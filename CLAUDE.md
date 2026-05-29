@@ -34,6 +34,16 @@ rpsl/
 Publish leaves as independently `go get`-able modules. Keep import direction strictly downward:
 resolve → object → policy → types → ast → lexer (never the reverse).
 
+**As-built module reality (diverges from the flat tree above):**
+- Separate go-get modules: `lexer`, `ast`, `types`, `resolve`. `object`, `policy`, and the
+  top-level `rpsl` façade live in the ROOT module. Wired for dev by a root `go.work` (`use`).
+- Inter-module requires use `v0.0.0`; `go work sync` FAILS (tries to fetch them from GitHub) —
+  ignore it, the `go.work` `use` set resolves locally and the per-module loop is the source of truth.
+- `Diagnostic`/`Severity` live in the `ast` module (so `object` can emit them); `rpsl` re-exports via aliases.
+- Net-using Source backends are isolated in `resolve/` sub-packages (irrd/whois/rdap) to keep core `resolve` socket-free.
+- Tests use in-process fake servers over a localhost listener + a `Dial` hook (no real network);
+  the bgpq4 differential is a checked-in golden snapshot, with an opt-in live diff gated on env vars.
+
 ## Build order — work strictly in this sequence (design §12)
 
 1. **lexer + ast + lossless round-trip + golden-corpus harness.** ← START HERE. Shippable alone.
@@ -87,7 +97,12 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
 
 ## Commands
 
-(Fill in as the project takes shape. Conventions:)
-- `go test ./...` — full suite, must be green before any milestone is considered done.
-- `go test -run TestRoundTrip ./lexer/... ./ast/...` — the lossless guard.
-- `go test -fuzz=FuzzLexer ./lexer` — fuzz the scanner.
+- **`go test ./...` only covers the ROOT module** (rpsl, object, policy). Each leaf
+  is a separate module, so run the full suite with a per-module loop:
+  `for m in . lexer ast types resolve; do (cd "$m" && go build ./... && go vet ./... && go test ./...); done`
+- `go test -run TestRoundTrip ./...` — the lossless guard (root module).
+- Fuzz (must never panic): `go test -run=xxx -fuzz=FuzzTokenize ./lexer`,
+  `-fuzz=FuzzParseImport ./policy`, `-fuzz=FuzzParseASPathRegexp ./policy`.
+- Leaf isolation: `cd types && go list -deps ./... | grep rkolesnichenko` must show only itself.
+- Engine purity: `cd resolve && go list -deps .` must NOT include `net` (sockets live only
+  in resolve/irrd, resolve/whois, resolve/rdap).
