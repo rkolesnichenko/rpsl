@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ func frame(data string) string {
 type fakeServer struct {
 	ln        net.Listener
 	responses map[string]string // exact command -> raw response frame ("" entries use "D\n")
+	conns     atomic.Int64      // total accepted connections
 }
 
 func newFakeServer(t *testing.T, responses map[string]string) *fakeServer {
@@ -48,6 +50,7 @@ func (fs *fakeServer) serve() {
 		if err != nil {
 			return
 		}
+		fs.conns.Add(1)
 		go fs.handle(conn)
 	}
 }
@@ -64,6 +67,8 @@ func (fs *fakeServer) handle(conn net.Conn) {
 		switch {
 		case cmd == "":
 			// ignore
+		case cmd == "!!":
+			// enable persistent mode; no response
 		case strings.HasPrefix(cmd, "!s"):
 			fmt.Fprint(conn, "C\n") // source set acknowledged
 		case strings.HasPrefix(cmd, "!q"):
@@ -185,5 +190,64 @@ func TestEngineExpandPrefixesOverIRRd(t *testing.T) {
 	}
 	if got.Len() != 2 {
 		t.Errorf("prefixes = %v, want the /24 plus AS1's 10.0.0.0/8", got.List())
+	}
+}
+
+// TestKeepAliveReusesConnection: with KeepAlive, multiple queries ride one
+// persistent connection instead of redialing per query.
+func TestKeepAliveReusesConnection(t *testing.T) {
+	fs := newFakeServer(t, map[string]string{
+		"!gAS1": frame("10.0.0.0/8"),
+		"!gAS2": frame("192.0.2.0/24"),
+		"!gAS3": frame("198.51.100.0/24"),
+	})
+	src := &Source{Addr: fs.addr(), Timeout: 2 * time.Second, KeepAlive: true}
+	defer src.Close()
+	for _, as := range []types.ASN{1, 2, 3} {
+		if _, err := src.OriginatedRoutes(context.Background(), as, types.AFIv4); err != nil {
+			t.Fatalf("OriginatedRoutes(AS%d): %v", as, err)
+		}
+	}
+	if got := fs.conns.Load(); got != 1 {
+		t.Errorf("accepted %d connections, want 1 (pooled reuse)", got)
+	}
+}
+
+// TestKeepAliveNotFoundKeepsConnection: a 'D' (not found) is a normal result,
+// so the connection stays pooled and is reused.
+func TestKeepAliveNotFoundKeepsConnection(t *testing.T) {
+	fs := newFakeServer(t, map[string]string{"!gAS1": frame("10.0.0.0/8")})
+	src := &Source{Addr: fs.addr(), Timeout: 2 * time.Second, KeepAlive: true}
+	defer src.Close()
+	// AS2 has no v4 routes -> server returns D -> empty, not an error.
+	if _, err := src.OriginatedRoutes(context.Background(), 2, types.AFIv4); err != nil {
+		t.Fatalf("OriginatedRoutes(AS2): %v", err)
+	}
+	if _, err := src.OriginatedRoutes(context.Background(), 1, types.AFIv4); err != nil {
+		t.Fatalf("OriginatedRoutes(AS1): %v", err)
+	}
+	if got := fs.conns.Load(); got != 1 {
+		t.Errorf("accepted %d connections, want 1 (D must not discard the conn)", got)
+	}
+}
+
+// TestKeepAliveEndToEnd drives the engine through a pooled source.
+func TestKeepAliveEndToEnd(t *testing.T) {
+	fs := newFakeServer(t, map[string]string{
+		"!iAS-TOP": frame("AS1 AS-SUB"),
+		"!iAS-SUB": frame("AS2 AS3"),
+	})
+	src := &Source{Addr: fs.addr(), Timeout: 2 * time.Second, KeepAlive: true}
+	defer src.Close()
+	e := &resolve.Expander{Src: src}
+	got, err := e.ExpandAS(context.Background(), mustSet(t, "AS-TOP"))
+	if err != nil {
+		t.Fatalf("ExpandAS: %v", err)
+	}
+	if got.Len() != 3 {
+		t.Errorf("ExpandAS = %v, want {1,2,3}", got.List())
+	}
+	if c := fs.conns.Load(); c != 1 {
+		t.Errorf("accepted %d connections, want 1", c)
 	}
 }

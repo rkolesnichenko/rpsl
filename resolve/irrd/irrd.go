@@ -20,6 +20,7 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rkolesnichenko/rpsl/object"
@@ -28,14 +29,31 @@ import (
 )
 
 // Source is a resolve.Source backed by an IRRd query-protocol server.
+//
+// By default each query uses a fresh connection (stateless, concurrency-safe).
+// Set KeepAlive to reuse persistent connections from an internal pool — fewer
+// TCP handshakes when expanding large set graphs. A KeepAlive Source must be
+// Close()d to release pooled connections.
 type Source struct {
 	Addr    string                                      // "whois.radb.net:43"
 	Sources string                                      // optional "!s" precedence, e.g. "RADB,RIPE"
 	Timeout time.Duration                               // per-call dial+I/O deadline; 0 = no deadline
 	Dial    func(ctx context.Context) (net.Conn, error) // override transport in tests; nil = net.Dialer
+
+	KeepAlive bool // reuse persistent connections from a pool
+	MaxConns  int  // max idle pooled connections when KeepAlive (default 2)
+
+	mu   sync.Mutex
+	idle []*pconn
 }
 
 var _ resolve.Source = (*Source)(nil)
+
+// pconn is a persistent IRRd connection (in "!!" mode) retained in the pool.
+type pconn struct {
+	conn net.Conn
+	br   *bufio.Reader
+}
 
 // errNotFound is the internal sentinel for a 'D' (key not found) response.
 var errNotFound = errors.New("irrd: key not found")
@@ -103,10 +121,13 @@ func (s *Source) routes(ctx context.Context, cmd string) ([]netip.Prefix, error)
 	return out, nil
 }
 
-// do opens a connection, optionally sets the source list, runs one query, and
-// returns its payload. A fresh connection per call keeps Source stateless and
-// safe for concurrent use; persistent connections are a future optimization.
+// do runs one query. With KeepAlive it borrows a persistent connection from the
+// pool (dialing a new one if none is idle), returning it on success and
+// discarding it on error. Otherwise it opens and closes a fresh connection.
 func (s *Source) do(ctx context.Context, cmd string) ([]byte, error) {
+	if s.KeepAlive {
+		return s.doPooled(ctx, cmd)
+	}
 	conn, err := s.dial(ctx)
 	if err != nil {
 		return nil, err
@@ -132,6 +153,101 @@ func (s *Source) do(ctx context.Context, cmd string) ([]byte, error) {
 	// Best-effort graceful quit; ignore errors on the way out.
 	_, _ = io.WriteString(conn, "!q\n")
 	return payload, err
+}
+
+func (s *Source) doPooled(ctx context.Context, cmd string) ([]byte, error) {
+	pc, err := s.acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if s.Timeout > 0 {
+		_ = pc.conn.SetDeadline(time.Now().Add(s.Timeout))
+	}
+	if _, err := fmt.Fprintf(pc.conn, "%s\n", cmd); err != nil {
+		_ = pc.conn.Close()
+		return nil, err
+	}
+	payload, err := readFrame(pc.br)
+	if err != nil && !errors.Is(err, errNotFound) {
+		_ = pc.conn.Close() // protocol/transport error: do not reuse
+		return nil, err
+	}
+	s.release(pc)
+	return payload, err
+}
+
+// acquire returns an idle pooled connection or dials and initializes a new one.
+func (s *Source) acquire(ctx context.Context) (*pconn, error) {
+	s.mu.Lock()
+	if n := len(s.idle); n > 0 {
+		pc := s.idle[n-1]
+		s.idle = s.idle[:n-1]
+		s.mu.Unlock()
+		return pc, nil
+	}
+	s.mu.Unlock()
+	return s.newPConn(ctx)
+}
+
+// newPConn dials a connection and puts it in persistent ("!!") mode.
+func (s *Source) newPConn(ctx context.Context) (*pconn, error) {
+	conn, err := s.dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if s.Timeout > 0 {
+		_ = conn.SetDeadline(time.Now().Add(s.Timeout))
+	}
+	br := bufio.NewReader(conn)
+	if _, err := io.WriteString(conn, "!!\n"); err != nil { // enable persistent mode; no response
+		_ = conn.Close()
+		return nil, err
+	}
+	if s.Sources != "" {
+		if _, err := fmt.Fprintf(conn, "!s%s\n", s.Sources); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		if _, err := readFrame(br); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+	}
+	return &pconn{conn: conn, br: br}, nil
+}
+
+// release returns a connection to the pool, or closes it if the pool is full.
+func (s *Source) release(pc *pconn) {
+	s.mu.Lock()
+	if len(s.idle) < s.maxConns() {
+		s.idle = append(s.idle, pc)
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+	_, _ = io.WriteString(pc.conn, "!q\n")
+	_ = pc.conn.Close()
+}
+
+func (s *Source) maxConns() int {
+	if s.MaxConns > 0 {
+		return s.MaxConns
+	}
+	return 2
+}
+
+// Close releases all pooled connections. It is safe to call on a non-KeepAlive
+// Source (a no-op) and may be called multiple times.
+func (s *Source) Close() error {
+	s.mu.Lock()
+	conns := s.idle
+	s.idle = nil
+	s.mu.Unlock()
+	for _, pc := range conns {
+		_, _ = io.WriteString(pc.conn, "!q\n")
+		_ = pc.conn.Close()
+	}
+	return nil
 }
 
 func (s *Source) dial(ctx context.Context) (net.Conn, error) {
