@@ -85,8 +85,13 @@ type PeeringAS struct {
 // PeeringSetRef is a reference to a peering-set (prng-…).
 type PeeringSetRef struct{ Name types.SetName }
 
-// PeeringRegexp is an AS-path regexp used in peering position, kept raw.
-type PeeringRegexp struct{ Raw string }
+// PeeringRegexp is an AS-path regexp used in peering position. Raw preserves the
+// original body for round-trip; Regexp is the parsed sub-AST (nil if it could
+// not be parsed).
+type PeeringRegexp struct {
+	Raw    string
+	Regexp *ASPathRE
+}
 
 func (PeeringAS) isPeering()     {}
 func (PeeringSetRef) isPeering() {}
@@ -158,8 +163,13 @@ type FilterASExpr struct{ AS ASExpr }
 // FilterSetRef references a route-set or filter-set by name.
 type FilterSetRef struct{ Name types.SetName }
 
-// FilterPathRE is an AS-path regexp (<...>), kept raw; no sub-AST yet (design §9).
-type FilterPathRE struct{ Raw string }
+// FilterPathRE is an AS-path regexp (<...>). Raw preserves the original body for
+// round-trip; Regexp is the parsed sub-AST (nil if it could not be parsed). The
+// regexp is structured, not evaluated against live paths (design §9).
+type FilterPathRE struct {
+	Raw    string
+	Regexp *ASPathRE
+}
 
 // FilterCommunity is a community(...) method call, kept raw for now.
 type FilterCommunity struct{ Raw string }

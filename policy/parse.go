@@ -208,7 +208,7 @@ func (p *parser) parsePeering() Peering {
 	t := p.cur()
 	if t.kind == tRegex {
 		p.advance()
-		return PeeringRegexp{Raw: t.text}
+		return PeeringRegexp{Raw: t.text, Regexp: p.parseRegexp(t)}
 	}
 	if t.kind != tWord {
 		p.errf(t, "policy/peering", "expected peering specification")
@@ -229,6 +229,17 @@ func (p *parser) parsePeering() Peering {
 	}
 	p.errf(t, "policy/peering", "invalid peering term "+quote(t.text))
 	return PeeringAS{}
+}
+
+// parseRegexp parses an AS-path regexp body, recording a non-fatal diagnostic
+// (and returning nil) if it does not parse. The Raw text is kept regardless.
+func (p *parser) parseRegexp(t token) *ASPathRE {
+	re, err := ParseASPathRegexp(t.text)
+	if err != nil {
+		p.errf(t, "policy/as-path-regexp", err.Error())
+		return nil
+	}
+	return re
 }
 
 // parseRouters consumes an optional router word and an optional "at <router>".
@@ -338,7 +349,7 @@ func (p *parser) parseFilterPrimary() Filter {
 		return p.parsePrefixList()
 	case tRegex:
 		p.advance()
-		return FilterPathRE{Raw: t.text}
+		return FilterPathRE{Raw: t.text, Regexp: p.parseRegexp(t)}
 	case tWord:
 		return p.parseFilterWord()
 	default:
