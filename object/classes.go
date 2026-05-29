@@ -4,8 +4,55 @@ import (
 	"net/netip"
 
 	"github.com/rkolesnichenko/rpsl/ast"
+	"github.com/rkolesnichenko/rpsl/policy"
 	"github.com/rkolesnichenko/rpsl/types"
 )
+
+// AutNum is an aut-num object. Its import:/export:/default: values are parsed
+// into the policy AST; each policy diagnostic is re-based onto its attribute.
+type AutNum struct {
+	AS       types.ASN
+	AsName   string
+	Imports  []policy.Import
+	Exports  []policy.Export
+	Defaults []policy.Default
+	AdminC   []types.NICHandle
+	TechC    []types.NICHandle
+	MntBy    []string
+	Source   string
+	raw      *ast.Object
+}
+
+func (a AutNum) Class() string    { return "aut-num" }
+func (a AutNum) Raw() *ast.Object { return a.raw }
+
+func decodeAutNum(d *decoder) AutNum {
+	an := AutNum{
+		AS:     d.asn("aut-num", "object/aut-num-as"),
+		AsName: d.str("as-name"),
+		AdminC: d.nicHandles("admin-c", "object/aut-num-admin-c"),
+		TechC:  d.nicHandles("tech-c", "object/aut-num-tech-c"),
+		MntBy:  d.all("mnt-by"),
+		Source: d.str("source"),
+		raw:    d.o,
+	}
+	for _, a := range d.o.GetAll("import") {
+		imp, ds := policy.ParseImport(a.Value)
+		an.Imports = append(an.Imports, imp)
+		d.rebase(a, ds)
+	}
+	for _, a := range d.o.GetAll("export") {
+		exp, ds := policy.ParseExport(a.Value)
+		an.Exports = append(an.Exports, exp)
+		d.rebase(a, ds)
+	}
+	for _, a := range d.o.GetAll("default") {
+		def, ds := policy.ParseDefault(a.Value)
+		an.Defaults = append(an.Defaults, def)
+		d.rebase(a, ds)
+	}
+	return an
+}
 
 // Mntner is a maintainer object. Auth lines are kept raw and uninterpreted.
 type Mntner struct {

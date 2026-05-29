@@ -46,6 +46,55 @@ source:  RIPE
 	}
 }
 
+func TestDecodeAutNum(t *testing.T) {
+	o := parse(`aut-num: AS65001
+as-name: EXAMPLE-AS
+import:  from AS64500 accept ANY
+export:  to AS64500 announce AS65001
+admin-c: EX1-RIPE
+mnt-by:  MAINT-EXAMPLE
+source:  RIPE
+`)
+	obj, diags := Decode(o)
+	if len(diags) != 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags)
+	}
+	a, ok := obj.(AutNum)
+	if !ok {
+		t.Fatalf("Decode = %T, want AutNum", obj)
+	}
+	if a.AS != 65001 {
+		t.Errorf("AS = %v, want 65001", a.AS)
+	}
+	if a.AsName != "EXAMPLE-AS" {
+		t.Errorf("AsName = %q", a.AsName)
+	}
+	if len(a.Imports) != 1 {
+		t.Errorf("Imports = %d, want 1", len(a.Imports))
+	}
+	if len(a.Exports) != 1 {
+		t.Errorf("Exports = %d, want 1", len(a.Exports))
+	}
+}
+
+// A malformed import: must still decode mnt-by:, with the policy diagnostic
+// re-based onto the import attribute's span.
+func TestAutNumPolicyResilience(t *testing.T) {
+	o := parse("aut-num: AS65001\nimport: from @@@ accept ANY\nmnt-by: MAINT-X\n")
+	obj, diags := Decode(o)
+	a := obj.(AutNum)
+	if len(a.MntBy) != 1 || a.MntBy[0] != "MAINT-X" {
+		t.Errorf("MntBy = %v, want [MAINT-X]", a.MntBy)
+	}
+	if len(diags) != 1 || diags[0].Rule != "policy/peering" {
+		t.Fatalf("diags = %+v, want one policy/peering", diags)
+	}
+	imp, _ := o.GetFirst("import")
+	if diags[0].Span != imp.Span {
+		t.Errorf("diag span = %+v, want re-based onto import span %+v", diags[0].Span, imp.Span)
+	}
+}
+
 func TestDecodeRoute(t *testing.T) {
 	o := parse(`route:    192.0.2.0/24
 origin:   AS65001

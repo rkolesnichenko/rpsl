@@ -5,6 +5,7 @@ import "github.com/rkolesnichenko/rpsl/ast"
 // registry maps a class name to its typed decoder. A class absent here decodes
 // to Generic with no diagnostics.
 var registry = map[string]func(*decoder) Object{
+	"aut-num":   func(d *decoder) Object { return decodeAutNum(d) },
 	"mntner":    func(d *decoder) Object { return decodeMntner(d) },
 	"person":    func(d *decoder) Object { return decodePerson(d) },
 	"role":      func(d *decoder) Object { return decodeRole(d) },
