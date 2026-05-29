@@ -13,23 +13,19 @@ import (
 	"github.com/rkolesnichenko/rpsl/lexer"
 )
 
-// Severity ranks a Diagnostic.
-type Severity uint8
-
-const (
-	Info Severity = iota
-	Warning
-	Error
+// Diagnostic and Severity live in the ast module so lower layers (object decoding)
+// can emit them without importing this façade. They are re-exported here for
+// convenience.
+type (
+	Diagnostic = ast.Diagnostic
+	Severity   = ast.Severity
 )
 
-// Diagnostic reports a problem found while parsing. Parsing is resilient:
-// diagnostics are returned alongside a best-effort result, never via panic.
-type Diagnostic struct {
-	Severity Severity
-	Message  string
-	Span     lexer.Span
-	Rule     string // machine-filterable identifier, e.g. "lexer/malformed-line"
-}
+const (
+	Info    = ast.Info
+	Warning = ast.Warning
+	Error   = ast.Error
+)
 
 // ParseObject parses exactly one object, returning the object plus any
 // diagnostics. The returned object round-trips: obj.String() == text.
@@ -90,8 +86,8 @@ func diagnose(toks []lexer.Token) []Diagnostic {
 	var ds []Diagnostic
 	for _, t := range toks {
 		if t.Kind == lexer.KindMalformed {
-			ds = append(ds, Diagnostic{
-				Severity: Error,
+			ds = append(ds, ast.Diagnostic{
+				Severity: ast.Error,
 				Message:  "line is not a valid attribute, continuation, comment, or blank",
 				Span:     t.Span,
 				Rule:     "lexer/malformed-line",

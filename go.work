@@ -1,0 +1,8 @@
+go 1.23
+
+use (
+	.
+	./ast
+	./lexer
+	./types
+)
