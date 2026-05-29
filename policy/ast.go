@@ -12,19 +12,22 @@ package policy
 
 import "github.com/rkolesnichenko/rpsl/types"
 
-// Import is a parsed import: value (and, later, mp-import:). Protocol/IntoProtocol
-// hold the optional "protocol X"/"into Y" prefixes ("" when absent).
+// Import is a parsed import: or mp-import: value. Protocol/IntoProtocol hold the
+// optional "protocol X"/"into Y" prefixes ("" when absent). AFIs holds the RFC
+// 4012 "afi <afi-list>" scope; empty means unscoped (legacy import:).
 type Import struct {
 	Protocol     string
 	IntoProtocol string
+	AFIs         []types.AddrFamily
 	Expr         Expr
 }
 
-// Export is a parsed export: value. Its peerings use "to" and its filter uses
-// "announce", but the structure mirrors Import.
+// Export is a parsed export: or mp-export: value. Its peerings use "to" and its
+// filter uses "announce", but the structure mirrors Import.
 type Export struct {
 	Protocol     string
 	IntoProtocol string
+	AFIs         []types.AddrFamily
 	Expr         Expr
 }
 
@@ -36,8 +39,8 @@ type Default struct {
 	Networks Filter
 }
 
-// Expr is the sealed routing-policy expression node. RFC 2622 §6 only produces
-// Factor; RFC 4012's except/refine variants are added in a later milestone.
+// Expr is the sealed routing-policy expression node: a Factor, a brace-enclosed
+// ExprList, or an Except/Refine composition (RFC 2622 §6.5 / RFC 4012 §2.5.1).
 type Expr interface{ isExpr() }
 
 // Factor is "(from|to) <peering> [action <actions>] ... accept|announce <filter>".
@@ -47,7 +50,20 @@ type Factor struct {
 	Filter Filter
 }
 
-func (Factor) isExpr() {}
+// ExprList is a brace-enclosed list of expressions: "{" e1 ";" e2 … "}".
+type ExprList struct{ Exprs []Expr }
+
+// Except is "<Left> EXCEPT <Right>": refinement that overrides the base policy
+// for the routes the right-hand expression matches.
+type Except struct{ Left, Right Expr }
+
+// Refine is "<Left> REFINE <Right>": the cartesian refinement of two policies.
+type Refine struct{ Left, Right Expr }
+
+func (Factor) isExpr()   {}
+func (ExprList) isExpr() {}
+func (Except) isExpr()   {}
+func (Refine) isExpr()   {}
 
 // PeerAction pairs one peering specification with its optional action list.
 type PeerAction struct {

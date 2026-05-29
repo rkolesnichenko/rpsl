@@ -77,6 +77,34 @@ source:  RIPE
 	}
 }
 
+func TestDecodeAutNumMpImport(t *testing.T) {
+	o := parse(`aut-num: AS65001
+as-name: EXAMPLE-AS
+import:    from AS64500 accept ANY
+mp-import: afi ipv6.unicast from AS64500 accept ANY
+mp-export: afi ipv6.unicast to AS64500 announce AS65001
+source:    RIPE
+`)
+	obj, diags := Decode(o)
+	if len(diags) != 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags)
+	}
+	a := obj.(AutNum)
+	if len(a.Imports) != 2 {
+		t.Fatalf("Imports = %d, want 2 (import + mp-import)", len(a.Imports))
+	}
+	// Legacy import: is unscoped; mp-import: carries the afi.
+	if len(a.Imports[0].AFIs) != 0 {
+		t.Errorf("import[0].AFIs = %v, want unscoped", a.Imports[0].AFIs)
+	}
+	if len(a.Imports[1].AFIs) != 1 || a.Imports[1].AFIs[0].String() != "ipv6.unicast" {
+		t.Errorf("mp-import AFIs = %v, want [ipv6.unicast]", a.Imports[1].AFIs)
+	}
+	if len(a.Exports) != 1 || len(a.Exports[0].AFIs) != 1 {
+		t.Errorf("Exports = %+v, want one afi-scoped mp-export", a.Exports)
+	}
+}
+
 // A malformed import: must still decode mnt-by:, with the policy diagnostic
 // re-based onto the import attribute's span.
 func TestAutNumPolicyResilience(t *testing.T) {

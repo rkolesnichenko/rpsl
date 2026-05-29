@@ -221,6 +221,95 @@ func TestRecovery(t *testing.T) {
 	}
 }
 
+func TestParseMpImportAFI(t *testing.T) {
+	imp, diags := ParseImport("afi ipv6.unicast from AS1 accept ANY")
+	if len(diags) != 0 {
+		t.Fatalf("diags = %+v", diags)
+	}
+	if len(imp.AFIs) != 1 || imp.AFIs[0].String() != "ipv6.unicast" {
+		t.Fatalf("AFIs = %v, want [ipv6.unicast]", imp.AFIs)
+	}
+	f := factor(t, imp.Expr)
+	if _, ok := f.Filter.(FilterAny); !ok {
+		t.Errorf("filter = %T, want FilterAny", f.Filter)
+	}
+}
+
+func TestParseAFIList(t *testing.T) {
+	imp, diags := ParseImport("afi ipv4.unicast, ipv6.unicast from AS1 accept ANY")
+	if len(diags) != 0 {
+		t.Fatalf("diags = %+v", diags)
+	}
+	if len(imp.AFIs) != 2 {
+		t.Fatalf("AFIs = %v, want 2", imp.AFIs)
+	}
+	if imp.AFIs[0].String() != "ipv4.unicast" || imp.AFIs[1].String() != "ipv6.unicast" {
+		t.Errorf("AFIs = %v", imp.AFIs)
+	}
+}
+
+func TestParseExcept(t *testing.T) {
+	imp, diags := ParseImport("from AS1 accept ANY except {from AS2 accept AS2}")
+	if len(diags) != 0 {
+		t.Fatalf("diags = %+v", diags)
+	}
+	ex, ok := imp.Expr.(Except)
+	if !ok {
+		t.Fatalf("Expr = %T, want Except", imp.Expr)
+	}
+	if _, ok := ex.Left.(Factor); !ok {
+		t.Errorf("Except.Left = %T, want Factor", ex.Left)
+	}
+	list, ok := ex.Right.(ExprList)
+	if !ok {
+		t.Fatalf("Except.Right = %T, want ExprList", ex.Right)
+	}
+	if len(list.Exprs) != 1 {
+		t.Errorf("ExprList = %d exprs, want 1", len(list.Exprs))
+	}
+}
+
+func TestParseRefine(t *testing.T) {
+	imp, _ := ParseImport("from AS1 accept ANY refine {from AS2 accept AS2}")
+	if _, ok := imp.Expr.(Refine); !ok {
+		t.Fatalf("Expr = %T, want Refine", imp.Expr)
+	}
+}
+
+func TestParseBraceList(t *testing.T) {
+	imp, diags := ParseImport("{ from AS1 accept AS1; from AS2 accept AS2 }")
+	if len(diags) != 0 {
+		t.Fatalf("diags = %+v", diags)
+	}
+	list, ok := imp.Expr.(ExprList)
+	if !ok {
+		t.Fatalf("Expr = %T, want ExprList", imp.Expr)
+	}
+	if len(list.Exprs) != 2 {
+		t.Fatalf("ExprList = %d exprs, want 2", len(list.Exprs))
+	}
+	for i, e := range list.Exprs {
+		if _, ok := e.(Factor); !ok {
+			t.Errorf("expr %d = %T, want Factor", i, e)
+		}
+	}
+}
+
+func TestParseMpFilterIPv6(t *testing.T) {
+	imp, diags := ParseImport("afi ipv6.unicast from AS1 accept {2001:db8::/32^+}")
+	if len(diags) != 0 {
+		t.Fatalf("diags = %+v", diags)
+	}
+	f := factor(t, imp.Expr)
+	pl, ok := f.Filter.(FilterPrefixList)
+	if !ok || len(pl.Ranges) != 1 {
+		t.Fatalf("filter = %T %+v, want one-range FilterPrefixList", f.Filter, f.Filter)
+	}
+	if !pl.Ranges[0].Prefix.Addr().Is6() {
+		t.Errorf("range not IPv6: %v", pl.Ranges[0])
+	}
+}
+
 // FuzzParseImport asserts the parser never panics on arbitrary input.
 func FuzzParseImport(f *testing.F) {
 	for _, s := range []string{
@@ -229,10 +318,15 @@ func FuzzParseImport(f *testing.F) {
 		"to AS1 announce {1.0.0.0/8^+}",
 		"from AS1 accept <^AS1+$>",
 		"protocol BGP4 from AS1 accept (AS1 AND NOT AS2) OR PeerAS",
+		"afi ipv6.unicast from AS1 accept {2001:db8::/32^+}",
+		"afi ipv4.unicast, ipv6.unicast from AS1 accept ANY",
+		"from AS1 accept ANY except {from AS2 accept AS2}",
+		"{ from AS1 accept AS1; from AS2 accept AS2 }",
 		"",
 		"{{{",
 		"from action accept",
 		"<unterminated",
+		"afi refine except {}",
 	} {
 		f.Add(s)
 	}

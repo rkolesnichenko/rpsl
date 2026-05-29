@@ -16,7 +16,8 @@ func ParseImport(s string) (Import, []ast.Diagnostic) {
 	p := newParser(s)
 	imp := Import{}
 	imp.Protocol, imp.IntoProtocol = p.parseProtocols()
-	imp.Expr = p.parseFactor("from", "accept")
+	imp.AFIs = p.parseAFIs()
+	imp.Expr = p.parseExpr("from", "accept")
 	return imp, p.diags
 }
 
@@ -26,7 +27,8 @@ func ParseExport(s string) (Export, []ast.Diagnostic) {
 	p := newParser(s)
 	exp := Export{}
 	exp.Protocol, exp.IntoProtocol = p.parseProtocols()
-	exp.Expr = p.parseFactor("to", "announce")
+	exp.AFIs = p.parseAFIs()
+	exp.Expr = p.parseExpr("to", "announce")
 	return exp, p.diags
 }
 
@@ -95,6 +97,80 @@ func (p *parser) parseProtocols() (proto, into string) {
 		}
 	}
 	return
+}
+
+// parseAFIs consumes an optional "afi <afi-list>" clause (RFC 4012). The list is
+// comma- or space-separated address families; parsing stops at the first token
+// that is not a valid address family (typically the from/to/{ that begins the
+// expression).
+func (p *parser) parseAFIs() []types.AddrFamily {
+	if !p.cur().kw("afi") {
+		return nil
+	}
+	p.advance()
+	var afis []types.AddrFamily
+	for {
+		t := p.cur()
+		if t.kind != tWord || isClauseKw(t) {
+			break
+		}
+		af, err := types.ParseAddrFamily(t.text)
+		if err != nil {
+			p.errf(t, "policy/afi", "invalid address family "+quote(t.text))
+			break
+		}
+		afis = append(afis, af)
+		p.advance()
+		if p.cur().kind == tComma {
+			p.advance()
+		}
+	}
+	return afis
+}
+
+// parseExpr parses a policy expression: a term, optionally composed with
+// left-associative EXCEPT / REFINE operators.
+func (p *parser) parseExpr(peerKw, filterKw string) Expr {
+	left := p.parseTerm(peerKw, filterKw)
+	for {
+		switch {
+		case p.cur().kw("except"):
+			p.advance()
+			p.parseAFIs() // an afi clause may scope the refinement; not retained yet
+			left = Except{Left: left, Right: p.parseTerm(peerKw, filterKw)}
+		case p.cur().kw("refine"):
+			p.advance()
+			p.parseAFIs()
+			left = Refine{Left: left, Right: p.parseTerm(peerKw, filterKw)}
+		default:
+			return left
+		}
+	}
+}
+
+// parseTerm parses either a brace-enclosed expression list or a single factor.
+func (p *parser) parseTerm(peerKw, filterKw string) Expr {
+	if p.cur().kind != tLBrace {
+		return p.parseFactor(peerKw, filterKw)
+	}
+	p.advance() // consume '{'
+	var exprs []Expr
+	for !p.atEOF() && p.cur().kind != tRBrace {
+		start := p.pos
+		exprs = append(exprs, p.parseExpr(peerKw, filterKw))
+		if p.cur().kind == tSemi {
+			p.advance()
+		}
+		if p.pos == start { // defensive: guarantee progress on malformed input
+			p.advance()
+		}
+	}
+	if p.cur().kind == tRBrace {
+		p.advance()
+	} else {
+		p.errf(p.cur(), "policy/expr-brace", "expected '}'")
+	}
+	return ExprList{Exprs: exprs}
 }
 
 // parseFactor parses one or more "<peerKw> <peering> [action …]" clauses

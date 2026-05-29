@@ -36,15 +36,21 @@ func decodeAutNum(d *decoder) AutNum {
 		Source: d.str("source"),
 		raw:    d.o,
 	}
-	for _, a := range d.o.GetAll("import") {
-		imp, ds := policy.ParseImport(a.Value)
-		an.Imports = append(an.Imports, imp)
-		d.rebase(a, ds)
+	// import: and mp-import: are unioned into Imports (design §6); the AFIs field
+	// distinguishes legacy from RFC 4012 mp entries. Likewise for export.
+	for _, name := range []string{"import", "mp-import"} {
+		for _, a := range d.o.GetAll(name) {
+			imp, ds := policy.ParseImport(a.Value)
+			an.Imports = append(an.Imports, imp)
+			d.rebase(a, ds)
+		}
 	}
-	for _, a := range d.o.GetAll("export") {
-		exp, ds := policy.ParseExport(a.Value)
-		an.Exports = append(an.Exports, exp)
-		d.rebase(a, ds)
+	for _, name := range []string{"export", "mp-export"} {
+		for _, a := range d.o.GetAll(name) {
+			exp, ds := policy.ParseExport(a.Value)
+			an.Exports = append(an.Exports, exp)
+			d.rebase(a, ds)
+		}
 	}
 	for _, a := range d.o.GetAll("default") {
 		def, ds := policy.ParseDefault(a.Value)
