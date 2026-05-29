@@ -1,0 +1,10 @@
+aut-num:        AS65001
+as-name:        EXAMPLE-AS
+descr:          Example Network Ltd
+                Second descr line
+import:         from AS64500 accept ANY
+export:         to AS64500 announce AS65001
+admin-c:        EX1-RIPE
+tech-c:         EX1-RIPE
+mnt-by:         MAINT-EXAMPLE
+source:         RIPE

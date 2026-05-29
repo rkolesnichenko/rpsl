@@ -1,0 +1,8 @@
+mntner:         MAINT-EXAMPLE
+descr:          Example maintainer
+admin-c:        EX1-RIPE
+upd-to:         hostmaster@example.net
+auth:           MD5-PW $1$abcdefgh$0123456789abcdef0123456
+mnt-by:         MAINT-EXAMPLE
+changed:        hostmaster@example.net 20200101
+source:         RIPE

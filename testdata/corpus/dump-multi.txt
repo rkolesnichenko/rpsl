@@ -1,0 +1,10 @@
+# RADB dump excerpt
+route:          198.51.100.0/24
+origin:         AS65002
+descr:          First object in the dump
+source:         RADB
+
+route6:         2001:db8::/32
+origin:         AS65002
+descr:          Second object in the dump
+source:         RADB

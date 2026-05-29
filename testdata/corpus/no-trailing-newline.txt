@@ -1,0 +1,6 @@
+person:         Example Person
+address:        123 Example Street
+phone:          +1 555 0100
+nic-hdl:        EX1-RIPE
+mnt-by:         MAINT-EXAMPLE
+source:         RIPE

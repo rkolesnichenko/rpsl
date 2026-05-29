@@ -1,0 +1,8 @@
+as-set:         AS-CUSTOMERS
+descr:          Customer cone
+members:        AS65010
+members:        AS65011
+members:        AS-DOWNSTREAM
+mbrs-by-ref:    MAINT-EXAMPLE
+mnt-by:         MAINT-EXAMPLE
+source:         RIPE

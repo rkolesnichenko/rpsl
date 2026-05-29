@@ -1,0 +1,11 @@
+as-set:         AS-EXAMPLE
+descr:          Example as-set with a gnarly remarks block
+remarks:        Peering policy notes:
++
+                - we peer openly    # inline note on a continuation line
++	tabbed plus-continuation line
+	final remark indented with a tab
+members:        AS65001
+members:        AS65002
+mnt-by:         MAINT-EXAMPLE
+source:         RIPE

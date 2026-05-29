@@ -1,0 +1,5 @@
+route:          192.0.2.0/24
+origin:         AS65001    # primary origin
+descr:          Example route object
+mnt-by:         MAINT-EXAMPLE
+source:         RADB
