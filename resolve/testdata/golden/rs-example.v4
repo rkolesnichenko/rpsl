@@ -1,0 +1,3 @@
+# ExpandPrefixes(RS-EXAMPLE, ipv4) — explicit prefix member plus AS64501's route.
+192.0.2.0/24
+203.0.113.0/24

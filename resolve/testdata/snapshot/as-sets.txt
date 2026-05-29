@@ -1,0 +1,9 @@
+as-set:   AS-EXAMPLE
+members:  AS64500
+members:  AS64501
+members:  AS-DOWNSTREAM
+source:   TEST
+
+as-set:   AS-DOWNSTREAM
+members:  AS64502
+source:   TEST

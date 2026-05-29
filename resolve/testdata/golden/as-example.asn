@@ -1,0 +1,7 @@
+# ExpandAS(AS-EXAMPLE) — transitive member ASNs, sorted ascending.
+# Regenerate against a live IRR with: bgpq4 -h <server> -3 -f 0 -l x AS-EXAMPLE
+# (or bgpq4 -j … and read .asn). For this offline snapshot it is the engine's
+# expected output and serves as a regression guard.
+AS64500
+AS64501
+AS64502
