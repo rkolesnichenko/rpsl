@@ -4,5 +4,6 @@ use (
 	.
 	./ast
 	./lexer
+	./resolve
 	./types
 )
