@@ -19,9 +19,26 @@ type Attribute struct {
 	Comment string // inline comment on the name line (after '#'), if any
 	Span    lexer.Span
 
+	// Segments maps Value offsets back to source positions (see lexer.Segment),
+	// enabling precise sub-spans within a folded value.
+	Segments []lexer.Segment
+
 	// lead holds the raw bytes of any comment/blank/malformed lines that
 	// immediately precede this attribute, so String stays byte-exact.
 	lead string
+}
+
+// SpanAt returns a precise source span for the half-open value range
+// [valStart, valEnd), translated through the segment map. It falls back to the
+// whole-attribute Span when no segment map is present.
+func (a Attribute) SpanAt(valStart, valEnd int) lexer.Span {
+	if len(a.Segments) == 0 {
+		return a.Span
+	}
+	t := lexer.Token{Span: a.Span, Segments: a.Segments}
+	sl, sc, sb := t.SourceAt(valStart)
+	el, ec, eb := t.SourceAt(valEnd)
+	return lexer.Span{StartLine: sl, StartCol: sc, StartByte: sb, EndLine: el, EndCol: ec, EndByte: eb}
 }
 
 // Object is an ordered collection of attributes. Order is significant in RPSL
@@ -43,12 +60,13 @@ func New(toks []lexer.Token) *Object {
 			continue
 		}
 		o.attrs = append(o.attrs, Attribute{
-			Name:    t.Name,
-			Value:   t.Value,
-			Raw:     t.Raw,
-			Comment: inlineComment(t.Raw),
-			Span:    t.Span,
-			lead:    lead.String(),
+			Name:     t.Name,
+			Value:    t.Value,
+			Raw:      t.Raw,
+			Comment:  inlineComment(t.Raw),
+			Span:     t.Span,
+			Segments: t.Segments,
+			lead:     lead.String(),
 		})
 		lead.Reset()
 	}

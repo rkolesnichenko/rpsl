@@ -32,15 +32,53 @@ type Span struct {
 	StartByte, EndByte  int
 }
 
+// Segment maps a contiguous range of an attribute's logical Value back to its
+// source location. A folded value is a join of one segment per physical line
+// (the name line plus each continuation); within a segment, value bytes map 1:1
+// to source bytes, so a value offset translates to source by linear offset from
+// the segment start. ValStart/ValEnd are a half-open range into Token.Value.
+type Segment struct {
+	ValStart, ValEnd int // range within Token.Value
+	SrcLine, SrcCol  int // 1-based source position of the segment's first byte
+	SrcByte          int // source byte offset of the segment's first byte
+}
+
 // Token is a single lexical unit. Raw holds the exact original bytes (including
 // continuation lines, inline comments, and the trailing line terminator); Value
 // holds the comment-stripped, continuation-joined logical value for attributes.
+// Segments maps Value offsets back to source positions (attributes only).
 type Token struct {
-	Kind  Kind
-	Name  string // canonical lowercased attribute name; "" for non-attribute kinds
-	Value string // logical value for attributes; "" for non-attribute kinds
-	Raw   string // exact source bytes for this token
-	Span  Span
+	Kind     Kind
+	Name     string // canonical lowercased attribute name; "" for non-attribute kinds
+	Value    string // logical value for attributes; "" for non-attribute kinds
+	Raw      string // exact source bytes for this token
+	Span     Span
+	Segments []Segment
+}
+
+// SourceAt maps a byte offset within this token's Value to a source position
+// (1-based line/col and a byte offset into the source). Offsets on the join
+// newline between segments resolve to the end of the preceding segment. When no
+// segment map is present it falls back to the token's start.
+func (t Token) SourceAt(valOffset int) (line, col, byteoff int) {
+	if len(t.Segments) == 0 {
+		return t.Span.StartLine, t.Span.StartCol, t.Span.StartByte
+	}
+	if valOffset < 0 {
+		valOffset = 0
+	}
+	for _, s := range t.Segments {
+		if valOffset <= s.ValEnd {
+			d := valOffset - s.ValStart
+			if d < 0 {
+				d = 0
+			}
+			return s.SrcLine, s.SrcCol + d, s.SrcByte + d
+		}
+	}
+	last := t.Segments[len(t.Segments)-1]
+	d := last.ValEnd - last.ValStart
+	return last.SrcLine, last.SrcCol + d, last.SrcByte + d
 }
 
 // physLine is one physical source line with its terminator preserved.
@@ -55,14 +93,15 @@ type physLine struct {
 // the concatenation of every token's Raw equals src exactly. It never panics.
 func Tokenize(src string) []Token {
 	var toks []Token
-	var cur *Token         // attribute being folded, or nil
-	var segs []string      // logical value segments for cur
+	var cur *Token    // attribute being folded, or nil
+	var segs []string // logical value segments for cur
+	var valOff int    // running offset within the joined value for the next segment
 
 	flush := func() {
 		if cur != nil {
 			cur.Value = strings.Join(segs, "\n")
 			toks = append(toks, *cur)
-			cur, segs = nil, nil
+			cur, segs, valOff = nil, nil, 0
 		}
 	}
 
@@ -76,7 +115,13 @@ func Tokenize(src string) []Token {
 			cur.Span.EndLine = pl.line
 			cur.Span.EndCol = len(pl.text) + 1
 			cur.Span.EndByte = endByte
-			segs = append(segs, contValue(pl.text))
+			val, off := contValue(pl.text)
+			segs = append(segs, val)
+			cur.Segments = append(cur.Segments, Segment{
+				ValStart: valOff, ValEnd: valOff + len(val),
+				SrcLine: pl.line, SrcCol: off + 1, SrcByte: pl.start + off,
+			})
+			valOff += len(val) + 1 // +1 for the join newline
 			continue
 		}
 
@@ -88,9 +133,14 @@ func Tokenize(src string) []Token {
 		}
 		switch kind {
 		case KindAttribute:
-			name, val := splitAttr(pl.text)
+			name, val, off := splitAttr(pl.text)
 			cur = &Token{Kind: KindAttribute, Name: name, Raw: raw, Span: span}
 			segs = []string{val}
+			cur.Segments = []Segment{{
+				ValStart: 0, ValEnd: len(val),
+				SrcLine: pl.line, SrcCol: off + 1, SrcByte: pl.start + off,
+			}}
+			valOff = len(val) + 1
 		default:
 			toks = append(toks, Token{Kind: kind, Raw: raw, Span: span})
 		}
@@ -153,36 +203,47 @@ func classify(text string, haveCur bool) (kind Kind, isCont bool) {
 	return KindMalformed, false
 }
 
-// splitAttr extracts the canonical (lowercased) attribute name and the
-// comment-stripped, trimmed value from an attribute's name line.
-func splitAttr(text string) (name, value string) {
+// splitAttr extracts the canonical (lowercased) attribute name, the
+// comment-stripped trimmed value, and the byte offset of the value's first
+// character within the line.
+func splitAttr(text string) (name, value string, valOff int) {
 	content := text
 	if h := strings.IndexByte(content, '#'); h >= 0 {
 		content = content[:h]
 	}
 	idx := strings.IndexByte(content, ':')
 	if idx < 0 {
-		return "", strings.TrimSpace(content)
+		v, off := trimPos(content, 0)
+		return "", v, off
 	}
 	name = strings.ToLower(strings.TrimSpace(content[:idx]))
-	value = strings.TrimSpace(content[idx+1:])
-	return name, value
+	value, valOff = trimPos(content, idx+1)
+	return name, value, valOff
 }
 
-// contValue computes the logical value contributed by a continuation line: the
-// single leading marker (space/tab/'+') is dropped, comments are stripped, and
-// surrounding whitespace is trimmed. A lone '+' yields an empty segment (a blank
-// line within the value).
-func contValue(text string) string {
+// contValue computes the logical value contributed by a continuation line (the
+// leading space/tab/'+' marker is dropped, comments are stripped, surrounding
+// whitespace trimmed) and the byte offset of its first character within the line.
+func contValue(text string) (value string, valOff int) {
 	content := text
 	if h := strings.IndexByte(content, '#'); h >= 0 {
 		content = content[:h]
 	}
 	if content == "" {
-		return ""
+		return "", 0
 	}
 	if content[0] == '+' {
-		return strings.TrimSpace(content[1:])
+		return trimPos(content, 1)
 	}
-	return strings.TrimSpace(content)
+	return trimPos(content, 0)
+}
+
+// trimPos returns the whitespace-trimmed value of content[from:] together with
+// the byte offset (within content, hence within the line) of its first
+// non-whitespace character. The trimmed value maps 1:1 to source bytes.
+func trimPos(content string, from int) (value string, off int) {
+	rest := content[from:]
+	trimmedLeft := strings.TrimLeft(rest, " \t")
+	off = from + (len(rest) - len(trimmedLeft))
+	return strings.TrimRight(trimmedLeft, " \t"), off
 }

@@ -90,3 +90,44 @@ func TestKinds(t *testing.T) {
 		}
 	}
 }
+
+// TestSegmentSourceMap verifies that value offsets translate back to accurate
+// source positions across a folded multi-line value with a '+' continuation and
+// an inline comment.
+func TestSegmentSourceMap(t *testing.T) {
+	src := "descr: first # c\n+ second\n        third\n"
+	toks := Tokenize(src)
+	if len(toks) != 1 || toks[0].Kind != KindAttribute {
+		t.Fatalf("tokens = %+v, want one attribute", toks)
+	}
+	tok := toks[0]
+	if tok.Value != "first\nsecond\nthird" {
+		t.Fatalf("Value = %q, want %q", tok.Value, "first\nsecond\nthird")
+	}
+	// Each fragment's first byte must map back to the right source byte.
+	for _, c := range []struct {
+		name string
+		off  int // offset within Value
+		want byte
+		line int
+	}{
+		{"first", 0, 'f', 1},
+		{"second", 6, 's', 2}, // after "first\n"
+		{"third", 13, 't', 3}, // after "first\nsecond\n"
+	} {
+		line, _, byteoff := tok.SourceAt(c.off)
+		if byteoff >= len(src) || src[byteoff] != c.want {
+			t.Errorf("%s: SourceAt(%d) byte %d = %q, want %q", c.name, c.off, byteoff, safeIdx(src, byteoff), string(c.want))
+		}
+		if line != c.line {
+			t.Errorf("%s: SourceAt(%d) line = %d, want %d", c.name, c.off, line, c.line)
+		}
+	}
+}
+
+func safeIdx(s string, i int) string {
+	if i < 0 || i >= len(s) {
+		return "<oob>"
+	}
+	return string(s[i])
+}

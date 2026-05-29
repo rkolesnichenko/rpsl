@@ -106,9 +106,10 @@ source:    RIPE
 }
 
 // A malformed import: must still decode mnt-by:, with the policy diagnostic
-// re-based onto the import attribute's span.
+// re-based to the precise source location of the offending token.
 func TestAutNumPolicyResilience(t *testing.T) {
-	o := parse("aut-num: AS65001\nimport: from @@@ accept ANY\nmnt-by: MAINT-X\n")
+	src := "aut-num: AS65001\nimport: from @@@ accept ANY\nmnt-by: MAINT-X\n"
+	o := parse(src)
 	obj, diags := Decode(o)
 	a := obj.(AutNum)
 	if len(a.MntBy) != 1 || a.MntBy[0] != "MAINT-X" {
@@ -117,10 +118,39 @@ func TestAutNumPolicyResilience(t *testing.T) {
 	if len(diags) != 1 || diags[0].Rule != "policy/peering" {
 		t.Fatalf("diags = %+v, want one policy/peering", diags)
 	}
-	imp, _ := o.GetFirst("import")
-	if diags[0].Span != imp.Span {
-		t.Errorf("diag span = %+v, want re-based onto import span %+v", diags[0].Span, imp.Span)
+	// The span must pinpoint the bad "@@@" token, not the whole attribute.
+	sp := diags[0].Span
+	if sp.StartLine != 2 {
+		t.Errorf("StartLine = %d, want 2 (the import line)", sp.StartLine)
 	}
+	if sp.StartByte >= len(src) || src[sp.StartByte] != '@' {
+		t.Errorf("StartByte %d does not point at '@' in source (got %q)", sp.StartByte, safeByte(src, sp.StartByte))
+	}
+}
+
+// A malformed token on a CONTINUATION line resolves to that physical line, which
+// is the payoff of the segment map (whole-attribute spans could not do this).
+func TestPolicyDiagnosticOnContinuationLine(t *testing.T) {
+	src := "aut-num: AS65001\nimport: from AS1 accept ANY\n        except @@@\nmnt-by: M\n"
+	o := parse(src)
+	_, diags := Decode(o)
+	if len(diags) == 0 {
+		t.Fatalf("expected a diagnostic for the malformed continuation")
+	}
+	d := diags[0]
+	if d.Span.StartLine != 3 {
+		t.Errorf("StartLine = %d, want 3 (the continuation line)", d.Span.StartLine)
+	}
+	if d.Span.StartByte >= len(src) || src[d.Span.StartByte] != '@' {
+		t.Errorf("StartByte %d does not point at '@' (got %q)", d.Span.StartByte, safeByte(src, d.Span.StartByte))
+	}
+}
+
+func safeByte(s string, i int) string {
+	if i < 0 || i >= len(s) {
+		return "<oob>"
+	}
+	return string(s[i])
 }
 
 func TestDecodeRoute(t *testing.T) {

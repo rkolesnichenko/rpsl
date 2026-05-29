@@ -46,13 +46,14 @@ func (d *decoder) errf(a ast.Attribute, rule, msg string) {
 	})
 }
 
-// rebase attaches policy-layer diagnostics (whose spans are offsets within an
-// attribute value) onto the owning attribute's span and records them. M3 uses
-// whole-attribute granularity; finer column mapping through line-folding is a
-// later refinement.
+// rebase attaches policy-layer diagnostics onto the owning attribute. Each
+// policy diagnostic carries its position as a byte range within the attribute's
+// logical value (in Span.StartByte/EndByte); rebase translates that range into a
+// precise source span via the attribute's segment map, so a diagnostic points at
+// the offending token even across folded continuation lines.
 func (d *decoder) rebase(a ast.Attribute, ds []ast.Diagnostic) {
 	for _, diag := range ds {
-		diag.Span = a.Span
+		diag.Span = a.SpanAt(diag.Span.StartByte, diag.Span.EndByte)
 		d.diags = append(d.diags, diag)
 	}
 }
