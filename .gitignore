@@ -1,0 +1,14 @@
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+
+# Go build & test artifacts
+*.test
+*.out
+*.prof
+coverage.*
+
+# OS cruft
+.DS_Store
+Thumbs.db
