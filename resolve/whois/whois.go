@@ -9,6 +9,7 @@ package whois
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -26,13 +27,26 @@ import (
 // full response is read until the server closes, and objects are parsed with the
 // library's own stack.
 type Source struct {
-	Addr    string                                      // "whois.ripe.net:43"
-	Sources string                                      // optional "-s SOURCE" filter
-	Timeout time.Duration                               // per-call dial+I/O deadline; 0 = none
-	Dial    func(ctx context.Context) (net.Conn, error) // override transport in tests; nil = net.Dialer
+	Addr        string                                      // "whois.ripe.net:43"
+	Sources     string                                      // optional "-s SOURCE" filter
+	Timeout     time.Duration                               // per-call dial+I/O deadline; 0 = none
+	MaxResponse int64                                       // per-call response byte cap; 0 = default (maxResponse)
+	Dial        func(ctx context.Context) (net.Conn, error) // override transport in tests; nil = net.Dialer
 }
 
 var _ resolve.Source = (*Source)(nil)
+
+// maxResponse caps a single WHOIS response. A hostile or wedged server could
+// otherwise stream unbounded data into io.ReadAll and exhaust memory; we treat
+// hitting the cap as an error. 256 MiB dwarfs any real object set.
+const maxResponse = 256 << 20
+
+func (s *Source) maxResponse() int64 {
+	if s.MaxResponse > 0 {
+		return s.MaxResponse
+	}
+	return maxResponse
+}
 
 // GetSet fetches an as-set or route-set object by name.
 func (s *Source) GetSet(ctx context.Context, name types.SetName) (object.Set, error) {
@@ -103,7 +117,7 @@ func (s *Source) MembersByRef(ctx context.Context, set types.SetName, mntners []
 // queryObjects runs one WHOIS query and decodes every object in the response.
 func (s *Source) queryObjects(ctx context.Context, q string) ([]object.Object, error) {
 	if s.Sources != "" {
-		q = "-s " + s.Sources + " " + q
+		q = "-s " + sanitizeLine(s.Sources) + " " + q
 	}
 	data, err := s.query(ctx, q)
 	if err != nil {
@@ -111,6 +125,9 @@ func (s *Source) queryObjects(ctx context.Context, q string) ([]object.Object, e
 	}
 	var out []object.Object
 	for raw := range rpsl.Parse(bytes.NewReader(data)) {
+		// Decode diagnostics are intentionally dropped: a server object we can't
+		// fully decode yields a zero/partial object that simply fails the callers'
+		// type switches, which is the desired graceful degradation here.
 		o, _ := object.Decode(raw)
 		out = append(out, o)
 	}
@@ -130,7 +147,17 @@ func (s *Source) query(ctx context.Context, q string) ([]byte, error) {
 	if _, err := io.WriteString(conn, q+"\n"); err != nil {
 		return nil, err
 	}
-	return io.ReadAll(conn)
+	// Bound the read: read up to max+1 and reject if the server tried to send
+	// more, rather than letting io.ReadAll grow without limit.
+	max := s.maxResponse()
+	data, err := io.ReadAll(io.LimitReader(conn, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > max {
+		return nil, fmt.Errorf("whois: response exceeds %d bytes", max)
+	}
+	return data, nil
 }
 
 func (s *Source) dial(ctx context.Context) (net.Conn, error) {
@@ -139,6 +166,18 @@ func (s *Source) dial(ctx context.Context) (net.Conn, error) {
 	}
 	d := net.Dialer{Timeout: s.Timeout}
 	return d.DialContext(ctx, "tcp", s.Addr)
+}
+
+// sanitizeLine strips control characters from a value interpolated into the
+// single-line WHOIS query, so a stray newline in caller-supplied config (e.g.
+// Sources) cannot inject an extra query line.
+func sanitizeLine(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < ' ' {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // maintainedBy reports whether any of the object's mnt-by values is allowed.

@@ -58,6 +58,12 @@ type pconn struct {
 // errNotFound is the internal sentinel for a 'D' (key not found) response.
 var errNotFound = errors.New("irrd: key not found")
 
+// maxFrame caps a single IRRd response payload. A hostile or buggy mirror could
+// otherwise advertise an arbitrary (or negative) length and drive an unbounded
+// allocation; we diagnose instead of allocating. 256 MiB dwarfs any real "!i"
+// or route payload.
+const maxFrame = 256 << 20
+
 // GetSet fetches a set's one-level membership via "!i" and synthesizes a typed
 // set object. A missing set maps to resolve.ErrNotFound.
 func (s *Source) GetSet(ctx context.Context, name types.SetName) (object.Set, error) {
@@ -139,7 +145,7 @@ func (s *Source) do(ctx context.Context, cmd string) ([]byte, error) {
 	br := bufio.NewReader(conn)
 
 	if s.Sources != "" {
-		if _, err := fmt.Fprintf(conn, "!s%s\n", s.Sources); err != nil {
+		if _, err := fmt.Fprintf(conn, "!s%s\n", sanitizeLine(s.Sources)); err != nil {
 			return nil, err
 		}
 		if _, err := readFrame(br); err != nil {
@@ -204,7 +210,7 @@ func (s *Source) newPConn(ctx context.Context) (*pconn, error) {
 		return nil, err
 	}
 	if s.Sources != "" {
-		if _, err := fmt.Fprintf(conn, "!s%s\n", s.Sources); err != nil {
+		if _, err := fmt.Fprintf(conn, "!s%s\n", sanitizeLine(s.Sources)); err != nil {
 			_ = conn.Close()
 			return nil, err
 		}
@@ -258,6 +264,18 @@ func (s *Source) dial(ctx context.Context) (net.Conn, error) {
 	return d.DialContext(ctx, "tcp", s.Addr)
 }
 
+// sanitizeLine strips control characters from a value interpolated into a
+// line-oriented protocol command, so a stray newline in caller-supplied config
+// (e.g. Sources) cannot inject an extra command line.
+func sanitizeLine(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < ' ' {
+			return -1
+		}
+		return r
+	}, s)
+}
+
 // readFrame parses one IRRd response: "A<len>\n<payload>\nC\n" (data), "C\n"
 // (empty success), "D\n" (not found → errNotFound), or "F <msg>" (error).
 func readFrame(br *bufio.Reader) ([]byte, error) {
@@ -274,6 +292,9 @@ func readFrame(br *bufio.Reader) ([]byte, error) {
 		n, err := strconv.Atoi(header[1:])
 		if err != nil {
 			return nil, fmt.Errorf("irrd: bad length header %q", header)
+		}
+		if n < 0 || n > maxFrame {
+			return nil, fmt.Errorf("irrd: response length %d out of range (max %d)", n, maxFrame)
 		}
 		buf := make([]byte, n)
 		if _, err := io.ReadFull(br, buf); err != nil {
