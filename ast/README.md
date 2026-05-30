@@ -43,10 +43,12 @@ type Attribute struct {
 ```go
 obj := ast.New(lexer.Tokenize(src))
 
-descr, ok := obj.GetFirst("descr")     // read
+nh, _ := obj.GetFirst("nic-hdl")       // read
 obj.Append("remarks", "added by tool") // edit
 fmt.Print(obj.String())                // re-serialize (original attrs unchanged byte-for-byte)
 ```
+
+This snippet is copied from the runnable [`ExampleObject`](example_test.go) test.
 
 ## Diagnostics
 

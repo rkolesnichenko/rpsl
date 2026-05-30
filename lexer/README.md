@@ -23,6 +23,9 @@ for _, t := range toks {
 // rebuilt.String() == src
 ```
 
+This snippet is copied from the runnable [`ExampleTokenize`](example_test.go)
+test, so `go test` keeps it honest.
+
 ## API
 
 ```go
