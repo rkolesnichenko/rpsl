@@ -119,6 +119,13 @@ func (o *Object) Has(name string) bool {
 	return ok
 }
 
+// Attributes returns the object's attributes in document order. The result is a
+// copy, so mutating the slice does not affect the object (validation and other
+// consumers iterate it read-only).
+func (o *Object) Attributes() []Attribute {
+	return append([]Attribute(nil), o.attrs...)
+}
+
 // String re-serializes the object byte-for-byte with the source it was parsed from.
 func (o *Object) String() string {
 	var b strings.Builder

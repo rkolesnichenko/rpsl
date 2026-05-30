@@ -55,6 +55,22 @@ func ParseDefault(s string) (Default, []ast.Diagnostic) {
 	return d, p.diags
 }
 
+// ParsePeering parses a standalone peering specification (the value of a
+// peering:/mp-peering: attribute in a peering-set). It returns a best-effort
+// Peering plus diagnostics; it never panics.
+func ParsePeering(s string) (Peering, []ast.Diagnostic) {
+	p := newParser(s)
+	return p.parsePeering(), p.diags
+}
+
+// ParseFilter parses a standalone policy filter (the value of a filter:/mp-filter:
+// attribute in a filter-set). It returns a best-effort Filter plus diagnostics;
+// it never panics.
+func ParseFilter(s string) (Filter, []ast.Diagnostic) {
+	p := newParser(s)
+	return p.parseFilter(), p.diags
+}
+
 type parser struct {
 	src   string
 	toks  []token

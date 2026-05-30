@@ -1,0 +1,8 @@
+organisation:   ORG-EX1-RIPE
+org-name:       Example Organisation
+org-type:       LIR
+address:        1 Example Way
+admin-c:        EX1-RIPE
+tech-c:         EX1-RIPE
+mnt-by:         MAINT-EXAMPLE
+source:         RIPE

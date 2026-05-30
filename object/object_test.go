@@ -264,7 +264,8 @@ func TestPerAttributeResilience(t *testing.T) {
 }
 
 func TestUnknownClassGeneric(t *testing.T) {
-	o := parse("inet-rtr: rtr.example.net\nlocal-as: AS65001\n")
+	// key-cert has no typed decoder, so it degrades to Generic.
+	o := parse("key-cert: PGPKEY-1\nmethod: PGP\n")
 	obj, diags := Decode(o)
 	if len(diags) != 0 {
 		t.Errorf("unexpected diagnostics: %+v", diags)
@@ -272,7 +273,7 @@ func TestUnknownClassGeneric(t *testing.T) {
 	if _, ok := obj.(Generic); !ok {
 		t.Errorf("Decode = %T, want Generic", obj)
 	}
-	if obj.Class() != "inet-rtr" {
+	if obj.Class() != "key-cert" {
 		t.Errorf("Class = %q", obj.Class())
 	}
 }
