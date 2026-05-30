@@ -52,10 +52,12 @@ func decodeAutNum(d *decoder) AutNum {
 			d.rebase(a, ds)
 		}
 	}
-	for _, a := range d.o.GetAll("default") {
-		def, ds := policy.ParseDefault(a.Value)
-		an.Defaults = append(an.Defaults, def)
-		d.rebase(a, ds)
+	for _, name := range []string{"default", "mp-default"} {
+		for _, a := range d.o.GetAll(name) {
+			def, ds := policy.ParseDefault(a.Value)
+			an.Defaults = append(an.Defaults, def)
+			d.rebase(a, ds)
+		}
 	}
 	return an
 }

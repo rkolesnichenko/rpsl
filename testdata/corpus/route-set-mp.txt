@@ -1,0 +1,6 @@
+route-set:      RS-EXAMPLE-MP
+members:        192.0.2.0/24, 198.51.100.0/24
+mp-members:     2001:db8::/32, 2001:db8:1::/48
+mbrs-by-ref:    EXAMPLE-MNT
+mnt-by:         EXAMPLE-MNT
+source:         RIPE

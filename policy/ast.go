@@ -5,9 +5,8 @@
 // (Go's stand-in for sum types); exhaustive type switches cover every variant.
 //
 // Scope is RFC 2622 §6: protocol/into prefixes, from/to peering [action]
-// clauses, and accept/announce/networks filters. RFC 4012 extensions
-// (mp-import/mp-export, afi scoping, except/refine) are deferred; the sealed
-// Expr interface is designed so those variants slot in without breaking callers.
+// clauses, and accept/announce/networks filters. RFC 4012 (RPSLng) is also supported: afi scoping, except/refine, and
+// mp-import/mp-export/mp-default.
 package policy
 
 import "github.com/rkolesnichenko/rpsl/types"
@@ -34,8 +33,9 @@ type Export struct {
 // Default is a parsed default: value: a single peering with optional action and
 // optional "networks" filter (nil when the value denotes an unscoped default).
 type Default struct {
-	Peering Peering
-	Actions []Action
+	AFIs     []types.AddrFamily
+	Peering  Peering
+	Actions  []Action
 	Networks Filter
 }
 
@@ -55,10 +55,16 @@ type ExprList struct{ Exprs []Expr }
 
 // Except is "<Left> EXCEPT <Right>": refinement that overrides the base policy
 // for the routes the right-hand expression matches.
-type Except struct{ Left, Right Expr }
+type Except struct {
+	Left, Right Expr
+	AFIs        []types.AddrFamily
+}
 
 // Refine is "<Left> REFINE <Right>": the cartesian refinement of two policies.
-type Refine struct{ Left, Right Expr }
+type Refine struct {
+	Left, Right Expr
+	AFIs        []types.AddrFamily
+}
 
 func (Factor) isExpr()   {}
 func (ExprList) isExpr() {}

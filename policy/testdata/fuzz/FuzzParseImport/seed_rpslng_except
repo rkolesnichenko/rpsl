@@ -1,0 +1,2 @@
+go test fuzz v1
+string("from AS1 accept ANY except afi ipv6.unicast {from AS2 accept AS2}")

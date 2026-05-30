@@ -37,6 +37,7 @@ func ParseExport(s string) (Export, []ast.Diagnostic) {
 func ParseDefault(s string) (Default, []ast.Diagnostic) {
 	p := newParser(s)
 	d := Default{}
+	d.AFIs = p.parseAFIs()
 	if !p.cur().kw("to") {
 		p.errf(p.cur(), "policy/default-to", "expected 'to' at start of default")
 		return d, p.diags
@@ -63,8 +64,12 @@ type parser struct {
 
 func newParser(s string) *parser { return &parser{src: s, toks: tokenize(s)} }
 
-func (p *parser) cur() token  { return p.toks[p.pos] }
-func (p *parser) advance()    { if p.pos < len(p.toks)-1 { p.pos++ } }
+func (p *parser) cur() token { return p.toks[p.pos] }
+func (p *parser) advance() {
+	if p.pos < len(p.toks)-1 {
+		p.pos++
+	}
+}
 func (p *parser) atEOF() bool { return p.cur().kind == tEOF }
 
 func (p *parser) errf(t token, rule, msg string) {
@@ -136,12 +141,12 @@ func (p *parser) parseExpr(peerKw, filterKw string) Expr {
 		switch {
 		case p.cur().kw("except"):
 			p.advance()
-			p.parseAFIs() // an afi clause may scope the refinement; not retained yet
-			left = Except{Left: left, Right: p.parseTerm(peerKw, filterKw)}
+			afis := p.parseAFIs() // an afi clause scopes the refinement
+			left = Except{Left: left, AFIs: afis, Right: p.parseTerm(peerKw, filterKw)}
 		case p.cur().kw("refine"):
 			p.advance()
-			p.parseAFIs()
-			left = Refine{Left: left, Right: p.parseTerm(peerKw, filterKw)}
+			afis := p.parseAFIs()
+			left = Refine{Left: left, AFIs: afis, Right: p.parseTerm(peerKw, filterKw)}
 		default:
 			return left
 		}

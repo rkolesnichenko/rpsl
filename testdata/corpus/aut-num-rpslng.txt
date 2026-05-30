@@ -1,0 +1,10 @@
+aut-num:        AS65001
+as-name:        EXAMPLE-RPSLNG
+import:         from AS65002 accept ANY
+mp-import:      afi ipv6.unicast from AS65003 accept AS65003
+export:         to AS65002 announce AS65001
+mp-export:      afi ipv6.unicast to AS65003 announce AS65001
+default:        to AS65002
+mp-default:     afi ipv6.unicast to AS65003
+mnt-by:         EXAMPLE-MNT
+source:         RIPE

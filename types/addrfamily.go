@@ -105,3 +105,17 @@ func (a AddrFamily) String() string {
 	}
 	return a.AFI.String() + "." + a.SAFI.String()
 }
+
+// Covers reports whether address family a (which may be a wildcard such as
+// "any" or "ipv4.any") includes the concrete family b. AFIAny covers any AFI;
+// SAFIAny or SAFIUnspecified covers any SAFI; otherwise the components must
+// match exactly.
+func (a AddrFamily) Covers(b AddrFamily) bool {
+	if a.AFI != AFIAny && a.AFI != b.AFI {
+		return false
+	}
+	if a.SAFI != SAFIAny && a.SAFI != SAFIUnspecified && a.SAFI != b.SAFI {
+		return false
+	}
+	return true
+}

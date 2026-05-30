@@ -28,9 +28,11 @@ parser targets IRRd/RIPE reality with the RFCs as the skeleton.
 | `resolve` | Pure set-expansion engine + in-memory `Source` | shipped |
 | `resolve/{irrd,whois,rdap}` | Live IRRd / WHOIS / RDAP backends | shipped |
 
-RFC 4012 extensions (`mp-import`/`mp-export`, `afi` scoping, `except`/`refine`)
-are partially landed — `mp-*` attributes and the `afi` dictionary are modeled; the
-`Expr` AST is designed so the remaining variants slot in without breaking callers.
+RFC 4012 (RPSLng) is supported: `mp-import`/`mp-export`/`mp-default`, the `afi`
+dictionary and `afi`-scoped policies (`Import`/`Export`/`Default` expose
+`AppliesTo`), `except`/`refine`, `route6`, and `mp-members`. The expansion
+engine applies an address-family constraint via `Expander.AFI`; interpreting
+per-policy `afi` scoping into filters is left to downstream BGP consumers.
 
 ## Install
 
