@@ -239,6 +239,23 @@ done
   (`resolve/testdata/`) compared on every run; an optional live `bgpq4` diff is
   gated on `RPSL_BGPQ4_SERVER` / `RPSL_BGPQ4_SET`.
 
+## Releasing
+
+The repo is a set of independent modules wired together for development by the
+root `go.work` (`use`). Inter-module `require`s are pinned at `v0.0.0` and resolve
+locally through the workspace, so:
+
+- `go test ./...` only covers the root module; run the full suite with the
+  per-module loop shown under [Testing](#testing).
+- `go work sync` **fails** (it tries to fetch the sibling modules from GitHub) —
+  that is expected; the `go.work` `use` set is the source of truth locally.
+
+To publish, a remote must exist; then tag each module and replace its `v0.0.0`
+requires with real versions, in dependency order:
+`lexer` → `ast` → `types` → root (`rpsl`, holding `object`/`policy`) → `resolve`.
+Each leaf carries a path-prefixed tag (`lexer/vX.Y.Z`, `ast/vX.Y.Z`, …) so
+`go get` resolves the modules individually.
+
 ## Further reading
 
 - GoDoc: [pkg.go.dev/github.com/rkolesnichenko/rpsl](https://pkg.go.dev/github.com/rkolesnichenko/rpsl)
@@ -246,3 +263,7 @@ done
 - RFCs: [2622](https://www.rfc-editor.org/rfc/rfc2622),
   [2650](https://www.rfc-editor.org/rfc/rfc2650),
   [4012](https://www.rfc-editor.org/rfc/rfc4012)
+
+## License
+
+[MIT](LICENSE) © 2026 R. Kolesnichenko.
