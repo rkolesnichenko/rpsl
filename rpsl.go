@@ -1,6 +1,7 @@
-// Package rpsl is the top-level façade over the RPSL lexer and generic object
-// model. Milestone 1 exposes lossless parsing of single objects and a lazy
-// streaming parser for multi-object dumps.
+// Package rpsl is the top-level façade over the RPSL lexer, generic object
+// model, typed decoding, and class/attribute validation. It exposes lossless
+// parsing of single objects, a lazy streaming parser for multi-object dumps,
+// typed Decode, and profile-based Validate.
 package rpsl
 
 import (
@@ -11,6 +12,23 @@ import (
 
 	"github.com/rkolesnichenko/rpsl/ast"
 	"github.com/rkolesnichenko/rpsl/lexer"
+	"github.com/rkolesnichenko/rpsl/object"
+)
+
+// Object is a typed RPSL object (AutNum, Route, AsSet, …) produced by Decode.
+// It is re-exported from the object package so consumers need only this façade.
+type Object = object.Object
+
+// Profile is a class/attribute dictionary used by Validate. The built-in
+// profiles are RIPE and RFCStrict.
+type Profile = object.Profile
+
+// RIPE and RFCStrict are the built-in validation profiles (design §10): RIPE
+// mirrors IRRd/RIPE reality (extra attributes, legacy changed:), RFCStrict
+// admits only RFC 2622/2650/4012 attributes.
+var (
+	RIPE      = object.RIPE
+	RFCStrict = object.RFCStrict
 )
 
 // Diagnostic and Severity live in the ast module so lower layers (object decoding)
@@ -79,6 +97,20 @@ func Parse(r io.Reader) iter.Seq2[*ast.Object, []Diagnostic] {
 		}
 		emit()
 	}
+}
+
+// Decode upgrades a generic object to its typed form (AutNum, Route, AsSet, …),
+// returning best-effort diagnostics. Unknown classes degrade to a generic
+// object. Decoding never fails a whole object; use Validate for schema checks.
+func Decode(o *ast.Object) (Object, []Diagnostic) {
+	return object.Decode(o)
+}
+
+// Validate checks an object against a dictionary profile, reporting unknown
+// attributes, missing required attributes, and cardinality violations. It is
+// separate from Decode so parsing stays resilient and validation stays opt-in.
+func Validate(o *ast.Object, p Profile) []Diagnostic {
+	return p.Validate(o)
 }
 
 // diagnose reports malformed lines surfaced by the lexer.

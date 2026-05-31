@@ -1,0 +1,9 @@
+inetnum:        192.0.2.0 - 192.0.2.255
+netname:        EXAMPLE-NET
+descr:          Example assignment
+country:        NL
+admin-c:        EX1-RIPE
+tech-c:         EX1-RIPE
+status:         ASSIGNED PA
+mnt-by:         MAINT-EXAMPLE
+source:         RIPE

@@ -7,6 +7,7 @@ package object
 
 import (
 	"net/netip"
+	"strings"
 
 	"github.com/rkolesnichenko/rpsl/ast"
 	"github.com/rkolesnichenko/rpsl/types"
@@ -23,7 +24,7 @@ type Object interface {
 // classes still satisfy Object.
 type Generic struct{ raw *ast.Object }
 
-func (g Generic) Class() string   { return g.raw.Class() }
+func (g Generic) Class() string    { return g.raw.Class() }
 func (g Generic) Raw() *ast.Object { return g.raw }
 
 // decoder removes per-attribute boilerplate and centralizes diagnostics. Each
@@ -116,6 +117,48 @@ func (d *decoder) prefix(name, rule string) netip.Prefix {
 	return p
 }
 
+// addrRange parses the first value of name as an inetnum-style address range
+// "lo - hi" (e.g. "192.0.2.0 - 192.0.2.255"). Returns the zero Addrs on failure.
+func (d *decoder) addrRange(name, rule string) (lo, hi netip.Addr) {
+	a, ok := d.o.GetFirst(name)
+	if !ok {
+		return netip.Addr{}, netip.Addr{}
+	}
+	l, h, found := strings.Cut(a.Value, "-")
+	if !found {
+		d.errf(a, rule, "expected 'lo - hi' address range")
+		return netip.Addr{}, netip.Addr{}
+	}
+	lo, err1 := netip.ParseAddr(strings.TrimSpace(l))
+	hi, err2 := netip.ParseAddr(strings.TrimSpace(h))
+	if err1 != nil || err2 != nil {
+		d.errf(a, rule, "invalid address range "+a.Value)
+		return netip.Addr{}, netip.Addr{}
+	}
+	return lo, hi
+}
+
+// asnRange parses the first value of name as an as-block range "ASlo - AShi"
+// (e.g. "AS1 - AS10"). Returns zero ASNs on failure.
+func (d *decoder) asnRange(name, rule string) (lo, hi types.ASN) {
+	a, ok := d.o.GetFirst(name)
+	if !ok {
+		return 0, 0
+	}
+	l, h, found := strings.Cut(a.Value, "-")
+	if !found {
+		d.errf(a, rule, "expected 'ASlo - AShi' range")
+		return 0, 0
+	}
+	lo, err1 := types.ParseASN(strings.TrimSpace(l))
+	hi, err2 := types.ParseASN(strings.TrimSpace(h))
+	if err1 != nil || err2 != nil {
+		d.errf(a, rule, "invalid as-block range "+a.Value)
+		return 0, 0
+	}
+	return lo, hi
+}
+
 // prefixes parses every value of name as a netip.Prefix, skipping bad ones.
 func (d *decoder) prefixes(name, rule string) []netip.Prefix {
 	var out []netip.Prefix
@@ -142,6 +185,21 @@ func (d *decoder) nicHandles(name, rule string) []types.NICHandle {
 		out = append(out, h)
 	}
 	return out
+}
+
+// setKey parses the set's own name from its class-defining first attribute
+// (e.g. "as-set", "peering-set"), recording a diagnostic on a malformed name.
+func (d *decoder) setKey(class, rule string) types.SetName {
+	a, ok := d.o.GetFirst(class)
+	if !ok {
+		return types.SetName{}
+	}
+	n, err := types.ParseSetName(a.Value)
+	if err != nil {
+		d.errf(a, rule, err.Error())
+		return types.SetName{}
+	}
+	return n
 }
 
 // setNames parses every value of name as a SetName, skipping bad ones.

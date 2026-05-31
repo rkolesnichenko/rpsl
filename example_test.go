@@ -76,6 +76,28 @@ func ExampleDecode() {
 	// diagnostics: 0
 }
 
+// ExampleValidate checks an object against a dictionary profile. The RFC-strict
+// profile flags RIPE's legacy changed: attribute; the RIPE profile tolerates it.
+func ExampleValidate() {
+	src := "route:   192.0.2.0/24\n" +
+		"origin:  AS65000\n" +
+		"changed: ops@example.net 20200101\n" +
+		"mnt-by:  EXAMPLE-MNT\n" +
+		"source:  RIPE\n"
+
+	obj, _ := rpsl.ParseObject(src)
+
+	// Decode and Validate are both reachable from the top-level façade.
+	decoded, _ := rpsl.Decode(obj)
+	fmt.Println("class:", decoded.Class())
+	fmt.Println("ripe diagnostics:", len(rpsl.Validate(obj, rpsl.RIPE)))
+	fmt.Println("rfc-strict diagnostics:", len(rpsl.Validate(obj, rpsl.RFCStrict)))
+	// Output:
+	// class: route
+	// ripe diagnostics: 0
+	// rfc-strict diagnostics: 1
+}
+
 // ExampleParseImport parses an import: policy value into the AST and walks it via
 // the sealed-interface type switches that model the grammar's sum types.
 func ExampleParseImport() {
