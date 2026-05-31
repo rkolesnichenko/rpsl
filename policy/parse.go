@@ -55,10 +55,18 @@ func ParseDefault(s string) (Default, []ast.Diagnostic) {
 	return d, p.diags
 }
 
+// maxParseDepth caps recursion in the policy and AS-path-regexp parsers. Hostile
+// input — deeply nested parens/braces or a long "not not not …" chain — would
+// otherwise recurse one stack frame per level and overflow the stack. Past the
+// cap we record a diagnostic and stop descending instead of panicking. Real
+// policy nests only a handful of levels, so this never trips on valid data.
+const maxParseDepth = 1000
+
 type parser struct {
 	src   string
 	toks  []token
 	pos   int
+	depth int
 	diags []ast.Diagnostic
 }
 
@@ -136,6 +144,12 @@ func (p *parser) parseAFIs() []types.AddrFamily {
 // parseExpr parses a policy expression: a term, optionally composed with
 // left-associative EXCEPT / REFINE operators.
 func (p *parser) parseExpr(peerKw, filterKw string) Expr {
+	p.depth++
+	defer func() { p.depth-- }()
+	if p.depth > maxParseDepth {
+		p.errf(p.cur(), "policy/nesting", "policy expression nesting too deep")
+		return ExprList{}
+	}
 	left := p.parseTerm(peerKw, filterKw)
 	for {
 		switch {
@@ -332,6 +346,13 @@ func (p *parser) parseFilterAnd() Filter {
 
 func (p *parser) parseFilterNot() Filter {
 	if p.cur().kw("not") {
+		p.depth++
+		defer func() { p.depth-- }()
+		if p.depth > maxParseDepth {
+			p.errf(p.cur(), "policy/nesting", "filter nesting too deep")
+			p.advance() // consume the 'not' to guarantee progress
+			return nil
+		}
 		p.advance()
 		return FilterNot{Inner: p.parseFilterNot()}
 	}
@@ -339,6 +360,13 @@ func (p *parser) parseFilterNot() Filter {
 }
 
 func (p *parser) parseFilterPrimary() Filter {
+	p.depth++
+	defer func() { p.depth-- }()
+	if p.depth > maxParseDepth {
+		p.errf(p.cur(), "policy/nesting", "filter nesting too deep")
+		p.advance() // consume a token to guarantee progress
+		return nil
+	}
 	t := p.cur()
 	switch t.kind {
 	case tLParen:

@@ -1,6 +1,9 @@
 package policy
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseASPathRegexpBasic(t *testing.T) {
 	re, err := ParseASPathRegexp("^AS1+ AS2*$")
@@ -142,6 +145,7 @@ func FuzzParseASPathRegexp(f *testing.F) {
 	for _, s := range []string{
 		"^AS1+ AS2*$", ".", "AS-FOO", "AS1|AS2", "(AS1 AS2)+",
 		"AS1{2,4}", "AS1{2,}", "3333", "", "((", "{}", "|||", "AS1.10",
+		strings.Repeat("(", 2000) + "AS1" + strings.Repeat(")", 2000),
 	} {
 		f.Add(s)
 	}

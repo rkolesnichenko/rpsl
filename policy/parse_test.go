@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/rkolesnichenko/rpsl/types"
@@ -327,6 +328,9 @@ func FuzzParseImport(f *testing.F) {
 		"from action accept",
 		"<unterminated",
 		"afi refine except {}",
+		"from AS1 accept " + strings.Repeat("(", 2000) + "ANY" + strings.Repeat(")", 2000),
+		"from AS1 accept " + strings.Repeat("not ", 2000) + "ANY",
+		strings.Repeat("{", 2000) + "from AS1 accept ANY",
 	} {
 		f.Add(s)
 	}

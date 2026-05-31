@@ -167,8 +167,9 @@ func isWordCont(c byte) bool {
 // ---- recursive-descent parser ----
 
 type reParser struct {
-	toks []reToken
-	pos  int
+	toks  []reToken
+	pos   int
+	depth int
 }
 
 func (p *reParser) cur() reToken { return p.toks[p.pos] }
@@ -203,6 +204,13 @@ func ParseASPathRegexp(body string) (*ASPathRE, error) {
 }
 
 func (p *reParser) parseAlt() (ASPathExpr, error) {
+	// Each nested group "(...)" re-enters parseAlt; cap the depth so a regexp like
+	// "<(((((…)))))>" cannot overflow the stack (shared cap with the policy parser).
+	p.depth++
+	defer func() { p.depth-- }()
+	if p.depth > maxParseDepth {
+		return nil, fmt.Errorf("rpsl/policy: AS-path regexp nesting too deep")
+	}
 	first, err := p.parseSeq()
 	if err != nil {
 		return nil, err
