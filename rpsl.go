@@ -52,23 +52,58 @@ func ParseObject(text string) (*ast.Object, []Diagnostic) {
 	return ast.New(toks), diagnose(toks)
 }
 
+// ParseOptions tunes streaming parser behavior. The zero value is the legacy
+// unbounded behavior (compatible with Parse).
+type ParseOptions struct {
+	// MaxObjectBytes caps the size of a single parsed object. When > 0 and the
+	// in-progress object's source exceeds it, the parser emits an Error
+	// diagnostic ("rpsl/object-too-large") and resumes at the next blank line.
+	// This protects callers against hostile dumps that withhold blank-line
+	// separators to drive the per-object buffer to OOM.
+	MaxObjectBytes int64
+}
+
 // Parse lazily parses a stream of blank-line-separated objects (IRR dumps,
 // whois output). It yields one object at a time, holding only the current
 // object in memory, so multi-gigabyte dumps stream rather than load wholesale.
+// For untrusted input, prefer ParseWith with a MaxObjectBytes cap.
 func Parse(r io.Reader) iter.Seq2[*ast.Object, []Diagnostic] {
+	return ParseWith(r, ParseOptions{})
+}
+
+// ParseWith is Parse with explicit options.
+func ParseWith(r io.Reader, opts ParseOptions) iter.Seq2[*ast.Object, []Diagnostic] {
 	return func(yield func(*ast.Object, []Diagnostic) bool) {
 		br := bufio.NewReader(r)
 		var buf strings.Builder
 		hasAttr := false
+		dropping := false // true when the current object exceeded MaxObjectBytes
 
 		emit := func() bool {
 			if buf.Len() == 0 {
+				dropping = false
 				return true
 			}
 			obj, d := ParseObject(buf.String())
 			buf.Reset()
 			hasAttr = false
+			dropping = false
 			return yield(obj, d)
+		}
+
+		emitOversize := func() bool {
+			// Surface the cap breach as a single Error diagnostic on an empty
+			// object, then drop the buffer and skip to the next blank line so
+			// subsequent objects in the stream still parse.
+			buf.Reset()
+			hasAttr = false
+			dropping = true
+			diag := Diagnostic{
+				Severity: Error,
+				Message:  "object exceeds MaxObjectBytes; truncated",
+				Rule:     "rpsl/object-too-large",
+			}
+			return yield(&ast.Object{}, []Diagnostic{diag})
 		}
 
 		for {
@@ -76,7 +111,9 @@ func Parse(r io.Reader) iter.Seq2[*ast.Object, []Diagnostic] {
 			if len(line) > 0 {
 				switch {
 				case isBlankLine(line):
-					if hasAttr {
+					if dropping {
+						dropping = false
+					} else if hasAttr {
 						if !emit() {
 							return
 						}
@@ -85,6 +122,16 @@ func Parse(r io.Reader) iter.Seq2[*ast.Object, []Diagnostic] {
 						buf.WriteString(line) // leading trivia for the next object
 					}
 				default:
+					if dropping {
+						break // skip until the next blank-line separator
+					}
+					if opts.MaxObjectBytes > 0 &&
+						int64(buf.Len())+int64(len(line)) > opts.MaxObjectBytes {
+						if !emitOversize() {
+							return
+						}
+						break
+					}
 					buf.WriteString(line)
 					if isAttrStart(line) {
 						hasAttr = true
@@ -95,7 +142,9 @@ func Parse(r io.Reader) iter.Seq2[*ast.Object, []Diagnostic] {
 				break
 			}
 		}
-		emit()
+		if !dropping {
+			emit()
+		}
 	}
 }
 

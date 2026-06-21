@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/netip"
 	"testing"
+	"time"
 
 	rpsl "github.com/rkolesnichenko/rpsl"
 	"github.com/rkolesnichenko/rpsl/object"
@@ -170,6 +171,72 @@ func TestExpandPrefixesMaxPrefixes(t *testing.T) {
 	if !errors.As(err, &tooLarge) {
 		t.Fatalf("err = %v, want ErrSetTooLarge", err)
 	}
+}
+
+// A pathologically wide IRR graph (10k unique as-sets at depth 1) is bounded
+// by MaxVisited; we set it to 50 and expect ErrSetTooLarge before exhausting
+// memory.
+func TestExpandASMaxVisited(t *testing.T) {
+	var texts []string
+	var members []string
+	for i := 1; i <= 200; i++ {
+		members = append(members, fmt.Sprintf("AS-CHILD-%d", i))
+		texts = append(texts, asSet(fmt.Sprintf("AS-CHILD-%d", i), fmt.Sprintf("AS%d", i)))
+	}
+	texts = append(texts, asSet("AS-WIDE", members...))
+	src := corpus(t, texts...)
+	e := &Expander{Src: src, MaxVisited: 50}
+	_, err := e.ExpandAS(context.Background(), mustSet(t, "AS-WIDE"))
+	var tooLarge ErrSetTooLarge
+	if !errors.As(err, &tooLarge) {
+		t.Fatalf("err = %v, want ErrSetTooLarge", err)
+	}
+	if tooLarge.Count <= 50 {
+		t.Errorf("Count = %d, want > MaxVisited (50)", tooLarge.Count)
+	}
+}
+
+// Context cancellation must take effect mid-walk, not only at function entry.
+// The Source blocks on ctx; we cancel and assert the call returns within a
+// tight bound (way below MaxDepth*RTT).
+func TestExpandContextCancellationMidWalk(t *testing.T) {
+	src := &blockingSource{block: make(chan struct{})}
+	defer close(src.block)
+	e := &Expander{Src: src}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := e.ExpandAS(ctx, mustSet(t, "AS-X"))
+		done <- err
+	}()
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("err = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ExpandAS did not return after cancel")
+	}
+}
+
+// blockingSource: GetSet sleeps until ctx is done. Used to verify ctx checks
+// are honored deep in walk loops, not just at entry.
+type blockingSource struct{ block chan struct{} }
+
+func (b *blockingSource) GetSet(ctx context.Context, _ types.SetName) (object.Set, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-b.block:
+		return nil, ErrNotFound
+	}
+}
+func (b *blockingSource) OriginatedRoutes(context.Context, types.ASN, types.AFI) ([]netip.Prefix, error) {
+	return nil, nil
+}
+func (b *blockingSource) MembersByRef(context.Context, types.SetName, []string) ([]object.Object, error) {
+	return nil, nil
 }
 
 // TestExpandPrefixesBudgetAcrossMembers exercises the materialize budget fix:

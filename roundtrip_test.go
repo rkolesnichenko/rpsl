@@ -88,3 +88,46 @@ func TestMalformedDiagnostic(t *testing.T) {
 		t.Errorf("diags = %+v, want one malformed-line diagnostic", diags)
 	}
 }
+
+// A stream whose first "object" withholds the blank-line separator past the
+// cap must be diagnosed and skipped without OOM, then the next object after
+// the eventual blank must still parse.
+func TestParseMaxObjectBytes(t *testing.T) {
+	var big strings.Builder
+	for i := 0; i < 200; i++ {
+		big.WriteString("descr: filler\n")
+	}
+	// Three objects: oversized #1, a valid #2 after a blank, and a valid #3.
+	src := "route: 192.0.2.0/24\n" + big.String() +
+		"\nroute: 198.51.100.0/24\norigin: AS2\n" +
+		"\nroute: 203.0.113.0/24\norigin: AS3\n"
+	var rules, classes []string
+	for obj, diags := range ParseWith(strings.NewReader(src), ParseOptions{MaxObjectBytes: 200}) {
+		for _, d := range diags {
+			rules = append(rules, d.Rule)
+		}
+		if obj != nil {
+			classes = append(classes, obj.Class())
+		}
+	}
+	// Expect one too-large diagnostic and two valid routes after it.
+	haveTooLarge := false
+	for _, r := range rules {
+		if r == "rpsl/object-too-large" {
+			haveTooLarge = true
+		}
+	}
+	if !haveTooLarge {
+		t.Errorf("rules = %v, missing rpsl/object-too-large", rules)
+	}
+	// The two subsequent route objects must still be emitted.
+	var routes int
+	for _, c := range classes {
+		if c == "route" {
+			routes++
+		}
+	}
+	if routes < 2 {
+		t.Errorf("classes = %v, want >= 2 routes after the oversized one", classes)
+	}
+}

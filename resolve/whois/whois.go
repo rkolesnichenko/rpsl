@@ -127,7 +127,10 @@ func (s *Source) queryObjects(ctx context.Context, q string) ([]object.Object, e
 	for raw := range rpsl.Parse(bytes.NewReader(data)) {
 		// Decode diagnostics are intentionally dropped: a server object we can't
 		// fully decode yields a zero/partial object that simply fails the callers'
-		// type switches, which is the desired graceful degradation here.
+		// type switches, which is the desired graceful degradation here. The
+		// downstream mntner check still relies on the lossless Raw object's
+		// mnt-by attribute (see maintainedBy), so a partial decode does not
+		// admit a member that would otherwise be filtered out.
 		o, _ := object.Decode(raw)
 		out = append(out, o)
 	}

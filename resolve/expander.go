@@ -12,17 +12,24 @@ import (
 const (
 	defaultMaxDepth    = 32
 	defaultMaxPrefixes = 1 << 20
+	defaultMaxVisited  = 1 << 17 // 131 072 unique sets — well above any real graph
 )
 
 // Expander expands set references into concrete ASNs and prefixes. It is pure:
 // all I/O is delegated to Src, all limits are explicit, and every traversal is
 // context-cancellable. A zero Expander (except Src) uses the default limits.
+//
+// Sources is advisory: the Source decides how (or whether) to honor IRR
+// precedence. Set it on the backend (e.g. resolve/irrd.Source.Sources) for
+// authoritative wiring; the field here is documentation for the caller's
+// intent.
 type Expander struct {
 	Src         Source
 	MaxDepth    int       // set-nesting depth cap (default 32)
 	MaxPrefixes int       // hard cap on prefix output (default 1<<20)
+	MaxVisited  int       // hard cap on unique sets traversed per call (default 1<<17)
 	AFI         types.AFI // address-family constraint; Unspecified/Any = both
-	Sources     []string  // IRR source precedence (advisory; Source decides)
+	Sources     []string  // IRR source precedence (advisory; configure on the Source itself)
 }
 
 func (e *Expander) maxDepth() int {
@@ -37,6 +44,13 @@ func (e *Expander) maxPrefixes() int {
 		return e.MaxPrefixes
 	}
 	return defaultMaxPrefixes
+}
+
+func (e *Expander) maxVisited() int {
+	if e.MaxVisited > 0 {
+		return e.MaxVisited
+	}
+	return defaultMaxVisited
 }
 
 // afiAllows reports whether a prefix is admitted under the configured AFI.
@@ -55,7 +69,7 @@ func (e *Expander) afiAllows(p netip.Prefix) bool {
 // nested set references and indirect (mbrs-by-ref) membership. Cycles are
 // skipped; missing sets expand to nothing.
 func (e *Expander) ExpandAS(ctx context.Context, n types.SetName) (ASSet, error) {
-	r := &asRun{e: e, ctx: ctx, out: newASSet(), visited: map[string]bool{}}
+	r := &asRun{e: e, ctx: ctx, top: n, out: newASSet(), visited: map[string]bool{}}
 	if err := r.walk(n, 0); err != nil {
 		return ASSet{}, err
 	}
@@ -65,6 +79,7 @@ func (e *Expander) ExpandAS(ctx context.Context, n types.SetName) (ASSet, error)
 type asRun struct {
 	e       *Expander
 	ctx     context.Context
+	top     types.SetName
 	out     *ASSet
 	visited map[string]bool
 }
@@ -80,6 +95,9 @@ func (r *asRun) walk(name types.SetName, depth int) error {
 	if r.visited[key] {
 		return nil // cycle or shared sub-set already covered
 	}
+	if len(r.visited) >= r.e.maxVisited() {
+		return ErrSetTooLarge{Name: r.top, Count: len(r.visited) + 1}
+	}
 	r.visited[key] = true
 
 	set, err := r.e.Src.GetSet(r.ctx, name)
@@ -91,6 +109,9 @@ func (r *asRun) walk(name types.SetName, depth int) error {
 	}
 
 	for _, m := range set.SetMembers() {
+		if err := r.ctx.Err(); err != nil {
+			return err
+		}
 		switch m.Kind {
 		case object.MemberAS:
 			r.out.add(m.AS)
@@ -110,6 +131,9 @@ func (r *asRun) walk(name types.SetName, depth int) error {
 			return err
 		}
 		for _, o := range objs {
+			if err := r.ctx.Err(); err != nil {
+				return err
+			}
 			switch t := o.(type) {
 			case object.AutNum:
 				r.out.add(t.AS)
@@ -201,6 +225,9 @@ func (r *pfxRun) walk(name types.SetName, depth int) error {
 	if r.visited[key] {
 		return nil
 	}
+	if len(r.visited) >= r.e.maxVisited() {
+		return ErrSetTooLarge{Name: r.top, Count: len(r.visited) + 1}
+	}
 	r.visited[key] = true
 
 	set, err := r.e.Src.GetSet(r.ctx, name)
@@ -214,6 +241,9 @@ func (r *pfxRun) walk(name types.SetName, depth int) error {
 	// Member kinds map uniformly across as-set and route-set: an ASN yields its
 	// originated routes, a nested set recurses, a prefix-range materializes.
 	for _, m := range set.SetMembers() {
+		if err := r.ctx.Err(); err != nil {
+			return err
+		}
 		switch m.Kind {
 		case object.MemberAS:
 			if err := r.addOriginated(m.AS); err != nil {
@@ -236,6 +266,9 @@ func (r *pfxRun) walk(name types.SetName, depth int) error {
 			return err
 		}
 		for _, o := range objs {
+			if err := r.ctx.Err(); err != nil {
+				return err
+			}
 			switch t := o.(type) {
 			case object.Route:
 				if err := r.addPrefix(t.Prefix); err != nil {
