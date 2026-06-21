@@ -83,10 +83,15 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   honor `mbrs-by-ref:` + the mntner check. Skipping the mntner check is a silent, hijack-relevant bug.
 - **Cycle detection**: as-sets reference each other cyclically. DFS with a visited set keyed by
   canonical set name; revisit = skip, not error (matches bgpq4).
-- **Fan-out guard**: real customer-cone as-sets expand to >100k prefixes. Enforce `MaxPrefixes`
-  *during* enumeration; return typed `ErrSetTooLarge`, never OOM.
+- **Fan-out guards**: enforce `MaxPrefixes` *during* enumeration, and pass the *remaining* budget
+  (`maxPrefixes - out.Len()`) to `PrefixRange.Materialize` so one range doesn't blow the run after
+  passing in isolation. Also enforce `MaxVisited` (per-call cap on the visited set-name map) so a
+  pathologically wide IRR graph can't balloon the map. All three return typed `ErrSetTooLarge`.
 - **AFI constraint**: v4 expansion drops route6/IPv6 mp-members and vice versa; `any` means both.
 - **Prefix-range operators** `^+ ^- ^n ^n-m`: first-class type with a capped `Materialize`.
+- **Dict ↔ decoder agreement**: if `object/profiles.go` lists an attribute on a class, the
+  matching `decodeXxx` in `object/classes.go` must read it. Drift silently drops data
+  (as-set `mp-members` was exactly this).
 
 ## Scope guardrails
 
@@ -106,3 +111,6 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
 - Leaf isolation: `cd types && go list -deps ./... | grep rkolesnichenko` must show only itself.
 - Engine purity: `cd resolve && go list -deps .` must NOT include `net` (sockets live only
   in resolve/irrd, resolve/whois, resolve/rdap).
+- IRRd wire framing: `A<len>\n<payload>C\n` where `<len>` *includes* the payload's trailing
+  newline (see `resolve/irrd/readframe_test.go`). After ReadFull(payload), the next ReadString
+  consumes the `C\n` status line directly — there is no separator newline to skip.
