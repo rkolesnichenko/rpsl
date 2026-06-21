@@ -172,6 +172,23 @@ func TestExpandPrefixesMaxPrefixes(t *testing.T) {
 	}
 }
 
+// TestExpandPrefixesBudgetAcrossMembers exercises the materialize budget fix:
+// two ranges that each fit alone (6 prefixes from a /29^+ = 1+2+4+8 → bounded
+// by the cap, but their union exceeds the 10-prefix MaxPrefixes). The engine
+// must surface ErrSetTooLarge whose Count actually exceeds the cap.
+func TestExpandPrefixesBudgetAcrossMembers(t *testing.T) {
+	src := corpus(t, routeSet("RS-MULTI", "192.0.2.0/29^+", "198.51.100.0/29^+"))
+	e := &Expander{Src: src, MaxPrefixes: 10}
+	_, err := e.ExpandPrefixes(context.Background(), mustSet(t, "RS-MULTI"))
+	var tooLarge ErrSetTooLarge
+	if !errors.As(err, &tooLarge) {
+		t.Fatalf("err = %v, want ErrSetTooLarge", err)
+	}
+	if tooLarge.Count <= 10 {
+		t.Errorf("Count = %d, want > MaxPrefixes (10)", tooLarge.Count)
+	}
+}
+
 // TestDualMembershipMntnerCheck is the hijack-relevant case: only routes whose
 // maintainer is listed in mbrs-by-ref may join indirectly.
 func TestDualMembershipMntnerCheck(t *testing.T) {

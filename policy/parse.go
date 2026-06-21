@@ -421,7 +421,7 @@ func (p *parser) parseFilterWord() Filter {
 		return FilterPeerAS{}
 	}
 	// A word immediately followed by '(' is a method-call filter (community(...)).
-	if p.toks[p.pos+1].kind == tLParen {
+	if p.pos+1 < len(p.toks) && p.toks[p.pos+1].kind == tLParen {
 		start := t.start
 		end := t.end
 		p.advance() // word

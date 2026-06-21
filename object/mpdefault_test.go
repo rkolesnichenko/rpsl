@@ -43,3 +43,31 @@ func TestRouteSetMpMembersSeparate(t *testing.T) {
 		t.Errorf("SetMembers() union = %d, want 2", len(rs.SetMembers()))
 	}
 }
+
+// As-set objects can carry mp-members in RIPE/IRRd reality (the profile admits
+// it). Both lists must populate, and SetMembers() must union them so the engine
+// does not silently drop ASNs that live only in mp-members.
+func TestAsSetMpMembersSeparate(t *testing.T) {
+	o := parse("as-set:     AS-X\n" +
+		"members:    AS1\n" +
+		"mp-members: AS2\n" +
+		"source:     TEST\n")
+	obj, diags := Decode(o)
+	if len(diags) != 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags)
+	}
+	as, ok := obj.(AsSet)
+	if !ok {
+		t.Fatalf("obj = %T, want AsSet", obj)
+	}
+	if len(as.Members) != 1 || len(as.MpMembers) != 1 {
+		t.Fatalf("Members=%d MpMembers=%d, want 1/1", len(as.Members), len(as.MpMembers))
+	}
+	union := as.SetMembers()
+	if len(union) != 2 {
+		t.Fatalf("SetMembers() union = %d, want 2", len(union))
+	}
+	if union[0].AS != 1 || union[1].AS != 2 {
+		t.Errorf("union ASNs = [%v %v], want [AS1 AS2]", union[0].AS, union[1].AS)
+	}
+}

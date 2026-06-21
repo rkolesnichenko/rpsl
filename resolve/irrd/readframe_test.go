@@ -35,6 +35,17 @@ func TestReadFrameValid(t *testing.T) {
 	}
 }
 
+// A mirror that returns a valid payload but a non-'C' trailer is sending
+// something we do not understand; the framer must reject rather than silently
+// accept (otherwise persistent connections in the pool would desynchronize).
+func TestReadFrameRejectsBadTrailer(t *testing.T) {
+	payload := "AS1 AS2\n"
+	in := fmt.Sprintf("A%d\n%sXfoo\n", len(payload), payload)
+	if _, err := readFrame(bufio.NewReader(strings.NewReader(in))); err == nil {
+		t.Errorf("readFrame accepted non-'C' trailer, want rejection")
+	}
+}
+
 func TestSanitizeLine(t *testing.T) {
 	if got := sanitizeLine("RADB,RIPE\n!gAS1"); strings.ContainsAny(got, "\r\n") {
 		t.Errorf("sanitizeLine left control chars: %q", got)

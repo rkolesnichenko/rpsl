@@ -300,8 +300,13 @@ func readFrame(br *bufio.Reader) ([]byte, error) {
 		if _, err := io.ReadFull(br, buf); err != nil {
 			return nil, err
 		}
-		if _, err := br.ReadString('\n'); err != nil { // trailing "C" status line
+		trailer, err := br.ReadString('\n') // trailing "C" status line
+		if err != nil {
 			return nil, err
+		}
+		if !strings.HasPrefix(trailer, "C") {
+			return nil, fmt.Errorf("irrd: missing 'C' status after payload, got %q",
+				strings.TrimRight(trailer, "\r\n"))
 		}
 		return buf, nil
 	case 'C':

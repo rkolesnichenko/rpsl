@@ -171,9 +171,16 @@ func (r *pfxRun) materialize(pr types.PrefixRange) error {
 	if !r.e.afiAllows(pr.Prefix) {
 		return nil
 	}
-	ps, err := pr.Materialize(r.e.maxPrefixes())
-	if err != nil { // ErrTooManyPrefixes: a single range blew the budget
-		return ErrSetTooLarge{Name: r.top, Count: r.e.maxPrefixes()}
+	// Budget only what's left after already-collected prefixes; otherwise a range
+	// that fits in isolation can still push us over and would be allocated in full
+	// before addPrefix catches it.
+	remaining := r.e.maxPrefixes() - r.out.Len()
+	if remaining < 0 {
+		remaining = 0
+	}
+	ps, err := pr.Materialize(remaining + 1) // +1 so we observe the overflow
+	if err != nil { // ErrTooManyPrefixes: this range alone exceeds remaining budget
+		return ErrSetTooLarge{Name: r.top, Count: r.e.maxPrefixes() + 1}
 	}
 	for _, p := range ps {
 		if err := r.addPrefix(p); err != nil {

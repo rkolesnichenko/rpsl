@@ -213,10 +213,13 @@ func decodeRoute6(d *decoder) Route6 {
 	}
 }
 
-// AsSet is an as-set: a named, possibly nested collection of ASNs.
+// AsSet is an as-set: a named, possibly nested collection of ASNs. MpMembers
+// carries the RFC 4012 mp-members: list, which RIPE/IRRd reality admits on
+// as-set objects even where strict RFC 4012 does not (see object/profiles.go).
 type AsSet struct {
 	Name      types.SetName
 	Members   []SetMember
+	MpMembers []SetMember
 	MbrsByRef []string
 	MntBy     []string
 	Source    string
@@ -237,7 +240,8 @@ func decodeAsSet(d *decoder) AsSet {
 	}
 	return AsSet{
 		Name:      name,
-		Members:   d.members("members", "object/as-set-members", false),
+		Members:   d.members("members", "object/as-set-members", false, types.AsSet),
+		MpMembers: d.members("mp-members", "object/as-set-mp-members", false, types.AsSet),
 		MbrsByRef: d.all("mbrs-by-ref"),
 		MntBy:     d.all("mnt-by"),
 		Source:    d.str("source"),
@@ -271,8 +275,8 @@ func decodeRouteSet(d *decoder) RouteSet {
 	}
 	return RouteSet{
 		Name:      name,
-		Members:   d.members("members", "object/route-set-members", true),
-		MpMembers: d.members("mp-members", "object/route-set-mp-members", true),
+		Members:   d.members("members", "object/route-set-members", true, types.RouteSet),
+		MpMembers: d.members("mp-members", "object/route-set-mp-members", true, types.RouteSet),
 		MbrsByRef: d.all("mbrs-by-ref"),
 		MntBy:     d.all("mnt-by"),
 		Source:    d.str("source"),

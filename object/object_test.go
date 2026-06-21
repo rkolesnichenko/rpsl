@@ -249,6 +249,34 @@ func TestWrongClassMemberWarns(t *testing.T) {
 	}
 }
 
+// A route-set member in an as-set (and vice versa) is class-confused. The
+// member is kept (the engine ignores mismatches), but a Warning must be emitted
+// so the operator can tell expansion will fall short. CLAUDE.md §10.
+func TestSetMemberClassMismatchWarns(t *testing.T) {
+	cases := []struct {
+		name, src string
+	}{
+		{"route-set member in as-set", "as-set: AS-FOO\nmembers: RS-BAR\n"},
+		{"as-set member in route-set", "route-set: RS-FOO\nmembers: AS-BAR\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			o := parse(tc.src)
+			_, diags := Decode(o)
+			var warned bool
+			for _, d := range diags {
+				if d.Severity == ast.Warning &&
+					strings.Contains(d.Message, "expected") {
+					warned = true
+				}
+			}
+			if !warned {
+				t.Errorf("no class-mismatch warning emitted: %+v", diags)
+			}
+		})
+	}
+}
+
 // Per-attribute resilience: a malformed origin: must not stop mnt-by: decoding,
 // and yields exactly one diagnostic on the bad line.
 func TestPerAttributeResilience(t *testing.T) {

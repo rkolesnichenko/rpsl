@@ -12,9 +12,17 @@ type Set interface {
 	RefMntners() []string    // mbrs-by-ref: maintainers enabling indirect membership
 }
 
-func (s AsSet) SetName() types.SetName  { return s.Name }
-func (s AsSet) SetMembers() []SetMember { return s.Members }
-func (s AsSet) RefMntners() []string    { return s.MbrsByRef }
+func (s AsSet) SetName() types.SetName { return s.Name }
+
+// SetMembers returns the union of members: and mp-members: as a fresh slice so
+// callers cannot mutate the underlying fields.
+func (s AsSet) SetMembers() []SetMember {
+	out := make([]SetMember, 0, len(s.Members)+len(s.MpMembers))
+	out = append(out, s.Members...)
+	out = append(out, s.MpMembers...)
+	return out
+}
+func (s AsSet) RefMntners() []string { return s.MbrsByRef }
 
 func (s RouteSet) SetName() types.SetName { return s.Name }
 
