@@ -3,6 +3,7 @@ go 1.23
 use (
 	.
 	./ast
+	./examples/bulk-ripe
 	./lexer
 	./resolve
 	./types

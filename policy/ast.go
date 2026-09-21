@@ -1,22 +1,27 @@
 // Package policy parses the RPSL routing-policy grammar (RFC 2622 §6) found in
 // the import:, export:, and default: attributes into a typed AST. Parsing is
-// resilient: a malformed factor yields a diagnostic and recovery at the next
-// peering separator, never a panic. The AST is modeled as sealed interfaces
-// (Go's stand-in for sum types); exhaustive type switches cover every variant.
+// resilient and total: every value is either consumed completely or yields a
+// diagnostic (nothing is dropped silently), and hostile input never panics.
+// The AST is modeled as sealed interfaces (Go's stand-in for sum types);
+// exhaustive type switches cover every variant.
 //
-// Scope is RFC 2622 §6: protocol/into prefixes, from/to peering [action]
-// clauses, and accept/announce/networks filters. RFC 4012 (RPSLng) is also supported: afi scoping, except/refine, and
-// mp-import/mp-export/mp-default.
+// Scope is RFC 2622 §5-6 — protocol/into prefixes, from/to peerings with
+// AS-expressions and router expressions, actions, filters with implicit OR and
+// range operators, AS-path regexps, structured except/refine policies — plus
+// RFC 4012 (RPSLng): afi scoping and mp-import/mp-export/mp-default.
 package policy
 
 import "github.com/rkolesnichenko/rpsl/types"
 
 // Import is a parsed import: or mp-import: value. Protocol/IntoProtocol hold the
-// optional "protocol X"/"into Y" prefixes ("" when absent). AFIs holds the RFC
-// 4012 "afi <afi-list>" scope; empty means unscoped (legacy import:).
+// optional "protocol X"/"into Y" prefixes ("" when absent). MP marks an
+// mp-import: (ParseMPImport). AFIs holds the RFC 4012 "afi <afi-list>" clause as
+// written; when it is empty the policy applies to ipv4.unicast for a legacy
+// import: and to every family for an mp-import: (RFC 4012 §2.5).
 type Import struct {
 	Protocol     string
 	IntoProtocol string
+	MP           bool
 	AFIs         []types.AddrFamily
 	Expr         Expr
 }
@@ -26,6 +31,7 @@ type Import struct {
 type Export struct {
 	Protocol     string
 	IntoProtocol string
+	MP           bool
 	AFIs         []types.AddrFamily
 	Expr         Expr
 }
@@ -33,6 +39,7 @@ type Export struct {
 // Default is a parsed default: value: a single peering with optional action and
 // optional "networks" filter (nil when the value denotes an unscoped default).
 type Default struct {
+	MP       bool
 	AFIs     []types.AddrFamily
 	Peering  Peering
 	Actions  []Action
@@ -40,7 +47,9 @@ type Default struct {
 }
 
 // Expr is the sealed routing-policy expression node: a Factor, a brace-enclosed
-// ExprList, or an Except/Refine composition (RFC 2622 §6.5 / RFC 4012 §2.5.1).
+// ExprList, or an Except/Refine composition (RFC 2622 §6.6 / RFC 4012 §2.5).
+// Except and Refine are right-associative ("performed right to left"):
+// "A except B refine C" is Except{A, Refine{B, C}}.
 type Expr interface{ isExpr() }
 
 // Factor is "(from|to) <peering> [action <actions>] ... accept|announce <filter>".
@@ -80,8 +89,9 @@ type PeerAction struct {
 // Peering is the sealed peering-specification node (RFC 2622 §6.2).
 type Peering interface{ isPeering() }
 
-// PeeringAS is an AS expression with optional router specifications. The router
-// expressions are kept raw for now (router parsing is out of scope for M3).
+// PeeringAS is an AS expression with optional router expressions: Router is the
+// peer-side expression and AtRouter the local one after "at". Both are kept as
+// raw text of the whole expression (e.g. "rtrs-a AND 192.0.2.1"); "" if absent.
 type PeeringAS struct {
 	AS       ASExpr
 	Router   string
@@ -118,11 +128,16 @@ type ASExprBinary struct {
 	L, R ASExpr
 }
 
-func (ASNum) isASExpr()        {}
-func (ASSetRef) isASExpr()     {}
-func (ASExprBinary) isASExpr() {}
+// ASSetTemplate references a per-peer as-set ("AS1:AS-CUSTOMERS:PeerAS").
+type ASSetTemplate struct{ Template SetNameTemplate }
 
-// ASOp is a boolean operator over AS expressions.
+func (ASNum) isASExpr()         {}
+func (ASSetRef) isASExpr()      {}
+func (ASSetTemplate) isASExpr() {}
+func (ASExprBinary) isASExpr()  {}
+
+// ASOp is a boolean operator over AS expressions. EXCEPT binds like AND; OR is
+// lowest (RFC 2622 §5.6).
 type ASOp uint8
 
 const (
@@ -150,24 +165,40 @@ const (
 )
 
 // Filter is the sealed policy-filter node (RFC 2622 §5.4). Boolean precedence is
-// NOT > AND > OR; parentheses override.
+// NOT > AND > OR; parentheses override; juxtaposition ("x y") is OR. Op on a
+// term is its range operator ("AS-FOO^+"); the zero Op means none.
 type Filter interface{ isFilter() }
 
 // FilterAny matches everything (the ANY keyword).
 type FilterAny struct{}
 
 // FilterPeerAS matches the routes of the peer AS (the PeerAS keyword).
-type FilterPeerAS struct{}
+type FilterPeerAS struct{ Op types.RangeOperator }
 
-// FilterPrefixList is an explicit brace-enclosed prefix(-range) list.
+// FilterPrefixList is an explicit brace-enclosed prefix(-range) list. An outer
+// operator ("{...}^+") is composed into each range at parse time (RFC 2622
+// §5.2); ranges it deletes are dropped.
 type FilterPrefixList struct{ Ranges []types.PrefixRange }
 
-// FilterASExpr filters by an AS expression (a bare AS or an as-set), resolved by
-// the expansion engine in a later layer.
-type FilterASExpr struct{ AS ASExpr }
+// FilterASExpr filters by an AS, an as-set, or a per-peer as-set template,
+// resolved by the expansion engine in a later layer.
+type FilterASExpr struct {
+	AS ASExpr
+	Op types.RangeOperator
+}
 
 // FilterSetRef references a route-set or filter-set by name.
-type FilterSetRef struct{ Name types.SetName }
+type FilterSetRef struct {
+	Name types.SetName
+	Op   types.RangeOperator
+}
+
+// FilterSetTemplate references a per-peer route-set or filter-set
+// ("AS1:RS-FOO:PeerAS").
+type FilterSetTemplate struct {
+	Template SetNameTemplate
+	Op       types.RangeOperator
+}
 
 // FilterPathRE is an AS-path regexp (<...>). Raw preserves the original body for
 // round-trip; Regexp is the parsed sub-AST (nil if it could not be parsed). The
@@ -185,13 +216,14 @@ type FilterAnd struct{ L, R Filter }
 type FilterOr struct{ L, R Filter }
 type FilterNot struct{ Inner Filter }
 
-func (FilterAny) isFilter()        {}
-func (FilterPeerAS) isFilter()     {}
-func (FilterPrefixList) isFilter() {}
-func (FilterASExpr) isFilter()     {}
-func (FilterSetRef) isFilter()     {}
-func (FilterPathRE) isFilter()     {}
-func (FilterCommunity) isFilter()  {}
-func (FilterAnd) isFilter()        {}
-func (FilterOr) isFilter()         {}
-func (FilterNot) isFilter()        {}
+func (FilterAny) isFilter()         {}
+func (FilterPeerAS) isFilter()      {}
+func (FilterPrefixList) isFilter()  {}
+func (FilterASExpr) isFilter()      {}
+func (FilterSetRef) isFilter()      {}
+func (FilterSetTemplate) isFilter() {}
+func (FilterPathRE) isFilter()      {}
+func (FilterCommunity) isFilter()   {}
+func (FilterAnd) isFilter()         {}
+func (FilterOr) isFilter()          {}
+func (FilterNot) isFilter()         {}

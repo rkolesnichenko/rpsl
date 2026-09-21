@@ -335,8 +335,20 @@ func FuzzParseImport(f *testing.F) {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
-		_, _ = ParseImport(s)
-		_, _ = ParseExport(s)
-		_, _ = ParseDefault(s)
+		_, pi := parseImport(s, false)
+		_, pe := parseExport(s, true)
+		_, pd := parseDefault(s, false)
+		for _, p := range []*parser{pi, pe, pd} {
+			assertNothingDropped(t, s, p)
+		}
 	})
+}
+
+// assertNothingDropped is the "never drop input" property: a parse that
+// reports no diagnostics must have consumed every token of the value.
+func assertNothingDropped(t *testing.T, s string, p *parser) {
+	t.Helper()
+	if len(p.diags) == 0 && !p.atEOF() {
+		t.Fatalf("%q: no diagnostics, but parsing stopped at %q", s, p.cur().text)
+	}
 }

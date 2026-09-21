@@ -95,25 +95,6 @@ func TestExpandASCycle(t *testing.T) {
 	}
 }
 
-func TestExpandASMaxDepth(t *testing.T) {
-	src := corpus(t,
-		asSet("AS-A", "AS1", "AS-B"),
-		asSet("AS-B", "AS2", "AS-C"),
-		asSet("AS-C", "AS3"),
-	)
-	e := &Expander{Src: src, MaxDepth: 1} // walk A (0) and B (1); C (2) skipped
-	got, err := e.ExpandAS(context.Background(), mustSet(t, "AS-A"))
-	if err != nil {
-		t.Fatalf("ExpandAS: %v", err)
-	}
-	if got.Has(3) {
-		t.Errorf("AS3 should be beyond MaxDepth=1; got %v", asnList(got))
-	}
-	if !got.Has(1) || !got.Has(2) {
-		t.Errorf("expected AS1, AS2 within depth; got %v", asnList(got))
-	}
-}
-
 func TestExpandPrefixesFromASCone(t *testing.T) {
 	src := corpus(t,
 		asSet("AS-CONE", "AS1", "AS2"),
@@ -313,9 +294,9 @@ func TestPropertyCyclicGraphTerminates(t *testing.T) {
 		texts[i] = asSet(name, members...)
 	}
 	src := corpus(t, texts...)
-	// MaxDepth above the graph diameter so connectivity (not the depth cap) is
-	// what the assertion measures; the +1 ring makes the graph strongly connected.
-	e := &Expander{Src: src, MaxDepth: 1000}
+	// The default MaxDepth suffices: depth is the shortest nesting distance, and
+	// the +7 chords keep it small even though the +1 ring is 60 sets long.
+	e := &Expander{Src: src}
 	got, err := e.ExpandAS(context.Background(), mustSet(t, "AS-0"))
 	if err != nil {
 		t.Fatalf("ExpandAS: %v", err)

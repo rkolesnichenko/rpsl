@@ -21,7 +21,9 @@ func ExampleObject() {
 	fmt.Println("class:", obj.Class())
 	fmt.Println("nic-hdl:", nh.Value)
 
-	obj.Append("remarks", "added by tool")
+	if err := obj.Append("remarks", "added by tool"); err != nil {
+		fmt.Println(err) // a name or value RPSL cannot represent
+	}
 	fmt.Print(obj.String())
 	// Output:
 	// class: person

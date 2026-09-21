@@ -24,8 +24,10 @@ const (
 	KindMalformed
 )
 
-// Span locates a token in the source. Lines and columns are 1-based; byte
-// offsets are a half-open [StartByte, EndByte) range into the source.
+// Span locates a token in the source. Lines and columns are 1-based and columns
+// count bytes, not characters; EndCol is exclusive and excludes the line
+// terminator. Byte offsets are a half-open [StartByte, EndByte) range into the
+// source and include the terminator.
 type Span struct {
 	StartLine, StartCol int
 	EndLine, EndCol     int
@@ -84,21 +86,31 @@ func (t Token) SourceAt(valOffset int) (line, col, byteoff int) {
 // physLine is one physical source line with its terminator preserved.
 type physLine struct {
 	text  string // content without the line terminator
-	term  string // "\n", "\r\n", or "" at end of input
+	term  string // "\n", "\r\n", "\r" or "" at end of input
 	start int    // byte offset of the line start
 	line  int    // 1-based line number
 }
 
 // Tokenize partitions src into a gap-free, in-order sequence of tokens such that
-// the concatenation of every token's Raw equals src exactly. It never panics.
-func Tokenize(src string) []Token {
+// the concatenation of every token's Raw equals src exactly. It never panics and
+// runs in time linear in len(src). Positions are relative to src (line 1, byte 0).
+func Tokenize(src string) []Token { return TokenizeAt(src, 1, 0) }
+
+// TokenizeAt is Tokenize for a src that begins at the given 1-based line and
+// byte offset of a larger stream (at the start of a line): every Span and
+// Segment position is reported in stream coordinates. Raw and Value are
+// unaffected.
+func TokenizeAt(src string, line, byteOffset int) []Token {
 	var toks []Token
 	var cur *Token    // attribute being folded, or nil
+	var curStart int  // src offset where cur begins
 	var segs []string // logical value segments for cur
 	var valOff int    // running offset within the joined value for the next segment
+	lineBase := line - 1
 
 	flush := func() {
 		if cur != nil {
+			cur.Raw = src[curStart : cur.Span.EndByte-byteOffset] // a slice: no copying per line
 			cur.Value = strings.Join(segs, "\n")
 			toks = append(toks, *cur)
 			cur, segs, valOff = nil, nil, 0
@@ -106,20 +118,18 @@ func Tokenize(src string) []Token {
 	}
 
 	for _, pl := range scanLines(src) {
-		raw := pl.text + pl.term
-		endByte := pl.start + len(raw)
+		endByte := pl.start + len(pl.text) + len(pl.term)
 		kind, isCont := classify(pl.text, cur != nil)
 
 		if isCont {
-			cur.Raw += raw
-			cur.Span.EndLine = pl.line
+			cur.Span.EndLine = lineBase + pl.line
 			cur.Span.EndCol = len(pl.text) + 1
-			cur.Span.EndByte = endByte
+			cur.Span.EndByte = byteOffset + endByte
 			val, off := contValue(pl.text)
 			segs = append(segs, val)
 			cur.Segments = append(cur.Segments, Segment{
 				ValStart: valOff, ValEnd: valOff + len(val),
-				SrcLine: pl.line, SrcCol: off + 1, SrcByte: pl.start + off,
+				SrcLine: lineBase + pl.line, SrcCol: off + 1, SrcByte: byteOffset + pl.start + off,
 			})
 			valOff += len(val) + 1 // +1 for the join newline
 			continue
@@ -127,22 +137,23 @@ func Tokenize(src string) []Token {
 
 		flush()
 		span := Span{
-			StartLine: pl.line, StartCol: 1,
-			EndLine: pl.line, EndCol: len(pl.text) + 1,
-			StartByte: pl.start, EndByte: endByte,
+			StartLine: lineBase + pl.line, StartCol: 1,
+			EndLine: lineBase + pl.line, EndCol: len(pl.text) + 1,
+			StartByte: byteOffset + pl.start, EndByte: byteOffset + endByte,
 		}
 		switch kind {
 		case KindAttribute:
 			name, val, off := splitAttr(pl.text)
-			cur = &Token{Kind: KindAttribute, Name: name, Raw: raw, Span: span}
+			cur = &Token{Kind: KindAttribute, Name: name, Span: span}
+			curStart = pl.start
 			segs = []string{val}
 			cur.Segments = []Segment{{
 				ValStart: 0, ValEnd: len(val),
-				SrcLine: pl.line, SrcCol: off + 1, SrcByte: pl.start + off,
+				SrcLine: lineBase + pl.line, SrcCol: off + 1, SrcByte: byteOffset + pl.start + off,
 			}}
 			valOff = len(val) + 1
 		default:
-			toks = append(toks, Token{Kind: kind, Raw: raw, Span: span})
+			toks = append(toks, Token{Kind: kind, Raw: src[pl.start:endByte], Span: span})
 		}
 	}
 	flush()
@@ -150,7 +161,8 @@ func Tokenize(src string) []Token {
 }
 
 // scanLines splits src into physical lines, preserving each line's terminator so
-// the bytes can be reassembled exactly.
+// the bytes can be reassembled exactly. A "\r" at the very end of input (with no
+// "\n" after it) is treated as that line's terminator.
 func scanLines(src string) []physLine {
 	var lines []physLine
 	i, lineNo := 0, 1
@@ -161,14 +173,18 @@ func scanLines(src string) []physLine {
 			j++
 		}
 		var text, term string
-		if j < len(src) { // hit a '\n'
+		switch {
+		case j < len(src): // hit a '\n'
 			if j > start && src[j-1] == '\r' {
 				text, term = src[start:j-1], "\r\n"
 			} else {
 				text, term = src[start:j], "\n"
 			}
 			i = j + 1
-		} else { // end of input, no trailing newline
+		case j > start && src[j-1] == '\r': // end of input after a lone '\r'
+			text, term = src[start:j-1], "\r"
+			i = j
+		default: // end of input, no trailing newline
 			text, term = src[start:j], ""
 			i = j
 		}

@@ -23,8 +23,8 @@ func (o *Object) GetFirst(name string) (Attribute, bool)
 func (o *Object) GetAll(name string) []Attribute      // case-insensitive, in order
 func (o *Object) Has(name string) bool
 func (o *Object) String() string                      // lossless re-serialization
-func (o *Object) Append(name, value string)           // editing support
-func (o *Object) Set(name string, values ...string)
+func (o *Object) Append(name, value string) error     // validated; newlines fold into continuations
+func (o *Object) Set(name string, values ...string) error // replaces in place, keeping alignment
 ```
 
 ```go
@@ -43,9 +43,11 @@ type Attribute struct {
 ```go
 obj := ast.New(lexer.Tokenize(src))
 
-nh, _ := obj.GetFirst("nic-hdl")       // read
-obj.Append("remarks", "added by tool") // edit
-fmt.Print(obj.String())                // re-serialize (original attrs unchanged byte-for-byte)
+nh, _ := obj.GetFirst("nic-hdl") // read
+if err := obj.Append("remarks", "added by tool"); err != nil {
+	// a name or value RPSL cannot represent (wraps ast.ErrInvalidAttribute)
+}
+fmt.Print(obj.String()) // re-serialize (original attrs unchanged byte-for-byte)
 ```
 
 This snippet is copied from the runnable [`ExampleObject`](example_test.go) test.

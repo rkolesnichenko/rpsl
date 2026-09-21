@@ -3,18 +3,18 @@ package policy
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
 // ASPathRE is a parsed AS-path regular expression (the body of a <...> term in
-// import/export policy, RFC 2622 §5.6). It is structured but NOT evaluated
+// import/export policy, RFC 2622 §5.4). It is structured but NOT evaluated
 // against live BGP paths — that is a separate consumer's job (design guardrail).
-// AnchorStart/AnchorEnd record a leading '^' / trailing '$'.
+// The '^' and '$' anchors are atoms of Body (ASPathStart / ASPathEnd), so they
+// may appear anywhere, e.g. "<AS1$|AS2$>".
 type ASPathRE struct {
-	AnchorStart bool
-	AnchorEnd   bool
-	Body        ASPathExpr
+	Body ASPathExpr
 }
 
 // ASPathExpr is the sealed AS-path regexp node.
@@ -23,15 +23,17 @@ type ASPathExpr interface{ isASPathExpr() }
 // ASPathAlt is a '|'-separated alternation of two or more branches.
 type ASPathAlt struct{ Alts []ASPathExpr }
 
-// ASPathSeq is an implicit concatenation of two or more terms.
+// ASPathSeq is an implicit concatenation of zero or more terms.
 type ASPathSeq struct{ Terms []ASPathExpr }
 
 // ASPathRepeat applies a quantifier to an inner expression. Max is -1 when
-// unbounded (for '*', '+', and open '{m,}' ranges).
+// unbounded (for '*', '+', and open '{m,}' ranges). Same marks the ~*, ~+ and
+// ~{m,n} forms, where every repetition must match the same AS.
 type ASPathRepeat struct {
 	Inner    ASPathExpr
 	Op       RepeatOp
 	Min, Max int
+	Same     bool
 }
 
 // ASPathAny is the '.' wildcard: any single AS.
@@ -43,12 +45,42 @@ type ASPathASN struct{ AS types.ASN }
 // ASPathSet matches any AS in the named as-set.
 type ASPathSet struct{ Name types.SetName }
 
-func (ASPathAlt) isASPathExpr()    {}
-func (ASPathSeq) isASPathExpr()    {}
-func (ASPathRepeat) isASPathExpr() {}
-func (ASPathAny) isASPathExpr()    {}
-func (ASPathASN) isASPathExpr()    {}
-func (ASPathSet) isASPathExpr()    {}
+// ASPathSetTemplate matches any AS in a per-peer as-set ("AS1:AS-X:PeerAS").
+type ASPathSetTemplate struct{ Template SetNameTemplate }
+
+// ASPathPeerAS matches the peer's AS (the PeerAS keyword).
+type ASPathPeerAS struct{}
+
+// ASPathStart is the '^' anchor: the beginning of the AS path.
+type ASPathStart struct{}
+
+// ASPathEnd is the '$' anchor: the end of the AS path.
+type ASPathEnd struct{}
+
+// ASPathClass is a bracketed AS set, "[...]", matching any one of its Items, or
+// none of them when Negated ("[^...]"). Items are ASPathASN, ASPathASNRange,
+// ASPathSet, ASPathSetTemplate, ASPathPeerAS, or ASPathAny.
+type ASPathClass struct {
+	Negated bool
+	Items   []ASPathExpr
+}
+
+// ASPathASNRange is an inclusive AS-number range ("AS1 - AS10"). It appears only
+// inside an ASPathClass.
+type ASPathASNRange struct{ Lo, Hi types.ASN }
+
+func (ASPathAlt) isASPathExpr()         {}
+func (ASPathSeq) isASPathExpr()         {}
+func (ASPathRepeat) isASPathExpr()      {}
+func (ASPathAny) isASPathExpr()         {}
+func (ASPathASN) isASPathExpr()         {}
+func (ASPathSet) isASPathExpr()         {}
+func (ASPathSetTemplate) isASPathExpr() {}
+func (ASPathPeerAS) isASPathExpr()      {}
+func (ASPathStart) isASPathExpr()       {}
+func (ASPathEnd) isASPathExpr()         {}
+func (ASPathClass) isASPathExpr()       {}
+func (ASPathASNRange) isASPathExpr()    {}
 
 // RepeatOp distinguishes the quantifier forms.
 type RepeatOp uint8
@@ -78,6 +110,10 @@ const (
 	reLBrace
 	reRBrace
 	reComma
+	reLBracket
+	reRBracket
+	reTilde
+	reDash
 	reEOF
 )
 
@@ -86,52 +122,24 @@ type reToken struct {
 	text string
 }
 
-func reTokenize(body string) []reToken {
+// reSingle maps the one-byte regexp operators to their token kinds.
+var reSingle = map[byte]reTokKind{
+	'^': reCaret, '$': reDollar, '.': reDot, '*': reStar, '+': rePlus,
+	'?': reQuest, '|': rePipe, '(': reLParen, ')': reRParen, '{': reLBrace,
+	'}': reRBrace, ',': reComma, '[': reLBracket, ']': reRBracket, '~': reTilde,
+	'-': reDash,
+}
+
+// reTokenize splits a regexp body into tokens. A byte that is neither
+// whitespace, an operator, nor part of a word is an error: skipping it would
+// silently change the expression's meaning.
+func reTokenize(body string) ([]reToken, error) {
 	var toks []reToken
 	i, n := 0, len(body)
-	emit := func(k reTokKind) { toks = append(toks, reToken{kind: k}) }
 	for i < n {
 		c := body[i]
 		switch {
 		case c == ' ' || c == '\t' || c == '\r' || c == '\n':
-			i++
-		case c == '^':
-			emit(reCaret)
-			i++
-		case c == '$':
-			emit(reDollar)
-			i++
-		case c == '*':
-			emit(reStar)
-			i++
-		case c == '+':
-			emit(rePlus)
-			i++
-		case c == '?':
-			emit(reQuest)
-			i++
-		case c == '|':
-			emit(rePipe)
-			i++
-		case c == '(':
-			emit(reLParen)
-			i++
-		case c == ')':
-			emit(reRParen)
-			i++
-		case c == '{':
-			emit(reLBrace)
-			i++
-		case c == '}':
-			emit(reRBrace)
-			i++
-		case c == ',':
-			emit(reComma)
-			i++
-		case c == '.':
-			// A standalone '.' is the any-AS wildcard; asdot '.' inside an ASN
-			// (e.g. AS1.10) is absorbed by the word scanner below.
-			emit(reDot)
 			i++
 		case isWordStart(c):
 			j := i
@@ -140,7 +148,7 @@ func reTokenize(body string) []reToken {
 					j++
 					continue
 				}
-				if body[j] == '.' && j+1 < n && isDigit(body[j+1]) { // asdot
+				if body[j] == '.' && j+1 < n && isDigit(body[j+1]) { // asdot, e.g. AS1.10
 					j++
 					continue
 				}
@@ -149,10 +157,15 @@ func reTokenize(body string) []reToken {
 			toks = append(toks, reToken{kind: reWord, text: body[i:j]})
 			i = j
 		default:
-			i++ // skip unknown byte; never stall
+			k, ok := reSingle[c]
+			if !ok {
+				return nil, fmt.Errorf("rpsl/policy: unexpected %q in AS-path regexp", c)
+			}
+			toks = append(toks, reToken{kind: k})
+			i++
 		}
 	}
-	return append(toks, reToken{kind: reEOF})
+	return append(toks, reToken{kind: reEOF}), nil
 }
 
 func isDigit(c byte) bool     { return c >= '0' && c <= '9' }
@@ -173,6 +186,12 @@ type reParser struct {
 }
 
 func (p *reParser) cur() reToken { return p.toks[p.pos] }
+func (p *reParser) peek() reToken {
+	if p.pos+1 < len(p.toks) {
+		return p.toks[p.pos+1]
+	}
+	return p.toks[len(p.toks)-1]
+}
 func (p *reParser) advance() {
 	if p.pos < len(p.toks)-1 {
 		p.pos++
@@ -182,25 +201,19 @@ func (p *reParser) advance() {
 // ParseASPathRegexp parses the interior of a <...> AS-path regexp (no angle
 // brackets). It returns a structured AST or an error; it never panics.
 func ParseASPathRegexp(body string) (*ASPathRE, error) {
-	p := &reParser{toks: reTokenize(body)}
-	re := &ASPathRE{}
-	if p.cur().kind == reCaret {
-		re.AnchorStart = true
-		p.advance()
+	toks, err := reTokenize(body)
+	if err != nil {
+		return nil, err
 	}
+	p := &reParser{toks: toks}
 	expr, err := p.parseAlt()
 	if err != nil {
 		return nil, err
 	}
-	re.Body = expr
-	if p.cur().kind == reDollar {
-		re.AnchorEnd = true
-		p.advance()
-	}
 	if p.cur().kind != reEOF {
 		return nil, fmt.Errorf("rpsl/policy: trailing tokens in AS-path regexp %q", body)
 	}
-	return re, nil
+	return &ASPathRE{Body: expr}, nil
 }
 
 func (p *reParser) parseAlt() (ASPathExpr, error) {
@@ -246,59 +259,93 @@ func (p *reParser) parseSeq() (ASPathExpr, error) {
 }
 
 func isAtomStart(k reTokKind) bool {
-	return k == reWord || k == reDot || k == reLParen
+	switch k {
+	case reWord, reDot, reLParen, reLBracket, reCaret, reDollar:
+		return true
+	}
+	return false
 }
 
+// parseTerm parses an atom and any postfix quantifiers applied to it.
 func (p *reParser) parseTerm() (ASPathExpr, error) {
 	atom, err := p.parseAtom()
 	if err != nil {
 		return nil, err
 	}
-	switch p.cur().kind {
-	case reStar:
-		p.advance()
-		return ASPathRepeat{Inner: atom, Op: RepeatStar, Min: 0, Max: -1}, nil
-	case rePlus:
-		p.advance()
-		return ASPathRepeat{Inner: atom, Op: RepeatPlus, Min: 1, Max: -1}, nil
-	case reQuest:
-		p.advance()
-		return ASPathRepeat{Inner: atom, Op: RepeatQuest, Min: 0, Max: 1}, nil
-	case reLBrace:
-		return p.parseRange(atom)
-	default:
-		return atom, nil
+	for {
+		same := false
+		if p.cur().kind == reTilde {
+			switch p.peek().kind {
+			case reStar, rePlus, reLBrace:
+				same = true
+				p.advance()
+			default:
+				return nil, fmt.Errorf("rpsl/policy: '~' must be followed by *, + or {m,n}")
+			}
+		}
+		var rep ASPathRepeat
+		switch p.cur().kind {
+		case reStar:
+			p.advance()
+			rep = ASPathRepeat{Op: RepeatStar, Min: 0, Max: -1}
+		case rePlus:
+			p.advance()
+			rep = ASPathRepeat{Op: RepeatPlus, Min: 1, Max: -1}
+		case reQuest:
+			p.advance()
+			rep = ASPathRepeat{Op: RepeatQuest, Min: 0, Max: 1}
+		case reLBrace:
+			if rep, err = p.parseRange(); err != nil {
+				return nil, err
+			}
+		default:
+			return atom, nil
+		}
+		switch atom.(type) {
+		case ASPathStart, ASPathEnd:
+			return nil, fmt.Errorf("rpsl/policy: quantifier applied to an anchor")
+		}
+		rep.Inner, rep.Same = atom, same
+		atom = rep
 	}
 }
 
-func (p *reParser) parseRange(atom ASPathExpr) (ASPathExpr, error) {
+// parseRange parses a {m}, {m,} or {m,n} quantifier.
+func (p *reParser) parseRange() (ASPathRepeat, error) {
 	p.advance() // '{'
-	if p.cur().kind != reWord {
-		return nil, fmt.Errorf("rpsl/policy: expected number in {m,n} quantifier")
-	}
-	min, err := strconv.Atoi(p.cur().text)
+	lo, err := p.quantBound("lower")
 	if err != nil {
-		return nil, fmt.Errorf("rpsl/policy: invalid {m,n} lower bound %q", p.cur().text)
+		return ASPathRepeat{}, err
 	}
-	p.advance()
-	max := min
+	hi := lo
 	if p.cur().kind == reComma {
 		p.advance()
 		if p.cur().kind == reWord { // {m,n}
-			max, err = strconv.Atoi(p.cur().text)
-			if err != nil {
-				return nil, fmt.Errorf("rpsl/policy: invalid {m,n} upper bound %q", p.cur().text)
+			if hi, err = p.quantBound("upper"); err != nil {
+				return ASPathRepeat{}, err
 			}
-			p.advance()
 		} else { // {m,}
-			max = -1
+			hi = -1
 		}
 	}
 	if p.cur().kind != reRBrace {
-		return nil, fmt.Errorf("rpsl/policy: expected '}' in quantifier")
+		return ASPathRepeat{}, fmt.Errorf("rpsl/policy: expected '}' in quantifier")
 	}
 	p.advance()
-	return ASPathRepeat{Inner: atom, Op: RepeatRange, Min: min, Max: max}, nil
+	if hi >= 0 && hi < lo {
+		return ASPathRepeat{}, fmt.Errorf("rpsl/policy: quantifier {%d,%d} has min > max", lo, hi)
+	}
+	return ASPathRepeat{Op: RepeatRange, Min: lo, Max: hi}, nil
+}
+
+func (p *reParser) quantBound(which string) (int, error) {
+	t := p.cur()
+	v, err := strconv.Atoi(t.text)
+	if t.kind != reWord || err != nil || v < 0 {
+		return 0, fmt.Errorf("rpsl/policy: invalid {m,n} %s bound %q", which, t.text)
+	}
+	p.advance()
+	return v, nil
 }
 
 func (p *reParser) parseAtom() (ASPathExpr, error) {
@@ -315,9 +362,17 @@ func (p *reParser) parseAtom() (ASPathExpr, error) {
 		}
 		p.advance()
 		return inner, nil
+	case reLBracket:
+		return p.parseClass()
 	case reDot:
 		p.advance()
 		return ASPathAny{}, nil
+	case reCaret:
+		p.advance()
+		return ASPathStart{}, nil
+	case reDollar:
+		p.advance()
+		return ASPathEnd{}, nil
 	case reWord:
 		p.advance()
 		return classifyASPathWord(t.text)
@@ -326,17 +381,94 @@ func (p *reParser) parseAtom() (ASPathExpr, error) {
 	}
 }
 
-// classifyASPathWord resolves a word to an ASN (plain digits or AS-prefixed) or
-// an as-set reference.
-func classifyASPathWord(w string) (ASPathExpr, error) {
-	if v, err := strconv.ParseUint(w, 10, 32); err == nil { // plain ASN, e.g. "3333"
-		return ASPathASN{AS: types.ASN(v)}, nil
+// parseClass parses "[...]" or "[^...]": ASNs, AS ranges ("AS1 - AS10" or
+// "AS1-AS10"), as-sets, templates, PeerAS, and '.'.
+func (p *reParser) parseClass() (ASPathExpr, error) {
+	p.advance() // '['
+	var c ASPathClass
+	if p.cur().kind == reCaret {
+		c.Negated = true
+		p.advance()
 	}
-	if as, err := types.ParseASN(w); err == nil {
+	for p.cur().kind != reRBracket {
+		t := p.cur()
+		switch t.kind {
+		case reDot:
+			p.advance()
+			c.Items = append(c.Items, ASPathAny{})
+		case reWord:
+			p.advance()
+			item, err := classifyASPathWord(t.text)
+			if err != nil {
+				lo, hi, ok := strings.Cut(t.text, "-")
+				if !ok {
+					return nil, err
+				}
+				if item, err = asnRange(lo, hi); err != nil {
+					return nil, err
+				}
+			} else if p.cur().kind == reDash { // "AS1 - AS10"
+				p.advance()
+				if p.cur().kind != reWord {
+					return nil, fmt.Errorf("rpsl/policy: expected AS number after '-' in [...]")
+				}
+				first, ok := item.(ASPathASN)
+				if !ok {
+					return nil, fmt.Errorf("rpsl/policy: range bound %q is not an AS number", t.text)
+				}
+				if item, err = asnRange(first.AS.String(), p.cur().text); err != nil {
+					return nil, err
+				}
+				p.advance()
+			}
+			c.Items = append(c.Items, item)
+		default:
+			return nil, fmt.Errorf("rpsl/policy: unexpected token in AS-path [...] set")
+		}
+	}
+	p.advance() // ']'
+	if len(c.Items) == 0 {
+		return nil, fmt.Errorf("rpsl/policy: empty [...] set in AS-path regexp")
+	}
+	return c, nil
+}
+
+// asnRange builds an inclusive AS range from two AS-number words.
+func asnRange(lo, hi string) (ASPathExpr, error) {
+	l, err1 := parseRegexpASN(lo)
+	h, err2 := parseRegexpASN(hi)
+	if err1 != nil || err2 != nil {
+		return nil, fmt.Errorf("rpsl/policy: invalid AS range %s-%s", lo, hi)
+	}
+	if h < l {
+		return nil, fmt.Errorf("rpsl/policy: AS range %s-%s is reversed", lo, hi)
+	}
+	return ASPathASNRange{Lo: l, Hi: h}, nil
+}
+
+// parseRegexpASN accepts plain ("3333") and AS-prefixed ("AS3333", "AS1.10")
+// AS numbers.
+func parseRegexpASN(w string) (types.ASN, error) {
+	if v, err := strconv.ParseUint(w, 10, 32); err == nil {
+		return types.ASN(v), nil
+	}
+	return types.ParseASN(w)
+}
+
+// classifyASPathWord resolves a word to an ASN, PeerAS, an as-set, or a PeerAS
+// set-name template.
+func classifyASPathWord(w string) (ASPathExpr, error) {
+	if as, err := parseRegexpASN(w); err == nil {
 		return ASPathASN{AS: as}, nil
+	}
+	if strings.EqualFold(w, "peeras") {
+		return ASPathPeerAS{}, nil
 	}
 	if sn, err := types.ParseSetName(w); err == nil {
 		return ASPathSet{Name: sn}, nil
+	}
+	if tpl, err := ParseSetNameTemplate(w); err == nil {
+		return ASPathSetTemplate{Template: tpl}, nil
 	}
 	return nil, fmt.Errorf("rpsl/policy: invalid AS-path term %q", w)
 }

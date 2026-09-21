@@ -76,13 +76,17 @@ func ExampleDecode() {
 	// diagnostics: 0
 }
 
-// ExampleValidate checks an object against a dictionary profile. The RFC-strict
-// profile flags RIPE's legacy changed: attribute; the RIPE profile tolerates it.
+// ExampleValidate checks an object against a dictionary profile. This route is
+// RFC 2622-conformant apart from created:, which the RIPE Database generates:
+// the RFC-strict profile flags it; the RIPE profile tolerates it.
 func ExampleValidate() {
 	src := "route:   192.0.2.0/24\n" +
+		"descr:   Example route\n" +
 		"origin:  AS65000\n" +
-		"changed: ops@example.net 20200101\n" +
+		"tech-c:  EX1-RIPE\n" +
 		"mnt-by:  EXAMPLE-MNT\n" +
+		"changed: ops@example.net 20200101\n" +
+		"created: 2020-01-01T00:00:00Z\n" +
 		"source:  RIPE\n"
 
 	obj, _ := rpsl.ParseObject(src)

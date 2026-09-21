@@ -5,10 +5,7 @@
 package rpsl
 
 import (
-	"bufio"
-	"io"
-	"iter"
-	"strings"
+	"fmt"
 
 	"github.com/rkolesnichenko/rpsl/ast"
 	"github.com/rkolesnichenko/rpsl/lexer"
@@ -46,106 +43,18 @@ const (
 )
 
 // ParseObject parses exactly one object, returning the object plus any
-// diagnostics. The returned object round-trips: obj.String() == text.
+// diagnostics. The returned object round-trips: obj.String() == text. Positions
+// are relative to text. Text holding more than one object still parses and
+// round-trips as one, with a Warning ("rpsl/multiple-objects"); use Parse for
+// dumps.
 func ParseObject(text string) (*ast.Object, []Diagnostic) {
-	toks := lexer.Tokenize(text)
+	return parseObjectAt(text, 1, 0)
+}
+
+// parseObjectAt parses text that begins at the given line and byte of a stream.
+func parseObjectAt(text string, line, byteOffset int) (*ast.Object, []Diagnostic) {
+	toks := lexer.TokenizeAt(text, line, byteOffset)
 	return ast.New(toks), diagnose(toks)
-}
-
-// ParseOptions tunes streaming parser behavior. The zero value is the legacy
-// unbounded behavior (compatible with Parse).
-type ParseOptions struct {
-	// MaxObjectBytes caps the size of a single parsed object. When > 0 and the
-	// in-progress object's source exceeds it, the parser emits an Error
-	// diagnostic ("rpsl/object-too-large") and resumes at the next blank line.
-	// This protects callers against hostile dumps that withhold blank-line
-	// separators to drive the per-object buffer to OOM.
-	MaxObjectBytes int64
-}
-
-// Parse lazily parses a stream of blank-line-separated objects (IRR dumps,
-// whois output). It yields one object at a time, holding only the current
-// object in memory, so multi-gigabyte dumps stream rather than load wholesale.
-// For untrusted input, prefer ParseWith with a MaxObjectBytes cap.
-func Parse(r io.Reader) iter.Seq2[*ast.Object, []Diagnostic] {
-	return ParseWith(r, ParseOptions{})
-}
-
-// ParseWith is Parse with explicit options.
-func ParseWith(r io.Reader, opts ParseOptions) iter.Seq2[*ast.Object, []Diagnostic] {
-	return func(yield func(*ast.Object, []Diagnostic) bool) {
-		br := bufio.NewReader(r)
-		var buf strings.Builder
-		hasAttr := false
-		dropping := false // true when the current object exceeded MaxObjectBytes
-
-		emit := func() bool {
-			if buf.Len() == 0 {
-				dropping = false
-				return true
-			}
-			obj, d := ParseObject(buf.String())
-			buf.Reset()
-			hasAttr = false
-			dropping = false
-			return yield(obj, d)
-		}
-
-		emitOversize := func() bool {
-			// Surface the cap breach as a single Error diagnostic on an empty
-			// object, then drop the buffer and skip to the next blank line so
-			// subsequent objects in the stream still parse.
-			buf.Reset()
-			hasAttr = false
-			dropping = true
-			diag := Diagnostic{
-				Severity: Error,
-				Message:  "object exceeds MaxObjectBytes; truncated",
-				Rule:     "rpsl/object-too-large",
-			}
-			return yield(&ast.Object{}, []Diagnostic{diag})
-		}
-
-		for {
-			line, err := br.ReadString('\n')
-			if len(line) > 0 {
-				switch {
-				case isBlankLine(line):
-					if dropping {
-						dropping = false
-					} else if hasAttr {
-						if !emit() {
-							return
-						}
-						// the separating blank is consumed, not attached
-					} else {
-						buf.WriteString(line) // leading trivia for the next object
-					}
-				default:
-					if dropping {
-						break // skip until the next blank-line separator
-					}
-					if opts.MaxObjectBytes > 0 &&
-						int64(buf.Len())+int64(len(line)) > opts.MaxObjectBytes {
-						if !emitOversize() {
-							return
-						}
-						break
-					}
-					buf.WriteString(line)
-					if isAttrStart(line) {
-						hasAttr = true
-					}
-				}
-			}
-			if err != nil {
-				break
-			}
-		}
-		if !dropping {
-			emit()
-		}
-	}
 }
 
 // Decode upgrades a generic object to its typed form (AutNum, Route, AsSet, …),
@@ -162,37 +71,56 @@ func Validate(o *ast.Object, p Profile) []Diagnostic {
 	return p.Validate(o)
 }
 
-// diagnose reports malformed lines surfaced by the lexer.
+// diagnose reports what the lexer surfaced: malformed lines, attribute names
+// RPSL does not allow, and a second object inside what should be one.
 func diagnose(toks []lexer.Token) []Diagnostic {
 	var ds []Diagnostic
+	seenAttr, blankAfterAttr, warned := false, false, false
 	for _, t := range toks {
-		if t.Kind == lexer.KindMalformed {
+		switch t.Kind {
+		case lexer.KindMalformed:
 			ds = append(ds, ast.Diagnostic{
 				Severity: ast.Error,
 				Message:  "line is not a valid attribute, continuation, comment, or blank",
 				Span:     t.Span,
 				Rule:     "lexer/malformed-line",
 			})
+		case lexer.KindBlank:
+			blankAfterAttr = seenAttr
+		case lexer.KindAttribute:
+			if !validAttrName(t.Name) {
+				ds = append(ds, ast.Diagnostic{
+					Severity: ast.Error,
+					Message:  fmt.Sprintf("invalid attribute name %q", t.Name),
+					Span:     t.Span,
+					Rule:     "lexer/invalid-attribute-name",
+				})
+			}
+			if blankAfterAttr && !warned {
+				warned = true
+				ds = append(ds, ast.Diagnostic{
+					Severity: ast.Warning,
+					Message:  "text holds more than one object; use Parse for multi-object input",
+					Span:     t.Span,
+					Rule:     "rpsl/multiple-objects",
+				})
+			}
+			seenAttr = true
 		}
 	}
 	return ds
 }
 
-func isBlankLine(line string) bool {
-	return strings.Trim(strings.TrimRight(line, "\r\n"), " \t") == ""
-}
-
-func isAttrStart(line string) bool {
-	s := strings.TrimRight(line, "\r\n")
-	if s == "" {
+// validAttrName reports whether a (lower-cased) attribute name is well formed:
+// a letter followed by letters, digits, '-' or '_'.
+func validAttrName(n string) bool {
+	if n == "" || n[0] < 'a' || n[0] > 'z' {
 		return false
 	}
-	switch s[0] {
-	case ' ', '\t', '+', '#':
-		return false
+	for i := 1; i < len(n); i++ {
+		if c := n[i]; !('a' <= c && c <= 'z') && !('0' <= c && c <= '9') && c != '-' && c != '_' {
+			return false
+		}
 	}
-	if h := strings.IndexByte(s, '#'); h >= 0 {
-		s = s[:h]
-	}
-	return strings.IndexByte(s, ':') >= 0
+	return true
 }

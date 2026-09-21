@@ -103,3 +103,30 @@ func TestDefaultAppliesToWildcard(t *testing.T) {
 		t.Errorf("afi any default should apply to both families, AFIs = %v", any.AFIs)
 	}
 }
+
+// RFC 4012 §2.5: an mp-* value with no afi clause applies to every family,
+// while a legacy import:/export:/default: means ipv4.unicast only.
+func TestMPWithoutAFIAppliesToAll(t *testing.T) {
+	v4m := types.AddrFamily{AFI: types.AFIv4, SAFI: types.SAFIMulticast}
+	imp, _ := ParseMPImport("from AS1 accept ANY")
+	exp, _ := ParseMPExport("to AS1 announce ANY")
+	def, _ := ParseMPDefault("to AS1")
+	for name, applies := range map[string]func(types.AddrFamily) bool{
+		"mp-import": imp.AppliesTo, "mp-export": exp.AppliesTo, "mp-default": def.AppliesTo,
+	} {
+		if !applies(v4u) || !applies(v6u) || !applies(v4m) {
+			t.Errorf("%s without afi: v4u=%v v6u=%v v4m=%v, want all true", name, applies(v4u), applies(v6u), applies(v4m))
+		}
+	}
+	if !imp.MP || !imp.Unscoped() {
+		t.Errorf("mp-import: MP=%v Unscoped=%v, want both true", imp.MP, imp.Unscoped())
+	}
+	legacy, _ := ParseImport("from AS1 accept ANY")
+	if legacy.MP || legacy.AppliesTo(v6u) || legacy.AppliesTo(v4m) || !legacy.AppliesTo(v4u) {
+		t.Errorf("legacy import must be ipv4.unicast only (MP=%v)", legacy.MP)
+	}
+	scoped, _ := ParseMPImport("afi ipv6.unicast from AS1 accept ANY")
+	if scoped.AppliesTo(v4u) || !scoped.AppliesTo(v6u) {
+		t.Errorf("mp-import afi ipv6.unicast must apply to ipv6.unicast only")
+	}
+}

@@ -236,13 +236,14 @@ source:    RIPE
 	}
 }
 
-// A prefix-range in an as-set is the wrong shape: kept best-effort, one Warning.
+// A prefix-range in an as-set is the wrong shape: it is kept as MemberInvalid
+// (so the engine never materializes it) with one Warning.
 func TestWrongClassMemberWarns(t *testing.T) {
 	o := parse("as-set: AS-FOO\nmembers: 192.0.2.0/24^+\n")
 	obj, diags := Decode(o)
 	s := obj.(AsSet)
-	if len(s.Members) != 1 || s.Members[0].Kind != MemberPrefixRange {
-		t.Errorf("member not kept: %v", s.Members)
+	if len(s.Members) != 1 || s.Members[0].Kind != MemberInvalid || s.Members[0].Raw != "192.0.2.0/24^+" {
+		t.Errorf("members = %+v, want one MemberInvalid with its Raw", s.Members)
 	}
 	if len(diags) != 1 || diags[0].Severity != ast.Warning {
 		t.Errorf("diags = %+v, want one warning", diags)
@@ -255,23 +256,28 @@ func TestWrongClassMemberWarns(t *testing.T) {
 func TestSetMemberClassMismatchWarns(t *testing.T) {
 	cases := []struct {
 		name, src string
+		warn      bool
 	}{
-		{"route-set member in as-set", "as-set: AS-FOO\nmembers: RS-BAR\n"},
-		{"as-set member in route-set", "route-set: RS-FOO\nmembers: AS-BAR\n"},
+		{"route-set member in as-set", "as-set: AS-FOO\nmembers: RS-BAR\n", true},
+		{"rtr-set member in route-set", "route-set: RS-FOO\nmembers: RTRS-BAR\n", true},
+		{"filter-set member in route-set", "route-set: RS-FOO\nmembers: FLTR-BAR\n", true},
+		// RFC 2622 §5.2: a route-set may list as-sets (the routes their ASes
+		// originate) and other route-sets; an as-set may list as-sets.
+		{"as-set member in route-set", "route-set: RS-FOO\nmembers: AS-BAR\n", false},
+		{"route-set member in route-set", "route-set: RS-FOO\nmembers: RS-BAR\n", false},
+		{"as-set member in as-set", "as-set: AS-FOO\nmembers: AS-BAR\n", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			o := parse(tc.src)
-			_, diags := Decode(o)
+			_, diags := Decode(parse(tc.src))
 			var warned bool
 			for _, d := range diags {
-				if d.Severity == ast.Warning &&
-					strings.Contains(d.Message, "expected") {
+				if d.Severity == ast.Warning && strings.Contains(d.Message, "expected") {
 					warned = true
 				}
 			}
-			if !warned {
-				t.Errorf("no class-mismatch warning emitted: %+v", diags)
+			if warned != tc.warn {
+				t.Errorf("class-mismatch warning = %v, want %v: %+v", warned, tc.warn, diags)
 			}
 		})
 	}

@@ -22,37 +22,53 @@ type Source interface {
 }
 ```
 
-`GetSet` returns `ErrNotFound` for a missing set (the engine treats it as an empty
-expansion, not a fatal error). `MembersByRef` backs the indirect `mbrs-by-ref`
-membership mechanism, performing the mntner check.
+`GetSet` returns `ErrNotFound` for a missing set: a missing *nested* set expands to
+nothing and is listed by the result's `Missing()`, while a missing top-level set is
+an error. `MembersByRef` backs the indirect `mbrs-by-ref` membership mechanism;
+implementations should filter with `resolve.ClaimAllowed`, and the engine re-checks
+every returned claim anyway. `NewMemSource(objs, "RIPE", "RADB")` takes an optional
+source precedence for set names defined in several IRRs.
 
 ## The `Expander`
 
 ```go
 type Expander struct {
 	Src         Source
-	MaxDepth    int       // set-nesting depth cap (default 32)
-	MaxPrefixes int       // hard cap on prefix output (default 1<<20)
+	MaxDepth    int       // cap on shortest nesting distance from the top (default 32)
+	MaxPrefixes int       // cap on output prefixes, or ranges (default 1<<20)
+	MaxVisited  int       // cap on distinct sets fetched (default 1<<17)
 	AFI         types.AFI // address-family constraint; Unspecified/Any = both
-	Sources     []string  // IRR source precedence (advisory; the Source decides)
 }
 
 func (e *Expander) ExpandAS(ctx context.Context, n types.SetName) (ASSet, error)
 func (e *Expander) ExpandPrefixes(ctx context.Context, n types.SetName) (PrefixSet, error)
+func (e *Expander) ExpandPrefixRanges(ctx context.Context, n types.SetName) (RangeSet, error)
 ```
 
-`ASSet`/`PrefixSet` are deduplicated sets with `Has`, `Len`, and a sorted `List`.
+`ASSet`/`PrefixSet`/`RangeSet` are deduplicated sets with `Has`, `Len`, a sorted
+`List`, and `Missing` (nested sets that were referenced but not found).
+`ExpandPrefixRanges` returns ranges before materialization — bgpq4's `le`/`ge`
+form — which is the only usable form for sets containing ranges like `/8^+`.
 
 ### Engine semantics
 
-- **Cycle detection** — DFS with a visited set keyed by canonical set name; a
-  revisit is *skipped, not an error* (matches `bgpq4`).
+- **Two phases** — discovery walks the set graph breadth-first, fetching each set
+  once, so a set's depth is its shortest nesting distance and the result never
+  depends on member order; evaluation then builds the result without further I/O.
+  Each AS's routes are fetched once per call.
+- **Cycle detection** — a revisit is *skipped, not an error* (matches `bgpq4`). A
+  cycle re-entered under a different range operator (`RS-A` lists `RS-B^+`,
+  `RS-B` lists `RS-A`) returns `ErrCyclicOperator` instead of an undersized result.
+- **Range operators on members** — `RS-FOO^+` and `AS1^24` apply to every range of
+  the set or route of the AS, composing along the path (RFC 2622 §5.2).
 - **Dual membership** — direct `members:`/`mp-members:` unioned with indirect
   `member-of:` claims, the latter honored only via `mbrs-by-ref:` + the mntner
   check. Skipping that check is a silent, hijack-relevant bug, so the engine
   enforces it through `MembersByRef`.
-- **Fan-out guard** — `MaxPrefixes` is checked *during* enumeration; a too-large
-  expansion returns a typed `ErrSetTooLarge{Name, Count}` rather than OOM-ing.
+- **Fan-out guards** — `MaxPrefixes` is checked *during* enumeration (duplicates
+  are free), `MaxVisited` bounds the sets fetched, and `MaxDepth` bounds nesting;
+  each returns `ErrSetTooLarge{Name, Limit, Count}` naming the cap rather than
+  OOM-ing or truncating silently. `AS-ANY`/`RS-ANY` return `ErrAnySet`.
 - **AFI constraint** — `AFIv4` drops IPv6 members and vice versa; `any`/unspecified
   keeps both.
 
@@ -87,7 +103,7 @@ unchanged.
 | --- | --- | --- |
 | `resolve/irrd` | IRRd query port (`whois.radb.net:43`, NTT, …) via `!i`/`!g`/`!6` | server-side; `MembersByRef` is a no-op (already folded into `!i`) |
 | `resolve/whois` | plain WHOIS (`whois.ripe.net:43`) | resolves indirect membership itself via inverse queries + local mntner check |
-| `resolve/rdap` | RDAP registration metadata (`rdap.db.ripe.net`) | registration lookups only; its `SetSource` is a no-op adapter (RDAP has no IRR set objects) |
+| `resolve/rdap` | RDAP registration metadata (`rdap.db.ripe.net`) | registration lookups only — not a `Source` (RDAP has no IRR set objects) |
 
 ```go
 import "github.com/rkolesnichenko/rpsl/resolve/irrd"
@@ -104,14 +120,32 @@ e := &resolve.Expander{Src: irr, AFI: types.AFIv4}
 asns, err := e.ExpandAS(ctx, name)
 ```
 
+Every `irrd` and `whois` query honours its context: cancelling it (or its deadline
+passing) aborts a pending read at once, and `Timeout` (default `DefaultTimeout`,
+60 s; negative = none) bounds each query even under `context.Background()`.
+`irrd.MaxConns` (default 4) bounds concurrent connections; with `KeepAlive`, a
+pooled connection the server has closed is retried once on a fresh one, and a
+refused `!s` source list is an error rather than "not found". A whois server
+error other than "no entries" is returned as `whois.ErrServer` (e.g. RIPE's
+`%ERROR:201` rate limiting), never as an empty result.
+
+Without `KeepAlive`, `irrd` still sends `!!` first on every connection: IRRd
+closes a connection after one command otherwise, and the `!s` source selection
+would consume it.
+
 The `irrd` and `whois` sources accept a `Dial func(ctx) (net.Conn, error)` hook,
 which the test suite uses to drive in-process fake servers without real network.
+The fakes model IRRd's one-command-without-`!!` behaviour. `RPSL_LIVE=1 go test
+-run TestLiveSmoke .` checks all three backends read-only against RADB, RIPE
+whois and RIPE RDAP.
 
 ## Correctness
 
-`resolve` ships a checked-in golden snapshot (`testdata/`) diffed against expected
-`bgpq4` output on every `go test`; an optional live `bgpq4` differential is gated
-on `RPSL_BGPQ4_SERVER` / `RPSL_BGPQ4_SET`.
+`resolve` ships a small synthetic snapshot (`testdata/`) with hand-checked golden
+expansions, compared on every `go test`, plus property tests that check expansion
+against an independent reachability oracle on random cyclic graphs. Only the
+optional live differential, gated on `RPSL_BGPQ4_SERVER` / `RPSL_BGPQ4_SET`, runs
+`bgpq4` itself (and compares ASNs).
 
 See the [root README](../README.md) and
 [GoDoc](https://pkg.go.dev/github.com/rkolesnichenko/rpsl/resolve).

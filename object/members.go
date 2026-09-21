@@ -2,7 +2,10 @@ package object
 
 import (
 	"fmt"
+	"strings"
+	"unicode"
 
+	"github.com/rkolesnichenko/rpsl/ast"
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
@@ -10,52 +13,118 @@ import (
 type MemberKind uint8
 
 const (
-	MemberAS          MemberKind = iota // a bare ASN
-	MemberSet                           // a nested set name
+	MemberInvalid     MemberKind = iota // unparseable (the zero value); only Raw is meaningful
+	MemberAS                            // an ASN, optionally with a range operator (route-set only)
+	MemberSet                           // a nested set name, optionally with a range operator (route-set only)
 	MemberPrefixRange                   // a prefix with optional range op (route-set only)
 )
 
-// SetMember is a single entry from a members:/mp-members: list. It is a tagged
-// union: exactly one of AS/Set/Range is meaningful per Kind. Raw preserves the
-// original token regardless, so a member of unexpected shape is still kept.
+func (k MemberKind) String() string {
+	switch k {
+	case MemberAS:
+		return "as"
+	case MemberSet:
+		return "set"
+	case MemberPrefixRange:
+		return "prefix-range"
+	default:
+		return "invalid"
+	}
+}
+
+// SetMember is a single item from a members:/mp-members: list. It is a tagged
+// union: exactly one of AS/Set/Range is meaningful per Kind, and Op may qualify
+// an AS or Set member of a route-set ("AS1^24", "RS-FOO^+"; RFC 2622 §5.2). Raw
+// preserves the item's text regardless, so a member of unexpected shape is
+// still kept.
 type SetMember struct {
 	Kind  MemberKind
 	AS    types.ASN
 	Set   types.SetName
 	Range types.PrefixRange
+	Op    types.RangeOperator
 	Raw   string
 }
 
-// members parses every value of name into SetMembers. as-set members may be a
-// bare ASN or a nested set; route-set members additionally allow prefix-ranges
-// (allowRange). containerClass is the expected class of nested set references
-// (AsSet for as-set, RouteSet for route-set); a mismatch is kept but flagged
-// with a Warning. A token of unexpected shape for the class is kept best-effort
-// and flagged rather than dropped.
-func (d *decoder) members(name, rule string, allowRange bool, containerClass types.SetClass) []SetMember {
+// ParseSetMember parses one list item of a members:/mp-members: value for a
+// set of class container. Range operators and prefix-ranges are accepted only
+// for types.RouteSet. On failure it returns a MemberInvalid member (never a
+// MemberAS) carrying Raw, plus an error. A nested set of a different class is
+// not an error here; the decoder flags it separately.
+func ParseSetMember(item string, container types.SetClass) (SetMember, error) {
+	m := SetMember{Raw: item}
+	s := strings.TrimSpace(item)
+	if s == "" || strings.ContainsFunc(s, unicode.IsSpace) {
+		return m, fmt.Errorf("invalid %s member %q", container, item)
+	}
+	routeSet := container == types.RouteSet
+	base, opText, hasOp := strings.Cut(s, "^")
+
+	var op types.RangeOperator
+	if hasOp {
+		o, err := types.ParseRangeOperator(opText)
+		if err == nil {
+			op = o
+		} else {
+			hasOp = false // not an AS/set operator; may still be a prefix-range
+			base = ""
+		}
+	}
+	if base != "" {
+		kind := MemberInvalid
+		if as, err := types.ParseASN(base); err == nil {
+			kind, m.AS = MemberAS, as
+		} else if sn, err := types.ParseSetName(base); err == nil {
+			kind, m.Set = MemberSet, sn
+		}
+		if kind != MemberInvalid {
+			if hasOp && !routeSet {
+				m.AS, m.Set = 0, types.SetName{}
+				return m, fmt.Errorf("range operator not valid in %s member %q", container, item)
+			}
+			m.Kind, m.Op = kind, op
+			return m, nil
+		}
+	}
+	if pr, err := types.ParsePrefixRange(s); err == nil {
+		if !routeSet {
+			return m, fmt.Errorf("prefix-range member %q not valid in %s", item, container)
+		}
+		m.Kind, m.Range = MemberPrefixRange, pr
+		return m, nil
+	}
+	return m, fmt.Errorf("invalid %s member %q", container, item)
+}
+
+// nestable reports whether a set of class member may be listed in a set of
+// class container (RFC 2622 §5.1-5.2): as-sets list as-sets; route-sets list
+// route-sets and as-sets (the routes their ASes originate).
+func nestable(container, member types.SetClass) bool {
+	switch container {
+	case types.RouteSet:
+		return member == types.RouteSet || member == types.AsSet
+	case types.SetClassUnknown:
+		return true
+	}
+	return member == container
+}
+
+// members parses every item of every name attribute into SetMembers for a set
+// of class container. An unparseable item is kept as MemberInvalid with a
+// Warning at the item's own span; a nested set of a class the container may not
+// list is kept but flagged with a Warning.
+func (d *decoder) members(name, rule string, container types.SetClass) []SetMember {
 	var out []SetMember
-	for _, a := range d.o.GetAll(name) {
-		if as, err := types.ParseASN(a.Value); err == nil {
-			out = append(out, SetMember{Kind: MemberAS, AS: as, Raw: a.Value})
-			continue
+	for _, it := range d.listItems(name) {
+		m, err := ParseSetMember(it.Value, container)
+		switch {
+		case err != nil:
+			d.diagAt(ast.Warning, it.span(), rule, err.Error())
+		case m.Kind == MemberSet && !nestable(container, m.Set.Class()):
+			d.diagAt(ast.Warning, it.span(), rule, fmt.Sprintf("set member %q has class %s, expected %s",
+				it.Value, m.Set.Class(), container))
 		}
-		if sn, err := types.ParseSetName(a.Value); err == nil {
-			if containerClass != types.SetClassUnknown && sn.Class != containerClass {
-				d.warnf(a, rule, fmt.Sprintf("set member %q has class %s, expected %s",
-					a.Value, sn.Class, containerClass))
-			}
-			out = append(out, SetMember{Kind: MemberSet, Set: sn, Raw: a.Value})
-			continue
-		}
-		if pr, err := types.ParsePrefixRange(a.Value); err == nil {
-			if !allowRange {
-				d.warnf(a, rule, "prefix-range member not valid for this set class")
-			}
-			out = append(out, SetMember{Kind: MemberPrefixRange, Range: pr, Raw: a.Value})
-			continue
-		}
-		d.warnf(a, rule, fmt.Sprintf("unrecognized set member %q", a.Value))
-		out = append(out, SetMember{Raw: a.Value})
+		out = append(out, m)
 	}
 	return out
 }

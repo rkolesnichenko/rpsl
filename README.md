@@ -53,16 +53,16 @@ Imports run strictly downward — `resolve → object → policy → types → a
 
 | Package | Import path | Role | Depends on |
 | --- | --- | --- | --- |
-| `rpsl` | `github.com/rkolesnichenko/rpsl` | Façade: `ParseObject`, `Parse` (streaming) | `ast`, `lexer` |
+| `rpsl` | `github.com/rkolesnichenko/rpsl` | Façade: `ParseObject`, `Parse` (streaming), `Decode`, `Validate` | `object`, `ast`, `lexer` |
 | `object` | `…/rpsl/object` | Typed classes (`AutNum`, `Route`, `AsSet`, …) + `Decode` | `policy`, `types`, `ast` |
-| `policy` | `…/rpsl/policy` | Routing-policy AST + `ParseImport`/`ParseExport`/`ParseDefault` | `types` |
+| `policy` | `…/rpsl/policy` | Routing-policy AST + `ParseImport`/`ParseExport`/`ParseDefault` (and `ParseMP*`) | `types`, `ast`, `lexer` |
 | `types` | `…/rpsl/types` | Leaf value types: `ASN`, `SetName`, `PrefixRange`, `AddrFamily`, `NICHandle` | — |
 | `ast` | `…/rpsl/ast` | Generic lossless `Object`/`Attribute` model; `Diagnostic`/`Severity` | `lexer` |
 | `lexer` | `…/rpsl/lexer` | Hand-written scanner; total-partition `Tokenize` | — |
 | `resolve` | `…/rpsl/resolve` | Pure expansion `Expander` + `Source` interface + `MemSource` | `object`, `types` |
 | `resolve/irrd` | `…/rpsl/resolve/irrd` | `Source` over an IRRd query port (RADB/NTT/…) | `resolve`, `object` |
 | `resolve/whois` | `…/rpsl/resolve/whois` | `Source` over plain WHOIS (RIPE-DB) | `resolve`, `object` |
-| `resolve/rdap` | `…/rpsl/resolve/rdap` | RDAP registration client + no-op `SetSource` adapter | `resolve` |
+| `resolve/rdap` | `…/rpsl/resolve/rdap` | RDAP registration client (not a `Source`) | `types` |
 
 Per-module guides: [`lexer`](lexer/README.md) · [`ast`](ast/README.md) ·
 [`types`](types/README.md) · [`resolve`](resolve/README.md).
@@ -225,21 +225,30 @@ Full rationale: [`docs/rpsl-go-design.md`](docs/rpsl-go-design.md).
 ## Testing
 
 The correctness bar is "matches the tools operators already trust," so testing is
-differential and corpus-driven. Each leaf is a separate module, so run the full
-suite with a per-module loop:
+differential and corpus-driven. The modules are separate, so `go test ./...`
+covers only the root; run everything with:
 
 ```sh
-for m in . lexer ast types resolve; do
-  (cd "$m" && go build ./... && go vet ./... && go test ./...)
-done
+scripts/check.sh               # every module: build, vet, test -race; gofmt; invariants
+FUZZTIME=15s scripts/check.sh  # ... plus all nine fuzz targets (what CI runs)
 ```
 
-- **`go test -run TestRoundTrip ./...`** — the lossless round-trip guard (root module).
-- **Fuzz** (must never panic): `go test -run=xxx -fuzz=FuzzTokenize ./lexer`,
-  `-fuzz=FuzzParseImport ./policy`, `-fuzz=FuzzParseASPathRegexp ./policy`.
-- **bgpq4 differential** — `resolve` ships a checked-in golden snapshot
-  (`resolve/testdata/`) compared on every run; an optional live `bgpq4` diff is
-  gated on `RPSL_BGPQ4_SERVER` / `RPSL_BGPQ4_SET`.
+- **Lossless round-trip** — `go test -run TestRoundTrip .` for single objects,
+  `TestStreamRoundTrip` and `FuzzParseStream` for streams.
+- **Fuzz** (must never panic, must never drop input): `FuzzTokenize`,
+  `FuzzAttributeList`, `FuzzParseSetName`, `FuzzParseRangeOperator`,
+  `FuzzParseStream`, `FuzzParseImport`, `FuzzParseASPathRegexp`,
+  `FuzzParseFilter`, `FuzzParsePeering`.
+- **Real data (opt-in)** — `scripts/fetch-ripe-dumps.sh` downloads RIPE split
+  dumps; `RPSL_REALDATA=.data/ripe go test -run TestRealData ./examples/bulk-ripe/bulk`
+  checks lossless streaming, error rates, and order-independent expansion of the
+  largest real sets.
+- **Live backends (opt-in)** — `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve`
+  queries RADB, RIPE and RDAP read-only.
+- **Expansion correctness** — `resolve` ships hand-checked golden expansions of a
+  synthetic snapshot (`resolve/testdata/`) and property tests against an
+  independent reachability oracle, run on every `go test`; an optional live
+  `bgpq4` diff is gated on `RPSL_BGPQ4_SERVER` / `RPSL_BGPQ4_SET`.
 
 ## Releasing
 
@@ -247,16 +256,13 @@ The repo is a set of independent modules wired together for development by the
 root `go.work` (`use`). Inter-module `require`s are pinned at `v0.0.0` and resolve
 locally through the workspace, so:
 
-- `go test ./...` only covers the root module; run the full suite with the
-  per-module loop shown under [Testing](#testing).
+- `go test ./...` only covers the root module; use `scripts/check.sh`.
 - `go work sync` **fails** (it tries to fetch the sibling modules from GitHub) —
   that is expected; the `go.work` `use` set is the source of truth locally.
 
-To publish, a remote must exist; then tag each module and replace its `v0.0.0`
-requires with real versions, in dependency order:
-`lexer` → `ast` → `types` → root (`rpsl`, holding `object`/`policy`) → `resolve`.
-Each leaf carries a path-prefixed tag (`lexer/vX.Y.Z`, `ast/vX.Y.Z`, …) so
-`go get` resolves the modules individually.
+Publishing tags each module and bumps its siblings' `require`s in dependency
+order (`lexer`, `types` → `ast` → root → `resolve`); the exact procedure is in
+[`RELEASING.md`](RELEASING.md).
 
 ## Further reading
 

@@ -76,8 +76,10 @@ source:      RIPE
 	if rs.Name.Canonical() != "RTRS-EXAMPLE" {
 		t.Errorf("Name = %q", rs.Name.Canonical())
 	}
-	if len(rs.Members) != 1 || len(rs.MpMembers) != 1 {
-		t.Errorf("Members=%v MpMembers=%v", rs.Members, rs.MpMembers)
+	// members: is a comma-separated list (RFC 2622 §2): two routers, not one.
+	if len(rs.Members) != 2 || rs.Members[0] != "rtr1.example.net" || rs.Members[1] != "rtr2.example.net" ||
+		len(rs.MpMembers) != 1 || rs.MpMembers[0] != "rtrs-OTHER" {
+		t.Errorf("Members=%q MpMembers=%q", rs.Members, rs.MpMembers)
 	}
 	if len(rs.MbrsByRef) != 1 || rs.MbrsByRef[0] != "MAINT-EX" {
 		t.Errorf("MbrsByRef = %v", rs.MbrsByRef)

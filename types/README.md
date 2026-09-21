@@ -15,8 +15,9 @@ prefix-ranges pays nothing for the rest of the library.
 | Type | Parses | Notes |
 | --- | --- | --- |
 | `ASN` | `ParseASN("AS65001")`, `"AS1.10"` | 32-bit; accepts plain and asdot, emits plain |
-| `SetName` | `ParseSetName("AS3333:AS-CUSTOMERS:RS-FOO")` | hierarchical; `Class` inferred; `Canonical()` for comparison |
+| `SetName` | `ParseSetName("AS3333:AS-CUSTOMERS")` | hierarchical; strict RFC 2622 syntax (safe to put on the wire); `Class()` inferred; `Canonical()` is the identity/map key |
 | `PrefixRange` | `ParsePrefixRange("192.0.2.0/24^25-28")` | `^+ ^- ^n ^n-m`; `Materialize(cap)` enumerates |
+| `RangeOperator` | `ParseRangeOperator("24-32")` | an operator without a prefix, as in `RS-FOO^+`; `Apply` composes per RFC 2622 §5.2 |
 | `AddrFamily` / `AFI` / `SAFI` | `ParseAddrFamily("ipv4.unicast")` | RFC 4012 afi dictionary; `any` means both |
 | `NICHandle` | `ParseNICHandle("EX1-RIPE")` | preserves original case |
 

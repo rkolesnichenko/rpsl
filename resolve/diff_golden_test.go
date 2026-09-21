@@ -89,6 +89,21 @@ func TestGoldenExpansion(t *testing.T) {
 		assertEqual(t, lines, readGolden(t, "as-example.asn"))
 	})
 
+	// The same set written as RFC 2622 comma-separated, folded lists must
+	// expand identically to its one-member-per-line twin.
+	t.Run("ExpandAS/AS-EXAMPLE-LIST", func(t *testing.T) {
+		e := &resolve.Expander{Src: src}
+		got, err := e.ExpandAS(ctx, mustSet(t, "AS-EXAMPLE-LIST"))
+		if err != nil {
+			t.Fatalf("ExpandAS: %v", err)
+		}
+		var lines []string
+		for _, a := range got.List() {
+			lines = append(lines, a.String())
+		}
+		assertEqual(t, lines, readGolden(t, "as-example.asn"))
+	})
+
 	prefixCase := func(name, set, golden string) {
 		t.Run(name, func(t *testing.T) {
 			e := &resolve.Expander{Src: src, AFI: types.AFIv4}

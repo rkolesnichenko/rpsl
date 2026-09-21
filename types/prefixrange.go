@@ -3,6 +3,7 @@ package types
 import (
 	"errors"
 	"fmt"
+	"iter"
 	"net/netip"
 	"strconv"
 	"strings"
@@ -35,46 +36,29 @@ type PrefixRange struct {
 // ParsePrefixRange parses a prefix optionally followed by a '^' range operator.
 func ParsePrefixRange(s string) (PrefixRange, error) {
 	t := strings.TrimSpace(s)
-	pfxStr, opStr := t, ""
-	if i := strings.IndexByte(t, '^'); i >= 0 {
-		pfxStr, opStr = t[:i], t[i+1:]
-	}
+	pfxStr, opStr, hasOp := strings.Cut(t, "^")
 	pfx, err := netip.ParsePrefix(strings.TrimSpace(pfxStr))
 	if err != nil {
 		return PrefixRange{}, fmt.Errorf("rpsl/types: invalid prefix range %q: %w", s, err)
 	}
-	r := PrefixRange{Prefix: pfx}
 	bits, maxBits := pfx.Bits(), pfx.Addr().BitLen()
-
-	switch {
-	case opStr == "":
-		r.Op, r.Lo, r.Hi = RangeExact, uint8(bits), uint8(bits)
-	case opStr == "+":
-		r.Op, r.Lo, r.Hi = RangePlus, uint8(bits), uint8(maxBits)
-	case opStr == "-":
-		r.Op, r.Lo, r.Hi = RangeMinus, uint8(bits+1), uint8(maxBits)
-	case strings.IndexByte(opStr, '-') >= 0:
-		d := strings.IndexByte(opStr, '-')
-		n, err1 := strconv.Atoi(opStr[:d])
-		m, err2 := strconv.Atoi(opStr[d+1:])
-		if err1 != nil || err2 != nil {
-			return PrefixRange{}, fmt.Errorf("rpsl/types: invalid range operator %q", opStr)
-		}
-		if n < bits || m < n || m > maxBits {
-			return PrefixRange{}, fmt.Errorf("rpsl/types: invalid range ^%s for /%d prefix", opStr, bits)
-		}
-		r.Op, r.Lo, r.Hi = RangeRange, uint8(n), uint8(m)
-	default:
-		n, err := strconv.Atoi(opStr)
-		if err != nil {
-			return PrefixRange{}, fmt.Errorf("rpsl/types: invalid range operator %q", opStr)
-		}
-		if n < bits || n > maxBits {
-			return PrefixRange{}, fmt.Errorf("rpsl/types: invalid length ^%d for /%d prefix", n, bits)
-		}
-		r.Op, r.Lo, r.Hi = RangeLength, uint8(n), uint8(n)
+	if !hasOp {
+		return PrefixRange{Prefix: pfx, Op: RangeExact, Lo: uint8(bits), Hi: uint8(bits)}, nil
 	}
-	return r, nil
+	op, err := ParseRangeOperator(opStr)
+	if err != nil {
+		return PrefixRange{}, err
+	}
+	switch op.Op {
+	case RangePlus:
+		return PrefixRange{Prefix: pfx, Op: RangePlus, Lo: uint8(bits), Hi: uint8(maxBits)}, nil
+	case RangeMinus:
+		return PrefixRange{Prefix: pfx, Op: RangeMinus, Lo: uint8(bits + 1), Hi: uint8(maxBits)}, nil
+	}
+	if int(op.N) < bits || int(op.M) > maxBits {
+		return PrefixRange{}, fmt.Errorf("rpsl/types: invalid range ^%s for /%d prefix", opStr, bits)
+	}
+	return PrefixRange{Prefix: pfx, Op: op.Op, Lo: op.N, Hi: op.M}, nil
 }
 
 // String renders the range back to its canonical text form.
@@ -95,62 +79,82 @@ func (r PrefixRange) String() string {
 }
 
 // Materialize enumerates the concrete prefixes the range denotes. The cap is
-// applied during enumeration: if the count would exceed maxPrefixes it returns
-// ErrTooManyPrefixes rather than allocating the whole set.
+// checked before anything is allocated: if the count would exceed maxPrefixes
+// it returns ErrTooManyPrefixes.
+//
+// To enforce one budget across many (possibly overlapping) ranges, stream them
+// through All into a deduplicating set and stop at the cap, as
+// resolve.Expander.ExpandPrefixes does, instead of calling Materialize per range.
 func (r PrefixRange) Materialize(maxPrefixes int) ([]netip.Prefix, error) {
-	base := r.Prefix.Masked()
-	addr := base.Addr()
-	baseBits, maxBits := base.Bits(), addr.BitLen()
-
-	lo, hi := int(r.Lo), int(r.Hi)
-	if lo < baseBits {
-		lo = baseBits
+	lo, hi, ok := r.window()
+	if !ok {
+		return nil, nil // invalid prefix, or e.g. ^- on a host prefix: nothing
 	}
-	if hi > maxBits {
-		hi = maxBits
-	}
-	if lo > hi { // e.g. ^- on a host prefix: no more-specifics
-		return nil, nil
-	}
-
-	var out []netip.Prefix
+	total := 0
 	for L := lo; L <= hi; L++ {
-		w := L - baseBits
+		w := L - r.Prefix.Bits()
 		if w >= 31 { // 2^31 prefixes dwarfs any sane cap
 			return nil, ErrTooManyPrefixes
 		}
-		count := 1 << uint(w)
-		if len(out)+count > maxPrefixes {
+		if total += 1 << uint(w); total > maxPrefixes {
 			return nil, ErrTooManyPrefixes
 		}
-		for k := 0; k < count; k++ {
-			out = append(out, nthSubPrefix(addr, baseBits, L, k))
-		}
+	}
+	out := make([]netip.Prefix, 0, total)
+	for p := range r.All() {
+		out = append(out, p)
 	}
 	return out, nil
 }
 
-// nthSubPrefix returns the k-th length-L sub-prefix of a masked base address.
-func nthSubPrefix(base netip.Addr, baseBits, L, k int) netip.Prefix {
-	width := L - baseBits
-	if base.Is4() {
-		b := base.As4()
-		setBits(b[:], baseBits, width, k)
-		return netip.PrefixFrom(netip.AddrFrom4(b), L)
+// All yields the concrete prefixes the range denotes, shortest first and in
+// address order within each length. It is lazy, so a consumer can enforce its
+// own budget and stop early even on ranges like ::/0^+ that cannot be
+// enumerated in full. The zero PrefixRange yields nothing.
+func (r PrefixRange) All() iter.Seq[netip.Prefix] {
+	return func(yield func(netip.Prefix) bool) {
+		lo, hi, ok := r.window()
+		if !ok {
+			return
+		}
+		base := r.Prefix.Masked().Addr()
+		baseBits := r.Prefix.Bits()
+		for L := lo; L <= hi; L++ {
+			b := base.AsSlice()
+			for {
+				a, _ := netip.AddrFromSlice(b)
+				if !yield(netip.PrefixFrom(a, L)) {
+					return
+				}
+				if !increment(b, baseBits, L) {
+					break
+				}
+			}
+		}
 	}
-	b := base.As16()
-	setBits(b[:], baseBits, width, k)
-	return netip.PrefixFrom(netip.AddrFrom16(b), L)
 }
 
-// setBits writes the low `width` bits of k into address bits [start, start+width),
-// MSB-first.
-func setBits(b []byte, start, width, k int) {
-	for i := 0; i < width; i++ {
-		if (k>>(width-1-i))&1 == 0 {
-			continue
-		}
-		pos := start + i
-		b[pos/8] |= byte(1 << (7 - pos%8))
+// window returns the prefix-length window [lo, hi] the range covers, clamped to
+// the prefix and its family, and false when it is empty or the range is invalid.
+func (r PrefixRange) window() (lo, hi int, ok bool) {
+	if !r.Prefix.IsValid() {
+		return 0, 0, false
 	}
+	lo = max(int(r.Lo), r.Prefix.Bits())
+	hi = min(int(r.Hi), r.Prefix.Addr().BitLen())
+	return lo, hi, lo <= hi
+}
+
+// increment adds one to the bit field [start, end) of the big-endian address b,
+// reporting false when the field wraps back to zero (enumeration is complete).
+func increment(b []byte, start, end int) bool {
+	for pos := end - 1; pos >= start; pos-- {
+		mask := byte(1 << (7 - pos%8))
+		if b[pos/8]&mask == 0 {
+			b[pos/8] |= mask
+			return true
+		}
+		b[pos/8] &^= mask
+	}
+	return false
 }

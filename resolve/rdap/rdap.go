@@ -4,9 +4,7 @@
 // Scope note: RDAP has no object class for IRR policy sets (as-set/route-set)
 // and does not expose origin→route mappings, so it cannot drive set expansion.
 // It is therefore a standalone registration-metadata client, NOT a substitute
-// for the IRRd or WHOIS resolve.Source backends. A no-op Source adapter
-// (SetSource) is provided so it can sit in a composite chain without
-// contributing expansion data.
+// for the IRRd or WHOIS resolve.Source backends.
 package rdap
 
 import (
@@ -15,28 +13,42 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
 
-	"github.com/rkolesnichenko/rpsl/object"
-	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
 // Client is an RDAP HTTP client rooted at a bootstrap or registry base URL
-// (e.g. "https://rdap.db.ripe.net"). A nil HTTP installs a default client with
-// a safe redirect policy that refuses non-https and private/loopback hosts.
+// (e.g. "https://rdap.db.ripe.net").
+//
+// With a nil HTTP, a built-in client is used whose dialer refuses private,
+// loopback, link-local and other special-purpose addresses at connect time —
+// so hostnames and numeric forms that resolve to them (localhost, 127.1, DNS
+// rebinding) are caught — and whose redirect policy refuses non-https targets.
+// It does not use HTTP proxies. A caller-supplied HTTP client is used as given:
+// only the URL check applies, so guard its dialer yourself.
 //
 // Defensive defaults: the BaseURL scheme must be https (set AllowInsecure to
-// opt into http for testing/internal use); response bodies are read through
-// an io.LimitReader bounded by MaxResponse (default 8 MiB; well above any
-// real registration record).
+// opt into http and internal targets for testing/internal use); response bodies
+// are bounded by MaxResponse (default 8 MiB; well above any real registration
+// record).
 type Client struct {
 	BaseURL       string
 	HTTP          *http.Client
-	MaxResponse   int64 // per-call body cap; 0 = default (defaultMaxResponse)
-	AllowInsecure bool  // permit http:// BaseURLs and http redirects
+	MaxResponse   int64  // per-call body cap; 0 = default (defaultMaxResponse)
+	AllowInsecure bool   // permit http:// BaseURLs, http redirects, and internal targets
+	UserAgent     string // User-Agent header; "" = "rpsl-go"
+
+	once        sync.Once
+	builtinHTTP *http.Client
 }
 
 // defaultMaxResponse caps an RDAP response body. Real autnum/ip records are
@@ -81,6 +93,14 @@ type IPNetwork struct {
 	Entities     []Entity `json:"entities"`
 }
 
+// ErrRateLimited is returned for a 429 response. RetryAfter is the server's
+// Retry-After hint (0 when absent or unparseable); retry policy is the caller's.
+type ErrRateLimited struct{ RetryAfter time.Duration }
+
+func (e ErrRateLimited) Error() string {
+	return fmt.Sprintf("rdap: rate limited (retry after %v)", e.RetryAfter)
+}
+
 // ErrNotFound is returned for a 404 RDAP response.
 var ErrNotFound = fmt.Errorf("rdap: object not found")
 
@@ -104,21 +124,27 @@ func (c *Client) LookupAutnum(ctx context.Context, as types.ASN) (*Autnum, error
 // LookupIP fetches registration data for a prefix via GET {BaseURL}/ip/{cidr}.
 func (c *Client) LookupIP(ctx context.Context, prefix netip.Prefix) (*IPNetwork, error) {
 	var out IPNetwork
-	if err := c.get(ctx, "/ip/"+prefix.String(), &out); err != nil {
+	if err := c.get(ctx, "/ip/"+prefix.Masked().String(), &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
 }
 
 func (c *Client) get(ctx context.Context, path string, dst any) error {
-	if err := c.validateURL(c.BaseURL + path); err != nil {
+	target := strings.TrimRight(c.BaseURL, "/") + path
+	if err := c.validateURL(target); err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Accept", "application/rdap+json")
+	ua := c.UserAgent
+	if ua == "" {
+		ua = "rpsl-go"
+	}
+	req.Header.Set("User-Agent", ua)
 	hc := c.HTTP
 	if hc == nil {
 		hc = c.defaultHTTP()
@@ -127,9 +153,17 @@ func (c *Client) get(ctx context.Context, path string, dst any) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
+	defer func() {
+		// Drain (a bounded amount of) any unread body so the keep-alive
+		// connection can be reused.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		resp.Body.Close()
+	}()
+	switch resp.StatusCode {
+	case http.StatusNotFound:
 		return ErrNotFound
+	case http.StatusTooManyRequests:
+		return ErrRateLimited{RetryAfter: retryAfter(resp.Header.Get("Retry-After"))}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("rdap: unexpected status %s for %s", resp.Status, path)
@@ -176,55 +210,94 @@ func (c *Client) validateURL(raw string) error {
 	return nil
 }
 
-// defaultHTTP builds the fallback http.Client used when c.HTTP is nil. The
-// CheckRedirect hook applies validateURL to every redirect target so a hostile
-// registry referral cannot drag the caller into a private address or a scheme
-// downgrade.
-func (c *Client) defaultHTTP() *http.Client {
-	return &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return errors.New("rdap: too many redirects")
-			}
-			return c.validateURL(req.URL.String())
-		},
+// retryAfter parses a Retry-After header: delay-seconds or an HTTP-date.
+func retryAfter(v string) time.Duration {
+	if secs, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && secs >= 0 {
+		return time.Duration(secs) * time.Second
 	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
+}
+
+// defaultHTTP returns the built-in client used when c.HTTP is nil, created once
+// so connections are reused. Its dialer applies guardDial (unless
+// AllowInsecure) to the address actually dialed, and its CheckRedirect applies
+// validateURL to every redirect target, so a hostile registry referral cannot
+// reach an internal address or downgrade the scheme.
+func (c *Client) defaultHTTP() *http.Client {
+	c.once.Do(func() {
+		dialer := &net.Dialer{Timeout: 30 * time.Second}
+		if !c.AllowInsecure {
+			dialer.Control = guardDial
+		}
+		c.builtinHTTP = &http.Client{
+			Transport: &http.Transport{
+				DialContext:         dialer.DialContext,
+				ForceAttemptHTTP2:   true,
+				TLSHandshakeTimeout: 10 * time.Second,
+				IdleConnTimeout:     90 * time.Second,
+				MaxIdleConns:        16,
+			},
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 10 {
+					return errors.New("rdap: too many redirects")
+				}
+				return c.validateURL(req.URL.String())
+			},
+		}
+	})
+	return c.builtinHTTP
+}
+
+// guardDial is a net.Dialer Control hook refusing a connection to a forbidden
+// address. It sees the resolved IP, so it also catches hostnames and numeric
+// forms (localhost, 127.1, 2130706433) and DNS rebinding.
+func guardDial(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("%w: unparseable address %q", ErrForbiddenHost, address)
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return fmt.Errorf("%w: unparseable address %q", ErrForbiddenHost, address)
+	}
+	if isForbiddenAddr(ip) {
+		return fmt.Errorf("%w: %s", ErrForbiddenHost, ip)
+	}
+	return nil
+}
+
+// forbiddenPrefixes are special-purpose ranges beyond what netip classifies:
+// "this network", CGNAT, IETF protocol assignments, benchmarking, reserved
+// (incl. broadcast), and the NAT64 prefixes that can reach internal IPv4.
+var forbiddenPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
 }
 
 // isForbiddenAddr reports whether ip belongs to a range a public RDAP server
 // has no legitimate reason to point at: loopback, link-local, private
-// (RFC1918/RFC4193), or the unspecified address.
+// (RFC1918/RFC4193), unspecified, multicast, or forbiddenPrefixes. An
+// IPv4-mapped IPv6 address is checked as the IPv4 address it carries.
 func isForbiddenAddr(ip netip.Addr) bool {
+	ip = ip.Unmap()
 	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
 		ip.IsPrivate() || ip.IsUnspecified() || ip.IsMulticast() {
 		return true
 	}
-	// IsPrivate covers 10/8, 172.16/12, 192.168/16, fc00::/7. Add 100.64/10
-	// (CGNAT) explicitly — Go does not classify it as private.
-	if ip.Is4() {
-		b := ip.As4()
-		if b[0] == 100 && b[1] >= 64 && b[1] <= 127 {
+	for _, p := range forbiddenPrefixes {
+		if p.Contains(ip) {
 			return true
 		}
 	}
 	return false
-}
-
-// SetSource adapts a Client to resolve.Source for composition in a multi-source
-// chain. RDAP serves no expansion data, so every method is empty: GetSet returns
-// resolve.ErrNotFound and the others return nothing.
-type SetSource struct{ Client *Client }
-
-var _ resolve.Source = SetSource{}
-
-func (SetSource) GetSet(context.Context, types.SetName) (object.Set, error) {
-	return nil, resolve.ErrNotFound
-}
-
-func (SetSource) OriginatedRoutes(context.Context, types.ASN, types.AFI) ([]netip.Prefix, error) {
-	return nil, nil
-}
-
-func (SetSource) MembersByRef(context.Context, types.SetName, []string) ([]object.Object, error) {
-	return nil, nil
 }

@@ -20,14 +20,14 @@ func TestPartitionInvariant(t *testing.T) {
 		"\n",
 		"\n\n\n",
 		"route: 192.0.2.0/24\n",
-		"route: 192.0.2.0/24",           // no trailing newline
+		"route: 192.0.2.0/24",                    // no trailing newline
 		"route: 192.0.2.0/24\r\norigin: AS1\r\n", // CRLF
-		"a: 1\n\nb: 2\n",                // two objects
+		"a: 1\n\nb: 2\n",                         // two objects
 		"# comment only\n",
-		"remarks: x\n+\n y\n",           // lone-+ blank in value
+		"remarks: x\n+\n y\n", // lone-+ blank in value
 		"orphan continuation\n garbage\n",
 		"no-colon-line\n",
-		"   \t  \n",                     // whitespace-only blank
+		"   \t  \n", // whitespace-only blank
 	}
 	for _, in := range inputs {
 		if got := rawConcat(Tokenize(in)); got != in {

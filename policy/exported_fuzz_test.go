@@ -11,7 +11,10 @@ func FuzzParseFilter(f *testing.F) {
 	} {
 		f.Add(s)
 	}
-	f.Fuzz(func(t *testing.T, s string) { _, _ = ParseFilter(s) })
+	f.Fuzz(func(t *testing.T, s string) {
+		_, p := parseFilterValue(s)
+		assertNothingDropped(t, s, p)
+	})
 }
 
 // FuzzParsePeering asserts the standalone peering parser never panics.
@@ -22,5 +25,8 @@ func FuzzParsePeering(f *testing.F) {
 	} {
 		f.Add(s)
 	}
-	f.Fuzz(func(t *testing.T, s string) { _, _ = ParsePeering(s) })
+	f.Fuzz(func(t *testing.T, s string) {
+		_, p := parsePeeringValue(s)
+		assertNothingDropped(t, s, p)
+	})
 }

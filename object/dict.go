@@ -3,6 +3,7 @@ package object
 import (
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/rkolesnichenko/rpsl/ast"
 	"github.com/rkolesnichenko/rpsl/lexer"
@@ -20,6 +21,9 @@ type AttrSpec struct {
 type ClassSpec struct {
 	Attrs        map[string]AttrSpec
 	AllowUnknown bool
+	// OneOf lists groups of attributes of which at least one must appear, e.g.
+	// {"peering", "mp-peering"} for a peering-set (RFC 4012).
+	OneOf [][]string
 }
 
 // Profile is a named class/attribute dictionary. The built-in profiles are RIPE
@@ -33,7 +37,8 @@ type Profile struct {
 // Validate checks o against the profile and returns diagnostics for: an unknown
 // class (dict/unknown-class), unknown attributes (dict/unknown-attr, suppressed
 // when the class allows them), missing required attributes (dict/missing-required),
-// and single-valued attributes appearing more than once (dict/cardinality). It
+// (including an unmet OneOf group), and single-valued attributes appearing more
+// than once (dict/cardinality). It
 // never mutates o and is independent of Decode, so parsing stays resilient and
 // validation is opt-in.
 func (p Profile) Validate(o *ast.Object) []ast.Diagnostic {
@@ -76,6 +81,21 @@ func (p Profile) Validate(o *ast.Object) []ast.Diagnostic {
 		diags = append(diags, diag(ast.Error, "dict/missing-required",
 			"required attribute "+strconv.Quote(name)+" is missing for class "+
 				strconv.Quote(class), classSpan(o, class)))
+	}
+	for _, group := range spec.OneOf {
+		present := false
+		for _, name := range group {
+			present = present || counts[name] > 0
+		}
+		if !present {
+			quoted := make([]string, len(group))
+			for i, name := range group {
+				quoted[i] = strconv.Quote(name)
+			}
+			diags = append(diags, diag(ast.Error, "dict/missing-required",
+				"one of "+strings.Join(quoted, ", ")+" is required for class "+strconv.Quote(class),
+				classSpan(o, class)))
+		}
 	}
 	return diags
 }

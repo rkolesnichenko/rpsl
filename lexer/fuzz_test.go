@@ -25,5 +25,17 @@ func FuzzTokenize(f *testing.F) {
 		if got != src {
 			t.Fatalf("partition invariant violated: input %q rejoined to %q", src, got)
 		}
+		// TokenizeAt reports the same tokens, shifted into stream coordinates.
+		at := TokenizeAt(src, 7, 50)
+		if len(at) != len(toks) {
+			t.Fatalf("TokenizeAt gave %d tokens, Tokenize %d", len(at), len(toks))
+		}
+		for i, tk := range at {
+			b := toks[i]
+			if tk.Raw != b.Raw || tk.Value != b.Value || tk.Span.StartLine != b.Span.StartLine+6 ||
+				tk.Span.EndByte != b.Span.EndByte+50 || len(tk.Segments) != len(b.Segments) {
+				t.Fatalf("token %d: TokenizeAt %+v is not Tokenize %+v shifted by (6 lines, 50 bytes)", i, tk, b)
+			}
+		}
 	})
 }

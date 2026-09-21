@@ -17,26 +17,43 @@ import (
 type MemSource struct {
 	sets   map[string]object.Set        // canonical set name -> set
 	routes map[types.ASN][]netip.Prefix // origin AS -> originated prefixes
-	claims map[string][]claim           // canonical set name -> member-of claimants
-}
-
-type claim struct {
-	obj     object.Object
-	mntners []string // lower-cased mnt-by values
+	claims map[string][]object.Object   // canonical set name -> member-of claimants
 }
 
 // NewMemSource indexes a corpus of decoded objects. Sets are indexed by
 // canonical name, route/route6 prefixes by origin AS, and every object's
 // member-of claims by the canonical name of each referenced set.
-func NewMemSource(objs []object.Object) *MemSource {
+//
+// When the same set name appears more than once (e.g. dumps from several IRRs),
+// sourcePrecedence decides which object is used, like IRRd's !s: the set whose
+// source: is listed earliest wins (case-insensitive), sources not listed rank
+// after all listed ones, and ties go to the object loaded first. Routes are
+// unioned across sources.
+func NewMemSource(objs []object.Object, sourcePrecedence ...string) *MemSource {
 	s := &MemSource{
 		sets:   map[string]object.Set{},
 		routes: map[types.ASN][]netip.Prefix{},
-		claims: map[string][]claim{},
+		claims: map[string][]object.Object{},
 	}
+	rank := func(o object.Object) int {
+		if raw := o.Raw(); raw != nil {
+			if a, ok := raw.GetFirst("source"); ok {
+				for i, src := range sourcePrecedence {
+					if strings.EqualFold(strings.TrimSpace(a.Value), src) {
+						return i
+					}
+				}
+			}
+		}
+		return len(sourcePrecedence)
+	}
+	setRank := map[string]int{}
 	for _, o := range objs {
 		if set, ok := o.(object.Set); ok {
-			s.sets[set.SetName().Canonical()] = set
+			key := set.SetName().Canonical()
+			if prev, dup := setRank[key]; !dup || rank(o) < prev {
+				s.sets[key], setRank[key] = set, rank(o)
+			}
 		}
 		switch t := o.(type) {
 		case object.Route:
@@ -53,30 +70,20 @@ func NewMemSource(objs []object.Object) *MemSource {
 	return s
 }
 
-// indexClaims records this object under every set its member-of attributes name.
+// indexClaims records this object under every set its member-of items name.
+// Whether a claim is honored is decided at query time by ClaimAllowed.
 func (s *MemSource) indexClaims(o object.Object) {
-	raw := o.Raw()
-	memberOf := raw.GetAll("member-of")
-	if len(memberOf) == 0 {
-		return
+	seen := map[string]bool{}
+	for _, a := range o.Raw().GetAll("member-of") {
+		for _, it := range a.List() {
+			n, err := types.ParseSetName(it.Value)
+			if err != nil || seen[n.Canonical()] {
+				continue
+			}
+			seen[n.Canonical()] = true
+			s.claims[n.Canonical()] = append(s.claims[n.Canonical()], o)
+		}
 	}
-	var mntners []string
-	for _, a := range raw.GetAll("mnt-by") {
-		mntners = append(mntners, strings.ToLower(strings.TrimSpace(a.Value)))
-	}
-	c := claim{obj: o, mntners: mntners}
-	for _, a := range memberOf {
-		s.claims[canonSetKey(a.Value)] = append(s.claims[canonSetKey(a.Value)], c)
-	}
-}
-
-// canonSetKey canonicalizes a set-name string for indexing, falling back to a
-// trimmed upper-case form when the value does not parse as a set name.
-func canonSetKey(v string) string {
-	if n, err := types.ParseSetName(v); err == nil {
-		return n.Canonical()
-	}
-	return strings.ToUpper(strings.TrimSpace(v))
 }
 
 // GetSet returns the named set or ErrNotFound.
@@ -98,34 +105,16 @@ func (s *MemSource) OriginatedRoutes(_ context.Context, as types.ASN, afi types.
 	return out, nil
 }
 
-// MembersByRef returns claimants of set maintained by one of mntners. "ANY"
-// (case-insensitive) admits any maintainer.
+// MembersByRef returns the objects claiming member-of set whose claim
+// ClaimAllowed honors under mntners ("ANY" admits any maintainer).
 func (s *MemSource) MembersByRef(_ context.Context, set types.SetName, mntners []string) ([]object.Object, error) {
-	allow := make(map[string]bool, len(mntners))
-	any := false
-	for _, m := range mntners {
-		m = strings.ToLower(strings.TrimSpace(m))
-		if m == "any" {
-			any = true
-		}
-		allow[m] = true
-	}
 	var out []object.Object
-	for _, c := range s.claims[set.Canonical()] {
-		if any || intersects(c.mntners, allow) {
-			out = append(out, c.obj)
+	for _, o := range s.claims[set.Canonical()] {
+		if ClaimAllowed(o, set, mntners) {
+			out = append(out, o)
 		}
 	}
 	return out, nil
-}
-
-func intersects(have []string, allow map[string]bool) bool {
-	for _, h := range have {
-		if allow[h] {
-			return true
-		}
-	}
-	return false
 }
 
 // afiMatches reports whether a prefix satisfies an AFI constraint.

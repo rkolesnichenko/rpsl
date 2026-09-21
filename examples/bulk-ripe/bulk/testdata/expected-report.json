@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "bytes": 4105,
+  "parsed_bytes": 4105,
+  "elapsed_ns": 0,
+  "objects": 20,
+  "class_counts": {
+    "as-set": 2,
+    "aut-num": 4,
+    "filter-set": 1,
+    "inet6num": 1,
+    "inetnum": 1,
+    "mntner": 1,
+    "organisation": 1,
+    "peering-set": 1,
+    "person": 1,
+    "role": 1,
+    "route": 4,
+    "route-set": 1,
+    "route6": 1
+  },
+  "diagnostics_total": 10,
+  "diagnostics_by_severity": {
+    "error": 10
+  },
+  "by_rule": [
+    {
+      "rule": "dict/missing-required",
+      "severity": "error",
+      "count": 7,
+      "first_span": "L16:C1"
+    },
+    {
+      "rule": "lexer/malformed-line",
+      "severity": "error",
+      "count": 1,
+      "first_span": "L127:C1"
+    },
+    {
+      "rule": "object/route-prefix",
+      "severity": "error",
+      "count": 1,
+      "first_span": "L136:C1"
+    },
+    {
+      "rule": "policy/peering",
+      "severity": "error",
+      "count": 1,
+      "first_span": "L145:C22"
+    }
+  ],
+  "resolve_samples": [
+    {
+      "set": "AS-CUSTOMERS",
+      "class": "as-set",
+      "asns": 4,
+      "prefixes": 4,
+      "elapsed_ns": 0
+    },
+    {
+      "set": "AS-NESTED",
+      "class": "as-set",
+      "asns": 1,
+      "prefixes": 0,
+      "elapsed_ns": 0
+    },
+    {
+      "set": "RS-EXAMPLES",
+      "class": "route-set",
+      "asns": 1,
+      "prefixes": 3,
+      "elapsed_ns": 0
+    }
+  ]
+}

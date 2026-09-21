@@ -1,0 +1,148 @@
+# Synthetic bulk-RPSL fixture for examples/bulk-ripe.
+# Hand-crafted; not a real registry export. The deliberately broken objects
+# at the bottom populate the diagnostic histogram so the test asserts the
+# rule-aggregation path is wired. Do not "fix" them.
+
+aut-num:        AS65001
+as-name:        EXAMPLE-ONE
+descr:          example aut-num for bulk-ripe testdata
+import:         from AS65002 accept ANY
+export:         to AS65002 announce AS65001
+admin-c:        NIC1-EX
+tech-c:         NIC1-EX
+mnt-by:         MAINT-EX
+source:         TEST
+
+aut-num:        AS65002
+as-name:        EXAMPLE-TWO
+descr:          example aut-num for bulk-ripe testdata
+import:         from AS65001 accept ANY
+export:         to AS65001 announce AS65002
+admin-c:        NIC1-EX
+mnt-by:         MAINT-EX
+source:         TEST
+
+aut-num:        AS65010
+as-name:        EXAMPLE-TEN
+descr:          aut-num that claims member-of AS-CUSTOMERS (mbrs-by-ref path)
+member-of:      AS-CUSTOMERS
+admin-c:        NIC1-EX
+mnt-by:         MAINT-EX
+source:         TEST
+
+as-set:         AS-CUSTOMERS
+descr:          top-level customer set, exercises direct + nested + indirect membership
+members:        AS65001
+members:        AS65002
+members:        AS-NESTED
+mbrs-by-ref:    MAINT-EX
+mnt-by:         MAINT-EX
+source:         TEST
+
+as-set:         AS-NESTED
+descr:          nested as-set with one direct member
+members:        AS65020
+mnt-by:         MAINT-EX
+source:         TEST
+
+route-set:      RS-EXAMPLES
+descr:          route-set with prefix + ASN member + mp-members + mbrs-by-ref
+members:        192.0.2.0/24
+members:        AS65001
+mp-members:     2001:db8::/32
+mbrs-by-ref:    MAINT-EX
+mnt-by:         MAINT-EX
+source:         TEST
+
+route:          192.0.2.0/24
+descr:          documentation prefix originated by AS65001
+origin:         AS65001
+mnt-by:         MAINT-EX
+source:         TEST
+
+route:          198.51.100.0/24
+descr:          documentation prefix originated by AS65001
+origin:         AS65001
+mnt-by:         MAINT-EX
+source:         TEST
+
+route:          203.0.113.0/24
+descr:          documentation prefix originated by AS65002
+origin:         AS65002
+mnt-by:         MAINT-EX
+source:         TEST
+
+route6:         2001:db8::/32
+descr:          documentation IPv6 prefix originated by AS65001
+origin:         AS65001
+mnt-by:         MAINT-EX
+source:         TEST
+
+mntner:         MAINT-EX
+descr:          maintainer for synthetic fixture
+admin-c:        NIC1-EX
+auth:           MD5-PW $1$abcdefgh$exampleexampleexampleEX
+mnt-by:         MAINT-EX
+source:         TEST
+
+person:         Example Person
+nic-hdl:        NIC1-EX
+address:        1 Example St
+phone:          +1 555 0100
+e-mail:         contact@example.invalid
+mnt-by:         MAINT-EX
+source:         TEST
+
+role:           Example Team
+nic-hdl:        NIC2-EX
+address:        1 Example St
+e-mail:         team@example.invalid
+admin-c:        NIC1-EX
+mnt-by:         MAINT-EX
+source:         TEST
+
+organisation:   ORG-EX1-TEST
+org-name:       Example Organisation
+org-type:       OTHER
+mnt-by:         MAINT-EX
+source:         TEST
+
+peering-set:    PRNG-EX
+peering:        AS65001
+mnt-by:         MAINT-EX
+source:         TEST
+
+filter-set:     FLTR-EX
+filter:         ANY
+mnt-by:         MAINT-EX
+source:         TEST
+
+inetnum:        192.0.2.0 - 192.0.2.255
+netname:        EXAMPLE-INET
+country:        XX
+status:         ASSIGNED PA
+mnt-by:         MAINT-EX
+source:         TEST
+
+% deliberately malformed pre-object line — triggers lexer/malformed-line on the next object
+
+inet6num:       2001:db8::/32
+netname:        EXAMPLE-INET6
+country:        XX
+status:         ASSIGNED
+mnt-by:         MAINT-EX
+source:         TEST
+
+route:          999.999.999.999/24
+descr:          deliberately malformed prefix — triggers object/route-prefix Error
+origin:         AS65001
+mnt-by:         MAINT-EX
+source:         TEST
+
+aut-num:        AS65099
+as-name:        EXAMPLE-BAD
+descr:          deliberately malformed import — triggers a policy-layer Error
+import:         from accept ANY
+admin-c:        NIC1-EX
+mnt-by:         MAINT-EX
+source:         TEST

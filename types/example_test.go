@@ -27,7 +27,7 @@ func ExamplePrefixRange_Materialize() {
 	r, _ := types.ParsePrefixRange("192.0.2.0/24^25-26")
 
 	prefixes, err := r.Materialize(100)
-	fmt.Println("range:", r)            // round-trips to canonical text
+	fmt.Println("range:", r)             // round-trips to canonical text
 	fmt.Println("count:", len(prefixes)) // two /25s + four /26s
 	fmt.Println("err:", err)
 	// Output:

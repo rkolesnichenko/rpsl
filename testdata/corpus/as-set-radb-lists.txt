@@ -1,0 +1,9 @@
+as-set:         AS-EXAMPLE-CONE
+descr:          Customer cone, RADB list style
+members:        AS65001, AS65002,
+                AS65003, AS-EXAMPLE-DOWN
+members:        AS65010,AS65011   # no space after the comma
+mbrs-by-ref:    MAINT-EXAMPLE, MAINT-OTHER
+mnt-by:         MAINT-EXAMPLE, MAINT-OTHER
+changed:        noc@example.net 20240101
+source:         RADB

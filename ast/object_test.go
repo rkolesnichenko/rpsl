@@ -16,7 +16,7 @@ func TestRoundTripExact(t *testing.T) {
 		"# leading comment\nroute: 192.0.2.0/24\norigin: AS1\n",
 		"remarks: a\n+\n b\nmembers: AS1\n",
 		"person: P\nnic-hdl: X\nsource: RIPE", // no trailing newline
-		"a: 1\n\n# between\nb: 2\n",            // interleaved trivia
+		"a: 1\n\n# between\nb: 2\n",           // interleaved trivia
 	}
 	for _, in := range inputs {
 		if got := parse(in).String(); got != in {
@@ -56,7 +56,9 @@ func TestInlineComment(t *testing.T) {
 
 func TestAppend(t *testing.T) {
 	o := parse("route: 192.0.2.0/24\norigin: AS1\n")
-	o.Append("mnt-by", "MAINT-X")
+	if err := o.Append("mnt-by", "MAINT-X"); err != nil {
+		t.Fatal(err)
+	}
 	if !o.Has("mnt-by") {
 		t.Fatal("Append did not add mnt-by")
 	}
@@ -68,7 +70,9 @@ func TestAppend(t *testing.T) {
 
 func TestAppendNoTrailingNewline(t *testing.T) {
 	o := parse("route: 192.0.2.0/24\norigin: AS1") // no trailing newline
-	o.Append("source", "RIPE")
+	if err := o.Append("source", "RIPE"); err != nil {
+		t.Fatal(err)
+	}
 	want := "route: 192.0.2.0/24\norigin: AS1\nsource: RIPE\n"
 	if o.String() != want {
 		t.Errorf("got %q, want %q", o.String(), want)
@@ -77,7 +81,9 @@ func TestAppendNoTrailingNewline(t *testing.T) {
 
 func TestSet(t *testing.T) {
 	o := parse("route: 192.0.2.0/24\norigin: AS1\norigin: AS2\nsource: RIPE\n")
-	o.Set("origin", "AS999")
+	if err := o.Set("origin", "AS999"); err != nil {
+		t.Fatal(err)
+	}
 	all := o.GetAll("origin")
 	if len(all) != 1 || all[0].Value != "AS999" {
 		t.Errorf("Set origin = %+v, want single AS999", all)

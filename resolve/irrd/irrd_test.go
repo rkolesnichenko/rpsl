@@ -55,9 +55,12 @@ func (fs *fakeServer) serve() {
 	}
 }
 
+// handle models real IRRd: without "!!" (persistent mode) the server answers one
+// command and closes the connection, as whois.radb.net does.
 func (fs *fakeServer) handle(conn net.Conn) {
 	defer conn.Close()
 	br := bufio.NewReader(conn)
+	persistent := false
 	for {
 		line, err := br.ReadString('\n')
 		if err != nil {
@@ -66,9 +69,10 @@ func (fs *fakeServer) handle(conn net.Conn) {
 		cmd := strings.TrimRight(line, "\r\n")
 		switch {
 		case cmd == "":
-			// ignore
+			continue
 		case cmd == "!!":
-			// enable persistent mode; no response
+			persistent = true // no response
+			continue
 		case strings.HasPrefix(cmd, "!s"):
 			fmt.Fprint(conn, "C\n") // source set acknowledged
 		case strings.HasPrefix(cmd, "!q"):
@@ -79,6 +83,9 @@ func (fs *fakeServer) handle(conn net.Conn) {
 			} else {
 				fmt.Fprint(conn, "D\n") // not found
 			}
+		}
+		if !persistent {
+			return
 		}
 	}
 }

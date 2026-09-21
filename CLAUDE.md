@@ -83,10 +83,13 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   honor `mbrs-by-ref:` + the mntner check. Skipping the mntner check is a silent, hijack-relevant bug.
 - **Cycle detection**: as-sets reference each other cyclically. DFS with a visited set keyed by
   canonical set name; revisit = skip, not error (matches bgpq4).
-- **Fan-out guards**: enforce `MaxPrefixes` *during* enumeration, and pass the *remaining* budget
-  (`maxPrefixes - out.Len()`) to `PrefixRange.Materialize` so one range doesn't blow the run after
-  passing in isolation. Also enforce `MaxVisited` (per-call cap on the visited set-name map) so a
-  pathologically wide IRR graph can't balloon the map. All three return typed `ErrSetTooLarge`.
+- **Fan-out guards**: enforce `MaxPrefixes` *during* enumeration by streaming ranges through
+  `PrefixRange.All()` into a deduplicating set (duplicates are free; no `remaining+1` arithmetic).
+  `MaxVisited` caps distinct sets fetched; `MaxDepth` caps the *shortest* nesting distance
+  (breadth-first discovery, so results never depend on member order). All three return
+  `ErrSetTooLarge{Limit}`; none truncates silently.
+- **Range operators on members** (`RS-FOO^+`, `AS1^24`) compose along each path via
+  `RangeOperator.Apply`; a cycle re-entered under a different operator stack is `ErrCyclicOperator`.
 - **AFI constraint**: v4 expansion drops route6/IPv6 mp-members and vice versa; `any` means both.
 - **Prefix-range operators** `^+ ^- ^n ^n-m`: first-class type with a capped `Materialize`.
 - **Dict ↔ decoder agreement**: if `object/profiles.go` lists an attribute on a class, the
@@ -102,12 +105,16 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
 
 ## Commands
 
-- **`go test ./...` only covers the ROOT module** (rpsl, object, policy). Each leaf
-  is a separate module, so run the full suite with a per-module loop:
-  `for m in . lexer ast types resolve; do (cd "$m" && go build ./... && go vet ./... && go test ./...); done`
-- `go test -run TestRoundTrip ./...` — the lossless guard (root module).
-- Fuzz (must never panic): `go test -run=xxx -fuzz=FuzzTokenize ./lexer`,
-  `-fuzz=FuzzParseImport ./policy`, `-fuzz=FuzzParseASPathRegexp ./policy`.
+- **`go test ./...` only covers the ROOT module** (rpsl, object, policy). Run everything
+  (all six modules incl. examples/bulk-ripe under -race, gofmt, invariants) with
+  `scripts/check.sh`; `FUZZTIME=15s scripts/check.sh` also runs all nine fuzz targets.
+- `go test -run 'TestRoundTrip|TestStreamRoundTrip' .` — the lossless guard (root module).
+- Fuzz (must never panic): FuzzTokenize (lexer), FuzzAttributeList (ast), FuzzParseSetName,
+  FuzzParseRangeOperator (types), FuzzParseStream (root), FuzzParseImport,
+  FuzzParseASPathRegexp, FuzzParseFilter, FuzzParsePeering (policy).
+- Opt-in: `RPSL_REALDATA=.data/ripe go test -run TestRealData ./examples/bulk-ripe/bulk`
+  (dumps via scripts/fetch-ripe-dumps.sh); `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve`.
+- Releasing: RELEASING.md (tag order lexer/types → ast → root → resolve).
 - Leaf isolation: `cd types && go list -deps ./... | grep rkolesnichenko` must show only itself.
 - Engine purity: `cd resolve && go list -deps .` must NOT include `net` (sockets live only
   in resolve/irrd, resolve/whois, resolve/rdap).

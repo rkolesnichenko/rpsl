@@ -2,7 +2,11 @@ package ast
 
 import "github.com/rkolesnichenko/rpsl/lexer"
 
-// Severity ranks a Diagnostic.
+// Severity ranks a Diagnostic. Info is advisory (e.g. a lint-style nudge),
+// Warning means the object decoded but a value was suspect, Error means a value
+// or line could not be interpreted at all. Severity orders Info < Warning <
+// Error so callers can filter on (d.Severity >= ast.Warning); for finer
+// dispatch see Diagnostic.Rule, which is the stable machine-filterable handle.
 type Severity uint8
 
 const (

@@ -7,14 +7,14 @@ type tokKind uint8
 
 const (
 	tWord   tokKind = iota // identifier, ASN, set name, prefix-range, number, keyword
-	tLBrace               // {
-	tRBrace               // }
-	tLParen               // (
-	tRParen               // )
-	tSemi                 // ;
-	tComma                // ,
-	tEq                   // =
-	tRegex                // <...> AS-path regexp; text excludes the angle brackets
+	tLBrace                // {
+	tRBrace                // }
+	tLParen                // (
+	tRParen                // )
+	tSemi                  // ;
+	tComma                 // ,
+	tEq                    // =
+	tRegex                 // <...> AS-path regexp; text excludes the angle brackets
 	tEOF
 )
 

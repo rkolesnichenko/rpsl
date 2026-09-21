@@ -17,7 +17,7 @@ func TestReadFrameRejectsBadLength(t *testing.T) {
 		"A999999999999\n", // absurd / overflow-ish
 		"Axyz\n",          // non-numeric
 	} {
-		if _, err := readFrame(bufio.NewReader(strings.NewReader(in))); err == nil {
+		if _, err := readFrame(bufio.NewReader(strings.NewReader(in)), defaultMaxResponse); err == nil {
 			t.Errorf("readFrame(%q) = nil error, want rejection", in)
 		}
 	}
@@ -26,7 +26,7 @@ func TestReadFrameRejectsBadLength(t *testing.T) {
 func TestReadFrameValid(t *testing.T) {
 	payload := "AS1 AS2\n"
 	in := fmt.Sprintf("A%d\n%sC\n", len(payload), payload)
-	got, err := readFrame(bufio.NewReader(strings.NewReader(in)))
+	got, err := readFrame(bufio.NewReader(strings.NewReader(in)), defaultMaxResponse)
 	if err != nil {
 		t.Fatalf("readFrame: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestReadFrameValid(t *testing.T) {
 func TestReadFrameRejectsBadTrailer(t *testing.T) {
 	payload := "AS1 AS2\n"
 	in := fmt.Sprintf("A%d\n%sXfoo\n", len(payload), payload)
-	if _, err := readFrame(bufio.NewReader(strings.NewReader(in))); err == nil {
+	if _, err := readFrame(bufio.NewReader(strings.NewReader(in)), defaultMaxResponse); err == nil {
 		t.Errorf("readFrame accepted non-'C' trailer, want rejection")
 	}
 }

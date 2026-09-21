@@ -6,4 +6,11 @@ source:   TEST
 
 as-set:   AS-DOWNSTREAM
 members:  AS64502
+members:  AS-EXAMPLE
+remarks:  deliberate cycle back to AS-EXAMPLE: it is skipped, not an error
+source:   TEST
+
+as-set:   AS-EXAMPLE-LIST
+members:  AS64500, AS64501,
+          AS-DOWNSTREAM
 source:   TEST
