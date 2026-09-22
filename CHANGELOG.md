@@ -9,8 +9,9 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
-The first release, planned as 0.1.0. It contains everything below; there is no
-earlier version to migrate from.
+## [0.1.0] - 2026-09-22
+
+The first release. There is no earlier version to migrate from.
 
 ### Added
 
@@ -117,3 +118,6 @@ earlier version to migrate from.
 - **Some values stay raw strings.** `import-via`, `export-via` and most action
   values do; a few common RP-attributes have typed helpers.
 - **`rdap` is not a `Source`.** RDAP serves registration data, not IRR sets.
+
+[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/rkolesnichenko/rpsl/releases/tag/v0.1.0
