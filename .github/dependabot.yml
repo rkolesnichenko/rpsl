@@ -1,0 +1,16 @@
+# Dependabot keeps the actions in .github/workflows up to date, in one grouped
+# pull request a month. The Go modules are left out on purpose: they have no
+# third-party dependencies, and their only requires are each other, which are
+# bumped at release time (RELEASING.md).
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "ci"
