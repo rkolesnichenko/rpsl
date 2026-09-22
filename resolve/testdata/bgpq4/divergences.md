@@ -9,7 +9,7 @@ passing unnoticed.
 
 | Case | Example | Engine | bgpq4 | Why |
 | --- | --- | --- | --- | --- |
-| `single-length-range` | `192.0.2.0/24^26` | the four /26s | nothing | A bgpq4 bug: `sx_prefix_range_parse` leaves the upper bound at 0 when `^n` has no `-m`, so the range is empty. RFC 2622 §2 defines `^n` as the length-n more-specifics. `^26-26` works in both. |
+| `single-length-range` | `192.0.2.0/24^26` | the four /26s | nothing | A bgpq4 bug, reported as [bgp/bgpq4#135](https://github.com/bgp/bgpq4/issues/135): `sx_prefix_range_parse` leaves the upper bound at 0 when `^n` has no `-m`, so the range is empty. RFC 2622 §2 defines `^n` as the length-n more-specifics. `^26-26` works in both. |
 | `operator-on-set-member` | `RS-INNER^25` | RS-INNER's prefixes under `^25` | nothing | RFC 2622 §5.2 allows a range operator on a set member. IRRd returns `RS-INNER^25` from `!i…,1` as an unresolved name, which bgpq4 cannot use. |
 | `operator-on-as-member` | `AS65001^25` in a route-set | AS65001's routes under `^25` | nothing | Same as above, for an AS number (RFC 2622 §5.3). |
 | `route-set-in-as-set` | `as-set: AS-X` listing `RS-Y` | RS-Y is not followed | RS-Y's AS members are added | RFC 2622 §5.1: an as-set lists AS numbers and as-sets only. Following a route-set would let it add ASes to the as-set. |
