@@ -108,7 +108,7 @@ func TestGetSetParsesMembers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSet: %v", err)
 	}
-	ms := set.SetMembers()
+	ms := set.(object.Set).SetMembers()
 	if len(ms) != 2 {
 		t.Fatalf("members = %+v, want 2", ms)
 	}
@@ -269,7 +269,7 @@ func TestGetSetEmptyIsNotMissing(t *testing.T) {
 	src := &Source{Addr: fs.addr(), Timeout: 2 * time.Second}
 	for _, name := range []string{"AS-EMPTY", "RS-EMPTY"} {
 		set, err := src.GetSet(context.Background(), mustSet(t, name))
-		if err != nil || set == nil || len(set.SetMembers()) != 0 || set.SetName() != mustSet(t, name) {
+		if err != nil || set == nil || len(set.(object.Set).SetMembers()) != 0 || set.SetName() != mustSet(t, name) {
 			t.Errorf("GetSet(%s) = %+v, %v; want the empty set", name, set, err)
 		}
 	}

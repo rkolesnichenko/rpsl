@@ -102,6 +102,21 @@ func TestDiagnosticRulesAreDocumented(t *testing.T) {
 	}
 	mpImport := func(v string) []Diagnostic { _, d := policy.ParseMPImport(v); return d }
 	parseImport := func(v string) []Diagnostic { _, d := policy.ParseImport(v); return d }
+	parseInject := func(v string) []Diagnostic { _, d := policy.ParseInject(v); return d }
+	parseAggrMtd := func(v string) []Diagnostic { _, d := policy.ParseAggrMtd(v); return d }
+	parseIfaddr := func(v string) []Diagnostic { _, d := policy.ParseIfaddr(v); return d }
+	parseIface := func(v string) []Diagnostic { _, d := policy.ParseInterface(v); return d }
+	parsePeer := func(v string) []Diagnostic { _, d := policy.ParsePeer(v); return d }
+	parseMntRoutes := func(v string) []Diagnostic { _, d := policy.ParseMntRoutes(v); return d }
+	parseTypedef := func(v string) []Diagnostic { _, d := policy.ParseTypedef(v); return d }
+	parseRPAttr := func(v string) []Diagnostic { _, d := policy.ParseRPAttribute(v); return d }
+	parseProtocol := func(v string) []Diagnostic { _, d := policy.ParseProtocol(v); return d }
+	// The dictionary checks only run when one is supplied.
+	dict := policy.RFCDictionary
+	withDict := func(v string) []Diagnostic {
+		_, d := policy.ParseImportWith(v, false, policy.Options{Dict: &dict})
+		return d
+	}
 	long := "#" + strings.Repeat("x", 64) + "\n"
 	catalog := []struct {
 		rule  string
@@ -163,6 +178,26 @@ func TestDiagnosticRulesAreDocumented(t *testing.T) {
 		{"policy/nesting", pol(parseImport, "from AS1 accept "+strings.Repeat("(", 2000)+"ANY")},
 		{"policy/too-long", pol(parseImport, strings.Repeat("AS1 ", 1<<20+1))},
 		{"policy/too-many-errors", pol(parseImport, "from AS1 accept "+strings.Repeat("junk!! ", 150))},
+		{"object/route-pingable", obj("route: 192.0.2.0/24\norigin: AS1\npingable: nope\n")},
+		{"object/mntner-auth", obj("mntner: M\nadmin-c: EX1-RIPE\nupd-to: e@e.net\nauth: WEIRD-PW x\nmnt-by: M\nsource: RIPE\n")},
+		{"object/route-created", obj("route: 192.0.2.0/24\norigin: AS1\ncreated: yesterday\n")},
+		{"object/route-last-modified", obj("route: 192.0.2.0/24\norigin: AS1\nlast-modified: never\n")},
+		{"object/route-changed", obj("route: 192.0.2.0/24\norigin: AS1\nchanged: e@e.net notadate\n")},
+		{"object/rtr-set-members", obj("rtr-set: RTRS-X\nmembers: AS-WRONG\n")},
+		{"object/poem-author", obj("poem: P\nform: F\ntext: t\nauthor: not a handle!\nmnt-by: M\nsource: RIPE\n")},
+		{"policy/inject", pol(parseInject, "upon WHATEVER")},
+		{"policy/aggr-mtd", pol(parseAggrMtd, "sideways")},
+		{"policy/ifaddr", pol(parseIfaddr, "1.1.1.1")},
+		{"policy/interface", pol(parseIface, "2001:db8::1 masklen 48 tunnel 192.0.2.1")},
+		{"policy/peer", pol(parsePeer, "BGP4 192.0.2.1 asno(")},
+		{"policy/peer", pol(parsePeer, "BGP4 192.0.2.1 ,")},
+		{"policy/mnt-routes", pol(parseMntRoutes, "MNT-A junk")},
+		{"policy/typedef", pol(parseTypedef, "lonely")},
+		{"policy/rp-attribute", pol(parseRPAttr, "pref")},
+		{"policy/rp-attribute", pol(withDict, "from AS1 action nonsense = 1; accept ANY")},
+		{"policy/rp-method", pol(withDict, "from AS1 action aspath.append(AS1); accept ANY")},
+		{"policy/rp-protocol", pol(parseProtocol, "BGP4 asno(as_number)")},
+		{"policy/rp-protocol", pol(withDict, "protocol NONSENSE from AS1 accept ANY")},
 		{"dict/unknown-class", obj("foo: x\n")},
 		{"dict/unknown-attr", obj("route: 192.0.2.0/24\norigin: AS1\nfoo: x\n")},
 		{"dict/missing-required", obj("route: 192.0.2.0/24\n")},

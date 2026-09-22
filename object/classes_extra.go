@@ -5,6 +5,7 @@ import (
 	"net/netip"
 
 	"github.com/rkolesnichenko/rpsl/ast"
+	"github.com/rkolesnichenko/rpsl/policy"
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
@@ -131,10 +132,10 @@ type InetRtr struct {
 	Name      string
 	Alias     []string
 	LocalAS   types.ASN
-	Ifaddr    []string
-	Interface []string
-	Peers     []string // peer: values, raw
-	MpPeers   []string // RFC 4012 mp-peer: values, raw
+	Ifaddr    []policy.Ifaddr
+	Interface []policy.Interface
+	Peers     []policy.Peer
+	MpPeers   []policy.Peer // RFC 4012 mp-peer: values
 	MemberOf  []types.SetName
 	raw       *ast.Object
 }
@@ -152,10 +153,10 @@ func decodeInetRtr(d *decoder) InetRtr {
 		Name:      d.key("inet-rtr"),
 		Alias:     d.all("alias"),
 		LocalAS:   d.asn("local-as", "object/inet-rtr-local-as"),
-		Ifaddr:    d.all("ifaddr"),
-		Interface: d.all("interface"),
-		Peers:     d.all("peer"),
-		MpPeers:   d.all("mp-peer"),
+		Ifaddr:    d.ifaddrs(),
+		Interface: d.interfaces(),
+		Peers:     d.peers("peer"),
+		MpPeers:   d.peers("mp-peer"),
 		MemberOf:  d.memberOf("inet-rtr", types.ClassRtrSet),
 		raw:       d.o,
 	}

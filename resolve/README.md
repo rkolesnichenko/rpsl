@@ -2,7 +2,7 @@
 
 `import "github.com/rkolesnichenko/rpsl/resolve"`
 
-The set-expansion engine: it expands `as-set`/`route-set` references into concrete
+The set-expansion engine: it expands set references into concrete
 ASNs and prefixes by traversing a graph of objects it must *fetch*. This is the
 feature nobody else ships in Go.
 
@@ -16,9 +16,9 @@ in production. (Core `resolve` imports only `net/netip`, never `net`;
 
 ```go
 type Source interface {
-	GetSet(ctx context.Context, name types.SetName) (object.Set, error)
+	GetSet(ctx context.Context, name types.SetName) (object.NamedSet, error)
 	OriginatedRoutes(ctx context.Context, as types.ASN, afi types.AFI) ([]netip.Prefix, error)
-	MembersByRef(ctx context.Context, set object.Set) ([]object.Object, error)
+	MembersByRef(ctx context.Context, set object.NamedSet) ([]object.Object, error)
 }
 ```
 
@@ -43,6 +43,10 @@ type Expander struct {
 func (e *Expander) ExpandAS(ctx context.Context, n types.SetName) (ASNSet, error)
 func (e *Expander) ExpandPrefixes(ctx context.Context, n types.SetName) (PrefixSet, error)
 func (e *Expander) ExpandPrefixRanges(ctx context.Context, n types.SetName) (RangeSet, error)
+func (e *Expander) ExpandRouters(ctx context.Context, n types.SetName) (RouterSet, error)
+func (e *Expander) ExpandPeerings(ctx context.Context, n types.SetName) (PeeringSet, error)
+func (e *Expander) ExpandFilterSet(ctx context.Context, n types.SetName) (RangeSet, error)
+func (e *Expander) EvalFilter(ctx context.Context, f policy.Filter) (RangeSet, error)
 ```
 
 `ASNSet`/`PrefixSet`/`RangeSet` are deduplicated sets with `Has`, `Len`, a sorted
@@ -68,8 +72,9 @@ form — which is the only usable form for sets containing ranges like `/8^+`.
   registry, and IRRd applies the same rule). Skipping either check is a silent,
   hijack-relevant bug, so the engine re-applies `ClaimAllowed` to every claim.
 - **Class rules** — an as-set is followed only into as-sets, a route-set into
-  route-sets and as-sets (RFC 2622 §5.1-5.2); a route-set inside an as-set is
-  not followed. `ExpandAS` takes an as-set, the prefix expansions an as-set or
+  route-sets and as-sets (RFC 2622 §5.1-5.2), an rtr-set into rtr-sets, a
+  peering-set into peering-sets, a filter-set into filter-sets; a route-set
+  inside an as-set is not followed. `ExpandAS` takes an as-set, the prefix expansions an as-set or
   route-set; anything else returns `ErrSetClass`. Ranges come back in canonical
   form, so equivalent spellings count once.
 - **Fan-out guards** — `MaxPrefixes` is checked *during* enumeration (duplicates
@@ -170,3 +175,46 @@ exactly as bgpq4 expands them; the other uses `^n`, which bgpq4 drops.
 
 See the [root README](../README.md) and
 [GoDoc](https://pkg.go.dev/github.com/rkolesnichenko/rpsl/resolve).
+
+## Expanding the other set classes
+
+`rtr-set` and `peering-set` expand the same way as-sets do — breadth-first,
+cycles skipped, missing nested sets reported rather than fatal:
+
+```go
+routers, _ := e.ExpandRouters(ctx, mustSet("RTRS-EXAMPLE"))   // addresses and inet-rtr names
+peerings, _ := e.ExpandPeerings(ctx, mustSet("PRNG-EXAMPLE")) // nested references replaced
+```
+
+A `filter-set` is different in kind: it holds an expression, not a member list.
+`EvalFilter` evaluates one into the prefix ranges it denotes, and
+`ExpandFilterSet` does the same for a named set:
+
+```go
+ranges, err := e.EvalFilter(ctx, filter) // filter is a policy.Filter
+```
+
+Only the part of the filter language with a finite answer in prefixes is
+evaluated: `ANY`, prefix lists, route-set/as-set/filter-set references, AS
+numbers and AS expressions, `OR`, and `AND` (the intersection of what the two
+sides denote). `NOT`, `PeerAS`, community tests, AS-path regexps and per-peer
+templates need a routing table or a peer, so they return a
+`*NotEnumerableError` naming the term — never a quietly smaller answer.
+
+## Sources that need no network
+
+```go
+src, err := resolve.LoadDump(f)              // an IRR bulk dump; wrap f in gzip.NewReader if needed
+cached := resolve.NewCache(live, time.Hour)  // a caching Source over any other
+```
+
+`Cache` is safe for concurrent use, caches "not found" as the real answer it is,
+and collapses identical lookups already in flight into one backend call.
+`DumpLoader` reads several files into one Source and reports what it saw.
+
+## Concurrency
+
+`Expander.Concurrency` fetches a whole breadth-first level at once, which hides
+a live registry's latency. It changes no result: the level's answers are merged
+in the level's own order, and a test compares serial against parallel over two
+hundred random set graphs.

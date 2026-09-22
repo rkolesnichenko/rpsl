@@ -197,10 +197,26 @@ func TestListAttributesSplit(t *testing.T) {
 		t.Errorf("inet-rtr MemberOf = %q, want [RTRS-A RTRS-B]", got)
 	}
 	rs := mustDecode(t, "rtr-set: RTRS-X\nmembers: r1.example, RTRS-Y\nmp-members: 2001:db8::1, r2.example\n").(RtrSet)
-	if !reflect.DeepEqual(rs.Members, []string{"r1.example", "RTRS-Y"}) ||
-		!reflect.DeepEqual(rs.MpMembers, []string{"2001:db8::1", "r2.example"}) {
+	if !reflect.DeepEqual(rawOf(rs.Members), []string{"r1.example", "RTRS-Y"}) ||
+		!reflect.DeepEqual(rawOf(rs.MpMembers), []string{"2001:db8::1", "r2.example"}) {
 		t.Errorf("rtr-set Members = %q, MpMembers = %q", rs.Members, rs.MpMembers)
 	}
+	// The comma-split items keep their kinds: a router, a nested set, an address.
+	if rs.Members[0].Kind != RtrMemberRouter || rs.Members[1].Kind != RtrMemberSet {
+		t.Errorf("Members kinds = %v, %v", rs.Members[0].Kind, rs.Members[1].Kind)
+	}
+	if a, ok := rs.MpMembers[0].Router.Addr(); !ok || a.String() != "2001:db8::1" {
+		t.Errorf("MpMembers[0] = %+v, want the address 2001:db8::1", rs.MpMembers[0])
+	}
+}
+
+// rawOf returns each member as it was written.
+func rawOf(ms []RtrSetMember) []string {
+	out := make([]string, len(ms))
+	for i, m := range ms {
+		out[i] = m.Raw
+	}
+	return out
 }
 
 // mustDecode decodes src and fails on any diagnostic.

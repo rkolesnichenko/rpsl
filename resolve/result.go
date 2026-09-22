@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/rkolesnichenko/rpsl/policy"
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
@@ -137,4 +138,109 @@ func listString[T fmt.Stringer](items []T) string {
 		parts[i] = it.String()
 	}
 	return "[" + strings.Join(parts, " ") + "]"
+}
+
+// RouterSet is the result of expanding an rtr-set: the distinct routers it
+// denotes, by address or by inet-rtr name.
+type RouterSet struct {
+	m       map[types.RouterID]struct{}
+	missing []types.SetName
+}
+
+func newRouterSet() *RouterSet { return &RouterSet{m: map[types.RouterID]struct{}{}} }
+
+func (s *RouterSet) add(r types.RouterID) {
+	if !r.IsZero() {
+		s.m[r] = struct{}{}
+	}
+}
+
+// Has reports whether the set contains r.
+func (s RouterSet) Has(r types.RouterID) bool { _, ok := s.m[r]; return ok }
+
+// Len returns the number of distinct routers.
+func (s RouterSet) Len() int { return len(s.m) }
+
+// Missing returns the nested sets that were not found, sorted.
+func (s RouterSet) Missing() []types.SetName { return s.missing }
+
+// List returns the routers sorted by their canonical text.
+func (s RouterSet) List() []types.RouterID {
+	out := make([]types.RouterID, 0, len(s.m))
+	for r := range s.m {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
+	return out
+}
+
+// String renders the routers as a comma-separated list.
+func (s RouterSet) String() string { return listString(s.List()) }
+
+// PeeringSet is the result of expanding a peering-set: the peerings it denotes,
+// in discovery order, with duplicates removed by their canonical text.
+type PeeringSet struct {
+	list    []policy.Peering
+	seen    map[string]bool
+	missing []types.SetName
+}
+
+func newPeeringSet() *PeeringSet { return &PeeringSet{seen: map[string]bool{}} }
+
+func (s *PeeringSet) add(p policy.Peering) {
+	if p == nil {
+		return
+	}
+	text := peeringText(p)
+	if s.seen[text] {
+		return
+	}
+	s.seen[text] = true
+	s.list = append(s.list, p)
+}
+
+// Has reports whether the set contains a peering that renders as text.
+func (s PeeringSet) Has(text string) bool { return s.seen[text] }
+
+// Len returns the number of distinct peerings.
+func (s PeeringSet) Len() int { return len(s.list) }
+
+// Missing returns the nested sets that were not found, sorted.
+func (s PeeringSet) Missing() []types.SetName { return s.missing }
+
+// List returns the peerings in discovery order.
+func (s PeeringSet) List() []policy.Peering {
+	out := make([]policy.Peering, len(s.list))
+	copy(out, s.list)
+	return out
+}
+
+// Strings returns each peering's canonical text, in the same order as List.
+func (s PeeringSet) Strings() []string {
+	out := make([]string, len(s.list))
+	for i, p := range s.list {
+		out[i] = peeringText(p)
+	}
+	return out
+}
+
+// String renders the peerings as a space-separated list in brackets, as the
+// other result types do.
+func (s PeeringSet) String() string { return "[" + strings.Join(s.Strings(), " ") + "]" }
+
+// peeringText is a peering's canonical text, the identity by which the result
+// deduplicates.
+func peeringText(p policy.Peering) string {
+	if v, ok := p.(interface{ String() string }); ok {
+		return v.String()
+	}
+	return fmt.Sprintf("%v", p)
+}
+
+// sortedNames returns a copy of ns sorted by canonical name.
+func sortedNames(ns []types.SetName) []types.SetName {
+	out := make([]types.SetName, len(ns))
+	copy(out, ns)
+	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
+	return out
 }

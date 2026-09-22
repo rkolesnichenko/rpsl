@@ -91,7 +91,7 @@ type Source interface {
 	// GetSet fetches a set object by name. It returns ErrNotFound (wrapped is
 	// fine) when the set does not exist; a nil set with a nil error is treated
 	// the same way.
-	GetSet(ctx context.Context, name types.SetName) (object.Set, error)
+	GetSet(ctx context.Context, name types.SetName) (object.NamedSet, error)
 
 	// OriginatedRoutes returns the prefixes a given AS originates, filtered to
 	// the requested address family (types.AFIUnspecified or AFIAny = all).
@@ -103,5 +103,5 @@ type Source interface {
 	// come from set.SetSource(). Implementations should filter with
 	// ClaimAllowed. The Expander re-applies ClaimAllowed to every returned
 	// object, so an over-inclusive result cannot widen a set.
-	MembersByRef(ctx context.Context, set object.Set) ([]object.Object, error)
+	MembersByRef(ctx context.Context, set object.NamedSet) ([]object.Object, error)
 }

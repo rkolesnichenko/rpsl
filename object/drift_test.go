@@ -26,7 +26,9 @@ var classKey = map[string][2]string{
 	"inetnum": {"192.0.2.0 - 192.0.2.255", "192.0.2.255"}, "inet6num": {"2001:db8::/32", "2001:db8::/32"},
 	"as-block": {"AS65000 - AS65010", "AS65010"}, "inet-rtr": {"rtr-key.example", "rtr-key.example"},
 	"irt": {"IRT-KEY", "IRT-KEY"}, "domain": {"2.0.192.in-addr.arpa", "2.0.192.in-addr.arpa"},
-	"organisation": {"ORG-KEY", "ORG-KEY"},
+	"organisation": {"ORG-KEY", "ORG-KEY"}, "key-cert": {"PGPKEY-1234ABCD", "PGPKEY-1234ABCD"},
+	"dictionary": {"RPSL-KEY", "RPSL-KEY"}, "poem": {"POEM-KEY", "POEM-KEY"},
+	"poetic-form": {"FORM-KEY", "FORM-KEY"},
 }
 
 // keyFields are the fields a class's key decodes into.
@@ -35,6 +37,7 @@ var keyFields = map[string][]string{
 	"route6": {"Prefix"}, "as-set": {"Name"}, "route-set": {"Name"}, "peering-set": {"Name"}, "filter-set": {"Name"},
 	"rtr-set": {"Name"}, "inetnum": {"Lo", "Hi"}, "inet6num": {"Prefix"}, "as-block": {"Lo", "Hi"},
 	"inet-rtr": {"Name"}, "irt": {"Name"}, "domain": {"Name"}, "organisation": {"OrgID"},
+	"key-cert": {"Name"}, "dictionary": {"Name"}, "poem": {"Name"}, "poetic-form": {"Name"},
 }
 
 // fieldNames maps the attributes whose field is not the attribute's name in
@@ -43,6 +46,7 @@ var fieldNames = map[string]string{
 	"e-mail": "Email", "import": "Imports", "mp-import": "Imports", "export": "Exports", "mp-export": "Exports",
 	"default": "Defaults", "mp-default": "Defaults", "peer": "Peers", "mp-peer": "MpPeers",
 	"peering": "Peerings", "mp-peering": "MpPeerings", "local-as": "LocalAS",
+	"rp-attribute": "RPAttribute",
 }
 
 // unprofiledFields are read although no profile lists their attribute.
@@ -72,7 +76,7 @@ func marker(class, attr string, i int) (value, needle string) {
 		return classKey[class][0], classKey[class][1]
 	case "origin", "local-as", "peering", "mp-peering", "filter", "mp-filter":
 		return as, as
-	case "admin-c", "tech-c", "zone-c", "nic-hdl", "abuse-c", "ping-hdl":
+	case "admin-c", "tech-c", "zone-c", "nic-hdl", "abuse-c", "ping-hdl", "author":
 		return "DRIFT" + n + "-TEST", "DRIFT" + n + "-TEST"
 	case "member-of":
 		switch class {
@@ -92,6 +96,34 @@ func marker(class, attr string, i int) (value, needle string) {
 			return "rtr-drift" + n + ".example", "rtr-drift" + n + ".example"
 		}
 		return as, as
+	case "pingable":
+		return fmt.Sprintf("10.11.%d.1", i), fmt.Sprintf("10.11.%d.1", i)
+	case "ifaddr":
+		return fmt.Sprintf("10.12.%d.1 masklen 24", i), fmt.Sprintf("10.12.%d.1", i)
+	case "interface":
+		return fmt.Sprintf("10.13.%d.1 masklen 24", i), fmt.Sprintf("10.13.%d.1", i)
+	case "peer":
+		return fmt.Sprintf("BGP4 10.14.%d.1", i), fmt.Sprintf("10.14.%d.1", i)
+	case "mp-peer":
+		return fmt.Sprintf("BGP4 10.15.%d.1", i), fmt.Sprintf("10.15.%d.1", i)
+	case "components":
+		return fmt.Sprintf("{10.16.%d.0/24}", i), fmt.Sprintf("10.16.%d.0/24", i)
+	case "export-comps":
+		return fmt.Sprintf("{10.17.%d.0/24}", i), fmt.Sprintf("10.17.%d.0/24", i)
+	case "inject":
+		return "at drift" + n + ".example", "drift" + n + ".example"
+	case "aggr-bndry":
+		return as, as
+	case "aggr-mtd":
+		return "outbound " + as, as
+	case "auth":
+		return "MD5-PW $1$drift" + n + "$xyz", "drift" + n
+	case "rp-attribute":
+		return "attr" + n + " operator=(integer)", "attr" + n
+	case "typedef":
+		return "type" + n + " list of integer", "type" + n
+	case "protocol":
+		return "PROTO" + n + " MANDATORY asno(as_number)", "proto" + n
 	case "import", "mp-import":
 		return "from " + as + " accept ANY", as
 	case "export", "mp-export":

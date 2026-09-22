@@ -81,13 +81,15 @@ func decodeAutNum(d *decoder) AutNum {
 	return an
 }
 
-// Mntner is a maintainer object. Auth lines are kept raw and uninterpreted.
-// ReferralBy (RFC 2725) names the maintainer that created this one.
+// Mntner is a maintainer object. Auth holds the authentication schemes and
+// their credentials; nothing here verifies one, which needs cryptography this
+// module does not depend on. ReferralBy (RFC 2725) names the maintainer that
+// created this one.
 type Mntner struct {
 	Common
 	Registry
 	Handle     string
-	Auth       []string
+	Auth       []Auth
 	UpdTo      []string
 	MntNfy     []string
 	ReferralBy []string
@@ -105,7 +107,7 @@ func decodeMntner(d *decoder) Mntner {
 		Common:     d.common("mntner"),
 		Registry:   d.registry("mntner"),
 		Handle:     d.key("mntner"),
-		Auth:       d.all("auth"),
+		Auth:       d.auth("mntner"),
 		UpdTo:      d.all("upd-to"),
 		MntNfy:     d.all("mnt-nfy"),
 		ReferralBy: d.list("referral-by"),
@@ -206,13 +208,13 @@ type Route struct {
 	Origin      types.ASN
 	MemberOf    []types.SetName
 	Holes       []netip.Prefix
-	Pingable    []string
+	Pingable    []netip.Addr
 	PingHdl     []types.NICHandle
-	Inject      []string
-	Components  string
-	AggrBndry   string
-	AggrMtd     string
-	ExportComps string
+	Inject      []policy.Inject
+	Components  policy.Components
+	AggrBndry   policy.ASExpr
+	AggrMtd     policy.AggrMtd
+	ExportComps policy.Filter
 	raw         *ast.Object
 }
 
@@ -231,13 +233,13 @@ func decodeRoute(d *decoder) Route {
 		Origin:      d.asn("origin", "object/route-origin"),
 		MemberOf:    d.memberOf("route", types.ClassRouteSet),
 		Holes:       d.holes("route", pfx),
-		Pingable:    d.all("pingable"),
+		Pingable:    d.pingable("route"),
 		PingHdl:     d.nicHandles("ping-hdl", "object/route-ping-hdl"),
-		Inject:      d.all("inject"),
-		Components:  d.str("components"),
-		AggrBndry:   d.str("aggr-bndry"),
-		AggrMtd:     d.str("aggr-mtd"),
-		ExportComps: d.str("export-comps"),
+		Inject:      d.injects("route"),
+		Components:  d.components("route"),
+		AggrBndry:   d.asExpr("route", "aggr-bndry"),
+		AggrMtd:     d.aggrMtd("route"),
+		ExportComps: d.filterAttr("route", "export-comps"),
 		raw:         d.o,
 	}
 }
@@ -251,13 +253,13 @@ type Route6 struct {
 	Origin      types.ASN
 	MemberOf    []types.SetName
 	Holes       []netip.Prefix
-	Pingable    []string
+	Pingable    []netip.Addr
 	PingHdl     []types.NICHandle
-	Inject      []string
-	Components  string
-	AggrBndry   string
-	AggrMtd     string
-	ExportComps string
+	Inject      []policy.Inject
+	Components  policy.Components
+	AggrBndry   policy.ASExpr
+	AggrMtd     policy.AggrMtd
+	ExportComps policy.Filter
 	raw         *ast.Object
 }
 
@@ -276,13 +278,13 @@ func decodeRoute6(d *decoder) Route6 {
 		Origin:      d.asn("origin", "object/route6-origin"),
 		MemberOf:    d.memberOf("route6", types.ClassRouteSet),
 		Holes:       d.holes("route6", pfx),
-		Pingable:    d.all("pingable"),
+		Pingable:    d.pingable("route6"),
 		PingHdl:     d.nicHandles("ping-hdl", "object/route6-ping-hdl"),
-		Inject:      d.all("inject"),
-		Components:  d.str("components"),
-		AggrBndry:   d.str("aggr-bndry"),
-		AggrMtd:     d.str("aggr-mtd"),
-		ExportComps: d.str("export-comps"),
+		Inject:      d.injects("route6"),
+		Components:  d.components("route6"),
+		AggrBndry:   d.asExpr("route6", "aggr-bndry"),
+		AggrMtd:     d.aggrMtd("route6"),
+		ExportComps: d.filterAttr("route6", "export-comps"),
 		raw:         d.o,
 	}
 }

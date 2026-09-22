@@ -44,6 +44,8 @@ attribute of it.
 | `object/<class>-host-bits` | Warning | A route, route6 or inet6num prefix with host bits set. |
 | `object/<class>-holes-host-bits` | Warning | A `holes:` prefix with host bits set; it is read with them cleared. |
 | `object/<class>-holes-outside` | Warning | A `holes:` prefix outside the route. |
+| `object/<class>-auth` | Warning | An `auth:` line naming a scheme this library does not know, or carrying no credential; it is kept whole and nothing is dropped. |
+| `object/<class>-changed`, `object/<class>-created`, `object/<class>-last-modified` | Warning | A `created:`/`last-modified:` that is not RFC 3339, or a `changed:` date that is not `YYYYMMDD`; the text is kept as written. |
 
 ## `policy/` — routing policy (`import`, `export`, `default`, `filter`, `peering`, and `mp-` forms)
 
@@ -62,6 +64,16 @@ attribute of it.
 | `policy/host-bits` | Warning | A prefix-list member with host bits set; it is read with them cleared. |
 | `policy/range-op` | Error | An invalid range operator. |
 | `policy/as-path-regexp` | Error or Warning | A malformed or empty AS-path regexp, one whose `<` is never closed, a `>` that closes nothing, or a term other than an AS number, as-set or `PeerAS` (Error, at the offending token); an AS number written without `AS`, as in `<3333>` (Warning). |
+| `policy/inject` | Error | A malformed `inject:` condition: a test that is not `STATIC`, `HAVE-COMPONENTS` or `EXCLUDE`, a missing `{` or `)`. |
+| `policy/aggr-mtd` | Error | An `aggr-mtd:` that is neither `inbound` nor `outbound`. |
+| `policy/ifaddr` | Error | A malformed `ifaddr:`: a bad address, a missing or over-long `masklen`. |
+| `policy/interface` | Error | A malformed RFC 4012 `interface:`: a bad address family, or a `tunnel` without its `,<encapsulation>`. |
+| `policy/peer` | Error or Warning | A malformed `peer:`/`mp-peer:` — a missing protocol, an unterminated `(` in an option (Error); an empty item in the option list (Warning). |
+| `policy/mnt-routes` | Error | A malformed `mnt-routes:`: no maintainer name, or a scope that is neither `ANY` nor a prefix list. |
+| `policy/typedef` | Error | A dictionary `typedef:` with no type definition after its name. |
+| `policy/rp-attribute` | Error or Warning | A malformed `rp-attribute:` declaration, or one declaring no method (Error); an action naming an attribute the dictionary does not declare (Warning, only when one is supplied). |
+| `policy/rp-method` | Warning | An action naming a method the dictionary's attribute does not declare. Only when a dictionary is supplied. |
+| `policy/rp-protocol` | Error or Warning | A malformed `protocol:` declaration, or an option group without `MANDATORY`/`OPTIONAL` (Error); a protocol name the dictionary does not declare (Warning, only when one is supplied). |
 | `policy/afi` | Error | An empty or invalid `afi` list, or an `afi` clause in a legacy `import:`, `export:` or `default:`, where RFC 4012 does not allow one (it is ignored). |
 | `policy/default-to` | Error | A `default` without its `to` peering. |
 | `policy/expr-brace`, `policy/missing-semicolon` | Error, Warning | A structured policy's `{…}` unbalanced, or two factors with no `;` between them. |

@@ -163,7 +163,43 @@ type parser struct {
 	depth  int
 	bailed bool // nesting cap hit: the rest of the value is abandoned
 	mp     bool // an mp-* value, where an afi clause is allowed
-	diags  []ast.Diagnostic
+	// stops are extra keywords that end a clause, a peering or a router
+	// expression. The import:/export:/default: grammar sets none; the
+	// sub-grammars of inject:, interface: and peer: add their own keywords so
+	// that, say, "upon" is not read as part of the action list before it.
+	stops []string
+	// dict, when set, is the RP-attribute dictionary actions and protocol names
+	// are checked against (RFC 2622 §9). Nil means syntax-only checking.
+	dict  *Dictionary
+	diags []ast.Diagnostic
+}
+
+// isStop reports whether t is one of this parser's extra stop keywords.
+func (p *parser) isStop(t token) bool {
+	for _, k := range p.stops {
+		if t.kw(k) {
+			return true
+		}
+	}
+	return false
+}
+
+// clauseKw, peeringStop and filterStop are the grammar's stop predicates widened
+// by p.stops; every grammar method uses these rather than the bare functions.
+func (p *parser) clauseKw(t token) bool    { return isClauseKw(t) || p.isStop(t) }
+func (p *parser) peeringStop(t token) bool { return isPeeringStop(t) || p.isStop(t) }
+func (p *parser) filterStop(t token) bool  { return isFilterStop(t) || p.isStop(t) }
+
+// startsFilterTerm reports whether t can begin another filter term, i.e. an
+// implicit OR continues the filter.
+func (p *parser) startsFilterTerm(t token) bool {
+	switch t.kind {
+	case tLParen, tLBrace, tRegex:
+		return true
+	case tWord:
+		return !p.filterStop(t)
+	}
+	return false
 }
 
 // newParser tokenizes s. A value over maxTokens gets one "policy/too-long"
@@ -320,8 +356,9 @@ func (p *parser) protocolClause(kw string) string {
 	}
 	kwTok := p.cur()
 	p.advance()
-	if t := p.cur(); t.kind == tWord && !isClauseKw(t) && !t.kw("into") && !t.kw("afi") {
+	if t := p.cur(); t.kind == tWord && !p.clauseKw(t) && !t.kw("into") && !t.kw("afi") {
 		p.advance()
+		p.checkProtocol(t.text, t)
 		return t.text
 	}
 	p.errf(kwTok, "policy/protocol", "expected a protocol name after '"+kw+"'")
@@ -340,7 +377,7 @@ func (p *parser) parseAFIs() []types.AddrFamily {
 	var afis []types.AddrFamily
 	for {
 		t := p.cur()
-		if t.kind != tWord || isClauseKw(t) {
+		if t.kind != tWord || p.clauseKw(t) {
 			break
 		}
 		af, err := types.ParseAddrFamily(t.text)
@@ -384,11 +421,11 @@ func (p *parser) parseExpr(peerKw, filterKw string) Expr {
 	case p.cur().kw("except"):
 		p.advance()
 		afis := p.parseAFIs()
-		return Except{Left: left, AFIs: afis, Right: p.parseExpr(peerKw, filterKw)}
+		return Except{Left: left, AFIs: afis, MP: p.mp, Right: p.parseExpr(peerKw, filterKw)}
 	case p.cur().kw("refine"):
 		p.advance()
 		afis := p.parseAFIs()
-		return Refine{Left: left, AFIs: afis, Right: p.parseExpr(peerKw, filterKw)}
+		return Refine{Left: left, AFIs: afis, MP: p.mp, Right: p.parseExpr(peerKw, filterKw)}
 	}
 	return left
 }
@@ -492,13 +529,13 @@ func (p *parser) parsePeering() Peering {
 			return PeeringSetRef{Name: sn}
 		}
 	}
-	if (t.kind != tWord && t.kind != tLParen) || isPeeringStop(t) || t.kw("at") {
+	if (t.kind != tWord && t.kind != tLParen) || p.peeringStop(t) || t.kw("at") {
 		p.errf(t, "policy/peering", "expected peering specification")
 		return PeeringAS{}
 	}
 	as, ok := p.parseASExpr()
 	if !ok {
-		for !isPeeringStop(p.cur()) { // the error is reported; skip the rest of the peering
+		for !p.peeringStop(p.cur()) { // the error is reported; skip the rest of the peering
 			p.advance()
 		}
 		return PeeringAS{}
@@ -583,7 +620,7 @@ func (p *parser) parseASPrim() (ASExpr, bool) {
 		p.errf(t, "policy/as-expr", `NOT is not an AS-expression operator (RFC 2622 §5.6): write "X EXCEPT Y" for "X AND NOT Y"`)
 		return nil, false
 	}
-	if t.kind != tWord || isPeeringStop(t) || t.kw("at") || t.kw("and") || t.kw("or") || t.kw("except") {
+	if t.kind != tWord || p.peeringStop(t) || t.kw("at") || t.kw("and") || t.kw("or") || t.kw("except") {
 		p.errf(t, "policy/as-expr", "expected an AS number or as-set")
 		return nil, false
 	}
@@ -614,16 +651,16 @@ func (p *parser) parseASPrim() (ASExpr, bool) {
 // Routers written side by side without an operator are diagnosed and the rest
 // of the router expression skipped.
 func (p *parser) parseRouterExpr() RouterExpr {
-	if isPeeringStop(p.cur()) || p.cur().kw("at") {
+	if p.peeringStop(p.cur()) || p.cur().kw("at") {
 		return nil
 	}
 	before := len(p.diags)
 	e := p.parseRouterOr()
-	if t := p.cur(); !isPeeringStop(t) && !t.kw("at") && !p.bailed {
+	if t := p.cur(); !p.peeringStop(t) && !t.kw("at") && !p.bailed {
 		if len(p.diags) == before { // else the error is already reported
 			p.errf(t, "policy/router", "expected AND, OR or EXCEPT before "+quote(t.text)+" in router expression")
 		}
-		for !isPeeringStop(p.cur()) && !p.cur().kw("at") {
+		for !p.peeringStop(p.cur()) && !p.cur().kw("at") {
 			p.advance()
 		}
 	}
@@ -694,7 +731,7 @@ func (p *parser) parseRouterPrim() RouterExpr {
 		p.errf(t, "policy/router", `NOT is not a router-expression operator (RFC 2622 §5.6): write "X EXCEPT Y" for "X AND NOT Y"`)
 		return nil
 	}
-	if t.kind != tWord || isPeeringStop(t) || t.kw("at") || t.kw("and") || t.kw("or") || t.kw("except") {
+	if t.kind != tWord || p.peeringStop(t) || t.kw("at") || t.kw("and") || t.kw("or") || t.kw("except") {
 		p.errf(t, "policy/router", "expected a router address, inet-rtr name or rtr-set")
 		return nil
 	}
@@ -783,11 +820,11 @@ func (p *parser) inRegexp(t token, start, end int) token {
 // does not follow the action grammar is diagnosed and left out.
 func (p *parser) parseActions() []Action {
 	var actions []Action
-	for !p.atEOF() && !isClauseKw(p.cur()) && p.cur().kind != tRBrace {
+	for !p.atEOF() && !p.clauseKw(p.cur()) && p.cur().kind != tRBrace {
 		start := p.cur().start
 		end := start
 		depth := 0
-		for !p.atEOF() && !isClauseKw(p.cur()) {
+		for !p.atEOF() && !p.clauseKw(p.cur()) {
 			k := p.cur().kind
 			if depth == 0 && (k == tSemi || k == tRBrace) {
 				break
@@ -802,6 +839,7 @@ func (p *parser) parseActions() []Action {
 		}
 		if raw := strings.TrimSpace(p.src[start:end]); raw != "" {
 			if a, msg := parseAction(raw); msg == "" {
+				p.checkAction(a, token{tWord, raw, start, start + len(raw)})
 				actions = append(actions, a)
 			} else {
 				p.errf(token{tWord, raw, start, start + len(raw)}, "policy/action", msg)
@@ -953,7 +991,7 @@ func (p *parser) parseFilterOr() Filter {
 	for {
 		if p.cur().kw("or") {
 			p.advance()
-		} else if !startsFilterTerm(p.cur()) {
+		} else if !p.startsFilterTerm(p.cur()) {
 			break
 		}
 		start := p.pos
@@ -966,18 +1004,6 @@ func (p *parser) parseFilterOr() Filter {
 		return terms[0]
 	}
 	return FilterOr{Terms: terms}
-}
-
-// startsFilterTerm reports whether t can begin another filter term, i.e. an
-// implicit OR continues the filter.
-func startsFilterTerm(t token) bool {
-	switch t.kind {
-	case tLParen, tLBrace, tRegex:
-		return true
-	case tWord:
-		return !isFilterStop(t)
-	}
-	return false
 }
 
 // isFilterStop reports whether a word ends a filter rather than continuing it.
@@ -1037,7 +1063,7 @@ func (p *parser) parseFilterPrimary() Filter {
 		p.advance()
 		return FilterPathRE{Raw: t.text, Regexp: p.parseRegexp(t)}
 	case tWord:
-		if !isFilterStop(t) {
+		if !p.filterStop(t) {
 			return p.parseFilterWord()
 		}
 	}

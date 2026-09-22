@@ -1,7 +1,7 @@
 // Package object provides typed wrappers over the generic ast.Object for the
 // RPSL classes: aut-num, mntner, person, role, route, route6, as-set, route-set,
 // peering-set, filter-set, rtr-set, inet-rtr, inetnum, inet6num, as-block, irt,
-// domain and organisation. Every attribute a validation profile lists for a
+// domain, organisation, key-cert, dictionary, poem and poetic-form. Every attribute a validation profile lists for a
 // class is surfaced on its typed struct (the RFC 2622 §3.1 common attributes via
 // the embedded Common, RIPE's cross-class ones via the embedded Registry).
 // Decoding is fallible per-attribute: a malformed value is skipped with a
@@ -12,10 +12,12 @@ package object
 import (
 	"fmt"
 	"net/netip"
+	"strconv"
 	"strings"
 
 	"github.com/rkolesnichenko/rpsl/ast"
 	"github.com/rkolesnichenko/rpsl/lexer"
+	"github.com/rkolesnichenko/rpsl/policy"
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
@@ -250,7 +252,7 @@ type Common struct {
 	Remarks []string
 	Notify  []string
 	MntBy   []string
-	Changed []string
+	Changed []Changed
 	Source  string
 }
 
@@ -263,7 +265,7 @@ func (d *decoder) common(class string) Common {
 		Remarks: d.all("remarks"),
 		Notify:  d.list("notify"),
 		MntBy:   d.list("mnt-by"),
-		Changed: d.all("changed"),
+		Changed: d.changed(class),
 		Source:  d.str("source"),
 	}
 }
@@ -274,16 +276,16 @@ func (d *decoder) common(class string) Common {
 // typed class beside Common; a field stays empty on a class whose template does
 // not list its attribute.
 type Registry struct {
-	Org           []string        // org: organisation handles
-	SponsoringOrg string          // sponsoring-org: the sponsoring LIR's organisation
-	AbuseC        types.NICHandle // abuse-c: the role object holding the abuse mailbox
-	MntLower      []string        // mnt-lower: maintainers of more-specific objects
-	MntRoutes     []string        // mnt-routes: values raw, as they may carry a prefix list
-	MntDomains    []string        // mnt-domains: maintainers of reverse domains
-	MntIrt        []string        // mnt-irt: irt objects
-	MntRef        []string        // mnt-ref: maintainers allowed to reference an organisation
-	Created       string          // created: RFC 3339 time, as RIPE writes it
-	LastModified  string          // last-modified: RFC 3339 time
+	Org           []string           // org: organisation handles
+	SponsoringOrg string             // sponsoring-org: the sponsoring LIR's organisation
+	AbuseC        types.NICHandle    // abuse-c: the role object holding the abuse mailbox
+	MntLower      []string           // mnt-lower: maintainers of more-specific objects
+	MntRoutes     []policy.MntRoutes // mnt-routes: a maintainer and the space it may authorise
+	MntDomains    []string           // mnt-domains: maintainers of reverse domains
+	MntIrt        []string           // mnt-irt: irt objects
+	MntRef        []string           // mnt-ref: maintainers allowed to reference an organisation
+	Created       Timestamp          // created: the RFC 3339 time RIPE sets
+	LastModified  Timestamp          // last-modified: the RFC 3339 time RIPE sets
 }
 
 // registry decodes the RIPE registry attributes of a class object.
@@ -297,13 +299,53 @@ func (d *decoder) registry(class string) Registry {
 		SponsoringOrg: d.str("sponsoring-org"),
 		AbuseC:        abuse,
 		MntLower:      d.list("mnt-lower"),
-		MntRoutes:     d.all("mnt-routes"),
+		MntRoutes:     d.mntRoutes(class),
 		MntDomains:    d.list("mnt-domains"),
 		MntIrt:        d.list("mnt-irt"),
 		MntRef:        d.list("mnt-ref"),
-		Created:       d.str("created"),
-		LastModified:  d.str("last-modified"),
+		Created:       d.timestamp(class, "created"),
+		LastModified:  d.timestamp(class, "last-modified"),
 	}
+}
+
+// changed decodes the changed: lines. A line that carries no usable date is
+// kept with a warning: the attribute is legacy and real dumps are full of odd
+// spellings, and Raw preserves whatever was written.
+func (d *decoder) changed(class string) []Changed {
+	var out []Changed
+	for _, a := range d.o.GetAll("changed") {
+		c, err := ParseChanged(a.Value)
+		if err != nil {
+			d.warnf(a, "object/"+class+"-changed", err.Error())
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// timestamp decodes created:/last-modified:. An unparsable stamp is kept with a
+// warning, since Raw still round-trips it.
+func (d *decoder) timestamp(class, name string) Timestamp {
+	a, ok := d.o.GetFirst(name)
+	if !ok {
+		return Timestamp{}
+	}
+	t, err := ParseTimestamp(a.Value)
+	if err != nil {
+		d.warnf(a, "object/"+class+"-"+name, err.Error())
+	}
+	return t
+}
+
+// mntRoutes decodes the mnt-routes: lines, whose scope is a prefix list or ANY.
+func (d *decoder) mntRoutes(class string) []policy.MntRoutes {
+	var out []policy.MntRoutes
+	for _, a := range d.o.GetAll("mnt-routes") {
+		m, ds := policy.ParseMntRoutes(a.Value)
+		d.rebase(a, ds)
+		out = append(out, m)
+	}
+	return out
 }
 
 // key returns the value of a class's own (key) attribute, diagnosing an empty
@@ -401,6 +443,142 @@ func (d *decoder) memberOf(class string, want types.SetClass) []types.SetName {
 				fmt.Sprintf("%s %s is a %s; a %s can only be a member of a %s", class, n, n.Class(), class, want))
 		}
 		out = append(out, n)
+	}
+	return out
+}
+
+// Sub-value decoders for the attributes whose values are small languages of
+// their own: the authentication schemes of RFC 2622 §3.2, the aggregation
+// attributes of RFC 2622 §8.1, and the inet-rtr attributes of RFC 2622 §9.
+// Each parses through the policy layer and re-anchors its diagnostics onto the
+// attribute, so a bad value costs that one value and nothing else.
+
+// auth decodes the auth: lines of a mntner or irt. An unrecognised scheme is a
+// warning, not an error: the value is kept whole in Raw, and registries add
+// schemes this library does not know.
+func (d *decoder) auth(class string) []Auth {
+	var out []Auth
+	for _, a := range d.o.GetAll("auth") {
+		v, err := ParseAuth(a.Value)
+		if err != nil {
+			d.warnf(a, "object/"+class+"-auth", err.Error())
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// pingable decodes the pingable: addresses of a route or route6.
+func (d *decoder) pingable(class string) []netip.Addr {
+	var out []netip.Addr
+	for _, a := range d.o.GetAll("pingable") {
+		addr, err := netip.ParseAddr(scalar(a))
+		if err != nil {
+			d.errf(a, "object/"+class+"-pingable", "invalid address "+strconv.Quote(scalar(a)))
+			continue
+		}
+		out = append(out, addr.Unmap().WithZone(""))
+	}
+	return out
+}
+
+// injects decodes the inject: lines of a route or route6.
+func (d *decoder) injects(class string) []policy.Inject {
+	var out []policy.Inject
+	for _, a := range d.o.GetAll("inject") {
+		v, ds := policy.ParseInject(a.Value)
+		d.rebase(a, ds)
+		out = append(out, v)
+	}
+	return out
+}
+
+// components decodes the single components: value of a route or route6.
+func (d *decoder) components(class string) policy.Components {
+	a, ok := d.o.GetFirst("components")
+	if !ok {
+		return policy.Components{}
+	}
+	v, ds := policy.ParseComponents(a.Value)
+	d.rebase(a, ds)
+	return v
+}
+
+// aggrMtd decodes the single aggr-mtd: value of a route or route6.
+func (d *decoder) aggrMtd(class string) policy.AggrMtd {
+	a, ok := d.o.GetFirst("aggr-mtd")
+	if !ok {
+		return policy.AggrMtd{}
+	}
+	v, ds := policy.ParseAggrMtd(a.Value)
+	d.rebase(a, ds)
+	return v
+}
+
+// asExpr decodes an attribute whose value is an AS expression (aggr-bndry:).
+func (d *decoder) asExpr(class, name string) policy.ASExpr {
+	a, ok := d.o.GetFirst(name)
+	if !ok {
+		return nil
+	}
+	v, ds := policy.ParseASExpression(a.Value)
+	d.rebase(a, ds)
+	return v
+}
+
+// filterAttr decodes an attribute whose value is a policy filter (export-comps:).
+func (d *decoder) filterAttr(class, name string) policy.Filter {
+	a, ok := d.o.GetFirst(name)
+	if !ok {
+		return nil
+	}
+	v, ds := policy.ParseFilter(a.Value)
+	d.rebase(a, ds)
+	return v
+}
+
+// ifaddrs decodes the ifaddr: lines of an inet-rtr.
+func (d *decoder) ifaddrs() []policy.Ifaddr {
+	var out []policy.Ifaddr
+	for _, a := range d.o.GetAll("ifaddr") {
+		v, ds := policy.ParseIfaddr(a.Value)
+		d.rebase(a, ds)
+		out = append(out, v)
+	}
+	return out
+}
+
+// interfaces decodes the RFC 4012 interface: lines of an inet-rtr.
+func (d *decoder) interfaces() []policy.Interface {
+	var out []policy.Interface
+	for _, a := range d.o.GetAll("interface") {
+		v, ds := policy.ParseInterface(a.Value)
+		d.rebase(a, ds)
+		out = append(out, v)
+	}
+	return out
+}
+
+// peers decodes the peer: or mp-peer: lines of an inet-rtr.
+func (d *decoder) peers(name string) []policy.Peer {
+	var out []policy.Peer
+	for _, a := range d.o.GetAll(name) {
+		v, ds := policy.ParsePeer(a.Value)
+		d.rebase(a, ds)
+		out = append(out, v)
+	}
+	return out
+}
+
+// rtrMembers decodes the members:/mp-members: items of an rtr-set.
+func (d *decoder) rtrMembers(name, rule string) []RtrSetMember {
+	var out []RtrSetMember
+	for _, it := range d.listItems(name) {
+		m, err := ParseRtrSetMember(it.Value)
+		if err != nil {
+			d.diagAt(ast.Error, it.span(), rule, err.Error())
+		}
+		out = append(out, m)
 	}
 	return out
 }

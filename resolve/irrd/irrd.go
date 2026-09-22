@@ -140,7 +140,7 @@ func validSourceName(n string) bool {
 // set object. IRRd answers "!i" alike for a missing set and for one with no
 // members, so on that answer GetSet asks for the object itself ("!m"): a set
 // that exists is returned empty, and a missing one maps to resolve.ErrNotFound.
-func (s *Source) GetSet(ctx context.Context, name types.SetName) (object.Set, error) {
+func (s *Source) GetSet(ctx context.Context, name types.SetName) (object.NamedSet, error) {
 	if name.IsZero() {
 		return nil, errors.New("irrd: empty set name")
 	}
@@ -186,7 +186,7 @@ func (s *Source) OriginatedRoutes(ctx context.Context, as types.ASN, afi types.A
 
 // MembersByRef returns nothing: indirect membership is already folded into the
 // server's "!i" result (see the package note).
-func (s *Source) MembersByRef(context.Context, object.Set) ([]object.Object, error) {
+func (s *Source) MembersByRef(context.Context, object.NamedSet) ([]object.Object, error) {
 	return nil, nil
 }
 

@@ -29,14 +29,14 @@ parses the `import`/`export`/`default` policy grammar into a real AST, and expan
 
 ```
 rpsl/
-  lexer/    ast/    types/    object/    policy/    resolve/    rpsl.go
+  lexer/  ast/  types/  object/  policy/  resolve/  auth/  rpsl.go
 ```
 Publish leaves as independently `go get`-able modules. Keep import direction strictly downward:
 resolve → object → policy → types → ast → lexer (never the reverse).
 
 **As-built module reality (diverges from the flat tree above):**
-- Separate go-get modules: `lexer`, `ast`, `types`, `resolve`. `object`, `policy`, and the
-  top-level `rpsl` façade live in the ROOT module. Wired for dev by a root `go.work` (`use`).
+- Separate go-get modules: `lexer`, `ast`, `types`, `resolve`. `object`, `policy`, `auth` and
+  the top-level `rpsl` façade live in the ROOT module. Wired for dev by a root `go.work` (`use`).
 - Inter-module requires name the latest release (v0.1.0); the `go.work` `use` set overrides them
   with the local directories, so edits are seen across modules at once. Bump them only when releasing.
 - `Diagnostic`/`Severity` live in the `ast` module (so `object` can emit them); `rpsl` re-exports via aliases.
@@ -94,6 +94,17 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   `RangeOperator.Apply`. Evaluation states are (set, operator stack) with stacks compared by effect
   (`resolve/opstack.go`), so cycles through operators reach the RFC fixpoint; there is no cyclic-operator error.
 - **AFI constraint**: v4 expansion drops route6/IPv6 mp-members and vice versa; `any` means both.
+  A *SAFI* cannot constrain set expansion (no set member carries one, and there is no multicast
+  route class), so `Expander.AFI` stays an `AFI`; SAFI applies only in `policy.*.AppliesTo`.
+- **Every set class expands**: as-set and route-set to ASNs/prefixes, rtr-set to routers,
+  peering-set to peerings, filter-set through `EvalFilter`. `Source.GetSet` returns
+  `object.NamedSet`; `nestedNames` + `nestable` decide what each class may nest.
+- **Filters are only partly enumerable**: `EvalFilter` handles ANY, prefix lists, set and AS
+  references, OR and AND (range intersection) and returns `*NotEnumerableError` for NOT,
+  PeerAS, community tests and AS-path regexps. Never answer one of those with an empty set.
+- **`Expander.Concurrency` must not change a result.** Discovery fetches a whole breadth-first
+  level at once and merges in the level's own order; `TestConcurrencyDoesNotChangeResults`
+  compares serial and parallel over 200 random graphs.
 - **Prefix-range operators** `^+ ^- ^n ^n-m`: first-class type with a capped `Materialize`.
 - **Dict ↔ decoder agreement**: if `object/profiles.go` lists an attribute on a class, the
   matching `decodeXxx` in `object/classes.go` must read it. Drift silently drops data
@@ -108,13 +119,16 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
 
 ## Commands
 
-- **`go test ./...` only covers the ROOT module** (rpsl, object, policy). Run everything
+- **`go test ./...` only covers the ROOT module** (rpsl, object, policy, auth). Run everything
   (all six modules incl. examples/bulk-ripe under -race, gofmt, invariants) with
   `scripts/check.sh`; `FUZZTIME=15s scripts/check.sh` also runs all twelve fuzz targets.
 - `go test -run 'TestRoundTrip|TestStreamRoundTrip' .` — the lossless guard (root module).
-- Fuzz (must never panic): FuzzTokenize (lexer), FuzzAttributeList, FuzzEdit (ast), FuzzParseSetName,
-  FuzzParseRangeOperator, FuzzParsePrefixRange (types), FuzzParseStream, FuzzDecode (root), FuzzParseImport,
-  FuzzParseASPathRegexp, FuzzParseFilter, FuzzParsePeering (policy).
+- Fuzz (24 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
+  FuzzFormat (ast); FuzzParseSetName, FuzzParseRangeOperator, FuzzParsePrefixRange,
+  FuzzParseRouterID (types); FuzzParseStream, FuzzDecode (root); FuzzParseImport,
+  FuzzParseASPathRegexp, FuzzParseFilter, FuzzParsePeering, FuzzParseInject,
+  FuzzParseComponents, FuzzParseAggrMtd, FuzzParseIfaddr, FuzzParseInterface, FuzzParsePeer,
+  FuzzParseRPAttribute, FuzzParseTypedef, FuzzParseProtocol, FuzzFilterString (policy).
 - Opt-in: `RPSL_REALDATA=$PWD/.data/ripe go test -run TestRealData ./examples/bulk-ripe/bulk`
   (dumps via scripts/fetch-ripe-dumps.sh); `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve`;
   `RPSL_LIVE=1 go test -run TestRIPETemplatesAreCurrent ./object` (RIPE profile vs whois -t).

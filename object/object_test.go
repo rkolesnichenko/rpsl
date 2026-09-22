@@ -38,8 +38,11 @@ source:  RIPE
 	if len(m.AdminC) != 1 || m.AdminC[0] != "EX1-RIPE" {
 		t.Errorf("AdminC = %v", m.AdminC)
 	}
-	if len(m.Auth) != 1 || m.Auth[0] != "MD5-PW $1$abc$xyz" {
+	if len(m.Auth) != 1 || m.Auth[0].Raw != "MD5-PW $1$abc$xyz" {
 		t.Errorf("Auth = %v", m.Auth)
+	}
+	if m.Auth[0].Method != AuthMD5 || m.Auth[0].Value != "$1$abc$xyz" {
+		t.Errorf("Auth[0] = %+v, want MD5-PW with its crypt", m.Auth[0])
 	}
 	if m.Source != "RIPE" {
 		t.Errorf("Source = %q", m.Source)
@@ -298,8 +301,9 @@ func TestPerAttributeResilience(t *testing.T) {
 }
 
 func TestUnknownClassGeneric(t *testing.T) {
-	// key-cert has no typed decoder, so it degrades to Generic.
-	o := parse("key-cert: PGPKEY-1\nmethod: PGP\n")
+	// limerick is an obsolete RIPE class no profile lists and no decoder
+	// handles, so it degrades to Generic rather than erroring.
+	o := parse("limerick: LIM-1\ntext: there once was a registry\n")
 	obj, diags := Decode(o)
 	if len(diags) != 0 {
 		t.Errorf("unexpected diagnostics: %+v", diags)
@@ -307,7 +311,7 @@ func TestUnknownClassGeneric(t *testing.T) {
 	if _, ok := obj.(Generic); !ok {
 		t.Errorf("Decode = %T, want Generic", obj)
 	}
-	if obj.Class() != "key-cert" {
+	if obj.Class() != "limerick" {
 		t.Errorf("Class = %q", obj.Class())
 	}
 }

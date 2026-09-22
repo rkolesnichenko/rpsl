@@ -41,7 +41,7 @@ func TestSuspectValuesAreDiagnosed(t *testing.T) {
 		{"filter-set: RS-FOO\n", "object/filter-set-name-class", ast.Warning},
 		{"peering-set: AS-FOO\nmp-peering: AS1\n", "object/peering-set-name-class", ast.Warning},
 		{"rtr-set: AS-FOO\n", "object/rtr-set-name-class", ast.Warning},
-		{"mntner:\nauth: x\n", "object/empty-key", ast.Error},
+		{"mntner:\nauth: NONE\n", "object/empty-key", ast.Error},
 		{"person:\nnic-hdl: EX1-RIPE\n", "object/empty-key", ast.Error},
 		{"role:   \nnic-hdl: EX1-RIPE\n", "object/empty-key", ast.Error},
 		{"inet-rtr:\nlocal-as: AS1\n", "object/empty-key", ast.Error},

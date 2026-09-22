@@ -82,7 +82,7 @@ func TestWhoisGetSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSet: %v", err)
 	}
-	if set.SetName().String() != "AS-FOO" || len(set.SetMembers()) != 2 {
+	if set.SetName().String() != "AS-FOO" || len(set.(object.Set).SetMembers()) != 2 {
 		t.Errorf("set = %+v, want AS-FOO with 2 members", set)
 	}
 }

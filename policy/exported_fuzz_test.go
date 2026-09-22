@@ -59,3 +59,151 @@ func FuzzParsePeering(f *testing.F) {
 		checkParse(t, s, pe, p.diags, func(v string) (any, []ast.Diagnostic) { return ParsePeering(v) })
 	})
 }
+
+// FuzzParseInject asserts the inject: parser never panics and keeps the
+// package's parse properties.
+func FuzzParseInject(f *testing.F) {
+	for _, s := range []string{
+		"at 1.1.1.1", "at 1.1.1.1 action dpa = 100; upon HAVE-COMPONENTS {10.0.0.0/8}",
+		"upon STATIC", "upon NOT EXCLUDE {10.0.0.0/8} AND STATIC",
+		"upon (STATIC OR STATIC)", "at RTRS-X", "", "upon", "at", "upon {",
+	} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		in, p := parseInjectValue(s)
+		assertNothingDropped(t, s, p)
+		checkParse(t, s, in, p.diags, func(v string) (any, []ast.Diagnostic) { return ParseInject(v) })
+	})
+}
+
+// FuzzParseComponents asserts the components: parser never panics.
+func FuzzParseComponents(f *testing.F) {
+	for _, s := range []string{
+		"ATOMIC", "{10.0.0.0/8^+}", "ATOMIC {10.0.0.0/8}",
+		"protocol BGP4 {10.0.0.0/8} protocol OSPF {11.0.0.0/8}",
+		"", "protocol", "{", "ATOMIC ATOMIC",
+	} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		c, p := parseComponentsValue(s)
+		assertNothingDropped(t, s, p)
+		checkParse(t, s, c, p.diags, func(v string) (any, []ast.Diagnostic) { return ParseComponents(v) })
+	})
+}
+
+// FuzzParseAggrMtd asserts the aggr-mtd: parser never panics.
+func FuzzParseAggrMtd(f *testing.F) {
+	for _, s := range []string{
+		"inbound", "outbound", "outbound AS-ANY", "outbound AS1 OR AS2",
+		"", "sideways", "inbound AS1", "outbound (",
+	} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		m, p := parseAggrMtdValue(s)
+		assertNothingDropped(t, s, p)
+		checkParse(t, s, m, p.diags, func(v string) (any, []ast.Diagnostic) { return ParseAggrMtd(v) })
+	})
+}
+
+// FuzzParseIfaddr asserts the ifaddr: parser never panics.
+func FuzzParseIfaddr(f *testing.F) {
+	for _, s := range []string{
+		"1.1.1.1 masklen 30", "1.1.1.1 masklen 30 action mtu = 1500;",
+		"2001:db8::1 masklen 64", "", "1.1.1.1", "masklen", "1.1.1.1 masklen 999",
+	} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		v, p := parseIfaddrValue(s)
+		assertNothingDropped(t, s, p)
+		checkParse(t, s, v, p.diags, func(x string) (any, []ast.Diagnostic) { return ParseIfaddr(x) })
+	})
+}
+
+// FuzzParseInterface asserts the RFC 4012 interface: parser never panics.
+func FuzzParseInterface(f *testing.F) {
+	for _, s := range []string{
+		"2001:db8::1 masklen 48", "afi ipv6.unicast 2001:db8::1 masklen 48",
+		"ipv4.unicast 1.1.1.1 masklen 30", "2001:db8::1 masklen 48 tunnel 192.0.2.1,GRE",
+		"", "afi", "2001:db8::1 masklen 48 tunnel", "tunnel 1.1.1.1,",
+	} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		v, p := parseInterfaceValue(s)
+		assertNothingDropped(t, s, p)
+		checkParse(t, s, v, p.diags, func(x string) (any, []ast.Diagnostic) { return ParseInterface(x) })
+	})
+}
+
+// FuzzParsePeer asserts the peer:/mp-peer: parser never panics.
+func FuzzParsePeer(f *testing.F) {
+	for _, s := range []string{
+		"BGP4 192.0.2.1", "BGP4 192.0.2.1 asno(AS2), flap_damp()",
+		"OSPF rtr.example.net", "BGP4 RTRS-X asno(AS2)",
+		"", "BGP4", "BGP4 192.0.2.1 asno(", "BGP4 192.0.2.1 ,,",
+	} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		v, p := parsePeerValue(s)
+		assertNothingDropped(t, s, p)
+		checkParse(t, s, v, p.diags, func(x string) (any, []ast.Diagnostic) { return ParsePeer(x) })
+	})
+}
+
+// The dictionary parsers keep each type expression as written, so their Args
+// and Definition fields carry the source's own spacing. That is deliberate —
+// the type language is not interpreted — but it means these values are not
+// whitespace-invariant, so these targets check every property except the
+// reparse ones.
+
+// FuzzParseRPAttribute asserts the rp-attribute: parser never panics.
+func FuzzParseRPAttribute(f *testing.F) {
+	for _, s := range []string{
+		"pref operator=(integer[0, 65535])",
+		"community operator=(community_list) append(community_list)",
+		"aspath prepend(list of as_number)", "x operator<<=(int)",
+		"", "pref", "pref operator=", "pref operator=(", "x y(",
+	} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		a, p := parseRPAttributeValue(s)
+		assertNothingDropped(t, s, p)
+		checkParse(t, s, a, p.diags, nil)
+	})
+}
+
+// FuzzParseTypedef asserts the typedef: parser never panics.
+func FuzzParseTypedef(f *testing.F) {
+	for _, s := range []string{
+		"community_list list of union integer[1, 4294967295], enum[internet]",
+		"as_number integer[1, 4294967295]", "", "lonely", "( )",
+	} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		td, p := parseTypedefValue(s)
+		checkParse(t, s, td, p.diags, nil)
+	})
+}
+
+// FuzzParseProtocol asserts the protocol: parser never panics.
+func FuzzParseProtocol(f *testing.F) {
+	for _, s := range []string{
+		"BGP4 MANDATORY asno(as_number) OPTIONAL flap_damp()",
+		"OSPF", "IS-IS", "", "BGP4 asno(as_number)", "BGP4 MANDATORY",
+		"BGP4 OPTIONAL x( MANDATORY y()",
+	} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		pr, p := parseProtocolValue(s)
+		assertNothingDropped(t, s, p)
+		checkParse(t, s, pr, p.diags, nil)
+	})
+}

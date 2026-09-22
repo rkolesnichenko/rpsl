@@ -16,6 +16,7 @@ func TestTextRoundTrip(t *testing.T) {
 	op, _ := ParseRangeOperator("24-32")
 	af, _ := ParseAddrFamily("ipv6.unicast")
 	nic, _ := ParseNICHandle("EX1-RIPE")
+	rtr, _ := ParseRouterID("RTR.Example.NET.")
 	cases := []struct {
 		v    encoding.TextMarshaler
 		ptr  encoding.TextUnmarshaler
@@ -27,6 +28,7 @@ func TestTextRoundTrip(t *testing.T) {
 		{op, new(RangeOperator), "^24-32"},
 		{af, new(AddrFamily), "ipv6.unicast"},
 		{nic, new(NICHandle), "EX1-RIPE"},
+		{rtr, new(RouterID), "rtr.example.net"},
 	}
 	for _, c := range cases {
 		b, err := c.v.MarshalText()

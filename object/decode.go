@@ -23,6 +23,10 @@ var registry = map[string]func(*decoder) Object{
 	"irt":          func(d *decoder) Object { return decodeIrt(d) },
 	"domain":       func(d *decoder) Object { return decodeDomain(d) },
 	"organisation": func(d *decoder) Object { return decodeOrganisation(d) },
+	"key-cert":     func(d *decoder) Object { return decodeKeyCert(d) },
+	"dictionary":   func(d *decoder) Object { return decodeDictionary(d) },
+	"poem":         func(d *decoder) Object { return decodePoem(d) },
+	"poetic-form":  func(d *decoder) Object { return decodePoeticForm(d) },
 }
 
 // Decode upgrades a generic ast.Object to its typed form via the class registry,

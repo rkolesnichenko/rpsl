@@ -71,12 +71,14 @@ type ExprList struct{ Exprs []Expr }
 type Except struct {
 	Left, Right Expr
 	AFIs        []types.AddrFamily
+	MP          bool // the enclosing value was an mp-* one, so AFIs may be set
 }
 
 // Refine is "<Left> REFINE <Right>": the cartesian refinement of two policies.
 type Refine struct {
 	Left, Right Expr
 	AFIs        []types.AddrFamily
+	MP          bool // the enclosing value was an mp-* one, so AFIs may be set
 }
 
 func (Factor) isExpr()   {}

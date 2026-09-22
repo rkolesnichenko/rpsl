@@ -205,7 +205,7 @@ func TestExpandContextCancellationMidWalk(t *testing.T) {
 // are honored deep in walk loops, not just at entry.
 type blockingSource struct{ block chan struct{} }
 
-func (b *blockingSource) GetSet(ctx context.Context, _ types.SetName) (object.Set, error) {
+func (b *blockingSource) GetSet(ctx context.Context, _ types.SetName) (object.NamedSet, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -216,7 +216,7 @@ func (b *blockingSource) GetSet(ctx context.Context, _ types.SetName) (object.Se
 func (b *blockingSource) OriginatedRoutes(context.Context, types.ASN, types.AFI) ([]netip.Prefix, error) {
 	return nil, nil
 }
-func (b *blockingSource) MembersByRef(context.Context, object.Set) ([]object.Object, error) {
+func (b *blockingSource) MembersByRef(context.Context, object.NamedSet) ([]object.Object, error) {
 	return nil, nil
 }
 

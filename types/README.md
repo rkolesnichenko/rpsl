@@ -5,8 +5,8 @@
 The leaf value types every higher RPSL layer is built from. They are built on
 `net/netip` (so they interoperate with `bart`/`netipx` and the rest of a modern
 Go networking stack) and are **comparable** where possible — `ASN`, `SetName`,
-`PrefixRange`, `AddrFamily`, and `NICHandle` all work as map keys and in tests,
-and all implement `encoding.TextMarshaler`/`TextUnmarshaler`, so they read and
+`PrefixRange`, `AddrFamily`, `NICHandle` and `RouterID` all work as map keys and
+in tests, and all implement `encoding.TextMarshaler`/`TextUnmarshaler`, so they read and
 write as their RPSL text in JSON (an `ASN` also decodes from a JSON number).
 
 This module has no dependencies, so a consumer who only needs to parse ASNs or
@@ -18,10 +18,11 @@ prefix-ranges pays nothing for the rest of the library.
 | --- | --- | --- |
 | `ASN` | `ParseASN("AS65001")`, `"AS1.10"` | 32-bit; accepts plain and asdot, emits plain |
 | `SetName` | `ParseSetName("AS3333:AS-CUSTOMERS")` | hierarchical; strict RFC 2622 syntax (safe to put on the wire); `Class()` inferred; canonical, so spellings are `==` |
-| `PrefixRange` | `ParsePrefixRange("192.0.2.0/24^25-28")` | `^+ ^- ^n ^n-m`; opaque and canonical (host bits cleared, spellings `==`); `NewPrefixRange`; `All()`/`Materialize(cap)` enumerate |
+| `PrefixRange` | `ParsePrefixRange("192.0.2.0/24^25-28")` | `^+ ^- ^n ^n-m`; opaque and canonical (host bits cleared, spellings `==`); `NewPrefixRange`; `All()`/`Materialize(cap)` enumerate; `Contains`/`Intersect` compare |
 | `RangeOperator` | `ParseRangeOperator("24-32")` | an operator without a prefix, as in `RS-FOO^+`; `Apply` composes per RFC 2622 §5.2 |
 | `AddrFamily` / `AFI` / `SAFI` | `ParseAddrFamily("ipv4.unicast")` | RFC 4012 afi dictionary; `any` means both |
-| `NICHandle` | `ParseNICHandle("EX1-RIPE")` | preserves original case |
+| `NICHandle` | `ParseNICHandle("EX1-RIPE")` | case-insensitive, held upper-case |
+| `RouterID` | `ParseRouterID("rtr.example.net")`, `"192.0.2.1"` | an rtr-set member or inet-rtr: an address or a DNS name; canonical, so spellings are `==` |
 
 ## ASNs
 
@@ -48,6 +49,10 @@ fmt.Println("range:", r)             // 192.0.2.0/24^25-26 — round-trips
 fmt.Println("count:", len(prefixes)) // 6 — two /25s + four /26s
 fmt.Println("err:", err)             // <nil>
 ```
+
+`Contains` reports whether a range denotes a given prefix, and `Intersect`
+returns the range denoting exactly what two ranges share — which is what the
+resolver's filter evaluation needs for an RPSL `AND`.
 
 Both snippets are copied from runnable `Example` tests
 ([`example_test.go`](example_test.go)).

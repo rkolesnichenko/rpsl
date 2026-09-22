@@ -152,3 +152,17 @@ func validAttrName(n string) bool {
 	}
 	return true
 }
+
+// Builder composes a new object attribute by attribute, the write-side
+// counterpart of parsing. It is re-exported from ast for the same reason
+// Diagnostic is: a consumer that only builds and parses objects needs one
+// import.
+type Builder = ast.Builder
+
+// NewBuilder starts an object of the given class, carrying key.
+func NewBuilder(class, key string) *Builder { return ast.NewBuilder(class, key) }
+
+// FormatOptions controls the opt-in normalization of ast.Object.Format: the
+// column values are aligned at, and whether attribute names are lower-cased.
+// The zero value changes nothing.
+type FormatOptions = ast.FormatOptions

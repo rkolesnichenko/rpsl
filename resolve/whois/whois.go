@@ -96,7 +96,7 @@ func (s *Source) maxResponse() int64 {
 // GetSet fetches an as-set or route-set object by name. When the server
 // returns it from several sources, the one from the source listed first in
 // Sources wins; without Sources, the first the server returns.
-func (s *Source) GetSet(ctx context.Context, name types.SetName) (object.Set, error) {
+func (s *Source) GetSet(ctx context.Context, name types.SetName) (object.NamedSet, error) {
 	if name.IsZero() {
 		return nil, errors.New("whois: empty set name")
 	}
@@ -153,7 +153,7 @@ func (s *Source) OriginatedRoutes(ctx context.Context, as types.ASN, afi types.A
 // MembersByRef returns the objects whose membership claim in set is honored,
 // via the inverse "member-of" query plus resolve.ClaimAllowed (maintainer and
 // same-source check) — real indirect-membership resolution.
-func (s *Source) MembersByRef(ctx context.Context, set object.Set) ([]object.Object, error) {
+func (s *Source) MembersByRef(ctx context.Context, set object.NamedSet) ([]object.Object, error) {
 	if set == nil || set.SetName().IsZero() {
 		return nil, errors.New("whois: empty set name")
 	}

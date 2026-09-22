@@ -85,10 +85,14 @@ fuzz() {
 
 if [ -n "${FUZZTIME:-}" ]; then
 	# module-dir package fuzz-target
-	for t in "lexer . FuzzTokenize" "ast . FuzzAttributeList" "ast . FuzzEdit" \
+	for t in "lexer . FuzzTokenize" "ast . FuzzAttributeList" "ast . FuzzEdit" "ast . FuzzFormat" \
 		"types . FuzzParseSetName" "types . FuzzParseRangeOperator" "types . FuzzParsePrefixRange" \
+		"types . FuzzParseRouterID" \
 		". . FuzzParseStream" ". . FuzzDecode" ". ./policy FuzzParseImport" ". ./policy FuzzParseASPathRegexp" \
-		". ./policy FuzzParseFilter" ". ./policy FuzzParsePeering"; do
+		". ./policy FuzzParseFilter" ". ./policy FuzzParsePeering" ". ./policy FuzzFilterString" \
+		". ./policy FuzzParseInject" ". ./policy FuzzParseComponents" ". ./policy FuzzParseAggrMtd" \
+		". ./policy FuzzParseIfaddr" ". ./policy FuzzParseInterface" ". ./policy FuzzParsePeer" \
+		". ./policy FuzzParseRPAttribute" ". ./policy FuzzParseTypedef" ". ./policy FuzzParseProtocol"; do
 		set -- $t
 		step "fuzz $3 ($FUZZTIME)"
 		fuzz "$1" "$2" "$3" || bad "fuzz $3"

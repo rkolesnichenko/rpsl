@@ -88,7 +88,7 @@ type lyingSource struct {
 	extra []object.Object
 }
 
-func (l lyingSource) MembersByRef(ctx context.Context, set object.Set) ([]object.Object, error) {
+func (l lyingSource) MembersByRef(ctx context.Context, set object.NamedSet) ([]object.Object, error) {
 	objs, err := l.MemSource.MembersByRef(ctx, set)
 	return append(objs, l.extra...), err
 }

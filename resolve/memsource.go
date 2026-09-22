@@ -15,7 +15,7 @@ import (
 // read generically from each object's lossless attributes, so MembersByRef can
 // enforce the mbrs-by-ref mntner check without a typed field on every class.
 type MemSource struct {
-	sets   map[string]object.Set        // canonical set name -> set
+	sets   map[string]object.NamedSet   // canonical set name -> set
 	routes map[types.ASN][]netip.Prefix // origin AS -> originated prefixes
 	claims map[string][]object.Object   // canonical set name -> member-of claimants
 }
@@ -31,7 +31,7 @@ type MemSource struct {
 // unioned across sources.
 func NewMemSource(objs []object.Object, sourcePrecedence ...string) *MemSource {
 	s := &MemSource{
-		sets:   map[string]object.Set{},
+		sets:   map[string]object.NamedSet{},
 		routes: map[types.ASN][]netip.Prefix{},
 		claims: map[string][]object.Object{},
 	}
@@ -48,7 +48,7 @@ func NewMemSource(objs []object.Object, sourcePrecedence ...string) *MemSource {
 		if o = value(o); o == nil {
 			continue
 		}
-		if set, ok := o.(object.Set); ok {
+		if set, ok := o.(object.NamedSet); ok {
 			key, r := set.SetName().String(), rank(set.SetSource())
 			if prev, dup := setRank[key]; !dup || r < prev {
 				s.sets[key], setRank[key] = set, r
@@ -86,7 +86,7 @@ func (s *MemSource) indexClaims(o object.Object) {
 }
 
 // GetSet returns the named set or ErrNotFound.
-func (s *MemSource) GetSet(_ context.Context, name types.SetName) (object.Set, error) {
+func (s *MemSource) GetSet(_ context.Context, name types.SetName) (object.NamedSet, error) {
 	if set, ok := s.sets[name.String()]; ok {
 		return set, nil
 	}
@@ -106,7 +106,7 @@ func (s *MemSource) OriginatedRoutes(_ context.Context, as types.ASN, afi types.
 
 // MembersByRef returns the objects claiming member-of set whose claim
 // ClaimAllowed honors.
-func (s *MemSource) MembersByRef(_ context.Context, set object.Set) ([]object.Object, error) {
+func (s *MemSource) MembersByRef(_ context.Context, set object.NamedSet) ([]object.Object, error) {
 	var out []object.Object
 	for _, o := range s.claims[set.SetName().String()] {
 		if ClaimAllowed(o, set) {

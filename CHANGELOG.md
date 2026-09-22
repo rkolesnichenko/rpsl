@@ -9,6 +9,94 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+## [0.2.0] - unreleased
+
+Closes the gaps between what v0.1.0 shipped and what the RFCs and this project's
+own design document describe. The headline is that the policy AST and the
+resolver now meet: `filter-set`, `peering-set` and `rtr-set` expand, and a
+policy filter can be evaluated into the prefixes it denotes.
+
+**This release changes types that shipped in v0.1.0.** See *Migrating from
+v0.1.0* below; every change is a compile error, never a silent behaviour change.
+
+### Added
+
+- **`policy`** — the attribute sub-grammars that were raw text:
+  - `ParseInject`, `ParseComponents`, `ParseAggrMtd`, `ParseASExpression` for
+    the RFC 2622 §8.1 aggregation attributes, with a sealed `InjectCond` tree.
+  - `ParseIfaddr`, `ParseInterface`, `ParsePeer` for the RFC 2622 §9 and
+    RFC 4012 §4 `inet-rtr` attributes.
+  - `ParseMntRoutes` for the RFC 2725 `mnt-routes:` scope.
+  - `Dictionary`, `ParseRPAttribute`, `ParseTypedef`, `ParseProtocol` and the
+    built-in `RFCDictionary` for the RFC 2622 §9 RP-attribute dictionary, plus
+    `ParseImportWith`/`ParseExportWith`/`ParseDefaultWith` to check a policy's
+    actions and protocol names against one. The plain `Parse*` are unchanged.
+  - `String()` on the whole AST, rendering canonical RPSL. Every policy example
+    in RFC 2622, 2650 and 4012 re-parses from its own rendering to the same AST.
+  - `Flatten` resolves `EXCEPT` and `REFINE` into the plain (peering, actions,
+    filter) terms a policy denotes (RFC 2622 §6.5-6.6); `Except` and `Refine`
+    gained `Unscoped`/`AppliesTo`.
+- **`object`** — typed decoding for `key-cert`, `dictionary`, `poem` and
+  `poetic-form`, which used to fall back to `Generic`; `Auth`, `Timestamp`,
+  `Changed`, `RtrSetMember` and their parsers; and the `NamedSet`,
+  `RouterSet`, `PeeringGroup` and `FilterGroup` interfaces over the set classes.
+- **`ast`** — `Builder` composes an object attribute by attribute, and
+  `Object.Format` normalizes attribute alignment and name case. Formatting is
+  the one sanctioned departure from losslessness and changes no parsed value.
+- **`types`** — `RouterID` (an rtr-set member: an address or an inet-rtr name),
+  and `PrefixRange.Contains`/`Intersect`.
+- **`resolve`** — `ExpandRouters`, `ExpandPeerings`, `ExpandFilterSet` and
+  `EvalFilter`, with `NotEnumerableError` for the filter terms that have no
+  finite answer in prefixes (`NOT`, `PeerAS`, community tests, AS-path
+  regexps); `Cache`, a concurrency-safe caching `Source` with single-flight and
+  negative caching; `DumpLoader`/`LoadDump`/`LoadDumps` to expand against an IRR
+  bulk dump with no network; and `Expander.Concurrency`, which fetches a whole
+  breadth-first level at once without changing any result.
+- **`auth`** — a new package for RFC 2725: the `Verifier` interface that
+  cryptography plugs into, `CheckMntner`/`CheckMntners`, `ReferralChain`, and
+  `RouteCreation`/`RouteAuthority`, which apply the §4 rule that creating a
+  route needs permission from the object's own maintainers, the origin AS *and*
+  the address space — the rule that stops a prefix hijack in an IRR.
+
+### Changed
+
+- Address-family scoping in the engine stays on `Expander.AFI`. On review, a
+  SAFI cannot constrain set expansion — no RPSL set member carries one, and
+  there is no multicast route class — so `policy.Import.AppliesTo` remains the
+  only place a SAFI has meaning. The engine's documentation now says so.
+
+### Migrating from v0.1.0
+
+Attributes whose values are small languages now decode into those languages
+rather than into strings:
+
+| Class | Field | v0.1.0 | v0.2.0 |
+| --- | --- | --- | --- |
+| `Route`, `Route6` | `Pingable` | `[]string` | `[]netip.Addr` |
+| | `Inject` | `[]string` | `[]policy.Inject` |
+| | `Components` | `string` | `policy.Components` |
+| | `AggrBndry` | `string` | `policy.ASExpr` |
+| | `AggrMtd` | `string` | `policy.AggrMtd` |
+| | `ExportComps` | `string` | `policy.Filter` |
+| `InetRtr` | `Ifaddr` | `[]string` | `[]policy.Ifaddr` |
+| | `Interface` | `[]string` | `[]policy.Interface` |
+| | `Peers`, `MpPeers` | `[]string` | `[]policy.Peer` |
+| `Mntner`, `Irt` | `Auth` | `[]string` | `[]object.Auth` |
+| `RtrSet` | `Members`, `MpMembers` | `[]string` | `[]object.RtrSetMember` |
+| `Common` | `Changed` | `[]string` | `[]object.Changed` |
+| `Registry` | `Created`, `LastModified` | `string` | `object.Timestamp` |
+| | `MntRoutes` | `[]string` | `[]policy.MntRoutes` |
+
+Each new type keeps a `Raw` field (or `String()`) holding the value exactly as
+written, so code that only wanted the text reads `.Raw` and is otherwise
+unchanged.
+
+`resolve.Source` now returns `object.NamedSet` rather than `object.Set`, so the
+engine can fetch every set class. A Source that only serves as-sets and
+route-sets needs no other change; a caller that used the returned value as an
+`object.Set` adds a type assertion. `object.Set` itself is unchanged and still
+carries `SetMembers`.
+
 ## [0.1.0] - 2026-09-22
 
 The first release. There is no earlier version to migrate from.

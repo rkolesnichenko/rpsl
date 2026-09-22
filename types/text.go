@@ -10,8 +10,8 @@ import (
 // Text forms (encoding.TextMarshaler / TextUnmarshaler) for every value type:
 // MarshalText writes the same form String does and the parser reads, so values
 // round-trip through encoding/json, flags and map keys. For the types whose zero
-// value is "none" (SetName, PrefixRange, RangeOperator, AddrFamily, NICHandle),
-// the zero value marshals as "" and "" unmarshals to it.
+// value is "none" (SetName, PrefixRange, RangeOperator, AddrFamily, NICHandle,
+// RouterID), the zero value marshals as "" and "" unmarshals to it.
 
 // MarshalText returns "AS<n>".
 func (a ASN) MarshalText() ([]byte, error) { return []byte(a.String()), nil }
@@ -135,5 +135,22 @@ func (h *NICHandle) UnmarshalText(b []byte) error {
 		return err
 	}
 	*h = v
+	return nil
+}
+
+// MarshalText returns the router's canonical form; the zero RouterID is "".
+func (r RouterID) MarshalText() ([]byte, error) { return []byte(r.String()), nil }
+
+// UnmarshalText parses r as ParseRouterID does; "" is the zero RouterID.
+func (r *RouterID) UnmarshalText(b []byte) error {
+	if len(b) == 0 {
+		*r = RouterID{}
+		return nil
+	}
+	v, err := ParseRouterID(string(b))
+	if err != nil {
+		return err
+	}
+	*r = v
 	return nil
 }

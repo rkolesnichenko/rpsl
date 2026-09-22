@@ -23,22 +23,31 @@ parser targets IRRd/RIPE reality with the RFCs as the skeleton.
 
 ## Status
 
-Every layer ships in v0.1.0, the first release. Until v1.0.0, a minor version
-may change the API; the [changelog](CHANGELOG.md) says how.
+Every layer ships. Until v1.0.0, a minor version may change the API; the
+[changelog](CHANGELOG.md) says how, and v0.2.0 has a migration table.
 
 | Layer | What it does | State |
 | --- | --- | --- |
-| `lexer` + `ast` | Tokenize and model objects; lossless byte-for-byte round-trip | shipped |
-| `types` + `object` | Leaf value types and typed decoding for the common classes | shipped |
-| `policy` | RFC 2622 §6 routing-policy parser → sealed-interface AST | shipped |
-| `resolve` | Pure set-expansion engine + in-memory `Source` | shipped |
+| `lexer` + `ast` | Tokenize, model and build objects; lossless byte-for-byte round-trip | shipped |
+| `types` + `object` | Leaf value types and typed decoding for all 22 classes | shipped |
+| `policy` | RFC 2622 §6 routing-policy parser → sealed-interface AST, and the §8.1/§9 attribute sub-grammars | shipped |
+| `resolve` | Pure expansion engine for as-set, route-set, rtr-set, peering-set and filter-set, + in-memory, dump and caching `Source`s | shipped |
 | `resolve/{irrd,whois,rdap}` | Live IRRd / WHOIS / RDAP backends | shipped |
+| `auth` | RFC 2725 authorisation, with cryptography injected | shipped |
 
 RFC 4012 (RPSLng) is supported: `mp-import`/`mp-export`/`mp-default`, the `afi`
-dictionary and `afi`-scoped policies (`Import`/`Export`/`Default` expose
-`AppliesTo`), `except`/`refine`, `route6`, and `mp-members`. The expansion
-engine applies an address-family constraint via `Expander.AFI`; interpreting
-per-policy `afi` scoping into filters is left to downstream BGP consumers.
+dictionary and `afi`-scoped policies (`Import`/`Export`/`Default`/`Except`/
+`Refine` expose `AppliesTo`), `except`/`refine` — which `policy.Flatten`
+resolves into the terms a policy denotes — `route6`, `mp-members`, and the
+`interface:` and `mp-peer:` forms. The expansion engine applies an
+address-family constraint via `Expander.AFI`. A SAFI has no meaning in set
+expansion — no set member carries one — so it applies only where RFC 4012 puts
+it, in `Import`/`Export`/`Default.AppliesTo`.
+
+Deliberately out of scope: evaluating AS-path regexps against live BGP paths
+(they parse into their own AST and stop there), cryptographic verification of
+`auth:` credentials (the `auth` package injects a `Verifier` instead), and the
+RFC 2725 §7 update-transaction protocol.
 
 ## Install
 

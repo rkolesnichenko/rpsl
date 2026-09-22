@@ -28,6 +28,7 @@ rpsl/                  # ROOT module: top-level façade + object/ + policy/
   lexer/               # separate go-get module: tokens, scanner, line-folding
   ast/                 # separate go-get module: generic Object/Attribute + Diagnostic/Severity
   types/               # separate go-get module: ASN, Prefix, PrefixRange, NICHandle, SetName, AddrFamily, …
+  auth/                # RFC 2725 authorisation model; cryptography injected
   resolve/             # separate go-get module: pure expansion Expander + Source interface
     irrd/              #   socket-using Source over an IRRd query port
     whois/             #   socket-using Source over plain WHOIS (RIPE-DB)
@@ -437,7 +438,10 @@ Engine mechanics that matter:
 - **Fan-out guards (three of them).** Real as-sets (e.g. some tier-1 customer cones) expand to *hundreds of thousands* of prefixes. `MaxPrefixes` bounds distinct output, `MaxVisited` (default `1<<17` = 131,072) bounds the sets fetched, and `MaxDepth` (default 32) bounds the shortest nesting distance. Each returns a `*SetTooLargeError{Name, Limit, Max, Count}` naming the cap — the caller decides whether to chunk or reject; none truncates a result silently.
 - **Missing and unexpandable sets.** A missing top-level set is an error wrapping `ErrNotFound`; missing nested sets expand to nothing, as in bgpq4, and are listed by the result's `Missing()`. An existing set with no members is empty, not missing, in every backend: IRRd answers `!i` alike for both, so the irrd `Source` checks with `!m`. `AS-ANY`/`RS-ANY` denote the whole IRR and return `AnySetError`.
 - **Indirect membership.** Per RFC 2622 §5.1-5.2, an as-set's indirect members are aut-nums and a route-set's are routes; each claim must pass `ClaimAllowed` (member-of + mbrs-by-ref mntner check), which the engine re-applies to whatever the `Source` returns.
-- **AFI constraint.** A v4 expansion must drop `route6`-only members and `mp-members` IPv6 entries, and vice versa. The `afi` dictionary from RFC 4012 makes this explicit; `any` means both.
+- **AFI constraint.** A v4 expansion must drop `route6`-only members and `mp-members` IPv6 entries, and vice versa. The `afi` dictionary from RFC 4012 makes this explicit; `any` means both. A *SAFI* has no role here: no RPSL set member carries one and there is no multicast route class, so `Expander.AFI` is an `AFI`, and the sub-family matters only where RFC 4012 puts it — in `policy.Import`/`Export`/`Default.AppliesTo`.
+- **The other set classes.** `ExpandRouters` walks an `rtr-set` to routers (`types.RouterID`), `ExpandPeerings` a `peering-set` to the peerings it denotes with nested references replaced, and `ExpandFilterSet`/`EvalFilter` a `filter-set`'s expression to prefix ranges. Discovery is the same breadth-first traversal for all of them; only what counts as a nested name, and which indirect claims are honored, differs by class.
+- **Filters are only partly enumerable.** `EvalFilter` evaluates `ANY`, prefix lists, route-set/as-set/filter-set references, AS numbers and AS expressions, `OR`, and `AND` (the intersection of two range sets, via `types.PrefixRange.Intersect`). `NOT`, `PeerAS`, community tests, AS-path regexps and per-peer templates have no finite prefix denotation, and return a `*NotEnumerableError` naming the term instead of a quietly smaller answer.
+- **Concurrency is optional and invisible.** `Expander.Concurrency` fetches one breadth-first level at a time and merges the answers in the level's own order, so a parallel expansion returns exactly what a serial one does.
 - **Source precedence.** When the same set name exists in multiple IRRs, the `Source` decides which wins (`irrd.Source.Sources`, `NewMemSource(objs, "RIPE", "RADB")`). Hijack-relevant; surfaced as configuration, not buried.
 
 ### 8.4 Prefix-range materialization
@@ -570,7 +574,22 @@ The correctness bar is "matches the tools operators already trust," so testing i
 
 Stop-and-ship points after 1, 2, and 5 — each is independently useful, so the project delivers value long before it's "complete."
 
-**Status (current).** All six milestones are shipped: the streaming lexer/`ast` and lossless round-trip, the typed `object` layer (including RFC 4012 `mp-*`, `route6`, `afi`-scoped policies, `except`/`refine`), the `resolve` engine with in-memory `Source` and the bgpq4 differential, plus the three live backends in `resolve/{irrd,whois,rdap}`. See [README.md#Status](../README.md#status) for the same matrix in shipping form.
+**Status (current).** All six milestones are shipped, and a seventh closed the gaps between
+them and this document: the streaming lexer/`ast` and lossless round-trip (plus `ast.Builder`
+and the opt-in `Format`), the typed `object` layer for all 22 classes with every attribute
+sub-grammar of RFC 2622 §8.1 and §9 parsed, the `policy` AST with canonical `String()`,
+`Flatten` for `except`/`refine` and the RFC 2622 §9 RP-attribute dictionary, the `resolve`
+engine expanding every set class — including `EvalFilter` over the enumerable fragment of the
+filter language — with in-memory, dump and caching `Source`s, optional concurrency and the
+bgpq4 differential, the three live backends in `resolve/{irrd,whois,rdap}`, and the `auth`
+package for RFC 2725. See [README.md#Status](../README.md#status) for the same matrix in
+shipping form.
+
+Three limits are deliberate and are not gaps. AS-path regexps are parsed but never evaluated
+against live paths (§13). Filter evaluation covers only the terms with a finite answer in
+prefixes, and names the others in a `NotEnumerableError` rather than quietly returning less.
+And `auth` verifies no credential itself: cryptography arrives through a `Verifier`, the same
+injection `Source` uses, so the library stays dependency-free.
 
 ---
 

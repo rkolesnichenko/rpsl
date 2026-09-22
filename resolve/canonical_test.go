@@ -46,7 +46,7 @@ func TestRangeSetCanonicalizesSourceRanges(t *testing.T) {
 // staticSource serves literal typed sets, as a custom backend might build them.
 type staticSource map[string]object.Set
 
-func (s staticSource) GetSet(_ context.Context, n types.SetName) (object.Set, error) {
+func (s staticSource) GetSet(_ context.Context, n types.SetName) (object.NamedSet, error) {
 	if set, ok := s[n.String()]; ok {
 		return set, nil
 	}
@@ -57,6 +57,6 @@ func (staticSource) OriginatedRoutes(context.Context, types.ASN, types.AFI) ([]n
 	return nil, nil
 }
 
-func (staticSource) MembersByRef(context.Context, object.Set) ([]object.Object, error) {
+func (staticSource) MembersByRef(context.Context, object.NamedSet) ([]object.Object, error) {
 	return nil, nil
 }

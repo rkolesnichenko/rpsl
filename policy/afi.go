@@ -39,3 +39,17 @@ func (d Default) Unscoped() bool { return len(d.AFIs) == 0 }
 
 // AppliesTo reports whether the default is in effect for address family af.
 func (d Default) AppliesTo(af types.AddrFamily) bool { return afisApply(d.AFIs, d.MP, af) }
+
+// Unscoped reports whether the exception carries no afi clause of its own.
+func (e Except) Unscoped() bool { return len(e.AFIs) == 0 }
+
+// AppliesTo reports whether the exception's right-hand policy is in effect for
+// af. An except/refine with no afi clause of its own inherits the enclosing
+// policy's scope, so it applies wherever that one does.
+func (e Except) AppliesTo(af types.AddrFamily) bool { return afisApply(e.AFIs, e.MP, af) }
+
+// Unscoped reports whether the refinement carries no afi clause of its own.
+func (r Refine) Unscoped() bool { return len(r.AFIs) == 0 }
+
+// AppliesTo reports whether the refinement's right-hand policy is in effect for af.
+func (r Refine) AppliesTo(af types.AddrFamily) bool { return afisApply(r.AFIs, r.MP, af) }

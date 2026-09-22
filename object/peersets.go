@@ -85,14 +85,14 @@ func decodeFilterSet(d *decoder) FilterSet {
 }
 
 // RtrSet is a rtr-set (rtrs-…): a named collection of routers. Members and
-// MpMembers carry inet-rtr names, nested rtr-set names, and router addresses,
-// kept as their raw text. MbrsByRef enables indirect membership.
+// MpMembers carry router addresses, inet-rtr names and nested rtr-set names.
+// MbrsByRef enables indirect membership.
 type RtrSet struct {
 	Common
 	Registry
 	Name      types.SetName
-	Members   []string
-	MpMembers []string
+	Members   []RtrSetMember
+	MpMembers []RtrSetMember
 	MbrsByRef []string
 	raw       *ast.Object
 }
@@ -108,8 +108,8 @@ func decodeRtrSet(d *decoder) RtrSet {
 		Common:    d.common("rtr-set"),
 		Registry:  d.registry("rtr-set"),
 		Name:      d.setKey("rtr-set", "object/rtr-set-name", types.ClassRtrSet),
-		Members:   d.list("members"),
-		MpMembers: d.list("mp-members"),
+		Members:   d.rtrMembers("members", "object/rtr-set-members"),
+		MpMembers: d.rtrMembers("mp-members", "object/rtr-set-mp-members"),
 		MbrsByRef: d.list("mbrs-by-ref"),
 		raw:       d.o,
 	}

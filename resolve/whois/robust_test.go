@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/types"
 )
@@ -49,7 +50,7 @@ func TestWhoisNoEntriesIsNotFound(t *testing.T) {
 	if routes, err := src.OriginatedRoutes(ctx, 10, types.AFIAny); err != nil || len(routes) != 0 {
 		t.Errorf("OriginatedRoutes = %v, %v; want empty, nil", routes, err)
 	}
-	if set, err := src.GetSet(ctx, mustSet(t, "AS-BAR")); err != nil || len(set.SetMembers()) != 1 {
+	if set, err := src.GetSet(ctx, mustSet(t, "AS-BAR")); err != nil || len(set.(object.Set).SetMembers()) != 1 {
 		t.Errorf("a %%WARNING line broke GetSet: %v, %v", set, err)
 	}
 }

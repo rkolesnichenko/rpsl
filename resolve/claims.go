@@ -22,7 +22,7 @@ import (
 // This is the single implementation of the mntner check. Sources should use it
 // in MembersByRef, and the Expander re-applies it to every object a Source
 // returns, so a lenient Source cannot widen a set.
-func ClaimAllowed(o object.Object, set object.Set) bool {
+func ClaimAllowed(o object.Object, set object.NamedSet) bool {
 	memberOf, mntBy, source, ok := claimant(o)
 	if !ok || set == nil || !names(memberOf, set.SetName()) ||
 		!strings.EqualFold(strings.TrimSpace(source), strings.TrimSpace(set.SetSource())) {
@@ -53,6 +53,8 @@ func claimant(o object.Object) (memberOf []types.SetName, mntBy []string, source
 	case object.AutNum:
 		return t.MemberOf, t.MntBy, t.Source, true
 	case object.Route:
+		return t.MemberOf, t.MntBy, t.Source, true
+	case object.InetRtr:
 		return t.MemberOf, t.MntBy, t.Source, true
 	case object.Route6:
 		return t.MemberOf, t.MntBy, t.Source, true
@@ -92,6 +94,22 @@ func value(o object.Object) object.Object {
 			return *t
 		}
 	case *object.RouteSet:
+		if t != nil {
+			return *t
+		}
+	case *object.RtrSet:
+		if t != nil {
+			return *t
+		}
+	case *object.PeeringSet:
+		if t != nil {
+			return *t
+		}
+	case *object.FilterSet:
+		if t != nil {
+			return *t
+		}
+	case *object.InetRtr:
 		if t != nil {
 			return *t
 		}

@@ -140,6 +140,45 @@ func (r PrefixRange) String() string {
 	}
 }
 
+// Contains reports whether r denotes p. Host bits in p are ignored: p is
+// compared in its masked form, as every prefix this package stores is.
+func (r PrefixRange) Contains(p netip.Prefix) bool {
+	if r.IsEmpty() || !p.IsValid() {
+		return false
+	}
+	p = p.Masked()
+	if p.Bits() < int(r.lo) || p.Bits() > int(r.hi) {
+		return false
+	}
+	// A length inside the window is still only in range when p sits under the
+	// base prefix; Contains reports false across address families.
+	return r.prefix.Contains(p.Addr())
+}
+
+// Intersect returns the range denoting exactly the prefixes both r and s
+// denote, and ok is false when they share none. Two ranges overlap only when
+// one base prefix contains the other, in which case the more specific base
+// bounds the result and the length windows intersect.
+func (r PrefixRange) Intersect(s PrefixRange) (_ PrefixRange, ok bool) {
+	if r.IsEmpty() || s.IsEmpty() {
+		return PrefixRange{}, false
+	}
+	base := r.prefix
+	if s.prefix.Bits() > base.Bits() {
+		base = s.prefix
+	}
+	// Nested, not merely same-family: the wider prefix must contain the base.
+	if !r.prefix.Contains(base.Addr()) || !s.prefix.Contains(base.Addr()) {
+		return PrefixRange{}, false
+	}
+	lo := max(int(r.lo), int(s.lo), base.Bits())
+	hi := min(int(r.hi), int(s.hi))
+	if lo > hi {
+		return PrefixRange{}, false
+	}
+	return PrefixRange{prefix: base, lo: uint8(lo), hi: uint8(hi)}, true
+}
+
 // Materialize enumerates the concrete prefixes the range denotes. The cap is
 // checked before anything is allocated: if the count would exceed maxPrefixes
 // it returns ErrTooManyPrefixes.

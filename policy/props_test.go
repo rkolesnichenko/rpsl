@@ -52,7 +52,10 @@ func checkParse(t *testing.T, s string, v any, diags []ast.Diagnostic, reparse f
 
 var keywords = map[string]bool{"from": true, "to": true, "accept": true, "announce": true, "action": true,
 	"except": true, "refine": true, "and": true, "or": true, "not": true, "any": true, "peeras": true,
-	"at": true, "afi": true, "networks": true, "protocol": true, "into": true}
+	"at": true, "afi": true, "networks": true, "protocol": true, "into": true,
+	// the sub-grammars of inject:, components:, aggr-mtd:, ifaddr:, interface: and peer:
+	"upon": true, "static": true, "have-components": true, "exclude": true, "atomic": true,
+	"inbound": true, "outbound": true, "masklen": true, "tunnel": true}
 
 // swapKeywordCase changes the case of every keyword token of s.
 func swapKeywordCase(s string) string {

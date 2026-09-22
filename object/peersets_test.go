@@ -77,9 +77,18 @@ source:      RIPE
 		t.Errorf("Name = %q", rs.Name.String())
 	}
 	// members: is a comma-separated list (RFC 2622 §2): two routers, not one.
-	if len(rs.Members) != 2 || rs.Members[0] != "rtr1.example.net" || rs.Members[1] != "rtr2.example.net" ||
-		len(rs.MpMembers) != 1 || rs.MpMembers[0] != "rtrs-OTHER" {
-		t.Errorf("Members=%q MpMembers=%q", rs.Members, rs.MpMembers)
+	if len(rs.Members) != 2 || len(rs.MpMembers) != 1 {
+		t.Fatalf("Members=%q MpMembers=%q", rs.Members, rs.MpMembers)
+	}
+	for i, want := range []string{"rtr1.example.net", "rtr2.example.net"} {
+		m := rs.Members[i]
+		if m.Kind != RtrMemberRouter || m.Router.Name() != want || m.Raw != want {
+			t.Errorf("Members[%d] = %+v, want the router %q", i, m, want)
+		}
+	}
+	// A nested rtr-set is recognised as a set, not as the DNS name it resembles.
+	if m := rs.MpMembers[0]; m.Kind != RtrMemberSet || m.Set.String() != "RTRS-OTHER" || m.Raw != "rtrs-OTHER" {
+		t.Errorf("MpMembers[0] = %+v, want the rtr-set RTRS-OTHER", m)
 	}
 	if len(rs.MbrsByRef) != 1 || rs.MbrsByRef[0] != "MAINT-EX" {
 		t.Errorf("MbrsByRef = %v", rs.MbrsByRef)

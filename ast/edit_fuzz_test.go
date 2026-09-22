@@ -120,3 +120,45 @@ func malformed(toks []lexer.Token) int {
 	}
 	return n
 }
+
+// FuzzFormat: formatting is the one sanctioned departure from losslessness, so
+// it must change nothing that has meaning. Whatever the input, the zero options
+// reproduce the source byte for byte, and any options leave every attribute's
+// name and parsed Value untouched once the result is re-parsed.
+func FuzzFormat(f *testing.F) {
+	for _, src := range []string{
+		"route: 192.0.2.0/24\norigin: AS1\n",
+		"Route:\t192.0.2.0/24   \r\nORIGIN:AS1\r\n",
+		"descr: one\n two\n+\n three\n",
+		"a:\n# comment\n\n  orphan\n",
+		"a:1", "", "  ", ":", "a::b\n", "#\n",
+	} {
+		f.Add(src, 17, true)
+	}
+	f.Fuzz(func(t *testing.T, src string, align int, lower bool) {
+		o := New(lexer.Tokenize(src))
+		if got := o.Format(FormatOptions{}); got != o.String() {
+			t.Fatalf("Format(zero) = %q, want String() = %q", got, o.String())
+		}
+		if align < -1<<20 || align > 1<<20 {
+			return // a silly column would only allocate, not inform
+		}
+		out := o.Format(FormatOptions{Align: align, LowerNames: lower})
+		again := New(lexer.Tokenize(out))
+		before, after := o.Attributes(), again.Attributes()
+		if len(before) != len(after) {
+			t.Fatalf("Format(%q) changed the attribute count %d -> %d\n%q",
+				src, len(before), len(after), out)
+		}
+		for i := range before {
+			if before[i].Name != after[i].Name {
+				t.Fatalf("Format(%q) renamed attribute %d: %q -> %q",
+					src, i, before[i].Name, after[i].Name)
+			}
+			if before[i].Value != after[i].Value {
+				t.Fatalf("Format(%q) changed value %d: %q -> %q\n%q",
+					src, i, before[i].Value, after[i].Value, out)
+			}
+		}
+	})
+}
