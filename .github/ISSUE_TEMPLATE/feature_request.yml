@@ -1,0 +1,29 @@
+name: Feature request
+description: A new capability, or a change to the API.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        rpsl parses, decodes and expands registry data. Evaluating AS-path
+        regexps against BGP paths is out of scope; that belongs in a BGP tool
+        built on top of it (see the
+        [design doc](https://github.com/rkolesnichenko/rpsl/blob/main/docs/rpsl-go-design.md), §13).
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you're trying to do
+      description: The task, and where rpsl gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: The API or behaviour you have in mind. A code sketch helps.
+      render: go
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: RFC sections, IRRd or RIPE Database behaviour, or other tools that do this.

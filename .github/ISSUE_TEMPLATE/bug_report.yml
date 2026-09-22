@@ -1,0 +1,69 @@
+name: Bug report
+description: Wrong output, a panic, a missing or wrong diagnostic, or other misbehaviour.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. For a security issue, please send a private
+        [vulnerability report](https://github.com/rkolesnichenko/rpsl/security/advisories/new)
+        instead of using this form.
+  - type: dropdown
+    id: package
+    attributes:
+      label: Package
+      options:
+        - rpsl (ParseObject, Parse, Decode, Validate)
+        - object
+        - policy
+        - resolve (Expander, MemSource)
+        - resolve/irrd
+        - resolve/whois
+        - resolve/rdap
+        - types
+        - ast
+        - lexer
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The module version in your go.mod, and the output of `go version`.
+      placeholder: rpsl v0.1.0, go1.23.4 linux/amd64
+    validations:
+      required: true
+  - type: textarea
+    id: input
+    attributes:
+      label: Input
+      description: >
+        The smallest RPSL text, policy value or set name that shows the problem.
+        For an expansion, include the set objects (or the IRR and sources you
+        queried) and the Expander's settings.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: code
+    attributes:
+      label: Code
+      description: The call that misbehaves, if the input doesn't make it obvious.
+      render: go
+  - type: textarea
+    id: got
+    attributes:
+      label: What happened
+      description: The output, diagnostics or error you got. For a panic, the full stack trace.
+    validations:
+      required: true
+  - type: textarea
+    id: want
+    attributes:
+      label: What you expected
+      description: >
+        And what that is based on: an RFC section (2622, 2650, 4012), what IRRd
+        or the RIPE Database does, or bgpq4's output for the same set.
+    validations:
+      required: true
