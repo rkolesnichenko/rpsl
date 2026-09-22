@@ -7,9 +7,15 @@ attack surfaces are taken seriously.
 
 ## Reporting a vulnerability
 
-Please email **rokolg@gmail.com** with details. Include a minimal reproducer
-if you have one. Public GitHub issues are not the right channel for an
-embargoed report — open an issue only after we've coordinated disclosure.
+Please report it privately through GitHub:
+**[Report a vulnerability](https://github.com/rkolesnichenko/rpsl/security/advisories/new)**
+(also on the repository's Security tab). The report stays private between you
+and the maintainer until an advisory is published. If you can't use GitHub,
+email **rokolg@gmail.com** instead.
+
+Include a minimal reproducer if you have one. Public GitHub issues are not the
+right channel for an embargoed report — open an issue only after we've
+coordinated disclosure.
 
 I'll acknowledge within 72 hours and aim to have a fix candidate within two
 weeks for issues affecting parsing safety, engine purity, or network
