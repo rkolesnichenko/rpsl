@@ -1,10 +1,11 @@
 # Releasing
 
 `rpsl` is six Go modules in one repository. Inside the repo they find each
-other through `go.work`, with every inter-module `require` pinned at `v0.0.0`.
-A consumer has no workspace, so each module must be tagged and its siblings'
-`require`s bumped to real versions, **in dependency order**: a module can only be
-tidied once the versions it requires are on the proxy.
+other through `go.work`, which overrides every inter-module `require` with the
+local directory; the `require`s themselves name the latest release. A consumer
+has no workspace, so each module must be tagged and its siblings' `require`s
+bumped to the new version, **in dependency order**: a module can only be tidied
+once the versions it requires are on the proxy.
 
 ```
 lexer, types  →  ast  →  root (rpsl: façade, object, policy)  →  resolve  →  examples/bulk-ripe
@@ -20,11 +21,10 @@ detects the license everywhere.
 **A published version is permanent.** Once the Go proxy has fetched a tag, that
 version is cached forever and cannot be changed, only retracted. Rehearse first.
 
-## Before the first release
+## Visibility
 
-The proxy cannot fetch a private repository. Make
-`github.com/rkolesnichenko/rpsl` public (Settings → General → Danger Zone →
-Change visibility) before pushing any tag.
+The proxy cannot fetch a private repository, so
+`github.com/rkolesnichenko/rpsl` must stay public.
 
 ## Pre-flight
 
@@ -37,16 +37,17 @@ Every item must pass on the commit you are about to release.
    (dumps via `scripts/fetch-ripe-dumps.sh`).
 3. `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve` and
    `RPSL_LIVE=1 go test -run TestRIPETemplatesAreCurrent ./object`.
-4. **`scripts/release-dryrun.sh v0.1.0`** — performs every step below in a
+4. **`scripts/release-dryrun.sh vX.Y.Z`**, with the version you are about to
+   release (it refuses one that is already tagged), performs every step below in a
    temporary repository against a local proxy, builds and tests each module with
    `GOWORK=off`, checks that a consumer of each module gets only what it
    requires, runs each module's tests from its published zip, and lists the
    files each release commit must hold. It publishes nothing.
-5. `CHANGELOG.md`: the release's section is dated (`## [0.1.0] - YYYY-MM-DD`)
-   and a new empty `## [Unreleased]` sits above it. Commit that, push `main`, and
+5. `CHANGELOG.md`: the release's section is dated (`## [X.Y.Z] - YYYY-MM-DD`)
+   and linked at the bottom, and a new empty `## [Unreleased]` sits above it. Commit that, push `main`, and
    wait for CI to pass on it.
 
-## Each release (example: v0.1.0)
+## Each release (example: v0.2.0)
 
 Run every command from the repository root. Every `go mod tidy` runs with
 `GOWORK=off`, so it resolves siblings from the proxy exactly as a consumer
@@ -55,7 +56,7 @@ skips new files, which would publish a module that does not build. Never commit
 `replace` directives.
 
 ```sh
-V=v0.1.0
+V=v0.2.0   # the version you are releasing
 M=github.com/rkolesnichenko/rpsl
 export GOWORK=off
 

@@ -37,8 +37,8 @@ resolve → object → policy → types → ast → lexer (never the reverse).
 **As-built module reality (diverges from the flat tree above):**
 - Separate go-get modules: `lexer`, `ast`, `types`, `resolve`. `object`, `policy`, and the
   top-level `rpsl` façade live in the ROOT module. Wired for dev by a root `go.work` (`use`).
-- Inter-module requires use `v0.0.0`; `go work sync` FAILS (tries to fetch them from GitHub) —
-  ignore it, the `go.work` `use` set resolves locally and the per-module loop is the source of truth.
+- Inter-module requires name the latest release (v0.1.0); the `go.work` `use` set overrides them
+  with the local directories, so edits are seen across modules at once. Bump them only when releasing.
 - `Diagnostic`/`Severity` live in the `ast` module (so `object` can emit them); `rpsl` re-exports via aliases.
 - Net-using Source backends are isolated in `resolve/` sub-packages (irrd/whois/rdap) to keep core `resolve` socket-free.
 - Tests use in-process fake servers over a localhost listener + a `Dial` hook (no real network);

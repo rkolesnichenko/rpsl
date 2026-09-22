@@ -1,7 +1,7 @@
 #!/bin/sh
 # Rehearses a release (RELEASING.md) end to end without publishing anything:
 #
-#   scripts/release-dryrun.sh [v0.1.0]
+#   scripts/release-dryrun.sh vX.Y.Z     # the version about to be released
 #
 # In a temporary git repository holding the tree as it would be committed, it
 # follows RELEASING.md step by step — bump each module's requires in dependency
@@ -13,9 +13,15 @@
 # module's own tests from its zip. Nothing touches the real repository, its
 # remote, the public proxy, or your module cache.
 set -eu
-V=${1:-v0.1.0}
+V=${1:?usage: scripts/release-dryrun.sh vX.Y.Z (the version about to be released)}
 M=github.com/rkolesnichenko/rpsl
 repo=$(cd "$(dirname "$0")/.." && pwd)
+# A released version is already in every go.mod and go.sum; rehearsing it again
+# has nothing to bump and would clash with the published checksums.
+if [ -n "$(git -C "$repo" tag -l "$V" "*/$V")" ]; then
+	echo "release-dryrun: $V is already released; rehearse the next version" >&2
+	exit 2
+fi
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/rpsl-dryrun.XXXXXX")
 trap 'chmod -R u+w "$tmp" 2>/dev/null; rm -rf "$tmp"' EXIT
 work=$tmp/repo

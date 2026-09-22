@@ -24,10 +24,10 @@ The repo is a Go workspace of six modules:
 | `resolve/` | pure expansion engine + `Source` interface; `irrd`/`whois`/`rdap` backends; `internal/netconn` (socket deadlines, backends only) |
 | `examples/bulk-ripe/` | GB-scale integration harness and the opt-in real-data regression |
 
-Inter-module `require`s are pinned at `v0.0.0` and resolve via the root
-`go.work` (`use`). `go work sync` **fails** by design: it tries to fetch the
-sibling modules from GitHub. Ignore it; the workspace is the source of truth
-locally.
+Inter-module `require`s name the latest release (`v0.1.0`), and the root
+`go.work` (`use`) overrides them with the local directories, so a change in one
+module is seen by the others at once, without a release. Leave the `require`s
+alone: they are bumped only when releasing ([RELEASING.md](RELEASING.md)).
 
 ## Running tests
 

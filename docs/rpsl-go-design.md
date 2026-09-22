@@ -38,7 +38,7 @@ Four leaves (`lexer`, `ast`, `types`, `resolve`) ship as independently `go get`-
 
 Imports run strictly downward: `resolve → object → policy → types → ast → lexer`, with the three `resolve/*` backends sitting at the same level as `resolve` and depending on `object` for typed values. The direction is invariant — never the reverse.
 
-For local development the modules are wired together with a root `go.work` (`use`); inter-module `require`s are pinned at `v0.0.0` and resolve via the workspace. `go work sync` fails (it tries to fetch the siblings from GitHub) — that is expected. See [README.md#Releasing](../README.md#releasing) for the per-module tagging order when publishing.
+For local development the modules are wired together with a root `go.work` (`use`), which overrides the inter-module `require`s — they name the latest release — with the local directories. See [README.md#Releasing](../README.md#releasing) for the per-module tagging order when publishing.
 
 ---
 

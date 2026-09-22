@@ -267,12 +267,12 @@ FUZZTIME=15s scripts/check.sh  # ... plus all twelve fuzz targets (what CI runs)
 ## Releasing
 
 The repo is a set of independent modules wired together for development by the
-root `go.work` (`use`). Inter-module `require`s are pinned at `v0.0.0` and resolve
-locally through the workspace, so:
+root `go.work` (`use`). Inter-module `require`s name the latest release, and the
+workspace overrides them with the local directories, so:
 
 - `go test ./...` only covers the root module; use `scripts/check.sh`.
-- `go work sync` **fails** (it tries to fetch the sibling modules from GitHub) —
-  that is expected; the `go.work` `use` set is the source of truth locally.
+- A change in one module is seen by the others at once; the `require`s are
+  bumped only when releasing.
 
 Publishing tags each module and bumps its siblings' `require`s in dependency
 order (`lexer`, `types` → `ast` → root → `resolve`); the exact procedure is in
