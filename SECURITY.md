@@ -25,9 +25,9 @@ any of them as a security-relevant bug.
 - **Resilient parsing, no panics on hostile input.** The lexer is a total
   partition of the input (every byte belongs to exactly one token), and
   malformed lines become `KindMalformed` tokens that surface as
-  `lexer/malformed-line` diagnostics rather than crashes. Fuzz coverage on
-  `FuzzTokenize`, `FuzzParseImport`, and `FuzzParseASPathRegexp` enforces this
-  property.
+  `lexer/malformed-line` diagnostics rather than crashes. Twelve fuzz targets,
+  one for every parser that takes untrusted text (listed in
+  [README.md](README.md#testing)), enforce this property.
 - **Streaming-mode memory cap.** `rpsl.ParseOptions.MaxObjectBytes` (default
   16 MiB) and `MaxObjectLines` (default 262,144), also applied by `Parse`, bound
   each object, the run of blank/comment lines before it, and every line as it is

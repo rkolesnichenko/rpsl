@@ -53,7 +53,13 @@ Per-target subsets you'll reach for often:
   `go test -run TestGoldensAreBgpq4Output -update ./resolve` and review the
   diff. Known differences from bgpq4 are pinned in
   `resolve/testdata/bgpq4/divergences.md`. With `RPSL_REALDATA` set,
-  `TestBgpq4RealData` compares real RIPE sets too.
+  `TestBgpq4RealData` compares real RIPE sets too. CI installs Ubuntu's bgpq4
+  (1.12) and Homebrew ships a newer one (1.16); the tests pass with both, so a
+  failure that appears with only one version is a change in bgpq4. Pin it in
+  `divergences.md` rather than editing the goldens to match.
+- **A fuzz failure:** Go saves the failing input under the package's
+  `testdata/fuzz/<Target>/`. Commit it with the fix: every `go test` replays it
+  from then on.
 - **Real-data regression** (opt-in): `scripts/fetch-ripe-dumps.sh`, then
   `RPSL_REALDATA=$PWD/.data/ripe go test -run TestRealData ./examples/bulk-ripe/bulk`.
 - **Live backends** (opt-in, read-only): `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve`,
@@ -83,6 +89,11 @@ make a change pass:
    `resolve → object → policy → types → ast → lexer`. Go forbids import cycles,
    but `object` and `policy` share the root module, so keep the direction by
    convention.
+6. **Diagnostic rules are a contract.** A `Diagnostic.Rule` ID is stable API that
+   callers filter on. Add a new rule to [`docs/diagnostics.md`](docs/diagnostics.md)
+   with its severity: an Error means the value was dropped, a Warning that it
+   was used anyway. `TestDiagnosticRulesAreDocumented` fails on a rule that is
+   emitted but not listed, or listed but never emitted.
 
 ## Style
 
@@ -102,6 +113,8 @@ make a change pass:
 
 - Branch from `main`. Keep the branch focused; small PRs review faster.
 - `scripts/check.sh` must pass before merge.
+- Add a line to `CHANGELOG.md` under `## [Unreleased]` for any change a user of
+  the library can see: API, behavior, a new or changed diagnostic rule.
 - Updating `CLAUDE.md` or `docs/rpsl-go-design.md` is part of the change when
   the externally-observable behavior shifts. The design doc is the source of
   truth.

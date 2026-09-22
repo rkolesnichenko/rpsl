@@ -94,9 +94,12 @@ fmt.Println(an.AS, an.MntBy) // AS65001 [EXAMPLE-MNT]
 
 ## Worked examples
 
-Every snippet below is copied from a runnable `Example` test
-([`example_test.go`](example_test.go), [`resolve/example_test.go`](resolve/example_test.go)),
-so `go test` keeps them honest.
+The snippets below come from runnable `Example` tests
+([`example_test.go`](example_test.go), [`policy/example_test.go`](policy/example_test.go),
+[`resolve/example_test.go`](resolve/example_test.go)), so `go test` keeps them
+honest. The live-source one needs the network; its counterpart,
+[`resolve/irrd/example_test.go`](resolve/irrd/example_test.go), is compiled but
+not run.
 
 ### Lossless round-trip
 
