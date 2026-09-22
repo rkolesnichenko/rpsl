@@ -67,6 +67,12 @@ func mustSet(t *testing.T, s string) types.SetName {
 	return n
 }
 
+// refSet is a route-set in source whose mbrs-by-ref lists refs.
+func refSet(t *testing.T, name, source string, refs ...string) object.RouteSet {
+	t.Helper()
+	return object.RouteSet{Name: mustSet(t, name), MbrsByRef: refs, Common: object.Common{Source: source}}
+}
+
 func TestWhoisGetSet(t *testing.T) {
 	fw := newFakeWhois(t, map[string]string{
 		"-r -T as-set,route-set AS-FOO": "as-set: AS-FOO\nmembers: AS1\nmembers: AS-BAR\nsource: TEST\n",
@@ -76,7 +82,7 @@ func TestWhoisGetSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSet: %v", err)
 	}
-	if set.SetName().Canonical() != "AS-FOO" || len(set.SetMembers()) != 2 {
+	if set.SetName().String() != "AS-FOO" || len(set.SetMembers()) != 2 {
 		t.Errorf("set = %+v, want AS-FOO with 2 members", set)
 	}
 }
@@ -91,7 +97,7 @@ func TestWhoisGetSetNotFound(t *testing.T) {
 
 func TestWhoisOriginatedRoutes(t *testing.T) {
 	fw := newFakeWhois(t, map[string]string{
-		"-r -i origin -T route,route6 AS10": "route: 198.51.100.0/24\norigin: AS10\nsource: TEST\n\n" +
+		"-r -T route,route6 -i origin AS10": "route: 198.51.100.0/24\norigin: AS10\nsource: TEST\n\n" +
 			"route6: 2001:db8::/32\norigin: AS10\nsource: TEST\n",
 	})
 	src := &Source{Addr: fw.addr(), Timeout: 2 * time.Second}
@@ -111,10 +117,10 @@ func TestWhoisMembersByRefMntnerCheck(t *testing.T) {
 	resp := "route: 198.51.100.0/24\norigin: AS10\nmember-of: RS-REF\nmnt-by: MAINT-GOOD\nsource: TEST\n\n" +
 		"route: 203.0.113.0/24\norigin: AS20\nmember-of: RS-REF\nmnt-by: MAINT-EVIL\nsource: TEST\n"
 	fw := newFakeWhois(t, map[string]string{
-		"-r -i member-of -T route,route6,aut-num,as-set RS-REF": resp,
+		"-r -T route,route6,aut-num,as-set -i member-of RS-REF": resp,
 	})
 	src := &Source{Addr: fw.addr(), Timeout: 2 * time.Second}
-	got, err := src.MembersByRef(context.Background(), mustSet(t, "RS-REF"), []string{"MAINT-GOOD"})
+	got, err := src.MembersByRef(context.Background(), refSet(t, "RS-REF", "TEST", "MAINT-GOOD"))
 	if err != nil {
 		t.Fatalf("MembersByRef: %v", err)
 	}
@@ -130,7 +136,7 @@ func TestWhoisMembersByRefMntnerCheck(t *testing.T) {
 func TestEngineExpandPrefixesOverWhois(t *testing.T) {
 	fw := newFakeWhois(t, map[string]string{
 		"-r -T as-set,route-set RS-REF": "route-set: RS-REF\nmbrs-by-ref: MAINT-GOOD\nsource: TEST\n",
-		"-r -i member-of -T route,route6,aut-num,as-set RS-REF": "route: 198.51.100.0/24\norigin: AS10\nmember-of: RS-REF\nmnt-by: MAINT-GOOD\nsource: TEST\n\n" +
+		"-r -T route,route6,aut-num,as-set -i member-of RS-REF": "route: 198.51.100.0/24\norigin: AS10\nmember-of: RS-REF\nmnt-by: MAINT-GOOD\nsource: TEST\n\n" +
 			"route: 203.0.113.0/24\norigin: AS20\nmember-of: RS-REF\nmnt-by: MAINT-EVIL\nsource: TEST\n",
 	})
 	src := &Source{Addr: fw.addr(), Timeout: 2 * time.Second}
@@ -141,5 +147,26 @@ func TestEngineExpandPrefixesOverWhois(t *testing.T) {
 	}
 	if got.Len() != 1 || !got.Has(netipMust("198.51.100.0/24")) {
 		t.Errorf("prefixes = %v, want only the MAINT-GOOD route", got.List())
+	}
+}
+
+// A set defined in several sources is taken from the first in Sources, as irrd
+// and MemSource do, whatever order the server lists them in.
+func TestWhoisGetSetFollowsSourcePriority(t *testing.T) {
+	resp := "as-set: AS-FOO\nmembers: AS1\nsource: RADB\n\nas-set: AS-FOO\nmembers: AS2\nsource: RIPE\n"
+	fw := newFakeWhois(t, map[string]string{
+		"-s RIPE,RADB -r -T as-set,route-set AS-FOO": resp,
+		"-s RADB,RIPE -r -T as-set,route-set AS-FOO": resp,
+		"-r -T as-set,route-set AS-FOO":              resp,
+	})
+	for _, c := range []struct {
+		sources []string
+		want    string
+	}{{[]string{"ripe", "RADB"}, "RIPE"}, {[]string{"RADB", "RIPE"}, "RADB"}, {nil, "RADB"}} {
+		src := &Source{Addr: fw.addr(), Sources: c.sources, Timeout: 2 * time.Second}
+		set, err := src.GetSet(context.Background(), mustSet(t, "AS-FOO"))
+		if err != nil || set.SetSource() != c.want {
+			t.Errorf("Sources %v: GetSet = %+v, %v; want the %s set", c.sources, set, err, c.want)
+		}
 	}
 }

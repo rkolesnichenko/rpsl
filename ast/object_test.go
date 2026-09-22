@@ -92,3 +92,38 @@ func TestSet(t *testing.T) {
 		t.Error("Set clobbered unrelated attributes")
 	}
 }
+
+// A nil *Object reads as an empty one, so objects that carry no source text
+// (Raw() == nil) never panic their readers.
+func TestNilObjectReads(t *testing.T) {
+	var o *Object
+	if o.Class() != "" || o.Key() != "" || o.Has("x") || len(o.GetAll("x")) != 0 ||
+		len(o.Attributes()) != 0 || o.String() != "" {
+		t.Error("nil *Object is not empty")
+	}
+	if _, ok := o.GetFirst("x"); ok {
+		t.Error("nil *Object GetFirst found something")
+	}
+}
+
+// Lookups and edits canonicalize names alike, so what Append adds GetAll finds.
+func TestNameLookupMatchesEdits(t *testing.T) {
+	o := New(nil)
+	if err := o.Append(" Descr\t", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if got := o.GetAll(" DESCR "); len(got) != 1 || got[0].Value != "x" {
+		t.Errorf("GetAll after Append = %+v", got)
+	}
+}
+
+func TestDiagnosticString(t *testing.T) {
+	d := Diagnostic{Severity: Error, Message: "bad line", Rule: "lexer/malformed-line",
+		Span: lexer.Span{StartLine: 4, StartCol: 14}}
+	if got, want := d.String(), "4:14: error lexer/malformed-line: bad line"; got != want {
+		t.Errorf("String = %q, want %q", got, want)
+	}
+	if Info.String() != "info" || Warning.String() != "warning" || Error.String() != "error" || Severity(9).String() != "severity(9)" {
+		t.Error("Severity.String")
+	}
+}

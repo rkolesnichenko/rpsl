@@ -18,15 +18,15 @@ in production. (Core `resolve` imports only `net/netip`, never `net`;
 type Source interface {
 	GetSet(ctx context.Context, name types.SetName) (object.Set, error)
 	OriginatedRoutes(ctx context.Context, as types.ASN, afi types.AFI) ([]netip.Prefix, error)
-	MembersByRef(ctx context.Context, set types.SetName, mntners []string) ([]object.Object, error)
+	MembersByRef(ctx context.Context, set object.Set) ([]object.Object, error)
 }
 ```
 
 `GetSet` returns `ErrNotFound` for a missing set: a missing *nested* set expands to
 nothing and is listed by the result's `Missing()`, while a missing top-level set is
 an error. `MembersByRef` backs the indirect `mbrs-by-ref` membership mechanism;
-implementations should filter with `resolve.ClaimAllowed`, and the engine re-checks
-every returned claim anyway. `NewMemSource(objs, "RIPE", "RADB")` takes an optional
+implementations should filter with `resolve.ClaimAllowed(obj, set)`, and the engine
+re-checks every returned claim anyway. `NewMemSource(objs, "RIPE", "RADB")` takes an optional
 source precedence for set names defined in several IRRs.
 
 ## The `Expander`
@@ -40,12 +40,12 @@ type Expander struct {
 	AFI         types.AFI // address-family constraint; Unspecified/Any = both
 }
 
-func (e *Expander) ExpandAS(ctx context.Context, n types.SetName) (ASSet, error)
+func (e *Expander) ExpandAS(ctx context.Context, n types.SetName) (ASNSet, error)
 func (e *Expander) ExpandPrefixes(ctx context.Context, n types.SetName) (PrefixSet, error)
 func (e *Expander) ExpandPrefixRanges(ctx context.Context, n types.SetName) (RangeSet, error)
 ```
 
-`ASSet`/`PrefixSet`/`RangeSet` are deduplicated sets with `Has`, `Len`, a sorted
+`ASNSet`/`PrefixSet`/`RangeSet` are deduplicated sets with `Has`, `Len`, a sorted
 `List`, and `Missing` (nested sets that were referenced but not found).
 `ExpandPrefixRanges` returns ranges before materialization — bgpq4's `le`/`ge`
 form — which is the only usable form for sets containing ranges like `/8^+`.
@@ -56,19 +56,26 @@ form — which is the only usable form for sets containing ranges like `/8^+`.
   once, so a set's depth is its shortest nesting distance and the result never
   depends on member order; evaluation then builds the result without further I/O.
   Each AS's routes are fetched once per call.
-- **Cycle detection** — a revisit is *skipped, not an error* (matches `bgpq4`). A
-  cycle re-entered under a different range operator (`RS-A` lists `RS-B^+`,
-  `RS-B` lists `RS-A`) returns `ErrCyclicOperator` instead of an undersized result.
+- **Cycle detection** — a revisit is *skipped, not an error* (matches `bgpq4`).
+  Evaluation walks each (set, operator stack) pair once, with stacks compared by
+  what they do (`^+^+` is `^+`), so a cycle through range operators (`RS-A`
+  lists `RS-B^+`, `RS-B` lists `RS-A`) resolves to the RFC's fixpoint.
 - **Range operators on members** — `RS-FOO^+` and `AS1^24` apply to every range of
   the set or route of the AS, composing along the path (RFC 2622 §5.2).
 - **Dual membership** — direct `members:`/`mp-members:` unioned with indirect
   `member-of:` claims, the latter honored only via `mbrs-by-ref:` + the mntner
-  check. Skipping that check is a silent, hijack-relevant bug, so the engine
-  enforces it through `MembersByRef`.
+  check, and only from the set's own `source:` (maintainer names are unique per
+  registry, and IRRd applies the same rule). Skipping either check is a silent,
+  hijack-relevant bug, so the engine re-applies `ClaimAllowed` to every claim.
+- **Class rules** — an as-set is followed only into as-sets, a route-set into
+  route-sets and as-sets (RFC 2622 §5.1-5.2); a route-set inside an as-set is
+  not followed. `ExpandAS` takes an as-set, the prefix expansions an as-set or
+  route-set; anything else returns `ErrSetClass`. Ranges come back in canonical
+  form, so equivalent spellings count once.
 - **Fan-out guards** — `MaxPrefixes` is checked *during* enumeration (duplicates
   are free), `MaxVisited` bounds the sets fetched, and `MaxDepth` bounds nesting;
-  each returns `ErrSetTooLarge{Name, Limit, Count}` naming the cap rather than
-  OOM-ing or truncating silently. `AS-ANY`/`RS-ANY` return `ErrAnySet`.
+  each returns a `*SetTooLargeError{Name, Limit, Max, Count}` naming the cap rather than
+  OOM-ing or truncating silently. `AS-ANY`/`RS-ANY` return `AnySetError`.
 - **AFI constraint** — `AFIv4` drops IPv6 members and vice versa; `any`/unspecified
   keeps both.
 
@@ -102,7 +109,7 @@ unchanged.
 | Sub-package | Talks to | Membership handling |
 | --- | --- | --- |
 | `resolve/irrd` | IRRd query port (`whois.radb.net:43`, NTT, …) via `!i`/`!g`/`!6` | server-side; `MembersByRef` is a no-op (already folded into `!i`) |
-| `resolve/whois` | plain WHOIS (`whois.ripe.net:43`) | resolves indirect membership itself via inverse queries + local mntner check |
+| `resolve/whois` | plain WHOIS (`whois.ripe.net:43`, or an IRRd server such as `whois.radb.net:43`) | resolves indirect membership itself via inverse queries + `ClaimAllowed` (mntner and same-source check) |
 | `resolve/rdap` | RDAP registration metadata (`rdap.db.ripe.net`) | registration lookups only — not a `Source` (RDAP has no IRR set objects) |
 
 ```go
@@ -110,7 +117,7 @@ import "github.com/rkolesnichenko/rpsl/resolve/irrd"
 
 irr := &irrd.Source{
 	Addr:      "whois.radb.net:43",
-	Sources:   "RADB,RIPE",
+	Sources:   []string{"RADB", "RIPE"},
 	Timeout:   10 * time.Second,
 	KeepAlive: true, // pool persistent connections; call Close() when done
 }
@@ -122,12 +129,19 @@ asns, err := e.ExpandAS(ctx, name)
 
 Every `irrd` and `whois` query honours its context: cancelling it (or its deadline
 passing) aborts a pending read at once, and `Timeout` (default `DefaultTimeout`,
-60 s; negative = none) bounds each query even under `context.Background()`.
+60 s; negative = none) bounds each query even under `context.Background()` —
+one deadline covering the wait for a `MaxConns` slot, the dial, the I/O and any
+retry. `rdap.Client.Timeout` bounds each RDAP request the same way.
 `irrd.MaxConns` (default 4) bounds concurrent connections; with `KeepAlive`, a
 pooled connection the server has closed is retried once on a fresh one, and a
-refused `!s` source list is an error rather than "not found". A whois server
-error other than "no entries" is returned as `whois.ErrServer` (e.g. RIPE's
-`%ERROR:201` rate limiting), never as an empty result.
+refused `!s` source list is an error rather than "not found". IRRd answers
+`!i` for an existing set with no members as for a missing one, so `irrd`
+confirms with `!m` and returns such a set empty (not in `Missing()`). Like
+`irrd`, `whois` takes a set defined in several sources from the first in
+`Sources`. A whois server
+error other than "no entries" is returned as `whois.ServerError` (e.g. RIPE's
+`%ERROR:201` rate limiting, or IRRd's `%% ERROR:` for an unknown source), never
+as an empty result.
 
 Without `KeepAlive`, `irrd` still sends `!!` first on every connection: IRRd
 closes a connection after one command otherwise, and the `!s` source selection
@@ -141,11 +155,18 @@ whois and RIPE RDAP.
 
 ## Correctness
 
-`resolve` ships a small synthetic snapshot (`testdata/`) with hand-checked golden
-expansions, compared on every `go test`, plus property tests that check expansion
-against an independent reachability oracle on random cyclic graphs. Only the
-optional live differential, gated on `RPSL_BGPQ4_SERVER` / `RPSL_BGPQ4_SET`, runs
-`bgpq4` itself (and compares ASNs).
+Every `go test` expands thousands of random IRRs — nested and cyclic sets in
+two sources, range operators, indirect members honored and rejected, missing
+sets — with the engine and with a brute-force model of RFC 2622, through
+`MemSource`, `irrd.Source` and `whois.Source` (served by the in-process IRRd in
+`internal/irrtest`), and requires the same AS numbers, prefixes and `Missing()`.
+
+When `bgpq4` is installed, `bgpq4` itself expands the same random IRRs through
+`irrtest`, and the golden expansions of the snapshot in `testdata/` are its
+output. The engine and bgpq4 agree everywhere except the cases pinned in
+[`testdata/bgpq4/divergences.md`](testdata/bgpq4/divergences.md). On the RIPE
+dumps (`RPSL_REALDATA`), 304 of 305 sampled sets that fit `MaxPrefixes` expand
+exactly as bgpq4 expands them; the other uses `^n`, which bgpq4 drops.
 
 See the [root README](../README.md) and
 [GoDoc](https://pkg.go.dev/github.com/rkolesnichenko/rpsl/resolve).

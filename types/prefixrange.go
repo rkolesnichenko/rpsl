@@ -24,55 +24,117 @@ const (
 // the supplied cap. The cap is enforced during enumeration, never after.
 var ErrTooManyPrefixes = errors.New("rpsl/types: prefix range exceeds cap")
 
-// PrefixRange is a prefix with an optional range operator, e.g. "192.0.2.0/24",
-// "192.0.2.0/24^+", "^-", "^24", "^24-28". Lo/Hi hold the resolved length window
-// for every operator. It is comparable.
+// PrefixRange is a prefix with a window of more-specific lengths, written with
+// an optional range operator: "192.0.2.0/24", "192.0.2.0/24^+", "^-", "^24",
+// "^24-28" (RFC 2622 §2). It is an opaque, canonical value: the prefix has no
+// host bits and the window is stored as lengths, so equivalent spellings
+// ("/8^24-24" and "/8^24") are == and can be used as map keys. Build one with
+// ParsePrefixRange or NewPrefixRange. The zero PrefixRange is no range.
 type PrefixRange struct {
-	Prefix netip.Prefix
-	Op     RangeOp
-	Lo, Hi uint8
+	prefix netip.Prefix
+	lo, hi uint8
+}
+
+// NewPrefixRange returns the range of prefixes under p with lengths lo..hi,
+// clamped to p's length and its family's. Host bits in p are cleared. ok is
+// false when p is invalid or the window is empty.
+func NewPrefixRange(p netip.Prefix, lo, hi int) (_ PrefixRange, ok bool) {
+	if !p.IsValid() {
+		return PrefixRange{}, false
+	}
+	p = p.Masked()
+	lo, hi = max(lo, p.Bits()), min(hi, p.Addr().BitLen())
+	if lo > hi {
+		return PrefixRange{}, false
+	}
+	return PrefixRange{prefix: p, lo: uint8(lo), hi: uint8(hi)}, true
+}
+
+// Prefix returns the range's base prefix.
+func (r PrefixRange) Prefix() netip.Prefix { return r.prefix }
+
+// Lo returns the shortest prefix length in the range.
+func (r PrefixRange) Lo() int { return int(r.lo) }
+
+// Hi returns the longest prefix length in the range.
+func (r PrefixRange) Hi() int { return int(r.hi) }
+
+// IsZero reports whether r is the zero PrefixRange.
+func (r PrefixRange) IsZero() bool { return !r.prefix.IsValid() }
+
+// IsEmpty reports whether r denotes no prefixes: the zero PrefixRange, or a
+// parsed range such as "192.0.2.1/32^-" (a host route has no more-specifics).
+func (r PrefixRange) IsEmpty() bool { return r.IsZero() || r.lo > r.hi }
+
+// Op returns the most specific operator that spells r's window: RangeExact for
+// the prefix alone, RangePlus for /n^n-max, RangeMinus for /n^(n+1)-max,
+// RangeLength for a single length, otherwise RangeRange.
+func (r PrefixRange) Op() RangeOp {
+	bits, maxBits := r.prefix.Bits(), r.prefix.Addr().BitLen()
+	lo, hi := int(r.lo), int(r.hi)
+	switch {
+	case lo == bits && hi == bits:
+		return RangeExact
+	case lo == bits && hi == maxBits:
+		return RangePlus
+	case lo == bits+1 && hi == maxBits:
+		return RangeMinus
+	case lo == hi:
+		return RangeLength
+	}
+	return RangeRange
 }
 
 // ParsePrefixRange parses a prefix optionally followed by a '^' range operator.
+// Host bits are cleared and the result is canonical, so equivalent spellings
+// yield the identical value. A range that denotes no prefixes, such as a host
+// route with ^-, is kept (see IsEmpty) and prints as written. Callers that must
+// report host bits should check the text themselves.
 func ParsePrefixRange(s string) (PrefixRange, error) {
-	t := strings.TrimSpace(s)
+	t := strings.Trim(s, " \t")
 	pfxStr, opStr, hasOp := strings.Cut(t, "^")
-	pfx, err := netip.ParsePrefix(strings.TrimSpace(pfxStr))
+	pfx, err := netip.ParsePrefix(pfxStr)
 	if err != nil {
 		return PrefixRange{}, fmt.Errorf("rpsl/types: invalid prefix range %q: %w", s, err)
 	}
+	pfx = pfx.Masked()
 	bits, maxBits := pfx.Bits(), pfx.Addr().BitLen()
-	if !hasOp {
-		return PrefixRange{Prefix: pfx, Op: RangeExact, Lo: uint8(bits), Hi: uint8(bits)}, nil
+	lo, hi := bits, bits
+	if hasOp {
+		op, err := ParseRangeOperator(opStr)
+		if err != nil {
+			return PrefixRange{}, err
+		}
+		switch op.Op {
+		case RangePlus:
+			hi = maxBits
+		case RangeMinus:
+			lo, hi = bits+1, maxBits
+		default:
+			if int(op.N) < bits || int(op.M) > maxBits {
+				return PrefixRange{}, fmt.Errorf("rpsl/types: invalid range ^%s for /%d prefix", opStr, bits)
+			}
+			lo, hi = int(op.N), int(op.M)
+		}
 	}
-	op, err := ParseRangeOperator(opStr)
-	if err != nil {
-		return PrefixRange{}, err
-	}
-	switch op.Op {
-	case RangePlus:
-		return PrefixRange{Prefix: pfx, Op: RangePlus, Lo: uint8(bits), Hi: uint8(maxBits)}, nil
-	case RangeMinus:
-		return PrefixRange{Prefix: pfx, Op: RangeMinus, Lo: uint8(bits + 1), Hi: uint8(maxBits)}, nil
-	}
-	if int(op.N) < bits || int(op.M) > maxBits {
-		return PrefixRange{}, fmt.Errorf("rpsl/types: invalid range ^%s for /%d prefix", opStr, bits)
-	}
-	return PrefixRange{Prefix: pfx, Op: op.Op, Lo: op.N, Hi: op.M}, nil
+	return PrefixRange{prefix: pfx, lo: uint8(lo), hi: uint8(hi)}, nil
 }
 
-// String renders the range back to its canonical text form.
+// String renders the range in canonical text form ("" for the zero range).
 func (r PrefixRange) String() string {
-	p := r.Prefix.String()
-	switch r.Op {
+	if r.IsZero() {
+		return ""
+	}
+	p := r.prefix.String()
+	switch r.Op() {
 	case RangePlus:
 		return p + "^+"
 	case RangeMinus:
 		return p + "^-"
 	case RangeLength:
-		return p + "^" + strconv.Itoa(int(r.Lo))
+		return p + "^" + strconv.Itoa(int(r.lo))
 	case RangeRange:
-		return p + "^" + strconv.Itoa(int(r.Lo)) + "-" + strconv.Itoa(int(r.Hi))
+		return p + "^" + strconv.Itoa(int(r.lo)) + "-" + strconv.Itoa(int(r.hi))
 	default:
 		return p
 	}
@@ -92,7 +154,7 @@ func (r PrefixRange) Materialize(maxPrefixes int) ([]netip.Prefix, error) {
 	}
 	total := 0
 	for L := lo; L <= hi; L++ {
-		w := L - r.Prefix.Bits()
+		w := L - r.prefix.Bits()
 		if w >= 31 { // 2^31 prefixes dwarfs any sane cap
 			return nil, ErrTooManyPrefixes
 		}
@@ -117,8 +179,8 @@ func (r PrefixRange) All() iter.Seq[netip.Prefix] {
 		if !ok {
 			return
 		}
-		base := r.Prefix.Masked().Addr()
-		baseBits := r.Prefix.Bits()
+		base := r.prefix.Addr()
+		baseBits := r.prefix.Bits()
 		for L := lo; L <= hi; L++ {
 			b := base.AsSlice()
 			for {
@@ -134,15 +196,10 @@ func (r PrefixRange) All() iter.Seq[netip.Prefix] {
 	}
 }
 
-// window returns the prefix-length window [lo, hi] the range covers, clamped to
-// the prefix and its family, and false when it is empty or the range is invalid.
+// window returns the prefix-length window [lo, hi] the range covers, and false
+// when it is empty.
 func (r PrefixRange) window() (lo, hi int, ok bool) {
-	if !r.Prefix.IsValid() {
-		return 0, 0, false
-	}
-	lo = max(int(r.Lo), r.Prefix.Bits())
-	hi = min(int(r.Hi), r.Prefix.Addr().BitLen())
-	return lo, hi, lo <= hi
+	return int(r.lo), int(r.hi), !r.IsEmpty()
 }
 
 // increment adds one to the bit field [start, end) of the big-endian address b,

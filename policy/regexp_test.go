@@ -1,7 +1,9 @@
 package policy
 
 import (
+	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -55,7 +57,7 @@ func TestParseASPathRegexpForms(t *testing.T) {
 			t.Fatal(err)
 		}
 		s, ok := re.Body.(ASPathSet)
-		if !ok || s.Name.Canonical() != "AS-FOO" {
+		if !ok || s.Name.String() != "AS-FOO" {
 			t.Errorf("body = %+v, want ASPathSet AS-FOO", re.Body)
 		}
 	})
@@ -124,7 +126,6 @@ func TestParseASPathRegexpRFC(t *testing.T) {
 		{"(^AS1|AS2)", "alt(seq(^ AS1) AS2)"},
 		{"AS8726:AS-PEERING:PeerAS$", "seq(tpl:AS8726:AS-PEERING:PeerAS $)"},
 		{"3333 AS1.10", "seq(AS3333 AS65546)"},
-		{"", "seq()"},
 	}
 	for _, c := range cases {
 		re, err := ParseASPathRegexp(c.in)
@@ -195,7 +196,7 @@ func renderRE(e ASPathExpr) string {
 	case ASPathASN:
 		return x.AS.String()
 	case ASPathSet:
-		return x.Name.Canonical()
+		return x.Name.String()
 	case ASPathSetTemplate:
 		return "tpl:" + x.Template.String()
 	case ASPathPeerAS:
@@ -259,9 +260,23 @@ func FuzzParseASPathRegexp(f *testing.F) {
 	f.Fuzz(func(t *testing.T, s string) {
 		// Nothing may be skipped: an accepted regexp consists only of bytes the
 		// grammar gives meaning to.
-		if _, err := ParseASPathRegexp(s); err == nil {
+		re, bare, err := parseASPathRegexp(s)
+		if err == nil {
 			if rest := strings.Trim(s, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:_-.^$*+?|(){}[],~ \t\r\n"); rest != "" {
 				t.Fatalf("ParseASPathRegexp(%q) accepted meaningless bytes %q", s, rest)
+			}
+			if d := depth(reflect.ValueOf(re)); d > maxParseDepth+8 {
+				t.Fatalf("ParseASPathRegexp(%q): depth %d over the cap", s, d)
+			}
+		}
+		// Errors and bare-number warnings point at bytes of the body.
+		var rerr *reError
+		if errors.As(err, &rerr) && (rerr.start < 0 || rerr.start > rerr.end || rerr.end > len(s)) {
+			t.Fatalf("ParseASPathRegexp(%q): error at %d-%d, outside the body", s, rerr.start, rerr.end)
+		}
+		for _, b := range bare {
+			if b.start < 0 || b.start > b.end || b.end > len(s) || !strings.Contains(s[b.start:b.end], strings.Split(b.text, "-")[0]) {
+				t.Fatalf("ParseASPathRegexp(%q): bare number %q at %d-%d", s, b.text, b.start, b.end)
 			}
 		}
 	})

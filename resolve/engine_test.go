@@ -117,9 +117,9 @@ func TestPropertyExpansionMatchesOracle(t *testing.T) {
 				e := &Expander{Src: g.corpus(t, r), MaxDepth: maxDepth}
 				got, err := e.ExpandAS(context.Background(), mustSet(t, "AS-S0"))
 				if maxDist > limit {
-					var tl ErrSetTooLarge
+					var tl *SetTooLargeError
 					if !errors.As(err, &tl) || tl.Limit != LimitDepth {
-						t.Fatalf("seed %d MaxDepth %d: err = %v, want ErrSetTooLarge{LimitDepth} (oracle depth %d)",
+						t.Fatalf("seed %d MaxDepth %d: err = %v, want SetTooLargeError{LimitDepth} (oracle depth %d)",
 							seed, maxDepth, err, maxDist)
 					}
 					continue
@@ -196,14 +196,7 @@ func TestCyclesAndOperators(t *testing.T) {
 		!reflect.DeepEqual(rangeList(got), []string{"10.0.0.0/30^+"}) {
 		t.Errorf("same-operator cycle = %v, %v; want [10.0.0.0/30^+]", rangeList(got), err)
 	}
-	// Re-entering an ancestor under different operators cannot be composed
-	// without a fixpoint: refuse rather than return an undersized result.
-	opCycle := corpus(t, routeSet("RS-A", "RS-B^+, 192.0.2.0/24"), routeSet("RS-B", "RS-A, 198.51.100.0/24"))
-	_, err := (&Expander{Src: opCycle}).ExpandPrefixRanges(ctx, mustSet(t, "RS-A"))
-	var cyc ErrCyclicOperator
-	if !errors.As(err, &cyc) || cyc.Set.Canonical() != "RS-B" || cyc.Member != "RS-A" {
-		t.Errorf("operator cycle err = %v (%+v), want ErrCyclicOperator{RS-B, RS-A}", err, cyc)
-	}
+	// Cycles through operators reach a fixpoint: see TestOperatorCyclesReachAFixpoint.
 }
 
 // ---- budgets and limits ----
@@ -213,6 +206,20 @@ func TestExpandPrefixesDuplicatesAreFree(t *testing.T) {
 	got, err := (&Expander{Src: src, MaxPrefixes: 2}).ExpandPrefixes(context.Background(), mustSet(t, "RS-A"))
 	if err != nil || got.Len() != 2 {
 		t.Errorf("ExpandPrefixes = %v, %v; want the 2 distinct /25s", got.List(), err)
+	}
+}
+
+// Overlapping ranges are duplicates too: four distinct ranges that cover three
+// prefixes fit a MaxPrefixes of 3 (found by the model oracle).
+func TestExpandPrefixesOverlappingRangesAreFree(t *testing.T) {
+	src := corpus(t, routeSet("RS-A", "10.0.0.0/31, 10.0.0.0/31^+, 10.0.0.0/31^-, 10.0.0.0/32"))
+	got, err := (&Expander{Src: src, MaxPrefixes: 3}).ExpandPrefixes(context.Background(), mustSet(t, "RS-A"))
+	if err != nil || got.Len() != 3 {
+		t.Errorf("ExpandPrefixes = %v, %v; want the 3 distinct prefixes", got.List(), err)
+	}
+	ranges, err := (&Expander{Src: src, MaxPrefixes: 3}).ExpandPrefixRanges(context.Background(), mustSet(t, "RS-A"))
+	if tl := (*SetTooLargeError)(nil); !errors.As(err, &tl) || tl.Limit != LimitPrefixes {
+		t.Errorf("ExpandPrefixRanges = %v, %v; want the 4 ranges over a cap of 3", ranges.List(), err)
 	}
 }
 
@@ -261,9 +268,9 @@ func TestErrSetTooLargeNamesItsLimit(t *testing.T) {
 	}
 	for _, c := range cases {
 		err := c.run()
-		var tl ErrSetTooLarge
+		var tl *SetTooLargeError
 		if !errors.As(err, &tl) || tl.Limit != c.limit || !strings.Contains(err.Error(), c.word) {
-			t.Errorf("%s: err = %v, want ErrSetTooLarge naming %s", c.name, err, c.word)
+			t.Errorf("%s: err = %v, want SetTooLargeError naming %s", c.name, err, c.word)
 		}
 	}
 	// Within the limit the same chain expands completely.
@@ -307,7 +314,7 @@ func TestMissingNestedSetsAreReported(t *testing.T) {
 func canonList(ns []types.SetName) []string {
 	var out []string
 	for _, n := range ns {
-		out = append(out, n.Canonical())
+		out = append(out, n.String())
 	}
 	return out
 }
@@ -321,9 +328,9 @@ func TestAnySetIsNotExpandable(t *testing.T) {
 		func() error { _, err := e.ExpandAS(ctx, mustSet(t, "AS-X")); return err },
 		func() error { _, err := e.ExpandPrefixes(ctx, mustSet(t, "RS-X")); return err },
 	} {
-		var anyErr ErrAnySet
+		var anyErr *AnySetError
 		if err := run(); !errors.As(err, &anyErr) {
-			t.Errorf("err = %v, want ErrAnySet", err)
+			t.Errorf("err = %v, want AnySetError", err)
 		}
 	}
 }

@@ -51,3 +51,46 @@ func FuzzParseRangeOperator(f *testing.F) {
 		}
 	})
 }
+
+// FuzzParsePrefixRange: never panics; an accepted range is canonical (its
+// prefix masked, and re-parsing its String gives the identical value), and a
+// small window enumerates exactly the number of prefixes it spans.
+func FuzzParsePrefixRange(f *testing.F) {
+	for _, s := range []string{
+		"10.0.0.0/8", "10.0.0.1/8^+", "10.0.0.0/8^24-24", "0.0.0.0/0^0-32",
+		"192.0.2.1/32^-", "2001:db8::/32^48", "10.0.0.0/8^9-32", "::/0^+",
+	} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		r, err := ParsePrefixRange(s)
+		if err != nil {
+			return
+		}
+		if r.Prefix() != r.Prefix().Masked() {
+			t.Fatalf("ParsePrefixRange(%q) kept host bits: %s", s, r.Prefix())
+		}
+		again, err := ParsePrefixRange(r.String())
+		if err != nil || again != r {
+			t.Fatalf("re-parse of %q via %q = %+v, %v; want %+v", s, r.String(), again, err, r)
+		}
+		c, ok := NewPrefixRange(r.Prefix(), r.Lo(), r.Hi())
+		if ok == r.IsEmpty() || (ok && c != r) {
+			t.Fatalf("ParsePrefixRange(%q) = %+v is not canonical (%+v, %v)", s, r, c, ok)
+		}
+		if !ok || c.Hi()-c.Prefix().Bits() > 12 {
+			return
+		}
+		want := 0
+		for l := c.Lo(); l <= c.Hi(); l++ {
+			want += 1 << (l - c.Prefix().Bits())
+		}
+		n := 0
+		for range c.All() {
+			n++
+		}
+		if n != want {
+			t.Fatalf("%s enumerates %d prefixes, want %d", c, n, want)
+		}
+	})
+}

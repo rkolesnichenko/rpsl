@@ -145,7 +145,7 @@ type RuleStat struct {
 }
 
 // ResolveSample reports one set-expansion attempt during the opt-in resolve pass.
-// Truncated means the expansion hit MaxPrefixes (ErrSetTooLarge), which is an
+// Truncated means the expansion hit MaxPrefixes (SetTooLargeError), which is an
 // expected outcome on large customer cones, not a failure.
 type ResolveSample struct {
 	Set       string `json:"set"`
@@ -382,7 +382,7 @@ func runResolvePass(ctx context.Context, opts Options, autNums []object.AutNum, 
 			// We still emit a sample so the operator sees the bad input.
 			targets = append(targets, target{
 				label: strings.ToUpper(raw),
-				class: types.SetClassUnknown.String(),
+				class: types.ClassUnknown.String(),
 				err:   err,
 			})
 			continue
@@ -400,10 +400,10 @@ func runResolvePass(ctx context.Context, opts Options, autNums []object.AutNum, 
 				len(b.Members)+len(b.MpMembers)+len(b.MbrsByRef)
 		})
 		for i := 0; i < opts.ExpandSample && i < len(asSets); i++ {
-			targets = append(targets, target{name: asSets[i].Name, class: types.AsSet.String()})
+			targets = append(targets, target{name: asSets[i].Name, class: types.ClassAsSet.String()})
 		}
 		for i := 0; i < opts.ExpandSample && i < len(routeSets); i++ {
-			targets = append(targets, target{name: routeSets[i].Name, class: types.RouteSet.String()})
+			targets = append(targets, target{name: routeSets[i].Name, class: types.ClassRouteSet.String()})
 		}
 	}
 
@@ -411,7 +411,7 @@ func runResolvePass(ctx context.Context, opts Options, autNums []object.AutNum, 
 	for _, t := range targets {
 		label := t.label
 		if label == "" {
-			label = t.name.Canonical()
+			label = t.name.String()
 		}
 		sample := ResolveSample{Set: label, Class: t.class}
 		if t.err != nil {
@@ -421,17 +421,21 @@ func runResolvePass(ctx context.Context, opts Options, autNums []object.AutNum, 
 		}
 		t0 := time.Now()
 		sctx, cancel := context.WithTimeout(ctx, opts.ExpandTimeout)
-		asResult, asErr := exp.ExpandAS(sctx, t.name)
+		var asResult resolve.ASNSet
+		var asErr error
+		if t.name.Class() == types.ClassAsSet { // ExpandAS is defined for as-sets only
+			asResult, asErr = exp.ExpandAS(sctx, t.name)
+		}
 		pfxResult, pfxErr := exp.ExpandPrefixes(sctx, t.name)
 		cancel()
 		sample.ElapsedNS = time.Since(t0).Nanoseconds()
 		sample.ASNs = asResult.Len()
 		sample.Prefixes = pfxResult.Len()
 
-		// ErrSetTooLarge is the documented "set blew the cap" sentinel — treat
+		// SetTooLargeError is the documented "set blew the cap" sentinel — treat
 		// it as a successful-but-truncated expansion, not an error. Both calls
 		// are reported on failure so a partial expansion doesn't shadow the other.
-		var tooLarge resolve.ErrSetTooLarge
+		var tooLarge *resolve.SetTooLargeError
 		switch {
 		case errors.As(pfxErr, &tooLarge), errors.As(asErr, &tooLarge):
 			sample.Truncated = true

@@ -52,7 +52,7 @@ func TestOneOfRequirements(t *testing.T) {
 				}
 			}
 			if got != c.missing {
-				t.Errorf("%s: %q one-of missing = %v, want %v", p.Name, c.src, got, c.missing)
+				t.Errorf("%s: %q one-of missing = %v, want %v", p.Name(), c.src, got, c.missing)
 			}
 		}
 	}
@@ -83,5 +83,57 @@ func TestRFCStrictCommonAttributes(t *testing.T) {
 	autnum := "aut-num: AS1\nas-name: X\ndescr: d\ntech-c: EX1-RIPE\nmnt-by: M\nchanged: a@b 20200101\nsource: RADB\n"
 	if got := missingRequired(RFCStrict.Validate(parse(autnum))); len(got) != 1 || !strings.Contains(got[0], "admin-c") {
 		t.Errorf("RFCStrict aut-num missing-required = %q, want admin-c", got)
+	}
+}
+
+// RFCStrict follows the RFC tables beyond RFC 2622: RFC 2725 (as-block,
+// referral-by, mnt-routes and mnt-lower), RFC 2726 (key-cert) and RFC 4012
+// (route6, inet6num, mp-members only on route-set and rtr-set).
+func TestRFCStrictTables(t *testing.T) {
+	req, reqS, opt, optS := AttrSpec{Required: true}, AttrSpec{Required: true, Single: true},
+		AttrSpec{}, AttrSpec{Single: true}
+	for _, c := range []struct {
+		class, attr string
+		want        AttrSpec
+		present     bool
+	}{
+		{"route", "mnt-lower", opt, true}, // RFC 2725 §10.1
+		{"route", "mnt-routes", opt, true},
+		{"route6", "mnt-lower", opt, true}, // RFC 4012 §3
+		{"route6", "mnt-routes", opt, true},
+		{"aut-num", "mnt-routes", opt, true}, // RFC 2725 §10.1, RFC 4012 §5
+		{"aut-num", "mnt-lower", opt, true},
+		{"inetnum", "mnt-routes", opt, true},
+		{"inetnum", "mnt-lower", opt, true},
+		{"inet6num", "netname", reqS, true}, // RFC 4012 §5
+		{"inet6num", "descr", req, true},
+		{"inet6num", "country", req, true},
+		{"inet6num", "mnt-lower", opt, true},
+		{"inet6num", "mnt-routes", opt, true},
+		{"inet6num", "status", AttrSpec{}, false},
+		{"as-set", "mp-members", AttrSpec{}, false}, // RFC 4012 §4.1: unchanged
+		{"route-set", "mp-members", opt, true},
+		{"as-block", "descr", opt, true}, // RFC 2725 §10.1
+		{"as-block", "admin-c", req, true},
+		{"as-block", "mnt-lower", opt, true},
+		{"mntner", "referral-by", req, true},
+		{"key-cert", "key-cert", reqS, true}, // RFC 2726 §2.1
+		{"key-cert", "method", optS, true},
+		{"key-cert", "owner", opt, true},
+		{"key-cert", "fingerpr", optS, true},
+		{"key-cert", "certif", reqS, true},
+		{"key-cert", "descr", AttrSpec{}, false},
+		{"key-cert", "tech-c", AttrSpec{}, false},
+	} {
+		spec, ok := RFCStrict.Class(c.class)
+		if !ok {
+			t.Errorf("RFCStrict has no %s class", c.class)
+			continue
+		}
+		got, present := spec.Attrs[c.attr]
+		if present != c.present || got != c.want {
+			t.Errorf("RFCStrict %s.%s = %+v (present %v), want %+v (present %v)",
+				c.class, c.attr, got, present, c.want, c.present)
+		}
 	}
 }

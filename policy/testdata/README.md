@@ -1,6 +1,12 @@
 # policy testdata
 
-This directory holds inputs for the `policy` package's fuzz targets.
+This directory holds inputs for the `policy` package's tests.
+
+## `rfc-examples.txt`
+
+Every routing-policy example in RFC 2622, RFC 2650 and RFC 4012, one per line
+with its RFC and line number. `TestRFCExamples` parses each and expects no
+diagnostic, or exactly the rules after `## expect:`.
 
 ## `fuzz/FuzzParseImport/`
 

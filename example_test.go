@@ -6,7 +6,6 @@ import (
 
 	rpsl "github.com/rkolesnichenko/rpsl"
 	"github.com/rkolesnichenko/rpsl/object"
-	"github.com/rkolesnichenko/rpsl/policy"
 )
 
 // ExampleParseObject parses a single object losslessly: String reproduces the
@@ -76,9 +75,10 @@ func ExampleDecode() {
 	// diagnostics: 0
 }
 
-// ExampleValidate checks an object against a dictionary profile. This route is
-// RFC 2622-conformant apart from created:, which the RIPE Database generates:
-// the RFC-strict profile flags it; the RIPE profile tolerates it.
+// ExampleValidate checks an object against a dictionary profile. This route
+// mixes eras: tech-c: and changed: are RFC 2622 attributes the RIPE Database no
+// longer has on a route, and created: is one RIPE generates that no RFC
+// defines, so each profile flags what the other accepts.
 func ExampleValidate() {
 	src := "route:   192.0.2.0/24\n" +
 		"descr:   Example route\n" +
@@ -94,35 +94,14 @@ func ExampleValidate() {
 	// Decode and Validate are both reachable from the top-level façade.
 	decoded, _ := rpsl.Decode(obj)
 	fmt.Println("class:", decoded.Class())
-	fmt.Println("ripe diagnostics:", len(rpsl.Validate(obj, rpsl.RIPE)))
-	fmt.Println("rfc-strict diagnostics:", len(rpsl.Validate(obj, rpsl.RFCStrict)))
+	for _, p := range []rpsl.Profile{rpsl.RIPE, rpsl.RFCStrict} {
+		for _, d := range rpsl.Validate(obj, p) {
+			fmt.Printf("%s: line %d: %s\n", p.Name(), d.Span.StartLine, d.Rule)
+		}
+	}
 	// Output:
 	// class: route
-	// ripe diagnostics: 0
-	// rfc-strict diagnostics: 1
-}
-
-// ExampleParseImport parses an import: policy value into the AST and walks it via
-// the sealed-interface type switches that model the grammar's sum types.
-func ExampleParseImport() {
-	imp, diags := policy.ParseImport("from AS65002 accept AS65002")
-	if len(diags) != 0 {
-		fmt.Println("unexpected diagnostics:", len(diags))
-	}
-
-	factor := imp.Expr.(policy.Factor)
-
-	if p, ok := factor.Peers[0].Peering.(policy.PeeringAS); ok {
-		if as, ok := p.AS.(policy.ASNum); ok {
-			fmt.Println("peer:", as.AS)
-		}
-	}
-	if f, ok := factor.Filter.(policy.FilterASExpr); ok {
-		if as, ok := f.AS.(policy.ASNum); ok {
-			fmt.Println("accept:", as.AS)
-		}
-	}
-	// Output:
-	// peer: AS65002
-	// accept: AS65002
+	// RIPE: line 4: dict/unknown-attr
+	// RIPE: line 6: dict/unknown-attr
+	// RFC-strict: line 7: dict/unknown-attr
 }

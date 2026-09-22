@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -125,5 +126,16 @@ func TestRedirectToPrivateRefused(t *testing.T) {
 	}
 	if err := c2.validateURL("https://rdap.example/autnum/1"); err != nil {
 		t.Errorf("validateURL(public hostname) = %v, want nil", err)
+	}
+}
+
+// An invalid prefix is refused before any request is made.
+func TestLookupIPRejectsInvalidPrefix(t *testing.T) {
+	var hit atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hit.Store(true) }))
+	t.Cleanup(srv.Close)
+	c := &Client{BaseURL: srv.URL, HTTP: srv.Client(), AllowInsecure: true}
+	if _, err := c.LookupIP(context.Background(), netip.Prefix{}); err == nil || hit.Load() {
+		t.Errorf("LookupIP(invalid) err = %v, request sent = %v; want an error and no request", err, hit.Load())
 	}
 }

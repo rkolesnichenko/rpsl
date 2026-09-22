@@ -1,6 +1,10 @@
 package types
 
-import "testing"
+import (
+	"maps"
+	"net/netip"
+	"testing"
+)
 
 func TestParseRangeOperator(t *testing.T) {
 	cases := []struct {
@@ -48,9 +52,9 @@ func TestParseRangeOperatorRejects(t *testing.T) {
 	}
 }
 
-// TestRangeOperatorApply pins RFC 2622 §5.2 composition: an outer ^n-m over an
-// inner ^k-l becomes ^max(n,k)-m when m >= max(n,k); otherwise the prefix is
-// deleted. ^+ / ^- resolve against the inner prefix's own length.
+// TestRangeOperatorApply pins RFC 2622 §2/§5.2 composition: an outer ^n-m over
+// an inner ^k-l becomes ^max(n,k)-m when m >= max(n,k); otherwise the prefix is
+// deleted. An outer ^+ over ^k-l is ^k-32, an outer ^- is ^(k+1)-32.
 func TestRangeOperatorApply(t *testing.T) {
 	cases := []struct {
 		outer, inner string
@@ -70,7 +74,12 @@ func TestRangeOperatorApply(t *testing.T) {
 		{"48", "2001:db8::/32", "2001:db8::/32^48"},
 		// Outer upper bound wins, lower bound is the max.
 		{"+", "10.0.0.0/8^24-28", "10.0.0.0/8^24-32"},
-		{"-", "10.0.0.0/8^24", "10.0.0.0/8^24-32"},
+		// RFC 2622 §2: {prefix/l^n-m}^- == {prefix/l^(n+1)-32}. The inner range's
+		// own shortest members are excluded, not only the prefix itself.
+		{"-", "10.0.0.0/8^24", "10.0.0.0/8^25-32"},
+		{"-", "128.9.0.0/16^-", "128.9.0.0/16^18-32"},
+		{"-", "2001:db8::/32^48", "2001:db8::/32^49-128"},
+		{"-", "10.0.0.0/8^32", ""}, // host routes have no more-specifics
 		// Results normalize to the canonical operator form.
 		{"8", "10.0.0.0/8", "10.0.0.0/8"},
 		{"0-8", "10.0.0.0/8^+", "10.0.0.0/8"},
@@ -95,9 +104,67 @@ func TestRangeOperatorApply(t *testing.T) {
 		}
 	}
 
+	// A zero or invalid range survives no operator.
+	if got, ok := (RangeOperator{Op: RangePlus}).Apply(PrefixRange{}); ok {
+		t.Errorf("^+ over the zero PrefixRange = %v, want deleted", got)
+	}
+
 	// The zero operator is the identity.
 	in, _ := ParsePrefixRange("10.0.0.0/8^+")
 	if got, ok := (RangeOperator{}).Apply(in); !ok || got != in {
 		t.Errorf("zero operator Apply = %v, %v; want %v unchanged", got, ok, in)
+	}
+}
+
+// TestApplyMatchesMemberSemantics checks Apply against the definition it
+// implements: an operator over a range applies to each prefix the range
+// contains, and the result is the union. Small IPv4 blocks keep the enumeration
+// exhaustive over every operator and every inner window.
+func TestApplyMatchesMemberSemantics(t *testing.T) {
+	const base, top = 20, 24 // 10.0.0.0/20 with lengths up to /24
+	var ops []RangeOperator
+	ops = append(ops, RangeOperator{Op: RangePlus}, RangeOperator{Op: RangeMinus})
+	for n := 16; n <= 26; n++ {
+		ops = append(ops, RangeOperator{Op: RangeLength, N: uint8(n), M: uint8(n)})
+		for m := n; m <= 26; m++ {
+			ops = append(ops, RangeOperator{Op: RangeRange, N: uint8(n), M: uint8(m)})
+		}
+	}
+	// member applies op to one exact prefix p: lengths [lo, hi] under p.
+	member := func(o RangeOperator, p netip.Prefix) (lo, hi int) {
+		bits := p.Bits()
+		switch o.Op {
+		case RangePlus:
+			return bits, 32
+		case RangeMinus:
+			return bits + 1, 32
+		}
+		return max(int(o.N), bits), int(o.M)
+	}
+	pfx := netip.MustParsePrefix("10.0.0.0/20")
+	for k := base; k <= top; k++ {
+		for l := k; l <= top; l++ {
+			inner, _ := NewPrefixRange(pfx, k, l)
+			want := map[netip.Prefix]bool{}
+			for _, o := range ops {
+				clear(want)
+				for q := range inner.All() {
+					lo, hi := member(o, q)
+					sub, _ := NewPrefixRange(q, lo, hi) // the zero range, if the window is empty
+					for r := range sub.All() {
+						want[r] = true
+					}
+				}
+				got := map[netip.Prefix]bool{}
+				if r, ok := o.Apply(inner); ok {
+					for q := range r.All() {
+						got[q] = true
+					}
+				}
+				if !maps.Equal(got, want) {
+					t.Errorf("{%s}%s: Apply gives %d prefixes, member semantics %d", inner, o, len(got), len(want))
+				}
+			}
+		}
 	}
 }

@@ -29,12 +29,11 @@ func (a Action) Int() (int, bool) {
 // Prepends returns the ASNs of an "aspath.prepend(AS…, …)" method action, in
 // order. ok is false for any other action, or if an argument is not an ASN.
 func (a Action) Prepends() ([]types.ASN, bool) {
-	if a.Op != ActionMethod || a.Attr != "aspath.prepend" {
+	if a.Op != ActionMethod || a.Attr != "aspath" || a.Method != "prepend" {
 		return nil, false
 	}
-	args := delimited(a.Value, '(', ')')
-	out := make([]types.ASN, 0, len(args))
-	for _, w := range args {
+	out := make([]types.ASN, 0, len(a.Args))
+	for _, w := range a.Args {
 		as, err := types.ParseASN(w)
 		if err != nil {
 			return nil, false
@@ -44,25 +43,21 @@ func (a Action) Prepends() ([]types.ASN, bool) {
 	return out, true
 }
 
-// Communities returns the community values of a community action, whether
-// written as "community = {…}", "community .= {…}", or "community.append(…)".
-// ok is false if this is not a community action.
+// Communities returns the communities an action sets or adds, written as
+// "community = {…}", "community .= {…}" or "community.append(…)". ok is false
+// for any other action — community.delete(…) included, whose Args are the
+// communities it removes.
 func (a Action) Communities() ([]string, bool) {
-	if a.Attr != "community" && !strings.HasPrefix(a.Attr, "community.") {
+	if a.Attr != "community" {
 		return nil, false
 	}
-	switch a.Op {
-	case ActionAssign, ActionAppend:
+	switch {
+	case a.Op == ActionAssign || a.Op == ActionAppend:
 		return braceList(a.Value), true
-	case ActionMethod:
-		return delimited(a.Value, '(', ')'), true
+	case a.Op == ActionMethod && a.Method == "append":
+		return a.Args, true
 	}
 	return nil, false
-}
-
-// Values returns the community values inside a community(...) filter term.
-func (c FilterCommunity) Values() []string {
-	return delimited(c.Raw, '(', ')')
 }
 
 // delimited returns the comma-separated items inside the first open..last close

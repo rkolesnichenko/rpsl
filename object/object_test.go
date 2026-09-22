@@ -172,7 +172,7 @@ source:   RIPE
 	if r.Origin != 65001 {
 		t.Errorf("Origin = %v", r.Origin)
 	}
-	if len(r.MemberOf) != 1 || r.MemberOf[0].Canonical() != "RS-EXAMPLE" {
+	if len(r.MemberOf) != 1 || r.MemberOf[0].String() != "RS-EXAMPLE" {
 		t.Errorf("MemberOf = %v", r.MemberOf)
 	}
 	if len(r.Holes) != 1 {
@@ -203,8 +203,8 @@ source:  RIPE
 		t.Fatalf("unexpected diagnostics: %+v", diags)
 	}
 	s := obj.(AsSet)
-	if s.Name.Canonical() != "AS-CUSTOMERS" {
-		t.Errorf("Name = %q", s.Name.Canonical())
+	if s.Name.String() != "AS-CUSTOMERS" {
+		t.Errorf("Name = %q", s.Name.String())
 	}
 	if len(s.Members) != 2 {
 		t.Fatalf("Members = %v", s.Members)
@@ -212,7 +212,7 @@ source:  RIPE
 	if s.Members[0].Kind != MemberAS || s.Members[0].AS != 65010 {
 		t.Errorf("member 0 = %+v, want AS65010", s.Members[0])
 	}
-	if s.Members[1].Kind != MemberSet || s.Members[1].Set.Canonical() != "AS-DOWNSTREAM" {
+	if s.Members[1].Kind != MemberSet || s.Members[1].Set.String() != "AS-DOWNSTREAM" {
 		t.Errorf("member 1 = %+v, want set AS-DOWNSTREAM", s.Members[1])
 	}
 }
@@ -237,16 +237,16 @@ source:    RIPE
 }
 
 // A prefix-range in an as-set is the wrong shape: it is kept as MemberInvalid
-// (so the engine never materializes it) with one Warning.
-func TestWrongClassMemberWarns(t *testing.T) {
+// (so the engine never materializes it) with one Error, since it is dropped.
+func TestWrongShapeMemberIsAnError(t *testing.T) {
 	o := parse("as-set: AS-FOO\nmembers: 192.0.2.0/24^+\n")
 	obj, diags := Decode(o)
 	s := obj.(AsSet)
 	if len(s.Members) != 1 || s.Members[0].Kind != MemberInvalid || s.Members[0].Raw != "192.0.2.0/24^+" {
 		t.Errorf("members = %+v, want one MemberInvalid with its Raw", s.Members)
 	}
-	if len(diags) != 1 || diags[0].Severity != ast.Warning {
-		t.Errorf("diags = %+v, want one warning", diags)
+	if len(diags) != 1 || diags[0].Severity != ast.Error {
+		t.Errorf("diags = %+v, want one error", diags)
 	}
 }
 

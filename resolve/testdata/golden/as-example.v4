@@ -1,5 +1,5 @@
-# ExpandPrefixes(AS-EXAMPLE, ipv4) — union of member ASNs' IPv4 routes, sorted.
-# AS64502 originates only IPv6 (2001:db8::/32), correctly dropped under ipv4.
+# bgpq4 -j -p -l x -L 64 -S TEST,RADB -4 AS-EXAMPLE, against testdata/snapshot served by
+# internal/irrtest. Regenerate: go test -run TestGoldensAreBgpq4Output -update .
 192.0.2.0/24
 198.51.100.0/24
 203.0.113.0/24

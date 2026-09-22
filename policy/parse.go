@@ -1,6 +1,9 @@
 package policy
 
 import (
+	"errors"
+	"fmt"
+	"net/netip"
 	"strings"
 
 	"github.com/rkolesnichenko/rpsl/ast"
@@ -28,6 +31,7 @@ func ParseMPImport(s string) (Import, []ast.Diagnostic) {
 
 func parseImport(s string, mp bool) (Import, *parser) {
 	p := newParser(s)
+	p.mp = mp
 	imp := Import{MP: mp}
 	if p.empty() {
 		return imp, p
@@ -54,6 +58,7 @@ func ParseMPExport(s string) (Export, []ast.Diagnostic) {
 
 func parseExport(s string, mp bool) (Export, *parser) {
 	p := newParser(s)
+	p.mp = mp
 	exp := Export{MP: mp}
 	if p.empty() {
 		return exp, p
@@ -80,6 +85,7 @@ func ParseMPDefault(s string) (Default, []ast.Diagnostic) {
 
 func parseDefault(s string, mp bool) (Default, *parser) {
 	p := newParser(s)
+	p.mp = mp
 	d := Default{MP: mp}
 	if p.empty() {
 		return d, p
@@ -109,6 +115,16 @@ func parseDefault(s string, mp bool) (Default, *parser) {
 // cap the parser records one diagnostic and abandons the value instead of
 // panicking. Real policy nests only a handful of levels.
 const maxParseDepth = 1000
+
+// maxTokens caps the tokens in one policy value (and in one AS-path regexp).
+// The largest real value, a RIPE IPv6 bogon filter-set, has about 236,000; a
+// longer value is refused with "policy/too-long" before its tokens are built.
+const maxTokens = 1 << 20
+
+// maxDiagnostics caps the diagnostics reported for one value. Past it the
+// parser records "policy/too-many-errors" and abandons the value: the rest
+// would only repeat the problem at a cost of memory per error.
+const maxDiagnostics = 100
 
 // ParsePeering parses a standalone peering specification (the value of a
 // peering:/mp-peering: attribute in a peering-set). It returns a best-effort
@@ -146,10 +162,45 @@ type parser struct {
 	pos    int
 	depth  int
 	bailed bool // nesting cap hit: the rest of the value is abandoned
+	mp     bool // an mp-* value, where an afi clause is allowed
 	diags  []ast.Diagnostic
 }
 
-func newParser(s string) *parser { return &parser{src: s, toks: tokenize(s)} }
+// newParser tokenizes s. A value over maxTokens gets one "policy/too-long"
+// diagnostic and parses as empty, with no further diagnostics.
+func newParser(s string) *parser {
+	toks, ok := tokenize(s)
+	if ok {
+		p := &parser{src: s, toks: toks}
+		p.checkDelimiters()
+		return p
+	}
+	p := &parser{src: s, toks: []token{{tEOF, "", len(s), len(s)}}}
+	p.errf(token{tEOF, "", 0, len(s)}, "policy/too-long",
+		fmt.Sprintf("policy value has more than %d tokens and is not parsed", maxTokens))
+	p.bailed = true
+	return p
+}
+
+// checkDelimiters diagnoses an AS-path regexp with no closing '>' and removes,
+// after diagnosing, each '>' that closes nothing, so the grammar never sees it.
+func (p *parser) checkDelimiters() {
+	kept := p.toks[:0]
+	for _, t := range p.toks {
+		switch {
+		case t.kind == tStray:
+			p.errf(t, "policy/as-path-regexp", "'>' without an opening '<'")
+			continue
+		case t.kind == tRegex && !t.closed():
+			p.errf(t, "policy/as-path-regexp", "unterminated AS-path regexp: expected '>'")
+		}
+		kept = append(kept, t)
+	}
+	p.toks = kept
+	if p.bailed { // the diagnostic cap moved pos to the old end
+		p.pos = len(p.toks) - 1
+	}
+}
 
 func (p *parser) cur() token { return p.toks[p.pos] }
 func (p *parser) peek() token {
@@ -171,10 +222,17 @@ func (p *parser) warnf(t token, rule, msg string) { p.diag(ast.Warning, t, rule,
 // diag records a diagnostic at t. Columns are 1-based; byte offsets are 0-based
 // and relative to the parsed value, for object's rebase onto the attribute.
 // Once the nesting cap has been hit, further diagnostics are suppressed: they
-// would only be cascades of the abandoned parse.
+// would only be cascades of the abandoned parse. Past maxDiagnostics the value
+// is abandoned the same way, with one "policy/too-many-errors".
 func (p *parser) diag(sev ast.Severity, t token, rule, msg string) {
 	if p.bailed {
 		return
+	}
+	if len(p.diags) >= maxDiagnostics {
+		sev, rule = ast.Error, "policy/too-many-errors"
+		msg = fmt.Sprintf("more than %d problems; the rest of the value is not checked", maxDiagnostics)
+		p.bailed = true
+		p.pos = len(p.toks) - 1
 	}
 	p.diags = append(p.diags, ast.Diagnostic{
 		Severity: sev,
@@ -251,21 +309,23 @@ func (p *parser) sync() {
 
 // parseProtocols consumes optional "protocol X" and "into Y" prefixes.
 func (p *parser) parseProtocols() (proto, into string) {
-	if p.cur().kw("protocol") {
-		p.advance()
-		if p.cur().kind == tWord {
-			proto = p.cur().text
-			p.advance()
-		}
+	return p.protocolClause("protocol"), p.protocolClause("into")
+}
+
+// protocolClause consumes "<kw> <protocol name>" if the value continues with
+// kw, diagnosing a missing name.
+func (p *parser) protocolClause(kw string) string {
+	if !p.cur().kw(kw) {
+		return ""
 	}
-	if p.cur().kw("into") {
+	kwTok := p.cur()
+	p.advance()
+	if t := p.cur(); t.kind == tWord && !isClauseKw(t) && !t.kw("into") && !t.kw("afi") {
 		p.advance()
-		if p.cur().kind == tWord {
-			into = p.cur().text
-			p.advance()
-		}
+		return t.text
 	}
-	return
+	p.errf(kwTok, "policy/protocol", "expected a protocol name after '"+kw+"'")
+	return ""
 }
 
 // parseAFIs consumes an optional "afi <afi-list>" clause (RFC 4012). The list is
@@ -296,6 +356,11 @@ func (p *parser) parseAFIs() []types.AddrFamily {
 	}
 	if len(afis) == 0 {
 		p.errf(afiTok, "policy/afi", "empty afi list")
+	}
+	if !p.mp {
+		p.errf(afiTok, "policy/afi", "an afi clause is RFC 4012 syntax, valid only in mp-import, "+
+			"mp-export and mp-default; it is ignored")
+		return nil
 	}
 	return afis
 }
@@ -334,6 +399,7 @@ func (p *parser) parseTerm(peerKw, filterKw string) Expr {
 	if p.cur().kind != tLBrace {
 		return p.parseFactor(peerKw, filterKw)
 	}
+	open := p.cur()
 	p.advance() // consume '{'
 	var exprs []Expr
 	for !p.atEOF() && p.cur().kind != tRBrace {
@@ -351,6 +417,9 @@ func (p *parser) parseTerm(peerKw, filterKw string) Expr {
 		}
 	}
 	if p.cur().kind == tRBrace {
+		if len(exprs) == 0 {
+			p.warnf(token{tLBrace, "{}", open.start, p.cur().end}, "policy/empty", "empty { } policy expression")
+		}
 		p.advance()
 	} else {
 		p.errf(p.cur(), "policy/expr-brace", "expected '}'")
@@ -418,7 +487,7 @@ func (p *parser) parsePeering() Peering {
 		return PeeringRegexp{Raw: t.text, Regexp: p.parseRegexp(t)}
 	}
 	if t.kind == tWord {
-		if sn, err := types.ParseSetName(t.text); err == nil && sn.Class() == types.PeeringSet {
+		if sn, err := types.ParseSetName(t.text); err == nil && sn.Class() == types.ClassPeeringSet {
 			p.advance()
 			return PeeringSetRef{Name: sn}
 		}
@@ -429,13 +498,17 @@ func (p *parser) parsePeering() Peering {
 	}
 	as, ok := p.parseASExpr()
 	if !ok {
+		for !isPeeringStop(p.cur()) { // the error is reported; skip the rest of the peering
+			p.advance()
+		}
 		return PeeringAS{}
 	}
 	pa := PeeringAS{AS: as, Router: p.parseRouterExpr()}
 	if p.cur().kw("at") {
 		atTok := p.cur()
 		p.advance()
-		if pa.AtRouter = p.parseRouterExpr(); pa.AtRouter == "" {
+		before := len(p.diags)
+		if pa.AtRouter = p.parseRouterExpr(); pa.AtRouter == nil && len(p.diags) == before {
 			p.errf(atTok, "policy/peering", "expected router expression after 'at'")
 		}
 	}
@@ -448,9 +521,16 @@ func (p *parser) parsePeering() Peering {
 //	as-prim = ASN | as-set | as-set template | "(" as-expr ")"
 //
 // It reports false after recording a diagnostic.
+//
+// Each operator nests the tree built so far one level deeper, so a chain counts
+// toward the nesting cap like parentheses do.
 func (p *parser) parseASExpr() (ASExpr, bool) {
 	l, ok := p.parseASAnd()
 	for ok && p.cur().kw("or") {
+		if !p.enter() {
+			return nil, false
+		}
+		defer p.leave()
 		p.advance()
 		var r ASExpr
 		if r, ok = p.parseASAnd(); ok {
@@ -463,6 +543,10 @@ func (p *parser) parseASExpr() (ASExpr, bool) {
 func (p *parser) parseASAnd() (ASExpr, bool) {
 	l, ok := p.parseASPrim()
 	for ok && (p.cur().kw("and") || p.cur().kw("except")) {
+		if !p.enter() {
+			return nil, false
+		}
+		defer p.leave()
 		op := ASAnd
 		if p.cur().kw("except") {
 			op = ASExcept
@@ -495,6 +579,10 @@ func (p *parser) parseASPrim() (ASExpr, bool) {
 		p.advance()
 		return e, true
 	}
+	if t.kw("not") {
+		p.errf(t, "policy/as-expr", `NOT is not an AS-expression operator (RFC 2622 §5.6): write "X EXCEPT Y" for "X AND NOT Y"`)
+		return nil, false
+	}
 	if t.kind != tWord || isPeeringStop(t) || t.kw("at") || t.kw("and") || t.kw("or") || t.kw("except") {
 		p.errf(t, "policy/as-expr", "expected an AS number or as-set")
 		return nil, false
@@ -504,78 +592,195 @@ func (p *parser) parseASPrim() (ASExpr, bool) {
 		return ASNum{AS: asn}, true
 	}
 	if sn, err := types.ParseSetName(t.text); err == nil {
-		if sn.Class() == types.AsSet {
+		if sn.Class() == types.ClassAsSet {
 			return ASSetRef{Name: sn}, true
 		}
 		p.errf(t, "policy/peering", quote(t.text)+" is a "+sn.Class().String()+", not an as-set")
 		return nil, false
 	}
-	if tpl, err := ParseSetNameTemplate(t.text); err == nil && tpl.Class() == types.AsSet {
+	if tpl, err := ParseSetNameTemplate(t.text); err == nil && tpl.Class() == types.ClassAsSet {
 		return ASSetTemplate{Template: tpl}, true
 	}
 	p.errf(t, "policy/peering", "invalid peering term "+quote(t.text))
 	return nil, false
 }
 
-// parseRouterExpr captures a router expression — router addresses, inet-rtr
-// and rtr-set names combined with AND/OR/EXCEPT and parentheses (RFC 2622
-// §5.6) — as raw text, stopping at "at" or the end of the peering.
-func (p *parser) parseRouterExpr() string {
-	start, end, depth := -1, -1, 0
-	for {
-		t := p.cur()
-		if depth == 0 && (isPeeringStop(t) || t.kw("at")) {
-			break
+// parseRouterExpr parses an optional router expression (RFC 2622 §5.6):
+//
+//	rtr-expr = rtr-and {"OR" rtr-and};  rtr-and = rtr-prim {("AND"|"EXCEPT") rtr-prim}
+//	rtr-prim = address | inet-rtr name | rtr-set | "(" rtr-expr ")"
+//
+// It returns nil when none is present (the peering ends, or "at" follows).
+// Routers written side by side without an operator are diagnosed and the rest
+// of the router expression skipped.
+func (p *parser) parseRouterExpr() RouterExpr {
+	if isPeeringStop(p.cur()) || p.cur().kw("at") {
+		return nil
+	}
+	before := len(p.diags)
+	e := p.parseRouterOr()
+	if t := p.cur(); !isPeeringStop(t) && !t.kw("at") && !p.bailed {
+		if len(p.diags) == before { // else the error is already reported
+			p.errf(t, "policy/router", "expected AND, OR or EXCEPT before "+quote(t.text)+" in router expression")
 		}
-		switch t.kind {
-		case tLParen:
-			depth++
-		case tRParen:
-			if depth == 0 {
-				p.errf(t, "policy/peering", "unbalanced ')' in router expression")
-				return p.rawSpan(start, end)
-			}
-			depth--
-		case tWord:
-		default: // regexps, braces, commas, '=' are not router syntax
-			if depth == 0 {
-				return p.rawSpan(start, end)
-			}
+		for !isPeeringStop(p.cur()) && !p.cur().kw("at") {
+			p.advance()
 		}
-		if t.kind == tEOF {
-			p.errf(t, "policy/peering", "unbalanced '(' in router expression")
-			break
+	}
+	return e
+}
+
+func (p *parser) parseRouterOr() RouterExpr {
+	l := p.parseRouterAnd()
+	for l != nil && p.cur().kw("or") {
+		if !p.enter() {
+			return nil
 		}
-		if start < 0 {
-			start = t.start
-		}
-		end = t.end
+		defer p.leave()
 		p.advance()
+		r := p.parseRouterAnd()
+		if r == nil {
+			return nil
+		}
+		l = RouterExprBinary{Op: RouterOr, L: l, R: r}
 	}
-	return p.rawSpan(start, end)
+	return l
 }
 
-func (p *parser) rawSpan(start, end int) string {
-	if start < 0 {
-		return ""
+func (p *parser) parseRouterAnd() RouterExpr {
+	l := p.parseRouterPrim()
+	for l != nil && (p.cur().kw("and") || p.cur().kw("except")) {
+		if !p.enter() {
+			return nil
+		}
+		defer p.leave()
+		op := RouterAnd
+		if p.cur().kw("except") {
+			op = RouterExcept
+		}
+		p.advance()
+		r := p.parseRouterPrim()
+		if r == nil {
+			return nil
+		}
+		l = RouterExprBinary{Op: op, L: l, R: r}
 	}
-	return p.src[start:end]
+	return l
 }
 
-// parseRegexp parses an AS-path regexp body, recording a non-fatal diagnostic
-// (and returning nil) if it does not parse. The Raw text is kept regardless.
+// parseRouterPrim parses one router, or a parenthesized router expression. A
+// single-label name ("PEERING", which real policies use as a label) is kept
+// but warned about: an inet-rtr name is a DNS name.
+func (p *parser) parseRouterPrim() RouterExpr {
+	t := p.cur()
+	if t.kind == tLParen {
+		if !p.enter() {
+			return nil
+		}
+		defer p.leave()
+		p.advance()
+		e := p.parseRouterOr()
+		if e == nil {
+			return nil
+		}
+		if p.cur().kind != tRParen {
+			p.errf(p.cur(), "policy/router", "expected ')' in router expression")
+			return nil
+		}
+		p.advance()
+		return e
+	}
+	if t.kw("not") {
+		p.errf(t, "policy/router", `NOT is not a router-expression operator (RFC 2622 §5.6): write "X EXCEPT Y" for "X AND NOT Y"`)
+		return nil
+	}
+	if t.kind != tWord || isPeeringStop(t) || t.kw("at") || t.kw("and") || t.kw("or") || t.kw("except") {
+		p.errf(t, "policy/router", "expected a router address, inet-rtr name or rtr-set")
+		return nil
+	}
+	p.advance()
+	if a, err := netip.ParseAddr(t.text); err == nil {
+		return RouterAddr{Addr: a}
+	}
+	if sn, err := types.ParseSetName(t.text); err == nil {
+		if sn.Class() == types.ClassRtrSet {
+			return RouterSetRef{Name: sn}
+		}
+		p.errf(t, "policy/router", quote(t.text)+" is a "+sn.Class().String()+", not a router or rtr-set")
+		return nil
+	}
+	switch labels := dnsLabels(t.text); {
+	case labels > 1:
+		return RouterName{Name: t.text}
+	case labels == 1:
+		p.warnf(t, "policy/router", quote(t.text)+" is not a router address, rtr-set or fully qualified inet-rtr name")
+		return RouterName{Name: t.text}
+	}
+	p.errf(t, "policy/router", "invalid router "+quote(t.text))
+	return nil
+}
+
+// dnsLabels returns the number of labels in s if it is a DNS name (letters,
+// digits and hyphens in dot-separated labels, a trailing dot allowed), else 0.
+func dnsLabels(s string) int {
+	s = strings.TrimSuffix(s, ".")
+	if s == "" {
+		return 0
+	}
+	labels := strings.Split(s, ".")
+	for _, l := range labels {
+		if l == "" || len(l) > 63 || l[0] == '-' || l[len(l)-1] == '-' {
+			return 0
+		}
+		for i := 0; i < len(l); i++ {
+			c := l[i]
+			if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '-') {
+				return 0
+			}
+		}
+	}
+	return len(labels)
+}
+
+// parseRegexp parses the AS-path regexp of token t, recording a diagnostic at
+// the offending token (and returning nil) if it does not parse, and a Warning
+// for each AS number written without "AS". The Raw text is kept regardless.
 func (p *parser) parseRegexp(t token) *ASPathRE {
-	re, err := ParseASPathRegexp(t.text)
-	if err != nil {
+	re, bare, err := parseASPathRegexp(t.text)
+	var rerr *reError
+	switch {
+	case errors.Is(err, errRegexpTooLong):
+		p.errf(t, "policy/too-long", err.Error())
+		return nil
+	case errors.As(err, &rerr):
+		p.errf(p.inRegexp(t, rerr.start, rerr.end), "policy/as-path-regexp", err.Error())
+		return nil
+	case err != nil:
 		p.errf(t, "policy/as-path-regexp", err.Error())
 		return nil
+	}
+	for _, b := range bare {
+		p.warnf(p.inRegexp(t, b.start, b.end), "policy/as-path-regexp",
+			quote(b.text)+` lacks the "AS" prefix RFC 2622 writes AS numbers with; it is read as an AS number`)
 	}
 	return re
 }
 
+// inRegexp returns a token for bytes [start, end) of regexp token t's body. A
+// zero-width range at the end of the body points at the closing '>' if there
+// is one.
+func (p *parser) inRegexp(t token, start, end int) token {
+	body := t.start + 1 // after '<'
+	if start == end && end == len(t.text) && t.closed() {
+		end++
+	}
+	return token{tRegex, t.text, min(body+start, t.end), min(body+end, t.end)}
+}
+
 // parseActions parses a ';'-separated action list, stopping at a clause keyword,
-// an unmatched '}', or EOF. Each action's raw text is interpreted into
-// attr/op/value; braces inside a value ("community .= {1:2}") are kept.
+// an unmatched '}', or EOF. Each action is cut at its ';' (braces inside a value,
+// as in "community .= {1:2}", are kept) and interpreted by parseAction; one that
+// does not follow the action grammar is diagnosed and left out.
 func (p *parser) parseActions() []Action {
 	var actions []Action
 	for !p.atEOF() && !isClauseKw(p.cur()) && p.cur().kind != tRBrace {
@@ -596,7 +801,11 @@ func (p *parser) parseActions() []Action {
 			p.advance()
 		}
 		if raw := strings.TrimSpace(p.src[start:end]); raw != "" {
-			actions = append(actions, parseAction(raw))
+			if a, msg := parseAction(raw); msg == "" {
+				actions = append(actions, a)
+			} else {
+				p.errf(token{tWord, raw, start, start + len(raw)}, "policy/action", msg)
+			}
 		}
 		if p.cur().kind != tSemi {
 			break
@@ -606,24 +815,133 @@ func (p *parser) parseActions() []Action {
 	return actions
 }
 
-// parseAction interprets one action's raw text.
-func parseAction(raw string) Action {
-	if eq := strings.IndexByte(raw, '='); eq >= 0 {
-		left := strings.TrimSpace(raw[:eq])
-		right := strings.TrimSpace(raw[eq+1:])
-		if strings.HasSuffix(left, ".") {
-			return Action{Attr: normAttr(strings.TrimSuffix(left, ".")), Op: ActionAppend, Value: right}
-		}
-		return Action{Attr: normAttr(left), Op: ActionAssign, Value: right}
-	}
-	if paren := strings.IndexByte(raw, '('); paren >= 0 {
-		return Action{Attr: normAttr(raw[:paren]), Op: ActionMethod, Value: raw}
-	}
-	return Action{Attr: normAttr(raw), Op: ActionMethod, Value: raw}
+// actionOps are the operators of RFC 2622 Figure 25, longest first so that
+// "<<=" is not read as "<". The assignments change a route attribute; the
+// comparisons only test one, so they are filters, never actions.
+var actionOps = []struct {
+	op     string
+	assign bool
+}{
+	{"<<=", true}, {">>=", true}, {"==", false}, {"!=", false}, {"<=", false}, {">=", false},
+	{".=", true}, {"+=", true}, {"-=", true}, {"*=", true}, {"/=", true}, {"=", true},
+	{"<", false}, {">", false},
 }
 
-// normAttr canonicalizes an rp-attribute name (lowercase, trimmed). Method
-// targets like "aspath.prepend" keep their dotted form.
+// parseAction interprets one action (RFC 2622 §6.1.1, §7): "attr = value",
+// "attr .= value" or "attr.method(args)". The other assignment operators of
+// RFC 2622 Figure 25 ("med += 5") are the operator methods they are named for
+// (Method "operator+=", one argument). It returns a message saying what is
+// wrong when raw is none of these.
+func parseAction(raw string) (Action, string) {
+	const form = "expected 'attr = value', 'attr .= value' or 'attr.method(args)'"
+	if open := strings.IndexByte(raw, '('); open >= 0 && !strings.Contains(raw[:open], "=") {
+		attr, method, dotted := strings.Cut(strings.TrimSpace(raw[:open]), ".")
+		closing := matchParen(raw, open)
+		switch {
+		case !dotted || !isRPName(attr) || !isRPName(method):
+			return Action{}, form
+		case closing < 0:
+			return Action{}, "unbalanced '(' in action " + quote(raw)
+		case strings.TrimSpace(raw[closing+1:]) != "":
+			return Action{}, "expected ';' after " + quote(raw[:closing+1])
+		}
+		return Action{Attr: normAttr(attr), Method: normAttr(method), Op: ActionMethod,
+			Args: splitTrim(raw[open+1 : closing]), Raw: raw}, ""
+	}
+	name := rpNamePrefix(raw)
+	rest := strings.TrimLeft(raw[len(name):], " \t\r\n")
+	if name == "" || !isRPName(name) {
+		return Action{}, form
+	}
+	for _, o := range actionOps {
+		op := o.op
+		if !strings.HasPrefix(rest, op) {
+			continue
+		}
+		if !o.assign {
+			return Action{}, quote(op) + " compares; an action assigns with = or .=, or calls a method"
+		}
+		value := strings.TrimSpace(rest[len(op):])
+		if msg := checkActionValue(value); msg != "" {
+			return Action{}, msg
+		}
+		switch op {
+		case "=":
+			return Action{Attr: normAttr(name), Op: ActionAssign, Value: value, Raw: raw}, ""
+		case ".=":
+			return Action{Attr: normAttr(name), Op: ActionAppend, Value: value, Raw: raw}, ""
+		}
+		return Action{Attr: normAttr(name), Method: "operator" + op, Op: ActionMethod,
+			Args: []string{value}, Raw: raw}, ""
+	}
+	return Action{}, form
+}
+
+// checkActionValue checks an action's right-hand side: one word, or one {…}
+// list. Anything after it means a missing ';'.
+func checkActionValue(v string) string {
+	switch {
+	case v == "":
+		return "action has no value"
+	case strings.HasPrefix(v, "{"):
+		if j := strings.IndexByte(v, '}'); j < 0 {
+			return "unterminated '{' in action value"
+		} else if rest := strings.TrimSpace(v[j+1:]); rest != "" {
+			return "expected ';' before " + quote(rest)
+		}
+		return ""
+	}
+	if i := strings.IndexAny(v, " \t\r\n"); i >= 0 {
+		return "expected ';' before " + quote(strings.TrimSpace(v[i:]))
+	}
+	if strings.ContainsAny(v, "={}()") {
+		return "invalid action value " + quote(v)
+	}
+	return ""
+}
+
+// rpNamePrefix returns the leading run of s that can belong to an rp-attribute
+// name, stopping before a '-' that begins the operator "-=".
+func rpNamePrefix(s string) string {
+	i := 0
+	for i < len(s) {
+		c := s[i]
+		ok := 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '_' ||
+			c == '-' && !strings.HasPrefix(s[i:], "-=")
+		if !ok {
+			break
+		}
+		i++
+	}
+	return s[:i]
+}
+
+// isRPName reports whether s is an rp-attribute or method name: a letter, then
+// letters, digits, '-' or '_'.
+func isRPName(s string) bool {
+	if s == "" || !('a' <= s[0] && s[0] <= 'z' || 'A' <= s[0] && s[0] <= 'Z') {
+		return false
+	}
+	return rpNamePrefix(s) == s
+}
+
+// matchParen returns the index of the ')' that closes the '(' at open, or -1.
+func matchParen(s string, open int) int {
+	depth := 0
+	for i := open; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			if depth--; depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// normAttr canonicalizes an rp-attribute name (lowercase, trimmed).
 func normAttr(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
 
 // parseFilter parses a policy filter (RFC 2622 §5.4) with precedence
@@ -631,20 +949,23 @@ func normAttr(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
 func (p *parser) parseFilter() Filter { return p.parseFilterOr() }
 
 func (p *parser) parseFilterOr() Filter {
-	l := p.parseFilterAnd()
+	terms := []Filter{p.parseFilterAnd()}
 	for {
 		if p.cur().kw("or") {
 			p.advance()
 		} else if !startsFilterTerm(p.cur()) {
-			return l
+			break
 		}
 		start := p.pos
-		r := p.parseFilterAnd()
-		l = FilterOr{L: l, R: r}
+		terms = append(terms, p.parseFilterAnd())
 		if p.pos == start { // defensive: guarantee progress
 			p.advance()
 		}
 	}
+	if len(terms) == 1 {
+		return terms[0]
+	}
+	return FilterOr{Terms: terms}
 }
 
 // startsFilterTerm reports whether t can begin another filter term, i.e. an
@@ -671,13 +992,15 @@ func isFilterStop(t token) bool {
 }
 
 func (p *parser) parseFilterAnd() Filter {
-	l := p.parseFilterNot()
+	terms := []Filter{p.parseFilterNot()}
 	for p.cur().kw("and") {
 		p.advance()
-		r := p.parseFilterNot()
-		l = FilterAnd{L: l, R: r}
+		terms = append(terms, p.parseFilterNot())
 	}
-	return l
+	if len(terms) == 1 {
+		return terms[0]
+	}
+	return FilterAnd{Terms: terms}
 }
 
 func (p *parser) parseFilterNot() Filter {
@@ -725,31 +1048,18 @@ func (p *parser) parseFilterPrimary() Filter {
 	return nil
 }
 
-// parseFilterWord handles word-led filter terms: ANY, PeerAS, method calls
-// (community(...)), AS numbers, set names, and PeerAS set-name templates, each
-// optionally followed by a range operator ("AS-FOO^+", "PeerAS^0-32").
+// parseFilterWord handles word-led filter terms: ANY, PeerAS, AS numbers, set
+// names, and PeerAS set-name templates, each optionally followed by a range
+// operator ("AS-FOO^+", "PeerAS^0-32"), and rp-attribute method calls
+// (community(...)). A term followed by '(' is an implicit OR with a
+// parenthesized group ("AS1 (AS2 OR AS3)"), never a method call.
 func (p *parser) parseFilterWord() Filter {
 	t := p.cur()
-	// A word immediately followed by '(' is a method-call filter (community(...)).
-	if p.peek().kind == tLParen {
-		start, end := t.start, t.end
-		p.advance() // word
-		depth := 0
-		for !p.atEOF() {
-			c := p.cur()
-			if c.kind == tLParen {
-				depth++
-			}
-			end = c.end
-			p.advance()
-			if c.kind == tRParen {
-				depth--
-				if depth == 0 {
-					break
-				}
-			}
-		}
-		return FilterCommunity{Raw: p.src[start:end]}
+	if p.peek().kind == tLParen && !isFilterTerm(t.text) {
+		return p.parseFilterMethod()
+	}
+	if strings.EqualFold(t.text, "community") && p.peek().kind == tEq {
+		return p.parseCommunityEquals()
 	}
 	p.advance()
 	base, opText, hasOp := strings.Cut(t.text, "^")
@@ -776,11 +1086,11 @@ func (p *parser) parseFilterWord() Filter {
 	}
 	if sn, err := types.ParseSetName(base); err == nil {
 		switch sn.Class() {
-		case types.AsSet:
+		case types.ClassAsSet:
 			return FilterASExpr{AS: ASSetRef{Name: sn}, Op: op}
-		case types.RouteSet:
+		case types.ClassRouteSet:
 			return FilterSetRef{Name: sn, Op: op}
-		case types.FilterSet:
+		case types.ClassFilterSet:
 			if hasOp {
 				p.errf(t, "policy/range-op", "a filter-set takes no range operator")
 			}
@@ -791,9 +1101,9 @@ func (p *parser) parseFilterWord() Filter {
 	}
 	if tpl, err := ParseSetNameTemplate(base); err == nil {
 		switch tpl.Class() {
-		case types.AsSet:
+		case types.ClassAsSet:
 			return FilterASExpr{AS: ASSetTemplate{Template: tpl}, Op: op}
-		case types.RouteSet, types.FilterSet:
+		case types.ClassRouteSet, types.ClassFilterSet:
 			return FilterSetTemplate{Template: tpl, Op: op}
 		}
 	}
@@ -801,25 +1111,140 @@ func (p *parser) parseFilterWord() Filter {
 	return nil
 }
 
+// isFilterTerm reports whether word is a filter term (with or without a range
+// operator) rather than the name of an rp-attribute method.
+func isFilterTerm(word string) bool {
+	base, _, _ := strings.Cut(word, "^")
+	if strings.EqualFold(base, "any") || strings.EqualFold(base, "peeras") {
+		return true
+	}
+	if _, err := types.ParseASN(base); err == nil {
+		return true
+	}
+	if _, err := types.ParseSetName(base); err == nil {
+		return true
+	}
+	_, err := ParseSetNameTemplate(base)
+	return err == nil
+}
+
+// parseFilterMethod parses an rp-attribute method call, name(args), through its
+// matching ')'. Only the route tests of RFC 2622 §7 are filters —
+// community(...) and community.contains(...); methods that modify a route
+// (community.append, aspath.prepend, ...) are actions and are diagnosed, as are
+// unknown names and an unterminated call.
+func (p *parser) parseFilterMethod() Filter {
+	name := p.cur()
+	end := name.end
+	p.advance()
+	depth := 0
+	for closed := false; !closed; {
+		if p.atEOF() {
+			p.errf(name, "policy/filter-paren", "unterminated "+quote(name.text+"(")+": expected ')'")
+			return nil
+		}
+		c := p.cur()
+		switch c.kind {
+		case tLParen:
+			depth++
+		case tRParen:
+			depth--
+			closed = depth == 0
+		}
+		end = c.end
+		p.advance()
+	}
+	switch lower := strings.ToLower(name.text); {
+	case lower == "community" || lower == "community.contains":
+		raw := p.src[name.start:end]
+		return FilterCommunity{Op: CommunityContains, Values: delimited(raw, '(', ')'), Raw: raw}
+	case strings.Contains(lower, "."):
+		p.errf(name, "policy/filter-method", quote(name.text)+" is an action method, not a filter "+
+			"(filters test routes with community(...) or community.contains(...))")
+	default:
+		p.errf(name, "policy/filter-method", "unknown filter method "+quote(name.text))
+	}
+	return nil
+}
+
+// parseCommunityEquals parses "community == {…}" (RFC 2622 §7): routes whose
+// communities are exactly the listed ones.
+func (p *parser) parseCommunityEquals() Filter {
+	name := p.cur()
+	p.advance()
+	eq := p.cur()
+	p.advance()
+	if p.cur().kind != tEq || p.cur().start != eq.end {
+		p.errf(eq, "policy/filter", "expected '==' after community")
+		return nil
+	}
+	p.advance()
+	if p.cur().kind != tLBrace {
+		p.errf(p.cur(), "policy/filter", "expected '{' after 'community =='")
+		return nil
+	}
+	p.advance()
+	var values []string
+	wantItem := true
+	for p.cur().kind != tRBrace {
+		t := p.cur()
+		switch {
+		case t.kind == tEOF:
+			p.errf(t, "policy/filter", "expected '}' to close the community list")
+			return nil
+		case t.kind == tComma:
+			wantItem = true
+		case t.kind == tWord && wantItem:
+			values = append(values, t.text)
+			wantItem = false
+		case t.kind == tWord:
+			p.errf(t, "policy/filter", "expected ',' before "+quote(t.text)+" in community list")
+		default:
+			p.errf(t, "policy/filter", "unexpected "+quote(t.text)+" in community list")
+		}
+		p.advance()
+	}
+	end := p.cur().end
+	p.advance()
+	return FilterCommunity{Op: CommunityEquals, Values: values, Raw: p.src[name.start:end]}
+}
+
 // parsePrefixList parses a brace-enclosed prefix-range list and an optional
 // outer range operator, which is composed into each member (RFC 2622 §5.2).
 func (p *parser) parsePrefixList() Filter {
 	p.advance() // consume '{'
 	var ranges []types.PrefixRange
+	wantItem, commas := true, 0
 	for !p.atEOF() && p.cur().kind != tRBrace {
 		t := p.cur()
 		switch t.kind {
 		case tWord:
-			if pr, err := types.ParsePrefixRange(t.text); err == nil {
-				ranges = append(ranges, pr)
-			} else {
+			pr, err := types.ParsePrefixRange(t.text)
+			switch {
+			case !wantItem:
+				p.errf(t, "policy/prefix-list", "expected ',' before "+quote(t.text)+"; it is left out")
+			case err != nil:
 				p.errf(t, "policy/prefix-list", "invalid prefix "+quote(t.text))
+			default:
+				if hasHostBits(t.text) {
+					p.warnf(t, "policy/host-bits", quote(t.text)+" has host bits set; it is read as "+pr.String())
+				}
+				ranges = append(ranges, pr)
 			}
+			wantItem = false
 		case tComma:
+			if wantItem {
+				p.warnf(t, "policy/prefix-list", "empty item in prefix list")
+			}
+			wantItem = true
+			commas++
 		default:
 			p.errf(t, "policy/prefix-list", "unexpected token in prefix list")
 		}
 		p.advance()
+	}
+	if wantItem && commas > 0 && p.cur().kind == tRBrace {
+		p.warnf(p.cur(), "policy/prefix-list", "empty item in prefix list")
 	}
 	if p.cur().kind != tRBrace {
 		p.errf(p.cur(), "policy/prefix-list", "expected '}'")
@@ -842,6 +1267,14 @@ func (p *parser) parsePrefixList() Filter {
 		ranges = composed
 	}
 	return FilterPrefixList{Ranges: ranges}
+}
+
+// hasHostBits reports whether the prefix of a prefix-range token ("a/n" or
+// "a/n^op") has bits set beyond its length, which ParsePrefixRange clears.
+func hasHostBits(text string) bool {
+	base, _, _ := strings.Cut(text, "^")
+	pfx, err := netip.ParsePrefix(base)
+	return err == nil && pfx != pfx.Masked()
 }
 
 // quote wraps a token for diagnostics.

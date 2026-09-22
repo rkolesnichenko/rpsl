@@ -13,3 +13,15 @@ source:  TEST
 route6:  2001:db8::/32
 origin:  AS64502
 source:  TEST
+
+route:   192.0.2.64/26
+origin:  AS64504
+source:  TEST
+
+route:   198.51.100.0/25
+origin:  AS64505
+source:  TEST
+
+route6:  2001:db8:5::/48
+origin:  AS64507
+source:  TEST

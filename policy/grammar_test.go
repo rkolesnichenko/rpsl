@@ -36,18 +36,32 @@ func TestPolicyGrammar(t *testing.T) {
 		{"multi-peering", ParseImport, "from AS1 action pref=100; from AS2 accept AS-FOO", "F[AS1{pref}; AS2 : AS-FOO]"},
 
 		// Implicit OR (RFC 2622 §5.4): "x y" is "x OR y", at OR precedence.
-		{"implicit-or", ParseImport, "from AS1 accept AS226 AS227 OR AS228", "F[AS1 : or(or(AS226 AS227) AS228)]"},
+		{"implicit-or", ParseImport, "from AS1 accept AS226 AS227 OR AS228", "F[AS1 : or(AS226 AS227 AS228)]"},
 		{"implicit-or-vs-and", ParseImport, "from AS1 accept AS1 AS2 AND AS3", "F[AS1 : or(AS1 and(AS2 AS3))]"},
 		{"implicit-or-parens", ParseImport, "from AS1 accept (AS1 AS2)", "F[AS1 : or(AS1 AS2)]"},
 		{"implicit-or-not", ParseImport, "from AS1 accept NOT (AS20965 AS1299)", "F[AS1 : not(or(AS20965 AS1299))]"},
 		{"implicit-or-prefixes", ParseImport, "from AS1 accept ANY {0.0.0.0/0^25-32}", "F[AS1 : or(ANY {0.0.0.0/0^25-32})]"},
 		{"explicit-precedence", ParseImport, "from AS1 accept AS1 AND AS2 OR AS3", "F[AS1 : or(and(AS1 AS2) AS3)]"},
+		// A term followed by '(' is an implicit OR with a group, never a method call.
+		{"implicit-or-group", ParseImport, "from AS1 accept AS1 (AS2 OR AS3)", "F[AS1 : or(AS1 or(AS2 AS3))]"},
+		{"implicit-or-set-group", ParseImport, "from AS1 accept AS-FOO (AS1)", "F[AS1 : or(AS-FOO AS1)]"},
+		{"implicit-or-peeras-group", ParseImport, "from AS1 accept PeerAS (AS2)", "F[AS1 : or(PeerAS AS2)]"},
+		{"implicit-or-asdot-group", ParseImport, "from AS1 accept AS1.10 (AS2)", "F[AS1 : or(AS65546 AS2)]"},
+		{"ripe-filter-set", ParseImport,
+			"from AS1 accept AS25229:AS-CUST AS25229:RS-DOMESTIC (AS-PACO-TO-UAIX AND <^AS8207>) (AS-SET-DCS AND <^AS35412>)",
+			"F[AS1 : or(AS25229:AS-CUST AS25229:RS-DOMESTIC and(AS-PACO-TO-UAIX <seq(^ AS8207)>) " +
+				"and(AS-SET-DCS <seq(^ AS35412)>))]"},
+		// The filter methods of RFC 2622 §7: community(...) and community.contains(...).
+		{"community", ParseImport, "from AS1 accept community(65000:1) AND AS1",
+			"F[AS1 : and(community(65000:1) AS1)]"},
+		{"community-contains", ParseImport, "from AS1 accept NOT Community.contains(65000:1, 65000:2)",
+			"F[AS1 : not(Community.contains(65000:1, 65000:2))]"},
 
 		// Range operators on filter terms (RFC 2622 §5.4) and prefix-list
 		// composition (RFC 2622 §5.2 examples).
 		{"op-as-set", ParseImport, "from AS1 accept AS-FOO^+", "F[AS1 : AS-FOO^+]"},
 		{"op-mixed", ParseImport, "from AS1 accept RS-X^24 OR AS1^- OR PeerAS^0-32",
-			"F[AS1 : or(or(RS-X^24 AS1^-) PeerAS^0-32)]"},
+			"F[AS1 : or(RS-X^24 AS1^- PeerAS^0-32)]"},
 		{"op-prefix-list", ParseImport, "from AS1 accept {10.0.0.0/8, 11.0.0.0/8}^+",
 			"F[AS1 : {10.0.0.0/8^+, 11.0.0.0/8^+}]"},
 		{"op-compose-range", ParseImport, "from AS1 accept {128.9.0.0/16^20-24}^26-28", "F[AS1 : {128.9.0.0/16^26-28}]"},
@@ -72,8 +86,8 @@ func TestPolicyGrammar(t *testing.T) {
 		{"as-except", ParseImport, "from AS-FOO EXCEPT AS3 accept ANY", "F[except(AS-FOO AS3) : ANY]"},
 		{"routers", ParseImport, "from AS1 192.0.2.1 at 192.0.2.2 accept ANY", "F[AS1 192.0.2.1 at 192.0.2.2 : ANY]"},
 		{"router-exprs", ParseImport, "from AS1 rtrs-a AND rtrs-b at 1.1.1.1 EXCEPT 1.1.1.2 accept ANY",
-			"F[AS1 rtrs-a AND rtrs-b at 1.1.1.1 EXCEPT 1.1.1.2 : ANY]"},
-		{"at-only", ParseImport, "from AS1 at rtrs-foo accept ANY", "F[AS1 at rtrs-foo : ANY]"},
+			"F[AS1 and(RTRS-A RTRS-B) at except(1.1.1.1 1.1.1.2) : ANY]"},
+		{"at-only", ParseImport, "from AS1 at rtrs-foo accept ANY", "F[AS1 at RTRS-FOO : ANY]"},
 		{"peering-set", ParseImport, "from prng-foo accept ANY", "F[PRNG-FOO : ANY]"},
 	}
 	for _, c := range cases {
@@ -111,7 +125,8 @@ func TestPolicyDiagnosesUnparsedInput(t *testing.T) {
 		{"no-filter", imp("from AS1"), []string{"policy/expect-filter"}},
 		{"empty", imp(""), []string{"policy/empty"}},
 		{"no-peering", imp("accept ANY"), []string{"policy/expect-peering"}},
-		{"empty-afi", imp("afi from AS1 accept ANY"), []string{"policy/afi"}},
+		{"empty-afi", func() []ast.Diagnostic { _, d := ParseMPImport("afi from AS1 accept ANY"); return d },
+			[]string{"policy/afi"}},
 		{"dangling-except", imp("from AS1 accept ANY except"), []string{"policy/expect-peering"}},
 		{"bad-range-op", imp("from AS1 accept AS-FOO^+24"), []string{"policy/range-op"}},
 		{"unclosed-as-paren", imp("from (AS1 OR AS2 accept ANY"), []string{"policy/as-expr"}},
@@ -123,6 +138,18 @@ func TestPolicyDiagnosesUnparsedInput(t *testing.T) {
 			[]string{"policy/trailing"}},
 		{"peering-dangling-at", func() []ast.Diagnostic { _, d := ParsePeering("AS1 at"); return d },
 			[]string{"policy/peering"}},
+		// Methods that modify a route are actions, not filters.
+		{"action-method-as-filter", imp("from AS1 accept AS48450 aspath.prepend(AS48450)"),
+			[]string{"policy/filter-method"}},
+		{"community-append-as-filter", imp("from AS1 accept community.append(65000:1)"),
+			[]string{"policy/filter-method"}},
+		{"unknown-method", imp("from AS1 accept foo(1)"), []string{"policy/filter-method"}},
+		// An unterminated call must not swallow the rest of the value silently.
+		{"unterminated-method", imp("from AS1 accept community.contains(1:2 from AS2 accept ANY"),
+			[]string{"policy/filter-paren"}},
+		{"unterminated-community", imp("from AS1 accept community(1:2"), []string{"policy/filter-paren"}},
+		// Host bits are cleared when the prefix is parsed; say so.
+		{"prefix-host-bits", imp("from AS1 accept {45.146.49.0/22^24}"), []string{"policy/host-bits"}},
 	}
 	for _, c := range cases {
 		if got := diagRules(c.parse()); !reflect.DeepEqual(got, c.want) {
@@ -231,15 +258,15 @@ func renderPeering(p Peering) string {
 	switch x := p.(type) {
 	case PeeringAS:
 		s := renderAS(x.AS)
-		if x.Router != "" {
-			s += " " + x.Router
+		if x.Router != nil {
+			s += " " + renderRouter(x.Router)
 		}
-		if x.AtRouter != "" {
-			s += " at " + x.AtRouter
+		if x.AtRouter != nil {
+			s += " at " + renderRouter(x.AtRouter)
 		}
 		return s
 	case PeeringSetRef:
-		return x.Name.Canonical()
+		return x.Name.String()
 	case PeeringRegexp:
 		return "<" + x.Raw + ">"
 	case nil:
@@ -248,12 +275,26 @@ func renderPeering(p Peering) string {
 	return fmt.Sprintf("<%T>", p)
 }
 
+func renderRouter(r RouterExpr) string {
+	switch x := r.(type) {
+	case RouterAddr:
+		return x.Addr.String()
+	case RouterName:
+		return x.Name
+	case RouterSetRef:
+		return x.Name.String()
+	case RouterExprBinary:
+		return [...]string{"and", "or", "except"}[x.Op] + "(" + renderRouter(x.L) + " " + renderRouter(x.R) + ")"
+	}
+	return fmt.Sprintf("<%T>", r)
+}
+
 func renderAS(a ASExpr) string {
 	switch x := a.(type) {
 	case ASNum:
 		return x.AS.String()
 	case ASSetRef:
-		return x.Name.Canonical()
+		return x.Name.String()
 	case ASSetTemplate:
 		return "tpl:" + x.Template.String()
 	case ASExprBinary:
@@ -263,6 +304,14 @@ func renderAS(a ASExpr) string {
 		return "<nil>"
 	}
 	return fmt.Sprintf("<%T>", a)
+}
+
+func renderFilters(fs []Filter) string {
+	parts := make([]string, len(fs))
+	for i, f := range fs {
+		parts[i] = renderFilter(f)
+	}
+	return strings.Join(parts, " ")
 }
 
 func renderFilter(f Filter) string {
@@ -280,7 +329,7 @@ func renderFilter(f Filter) string {
 	case FilterASExpr:
 		return renderAS(x.AS) + x.Op.String()
 	case FilterSetRef:
-		return x.Name.Canonical() + x.Op.String()
+		return x.Name.String() + x.Op.String()
 	case FilterSetTemplate:
 		return "settpl:" + x.Template.String() + x.Op.String()
 	case FilterPathRE:
@@ -291,9 +340,9 @@ func renderFilter(f Filter) string {
 	case FilterCommunity:
 		return x.Raw
 	case FilterAnd:
-		return "and(" + renderFilter(x.L) + " " + renderFilter(x.R) + ")"
+		return "and(" + renderFilters(x.Terms) + ")"
 	case FilterOr:
-		return "or(" + renderFilter(x.L) + " " + renderFilter(x.R) + ")"
+		return "or(" + renderFilters(x.Terms) + ")"
 	case FilterNot:
 		return "not(" + renderFilter(x.Inner) + ")"
 	case nil:

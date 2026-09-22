@@ -1,3 +1,4 @@
-# ExpandPrefixes(RS-EXAMPLE, ipv4) — explicit prefix member plus AS64501's route.
+# bgpq4 -j -p -l x -L 64 -S TEST,RADB -4 RS-EXAMPLE, against testdata/snapshot served by
+# internal/irrtest. Regenerate: go test -run TestGoldensAreBgpq4Output -update .
 192.0.2.0/24
 203.0.113.0/24

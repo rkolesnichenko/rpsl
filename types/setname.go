@@ -9,26 +9,28 @@ import (
 // set component's prefix.
 type SetClass uint8
 
+// The set classes, named by their prefix.
 const (
-	SetClassUnknown SetClass = iota
-	AsSet                    // as-
-	RouteSet                 // rs-
-	RtrSet                   // rtrs-
-	FilterSet                // fltr-
-	PeeringSet               // prng-
+	ClassUnknown    SetClass = iota
+	ClassAsSet               // as-
+	ClassRouteSet            // rs-
+	ClassRtrSet              // rtrs-
+	ClassFilterSet           // fltr-
+	ClassPeeringSet          // prng-
 )
 
+// String returns the class name, e.g. "as-set".
 func (c SetClass) String() string {
 	switch c {
-	case AsSet:
+	case ClassAsSet:
 		return "as-set"
-	case RouteSet:
+	case ClassRouteSet:
 		return "route-set"
-	case RtrSet:
+	case ClassRtrSet:
 		return "rtr-set"
-	case FilterSet:
+	case ClassFilterSet:
 		return "filter-set"
-	case PeeringSet:
+	case ClassPeeringSet:
 		return "peering-set"
 	default:
 		return "unknown"
@@ -38,11 +40,14 @@ func (c SetClass) String() string {
 // SetName is a validated, possibly hierarchical RPSL set name such as
 // "AS3333:AS-CUSTOMERS" (RFC 2622 §5). Only ParseSetName produces a non-zero
 // value, so a SetName never carries whitespace, commas, '^', or control bytes
-// and is safe to interpolate into an IRRd or whois query. It is comparable, but
-// == is spelling-exact: use Canonical as the RPSL identity and map key.
+// and is safe to interpolate into an IRRd or whois query.
+//
+// RPSL names are case-insensitive, so a SetName holds only the canonical form —
+// set components upper-cased, ASN components in asplain ("as007:as-x" is
+// "AS7:AS-X") — and every spelling of one name is == and one map key. The
+// original spelling is kept in the lossless ast layer.
 type SetName struct {
-	name  string   // trimmed original spelling
-	canon string   // precomputed Canonical form
+	canon string   // canonical form
 	class SetClass // class shared by every set component
 }
 
@@ -52,17 +57,17 @@ func componentClass(c string) (SetClass, bool) {
 	lc := strings.ToLower(c)
 	switch {
 	case strings.HasPrefix(lc, "as-"):
-		return AsSet, true
+		return ClassAsSet, true
 	case strings.HasPrefix(lc, "rs-"):
-		return RouteSet, true
+		return ClassRouteSet, true
 	case strings.HasPrefix(lc, "rtrs-"):
-		return RtrSet, true
+		return ClassRtrSet, true
 	case strings.HasPrefix(lc, "fltr-"):
-		return FilterSet, true
+		return ClassFilterSet, true
 	case strings.HasPrefix(lc, "prng-"):
-		return PeeringSet, true
+		return ClassPeeringSet, true
 	}
-	return SetClassUnknown, false
+	return ClassUnknown, false
 }
 
 // validSetComponent applies the RFC 2622 §2 name rule to a set component that
@@ -92,17 +97,24 @@ func isAlnum(b byte) bool {
 	return 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z' || '0' <= b && b <= '9'
 }
 
+// MaxSetNameLen is the longest set name ParseSetName accepts, in bytes. Real
+// names are a few dozen bytes; the cap keeps hostile ones off query lines.
+const MaxSetNameLen = 1024
+
 // ParseSetName parses a set name. Components are separated by ':'; each must be
 // an ASN or a set name, at least one must be a set name, and all set names must
 // be of the same class (RFC 2622 §5). Only surrounding whitespace is trimmed.
 func ParseSetName(s string) (SetName, error) {
-	t := strings.TrimSpace(s)
+	t := strings.Trim(s, " \t")
 	if t == "" {
 		return SetName{}, fmt.Errorf("rpsl/types: invalid set name: empty")
 	}
+	if len(t) > MaxSetNameLen {
+		return SetName{}, fmt.Errorf("rpsl/types: invalid set name: longer than %d bytes", MaxSetNameLen)
+	}
 	parts := strings.Split(t, ":")
 	canon := make([]string, len(parts))
-	class := SetClassUnknown
+	class := ClassUnknown
 	for i, p := range parts {
 		if p == "" {
 			return SetName{}, fmt.Errorf("rpsl/types: invalid set name %q: empty component", s)
@@ -111,7 +123,7 @@ func ParseSetName(s string) (SetName, error) {
 			if !validSetComponent(p) {
 				return SetName{}, fmt.Errorf("rpsl/types: invalid set name %q: bad component %q", s, p)
 			}
-			if class != SetClassUnknown && cls != class {
+			if class != ClassUnknown && cls != class {
 				return SetName{}, fmt.Errorf("rpsl/types: invalid set name %q: mixes %s and %s components", s, class, cls)
 			}
 			class = cls
@@ -124,30 +136,26 @@ func ParseSetName(s string) (SetName, error) {
 		}
 		canon[i] = as.String()
 	}
-	if class == SetClassUnknown {
+	if class == ClassUnknown {
 		return SetName{}, fmt.Errorf("rpsl/types: invalid set name %q: no set component", s)
 	}
-	return SetName{name: t, canon: strings.Join(canon, ":"), class: class}, nil
+	return SetName{canon: strings.Join(canon, ":"), class: class}, nil
 }
 
 // Class reports the set class of the name's set components.
 func (n SetName) Class() SetClass { return n.class }
 
-// String returns the name in its original spelling.
-func (n SetName) String() string { return n.name }
-
-// Canonical returns the RPSL identity of the name: set components upper-cased,
-// ASN components normalized ("as007:as-x" and "AS7:AS-X" share one form).
-func (n SetName) Canonical() string { return n.canon }
+// String returns the name in canonical form.
+func (n SetName) String() string { return n.canon }
 
 // IsZero reports whether n is the zero SetName (never produced by ParseSetName).
-func (n SetName) IsZero() bool { return n.name == "" }
+func (n SetName) IsZero() bool { return n.canon == "" }
 
-// Components returns the ':'-separated components in their original spelling,
-// as a fresh slice.
+// Components returns the ':'-separated components, in canonical form, as a
+// fresh slice.
 func (n SetName) Components() []string {
-	if n.name == "" {
+	if n.canon == "" {
 		return nil
 	}
-	return strings.Split(n.name, ":")
+	return strings.Split(n.canon, ":")
 }

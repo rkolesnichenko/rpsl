@@ -13,8 +13,9 @@ import (
 type ASN uint32
 
 // ParseASN parses "AS65001", dotted "AS1.10" (asdot), and is case-insensitive.
+// Surrounding spaces and tabs are trimmed; any other whitespace is an error.
 func ParseASN(s string) (ASN, error) {
-	t := strings.TrimSpace(s)
+	t := strings.Trim(s, " \t")
 	if len(t) < 3 || !strings.EqualFold(t[:2], "as") {
 		return 0, fmt.Errorf("rpsl/types: invalid ASN %q: missing AS prefix", s)
 	}

@@ -1,0 +1,256 @@
+# Every routing-policy example in RFC 2622, RFC 2650 and RFC 4012, as written
+# (a value continued over several lines is joined into one). Grammar templates
+# such as "from <peering-1> [action <action-1>]" are left out, and three values
+# split by a page break or a hyphenated line are rejoined by hand.
+# TestRFCExamples parses each and expects no diagnostic, or the rules after
+# "## expect:".
+
+# RFC 2622, line 944
+filter: { 5.0.0.0/8, 6.0.0.0/8 }
+# RFC 2622, line 947
+filter: (AS1 or fltr-foo) and <AS2>
+# RFC 2622, line 1002
+import: from AS2 accept AS2
+# RFC 2622, line 1003
+import: from AS2 accept AS-FOO
+# RFC 2622, line 1004
+import: from AS2 accept RS-FOO
+# RFC 2622, line 1023
+import: from AS-FOO accept PeerAS
+# RFC 2622, line 1028
+import: from AS2 accept AS2
+# RFC 2622, line 1029
+import: from AS3 accept AS3
+# RFC 2622, line 1190
+export: to AS2 announce AS1 AND NOT community(NO_EXPORT)
+# RFC 2622, line 1378
+import: from AS2 7.7.7.2 at 7.7.7.1 accept { 128.9.0.0/16 }
+# RFC 2622, line 1384
+import: from AS2 at 7.7.7.1 accept { 128.9.0.0/16 }
+# RFC 2622, line 1391
+import: from AS2 accept { 128.9.0.0/16 }
+# RFC 2622, line 1411
+import: from AS-FOO      at 9.9.9.1 accept { 128.9.0.0/16 }
+# RFC 2622, line 1418
+import: from AS-FOO                 accept { 128.9.0.0/16 }
+# RFC 2622, line 1424 — RFC 2622 §5.6 example 6 uses NOT, which its own grammar
+# lacks; the parser rejects it and points to EXCEPT.
+import: from AS-FOO and not AS2 at not 7.7.7.1 accept { 128.9.0.0/16 } ## expect: policy/as-expr
+# RFC 2622, line 1434
+peering: AS1 at 9.9.9.1
+# RFC 2622, line 1437
+peering: prng-bar
+# RFC 2622, line 1438
+peering: AS2 at 9.9.9.1
+# RFC 2622, line 1441
+import: from prng-foo accept { 128.9.0.0/16 }
+# RFC 2622, line 1502
+import: from AS2 action pref = 1; accept { 128.9.0.0/16 }
+# RFC 2622, line 1536
+import: from AS2 action pref = 10; med = 0; community.append(10250, 3561:10); accept { 128.9.0.0/16 }
+# RFC 2622, line 1547
+import: from AS2 action pref = 1; from AS3 action pref = 2; accept AS4
+# RFC 2622, line 1557
+import: from AS2 7.7.7.2 at 7.7.7.1 action pref = 1; from AS2                    action pref = 2; accept AS4
+# RFC 2622, line 1592
+export: to AS2 action med = 5; community .= { 70 }; announce AS4
+# RFC 2622, line 1602
+export: to AS-FOO announce ANY
+# RFC 2622, line 1643
+import: from AS2 accept AS2
+# RFC 2622, line 1644
+export: protocol BGP4 into RIP to AS1 announce ANY
+# RFC 2622, line 1652
+import: from AS2 accept AS2^+
+# RFC 2622, line 1653
+export: protocol BGP4 into OSPF to AS1 announce AS2
+# RFC 2622, line 1661
+import: protocol STATIC into BGP4 from AS1 action aspath.prepend(AS1, AS1); accept AS1:RS-STATIC-ROUTES
+# RFC 2622, line 1669
+import: from AS2 accept AS2
+# RFC 2622, line 1670
+import: protocol IDMR from AS2 accept AS2:RS-RPF-ROUTES
+# RFC 2622, line 1693
+import: from AS2 7.7.7.2 at 7.7.7.1 action pref = 2; from AS2 7.7.7.2 at 7.7.7.1 action pref = 1; accept AS4
+# RFC 2622, line 1705
+import: from AS2                    action pref = 2; from AS2 7.7.7.2 at 7.7.7.1 action pref = 1; dpa = 5; accept AS4
+# RFC 2622, line 1719
+import: from AS2 7.7.7.2 at 7.7.7.1 action pref = 1; dpa = 5; from AS2                    action pref = 2; accept AS4
+# RFC 2622, line 1727
+import: from AS2 action pref = 2; accept AS4
+# RFC 2622, line 1728
+import: from AS2 action pref = 1; accept AS4
+# RFC 2622, line 1744
+import: from AS2 action pref = 2; accept AS4
+# RFC 2622, line 1745
+import: from AS2 action pref = 1; accept AS4 OR AS5
+# RFC 2622, line 1773
+import: from AS2 7.7.7.2 at 7.7.7.1 action pref = 2; accept {128.9.0.0/16}
+# RFC 2622, line 1776
+import: from AS2 action pref = 1; accept {128.9.0.0/16, 75.0.0.0/8}
+# RFC 2622, line 1818
+default: to AS2
+# RFC 2622, line 1824
+default: to AS2 7.7.7.2 at 7.7.7.1
+# RFC 2622, line 1830
+default: to AS2 action pref = 1;
+# RFC 2622, line 1831
+default: to AS3 action pref = 2;
+# RFC 2622, line 1837
+default: to AS2 networks { 128.9.0.0/16 }
+# RFC 2622, line 1913
+import: from AS1 action pref = 1; accept as-foo; except { from AS2 action pref = 2; accept AS226; except { from AS3 action pref = 3; accept {128.9.0.0/16}; } }
+# RFC 2622, line 1948
+import: from AS1 action pref = 1; accept as-foo; except { from AS3 action pref = 3; accept AS226 AND {128.9.0.0/16}; from AS2 action pref = 2; accept AS226 AND NOT {128.9.0.0/16}; }
+# RFC 2622, line 1958
+import: { from AS3 action pref = 3; accept as-foo AND AS226 AND {128.9.0.0/16}; from AS2 action pref = 2; accept as-foo AND AS226 AND NOT {128.9.0.0/16}; from AS1 action pref = 1; accept as-foo AND NOT (AS226 AND NOT {128.9.0.0/16} OR AS226 AND {128.9.0.0/16}); }
+# RFC 2622, line 1981
+import: { from AS3 action pref = 3; accept {128.9.0.0/16}; from AS2 action pref = 2; accept AS226 AND NOT {128.9.0.0/16}; from AS1 action pref = 1; accept as-foo AND NOT AS226; }
+# RFC 2622, line 1999
+import: { from AS-ANY action pref = 1; accept community(3560:10); from AS-ANY action pref = 2; accept community(3560:20); } refine { from AS1 accept AS1; from AS2 accept AS2; from AS3 accept AS3; }
+# RFC 2622, line 2023
+import: { from AS1 action pref = 1; accept community(3560:10) AND AS1; from AS1 action pref = 2; accept community(3560:20) AND AS1; from AS2 action pref = 1; accept community(3560:10) AND AS2; from AS2 action pref = 2; accept community(3560:20) AND AS2; from AS3 action pref = 1; accept community(3560:10) AND AS3; from AS3 action pref = 2; accept community(3560:20) AND AS3; }
+# RFC 2622, line 2039
+import: { from AS-ANY action med = 0; accept {0.0.0.0/0^0-18}; } refine { from AS1 at 7.7.7.1 action pref = 1; accept AS1; from AS1            action pref = 2; accept AS1; }
+# RFC 2622, line 2051
+import: { from AS1 at 7.7.7.1 action med=0; pref=1; accept {0.0.0.0/0^0-18} AND AS1; from  AS1             action med=0; pref=2; accept {0.0.0.0/0^0-18} AND AS1; }
+# RFC 2622, line 2478
+export: to AS2 action community.={3561:90}; to AS3 action community.={3561:80}; announce AS1
+# RFC 2622, line 2486
+import: from AS3561:AS-PEERS action pref = 10; accept community(3561:90)
+# RFC 2622, line 2489
+import: from AS3561:AS-PEERS action pref = 20; accept community(3561:80)
+# RFC 2622, line 2492
+import: from AS3561:AS-PEERS action pref = 20; accept community(3561:70)
+# RFC 2622, line 2495
+import: from AS3561:AS-PEERS action pref = 0; accept ANY
+# RFC 2622, line 2765
+export: to AS2 announce AS1
+# RFC 2622, line 2766
+export: to AS3 announce AS1 and not {128.9.0.0/16}
+# RFC 2622, line 2767
+export: to AS4 announce AS1
+# RFC 2622, line 2768
+export: to AS5 announce AS1
+# RFC 2622, line 2769
+export: to AS6 announce AS1
+# RFC 2622, line 2981
+peering: AS3334 192.87.45.195
+# RFC 2622, line 2982
+peering: AS3335 192.87.45.196
+# RFC 2650, line 187
+import: from AS1 accept ANY
+# RFC 2650, line 188
+import: from AS3 accept <^AS3+$>
+# RFC 2650, line 189
+export: to AS3 announce ANY
+# RFC 2650, line 190
+export: to AS1 announce AS2 AS3
+# RFC 2650, line 287
+import: from AS1 accept ANY
+# RFC 2650, line 288
+import: from AS3 accept <^AS3+$>
+# RFC 2650, line 289
+import: from AS4 accept <^AS4+$>
+# RFC 2650, line 290
+export: to AS3 announce ANY
+# RFC 2650, line 291
+export: to AS4 announce ANY
+# RFC 2650, line 292
+export: to AS1 announce AS2 AS3 AS4
+# RFC 2650, line 315
+import: from AS1 accept ANY
+# RFC 2650, line 316
+import: from AS2:AS-CUSTOMERS accept <^AS2:AS-CUSTOMERS+$>
+# RFC 2650, line 317
+export: to AS2:AS-CUSTOMERS announce ANY
+# RFC 2650, line 318
+export: to AS1 announce AS2 AS2:AS-CUSTOMERS
+# RFC 2650, line 324
+import: from AS2 accept <^AS2+ AS2:AS-CUSTOMERS*$>
+# RFC 2650, line 360
+import: from AS3 accept { 7.7.0.0/16^16-19 }
+# RFC 2650, line 382
+import: from AS1 accept ANY
+# RFC 2650, line 383
+import: from AS3 accept AS2:RS-ROUTES:AS3
+# RFC 2650, line 384
+import: from AS4 accept AS2:RS-ROUTES:AS4
+# RFC 2650, line 385
+export: to AS2:AS-CUSTOMERS announce ANY
+# RFC 2650, line 386
+export: to AS1 announce AS2 AS2:AS-CUSTOMERS
+# RFC 2650, line 412
+import: from AS3 accept AS2:RS-ROUTES:PeerAS
+# RFC 2650, line 413
+import: from AS4 accept AS2:RS-ROUTES:PeerAS
+# RFC 2650, line 419
+import: from AS1 accept ANY
+# RFC 2650, line 420
+import: from AS2:AS-CUSTOMERS accept AS2:RS-ROUTES:PeerAS
+# RFC 2650, line 421
+export: to AS2:AS-CUSTOMERS announce ANY
+# RFC 2650, line 422
+export: to AS1 announce AS2 AS2:AS-CUSTOMERS
+# RFC 2650, line 456
+import: from AS2 at 7.7.7.1 accept <^AS2+$>
+# RFC 2650, line 466
+import: from AS2 7.7.7.2 at 7.7.7.1 accept <^AS2+$>
+# RFC 2650, line 486
+import: from AS2 7.7.7.2 at 7.7.7.1 action pref=10; from AS2 7.7.7.3 at 7.7.7.1 action pref=20; accept <^AS2+$>
+# RFC 2650, line 512
+export: to AS1 7.7.7.1 at 7.7.7.2 action med=10; to AS1 7.7.7.1 at 7.7.7.3 action med=20; announce <^AS2+$>
+# RFC 2650, line 526
+export: to AS1 action med=igp_cost; announce <^AS2+$>
+# RFC 2650, line 568
+import: from AS2 accept (AS2 OR AS4) AND <^AS2+ AS4*$>
+# RFC 2650, line 570
+import: from AS3 accept (AS3 OR AS4) AND <^AS3+ AS4*$>
+# RFC 2650, line 572
+import: from AS5 accept AS5 AND <^AS5+$>
+# RFC 2650, line 583
+import: from AS2 action pref=10; accept (AS2 OR AS4) AND <^AS2+ AS4*$> AND community.contains(1:1)
+# RFC 2650, line 587
+import: from AS2 action pref=0; accept (AS2 OR AS4) AND <^AS2+ AS4*$>
+# RFC 2650, line 590
+import: from AS3 action pref=10; accept (AS3 OR AS4) AND <^AS3+ AS4*$> AND community.contains(1:1)
+# RFC 2650, line 594
+import: from AS3 action pref=0; accept (AS3 OR AS4) AND <^AS3+ AS4*$>
+# RFC 2650, line 597
+import: from AS5 action pref=10; accept AS5 AND <^AS5+$> AND community.contains(1:1)
+# RFC 2650, line 600
+import: from AS5 action pref=0; accept AS5 AND <^AS5+$>
+# RFC 2650, line 624
+import: { from AS-ANY action pref=10; accept community.contains(1:1); from AS-ANY action pref=0; accept ANY; } refine { from AS2 accept (AS2 OR AS4) AND <^AS2+ AS4*$>; from AS3 accept (AS3 OR AS4) AND <^AS3+ AS4*$>; from AS5 accept AS5 AND <^AS5+$>; }
+# RFC 2650, line 680
+import: { from AS-ANY action pref=10; accept community.contains(1:1); from AS-ANY action pref=0; accept ANY; } refine { from AS1:AS-CUSTOMERS accept (PeerAS OR AS1:AS-CUSTOMER:PeerAS) AND <^PeerAS+ AS1:AS-CUSTOMER:PeerAS*$> }
+# RFC 2650, line 701
+export: to AS2 action community.append(1:1); announce AS1
+# RFC 2650, line 704
+export: to AS3 announce AS1
+# RFC 2650, line 1023
+import: from AS3701 accept ANY
+# RFC 2650, line 1024
+import: from AS4222 accept <^AS4222+$>
+# RFC 2650, line 1025
+import: from AS5650 accept <^AS5650+$>
+# RFC 2650, line 1026
+import: from AS2914 accept <^AS2914+ (AS-WNA)*$>
+# RFC 2650, line 1027
+import: from AS1798 accept <^AS1798+$>
+# RFC 2650, line 1028
+export: to AS3701 announce AS3582
+# RFC 2650, line 1029
+export: to AS4222 announce AS3582
+# RFC 2650, line 1030
+export: to AS5650 announce AS3582
+# RFC 2650, line 1031
+export: to AS2914 announce AS3582
+# RFC 2650, line 1032
+export: to AS1798 announce AS3582
+# RFC 4012, line 352
+mp-import: afi any.unicast from AS65001 accept as-foo; except afi any.unicast { from AS65002 accept AS65226; } except afi ipv6.unicast { from AS65003 accept {2001:0DB8::/32}; }
+# RFC 4012, line 375
+mp-import: afi ipv6.unicast from AS65001 accept {192.0.2.0/24}
+# RFC 4012, line 514
+mp-peering: AS65002 2001:0DB8::1 at 2001:0DB8::2

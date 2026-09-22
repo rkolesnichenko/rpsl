@@ -18,3 +18,4 @@ Thumbs.db
 /.data/
 .remember/
 .claude/settings.local.json
+.claude/worktrees/

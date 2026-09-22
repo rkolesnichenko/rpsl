@@ -20,9 +20,9 @@ type MemSource struct {
 	claims map[string][]object.Object   // canonical set name -> member-of claimants
 }
 
-// NewMemSource indexes a corpus of decoded objects. Sets are indexed by
-// canonical name, route/route6 prefixes by origin AS, and every object's
-// member-of claims by the canonical name of each referenced set.
+// NewMemSource indexes a corpus of objects — decoded, or built by the caller,
+// as values or pointers. Sets are indexed by name, route/route6 prefixes by
+// origin AS, and aut-num/route/route6 member-of claims by each named set.
 //
 // When the same set name appears more than once (e.g. dumps from several IRRs),
 // sourcePrecedence decides which object is used, like IRRd's !s: the set whose
@@ -35,24 +35,23 @@ func NewMemSource(objs []object.Object, sourcePrecedence ...string) *MemSource {
 		routes: map[types.ASN][]netip.Prefix{},
 		claims: map[string][]object.Object{},
 	}
-	rank := func(o object.Object) int {
-		if raw := o.Raw(); raw != nil {
-			if a, ok := raw.GetFirst("source"); ok {
-				for i, src := range sourcePrecedence {
-					if strings.EqualFold(strings.TrimSpace(a.Value), src) {
-						return i
-					}
-				}
+	rank := func(source string) int {
+		for i, src := range sourcePrecedence {
+			if strings.EqualFold(strings.TrimSpace(source), src) {
+				return i
 			}
 		}
 		return len(sourcePrecedence)
 	}
 	setRank := map[string]int{}
 	for _, o := range objs {
+		if o = value(o); o == nil {
+			continue
+		}
 		if set, ok := o.(object.Set); ok {
-			key := set.SetName().Canonical()
-			if prev, dup := setRank[key]; !dup || rank(o) < prev {
-				s.sets[key], setRank[key] = set, rank(o)
+			key, r := set.SetName().String(), rank(set.SetSource())
+			if prev, dup := setRank[key]; !dup || r < prev {
+				s.sets[key], setRank[key] = set, r
 			}
 		}
 		switch t := o.(type) {
@@ -70,25 +69,25 @@ func NewMemSource(objs []object.Object, sourcePrecedence ...string) *MemSource {
 	return s
 }
 
-// indexClaims records this object under every set its member-of items name.
-// Whether a claim is honored is decided at query time by ClaimAllowed.
+// indexClaims records a claimant under every set its member-of names. Whether a
+// claim is honored is decided at query time by ClaimAllowed.
 func (s *MemSource) indexClaims(o object.Object) {
-	seen := map[string]bool{}
-	for _, a := range o.Raw().GetAll("member-of") {
-		for _, it := range a.List() {
-			n, err := types.ParseSetName(it.Value)
-			if err != nil || seen[n.Canonical()] {
-				continue
-			}
-			seen[n.Canonical()] = true
-			s.claims[n.Canonical()] = append(s.claims[n.Canonical()], o)
+	memberOf, _, _, ok := claimant(o)
+	if !ok {
+		return
+	}
+	seen := map[types.SetName]bool{}
+	for _, n := range memberOf {
+		if !seen[n] {
+			seen[n] = true
+			s.claims[n.String()] = append(s.claims[n.String()], o)
 		}
 	}
 }
 
 // GetSet returns the named set or ErrNotFound.
 func (s *MemSource) GetSet(_ context.Context, name types.SetName) (object.Set, error) {
-	if set, ok := s.sets[name.Canonical()]; ok {
+	if set, ok := s.sets[name.String()]; ok {
 		return set, nil
 	}
 	return nil, ErrNotFound
@@ -106,11 +105,11 @@ func (s *MemSource) OriginatedRoutes(_ context.Context, as types.ASN, afi types.
 }
 
 // MembersByRef returns the objects claiming member-of set whose claim
-// ClaimAllowed honors under mntners ("ANY" admits any maintainer).
-func (s *MemSource) MembersByRef(_ context.Context, set types.SetName, mntners []string) ([]object.Object, error) {
+// ClaimAllowed honors.
+func (s *MemSource) MembersByRef(_ context.Context, set object.Set) ([]object.Object, error) {
 	var out []object.Object
-	for _, o := range s.claims[set.Canonical()] {
-		if ClaimAllowed(o, set, mntners) {
+	for _, o := range s.claims[set.SetName().String()] {
+		if ClaimAllowed(o, set) {
 			out = append(out, o)
 		}
 	}

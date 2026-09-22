@@ -21,11 +21,11 @@ source:      RIPE
 	if !ok {
 		t.Fatalf("Decode = %T, want PeeringSet", obj)
 	}
-	if ps.Name.Canonical() != "PRNG-EXAMPLE" {
-		t.Errorf("Name = %q", ps.Name.Canonical())
+	if ps.Name.String() != "PRNG-EXAMPLE" {
+		t.Errorf("Name = %q", ps.Name.String())
 	}
-	if len(ps.Peerings) != 2 {
-		t.Fatalf("Peerings = %+v, want 2", ps.Peerings)
+	if len(ps.Peerings) != 1 || len(ps.MpPeerings) != 1 {
+		t.Fatalf("Peerings = %+v, MpPeerings = %+v; want one each", ps.Peerings, ps.MpPeerings)
 	}
 	if _, ok := ps.Peerings[0].(policy.PeeringAS); !ok {
 		t.Errorf("peering[0] = %T, want PeeringAS", ps.Peerings[0])
@@ -49,8 +49,8 @@ source:     RIPE
 	if !ok {
 		t.Fatalf("Decode = %T, want FilterSet", obj)
 	}
-	if fs.Name.Canonical() != "FLTR-EXAMPLE" {
-		t.Errorf("Name = %q", fs.Name.Canonical())
+	if fs.Name.String() != "FLTR-EXAMPLE" {
+		t.Errorf("Name = %q", fs.Name.String())
 	}
 	if _, ok := fs.Filter.(policy.FilterAnd); !ok {
 		t.Errorf("Filter = %T, want FilterAnd", fs.Filter)
@@ -73,8 +73,8 @@ source:      RIPE
 	if !ok {
 		t.Fatalf("Decode = %T, want RtrSet", obj)
 	}
-	if rs.Name.Canonical() != "RTRS-EXAMPLE" {
-		t.Errorf("Name = %q", rs.Name.Canonical())
+	if rs.Name.String() != "RTRS-EXAMPLE" {
+		t.Errorf("Name = %q", rs.Name.String())
 	}
 	// members: is a comma-separated list (RFC 2622 §2): two routers, not one.
 	if len(rs.Members) != 2 || rs.Members[0] != "rtr1.example.net" || rs.Members[1] != "rtr2.example.net" ||

@@ -3,6 +3,8 @@ package irrd
 import (
 	"bufio"
 	"fmt"
+	"io"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -46,8 +48,44 @@ func TestReadFrameRejectsBadTrailer(t *testing.T) {
 	}
 }
 
-func TestSanitizeLine(t *testing.T) {
-	if got := sanitizeLine("RADB,RIPE\n!gAS1"); strings.ContainsAny(got, "\r\n") {
-		t.Errorf("sanitizeLine left control chars: %q", got)
+// junk is an endless stream of 'x' with no newline, as a hostile server might
+// send it; it allocates nothing itself.
+type junk struct{}
+
+func (junk) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 'x'
+	}
+	return len(p), nil
+}
+
+// MaxResponse bounds the payload, and the header and status lines around it are
+// bounded too: a server that never ends a status line must not make the reader
+// buffer it. The trailer after a payload must be exactly "C".
+func TestReadFrameBoundsStatusLines(t *testing.T) {
+	const flood = 64 << 20
+	cases := map[string]io.Reader{
+		"header":      io.MultiReader(strings.NewReader("A"), io.LimitReader(junk{}, flood)),
+		"error":       io.MultiReader(strings.NewReader("F "), io.LimitReader(junk{}, flood)),
+		"unknown":     io.MultiReader(strings.NewReader("X"), io.LimitReader(junk{}, flood)),
+		"trailer":     io.MultiReader(strings.NewReader("A5\nabcd\nC"), io.LimitReader(junk{}, flood)),
+		"trailer-ext": strings.NewReader("A5\nabcd\nCfoo\n"),
+	}
+	for name, in := range cases {
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		_, err := readFrame(bufio.NewReader(in), 1000)
+		runtime.ReadMemStats(&after)
+		if err == nil {
+			t.Errorf("%s: readFrame accepted it, want an error", name)
+		}
+		if alloc := after.TotalAlloc - before.TotalAlloc; alloc > 1<<20 {
+			t.Errorf("%s: readFrame allocated %d bytes, want under 1 MiB", name, alloc)
+		}
+	}
+	for _, ok := range []string{"A5\nabcd\nC\n", "A5\nabcd\nC\r\n"} {
+		if got, err := readFrame(bufio.NewReader(strings.NewReader(ok)), 1000); err != nil || string(got) != "abcd\n" {
+			t.Errorf("readFrame(%q) = %q, %v; want the payload", ok, got, err)
+		}
 	}
 }

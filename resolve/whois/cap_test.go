@@ -23,9 +23,3 @@ func TestWhoisResponseCap(t *testing.T) {
 		t.Errorf("err = %v, want a response-cap error", err)
 	}
 }
-
-func TestWhoisSanitizeSources(t *testing.T) {
-	if got := sanitizeLine("RIPE\n-i member-of EVIL"); strings.ContainsAny(got, "\r\n") {
-		t.Errorf("sanitizeLine left control chars: %q", got)
-	}
-}

@@ -85,7 +85,7 @@ func TestFilterCommunityValues(t *testing.T) {
 	if !ok {
 		t.Fatalf("filter = %T, want FilterCommunity", f.Filter)
 	}
-	if vs := fc.Values(); len(vs) != 2 || vs[0] != "65000:1" {
+	if vs := fc.Values; len(vs) != 2 || vs[0] != "65000:1" {
 		t.Errorf("Values() = %v, want [65000:1 65000:2]", vs)
 	}
 }

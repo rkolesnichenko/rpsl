@@ -5,8 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"math"
 	"net"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -87,7 +90,7 @@ func commands(c net.Conn, br *bufio.Reader, f func(cmd string) (keepGoing bool))
 // (Found against whois.radb.net: "!sRIPE" was answered and the query got EOF.)
 func TestPerQueryWithSourcesUsesPersistentMode(t *testing.T) {
 	fs := newFakeServer(t, map[string]string{"!gAS3333": frame("193.0.0.0/21")})
-	src := &Source{Addr: fs.addr(), Sources: "RIPE"}
+	src := &Source{Addr: fs.addr(), Sources: []string{"RIPE"}}
 	got, err := src.OriginatedRoutes(context.Background(), 3333, types.AFIv4)
 	if err != nil || len(got) != 1 {
 		t.Errorf("OriginatedRoutes = %v, %v; want [193.0.0.0/21]", got, err)
@@ -235,7 +238,7 @@ func TestRejectedSourceListIsAnError(t *testing.T) {
 				}
 			}
 		})
-		src := &Source{Addr: srv.addr(), Sources: "BOGUS", KeepAlive: keep}
+		src := &Source{Addr: srv.addr(), Sources: []string{"BOGUS"}, KeepAlive: keep}
 		_, err := src.GetSet(context.Background(), mustSet(t, "AS-X"))
 		if err == nil || errors.Is(err, resolve.ErrNotFound) || !strings.Contains(err.Error(), "BOGUS") {
 			t.Errorf("%s: err = %v, want an error naming the rejected source list", name, err)
@@ -251,8 +254,8 @@ func TestCloseStopsPooling(t *testing.T) {
 		t.Fatal(err)
 	}
 	src.Close()
-	if _, err := src.OriginatedRoutes(context.Background(), 1, types.AFIv4); err != nil {
-		t.Fatalf("query after Close: %v", err)
+	if _, err := src.OriginatedRoutes(context.Background(), 1, types.AFIv4); !errors.Is(err, ErrClosed) {
+		t.Fatalf("query after Close = %v, want ErrClosed", err)
 	}
 	if n := len(src.idle); n != 0 {
 		t.Errorf("%d connections pooled after Close, want 0 (they would leak)", n)
@@ -313,5 +316,107 @@ func TestMaxConnsBoundsConcurrency(t *testing.T) {
 		if failed.Load() != 0 || peak.Load() > 3 {
 			t.Errorf("%s: %d queries failed, peak %d open connections; want 0 and <= 3", name, failed.Load(), peak.Load())
 		}
+	}
+}
+
+// Timeout bounds the whole query — dialing, I/O, and waiting for a MaxConns
+// slot — rather than restarting at each stage.
+func TestTimeoutCoversTheWholeQuery(t *testing.T) {
+	srv := newRawServer(t, silent)
+	slowDial := func(ctx context.Context) (net.Conn, error) {
+		select {
+		case <-time.After(600 * time.Millisecond):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		var d net.Dialer
+		return d.DialContext(ctx, "tcp", srv.addr())
+	}
+	src := &Source{Dial: slowDial, Timeout: time.Second}
+	start := time.Now()
+	if _, err := src.GetSet(context.Background(), mustSet(t, "AS-X")); !errors.Is(err, context.DeadlineExceeded) ||
+		time.Since(start) > 1400*time.Millisecond {
+		t.Errorf("slow dial: GetSet = %v after %v; want context.DeadlineExceeded after ~1s", err, time.Since(start))
+	}
+
+	// One query holds the only slot on a silent server until its 600ms Timeout;
+	// a second query started 200ms later must also finish within its own 600ms,
+	// the wait for the slot included (it used to take 400ms + 600ms).
+	held := &Source{Addr: srv.addr(), MaxConns: 1, Timeout: 600 * time.Millisecond}
+	go held.GetSet(context.Background(), mustSet(t, "AS-HOLD"))
+	time.Sleep(200 * time.Millisecond)
+	start = time.Now()
+	if _, err := held.GetSet(context.Background(), mustSet(t, "AS-X")); !errors.Is(err, context.DeadlineExceeded) ||
+		time.Since(start) > 850*time.Millisecond {
+		t.Errorf("slot wait: GetSet = %v after %v; want context.DeadlineExceeded after ~600ms", err, time.Since(start))
+	}
+}
+
+// Sources is a list of source names; each must be a plain name, so no value can
+// smuggle another command or flag onto the wire. It is refused before dialing.
+func TestSourcesAreValidated(t *testing.T) {
+	for _, bad := range [][]string{{"RIPE -k"}, {"RIPE\n!iAS-X"}, {""}, {"RIPE,RADB"}} {
+		src := &Source{Sources: bad, Dial: func(context.Context) (net.Conn, error) {
+			t.Errorf("dialed with Sources %q", bad)
+			return nil, errors.New("unreachable")
+		}}
+		if _, err := src.GetSet(context.Background(), mustSet(t, "AS-X")); err == nil {
+			t.Errorf("Sources %q accepted", bad)
+		}
+	}
+	sent := make(chan string, 16)
+	srv := newRawServer(t, func(_ int64, c net.Conn, br *bufio.Reader) {
+		for {
+			line, err := br.ReadString('\n')
+			if err != nil {
+				return
+			}
+			cmd := strings.TrimSpace(line)
+			sent <- cmd
+			switch {
+			case strings.HasPrefix(cmd, "!s"):
+				io.WriteString(c, "C\n")
+			case strings.HasPrefix(cmd, "!i"), strings.HasPrefix(cmd, "!m"):
+				io.WriteString(c, "D\n")
+			case cmd == "!q":
+				return
+			}
+		}
+	})
+	(&Source{Addr: srv.addr(), Sources: []string{"RIPE", "radb"}, Timeout: 2 * time.Second}).GetSet(context.Background(), mustSet(t, "AS-X"))
+	var got []string
+	for len(sent) > 0 {
+		got = append(got, <-sent)
+	}
+	if !slices.Contains(got, "!sRIPE,RADB") {
+		t.Errorf("commands %q, want !sRIPE,RADB", got)
+	}
+}
+
+// After Close, queries fail with ErrClosed instead of dialing on; Close is
+// idempotent.
+func TestClosedSourceRefusesQueries(t *testing.T) {
+	src := &Source{Dial: func(context.Context) (net.Conn, error) {
+		t.Error("dialed after Close")
+		return nil, errors.New("unreachable")
+	}}
+	if err := src.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := src.GetSet(context.Background(), mustSet(t, "AS-X")); !errors.Is(err, ErrClosed) {
+		t.Errorf("GetSet after Close = %v, want ErrClosed", err)
+	}
+	if err := src.Close(); err != nil {
+		t.Errorf("second Close = %v", err)
+	}
+}
+
+// Zero means the default and negative unlimited, as for every limit.
+func TestLimitsFollowOneRule(t *testing.T) {
+	if (&Source{MaxResponse: -1}).maxResponse() != math.MaxInt64 || (&Source{MaxConns: -1}).maxConns() != math.MaxInt {
+		t.Error("negative MaxResponse/MaxConns are not unlimited")
+	}
+	if (&Source{}).maxResponse() != defaultMaxResponse || (&Source{}).maxConns() != defaultMaxConns {
+		t.Error("zero MaxResponse/MaxConns are not the defaults")
 	}
 }

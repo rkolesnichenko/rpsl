@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/netip"
 	"sort"
-	"strings"
 
 	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/types"
@@ -22,7 +22,7 @@ const (
 // all I/O is delegated to Src, all limits are explicit, and every traversal is
 // context-cancellable. A zero Expander (except Src) uses the default limits
 // MaxDepth=32, MaxPrefixes=1<<20 (1,048,576), MaxVisited=1<<17 (131,072); each
-// returns ErrSetTooLarge, naming the Limit, when breached. An Expander holds no
+// returns SetTooLargeError, naming the Limit, when breached. An Expander holds no
 // per-call state, so one value may serve concurrent expansions.
 //
 // Expansion runs in two phases. Discovery walks the set graph breadth-first
@@ -42,26 +42,26 @@ type Expander struct {
 	AFI         types.AFI // address-family constraint; Unspecified/Any = both
 }
 
-func (e *Expander) maxDepth() int {
-	if e.MaxDepth > 0 {
-		return e.MaxDepth
+// limit applies the rule every cap follows: zero means def, negative unlimited.
+func limit(v, def int) int {
+	switch {
+	case v == 0:
+		return def
+	case v < 0:
+		return math.MaxInt
 	}
-	return defaultMaxDepth
+	return v
 }
 
-func (e *Expander) maxPrefixes() int {
-	if e.MaxPrefixes > 0 {
-		return e.MaxPrefixes
-	}
-	return defaultMaxPrefixes
-}
+// ctxCheckEvery is how many prefixes ExpandPrefixes enumerates between checks
+// of its context.
+const ctxCheckEvery = 4096
 
-func (e *Expander) maxVisited() int {
-	if e.MaxVisited > 0 {
-		return e.MaxVisited
-	}
-	return defaultMaxVisited
-}
+func (e *Expander) maxDepth() int { return limit(e.MaxDepth, defaultMaxDepth) }
+
+func (e *Expander) maxPrefixes() int { return limit(e.MaxPrefixes, defaultMaxPrefixes) }
+
+func (e *Expander) maxVisited() int { return limit(e.MaxVisited, defaultMaxVisited) }
 
 // afiAllows reports whether a prefix is admitted under the configured AFI.
 func (e *Expander) afiAllows(p netip.Prefix) bool {
@@ -77,13 +77,17 @@ func (e *Expander) afiAllows(p netip.Prefix) bool {
 
 // ExpandAS returns the ASNs denoted by an as-set: the ASN members of every
 // as-set reachable from it plus their indirect (mbrs-by-ref) aut-num members.
+// Any other class of set returns an error wrapping ErrSetClass.
 // Cycles are skipped (as in bgpq4). A missing top-level set returns an error
 // wrapping ErrNotFound; missing nested sets expand to nothing and are listed by
-// ASSet.Missing. AFI only filters prefixes; ExpandAS is family-agnostic.
-func (e *Expander) ExpandAS(ctx context.Context, n types.SetName) (ASSet, error) {
-	g, err := e.discover(ctx, n, false)
+// ASNSet.Missing. AFI only filters prefixes; ExpandAS is family-agnostic.
+func (e *Expander) ExpandAS(ctx context.Context, n types.SetName) (ASNSet, error) {
+	if n.Class() != types.ClassAsSet {
+		return ASNSet{}, fmt.Errorf("resolve: ExpandAS %s: %w", n, ErrSetClass)
+	}
+	g, err := e.discover(ctx, n)
 	if err != nil {
-		return ASSet{}, err
+		return ASNSet{}, err
 	}
 	out := newASSet()
 	for _, nd := range g.nodes {
@@ -107,19 +111,28 @@ func (e *Expander) ExpandAS(ctx context.Context, n types.SetName) (ASSet, error)
 // as-sets (RFC 2622 §5.2), nested route-sets, and indirect route members, with
 // range operators on members ("RS-FOO^+", "AS1^24") composed along each path.
 // It is what bgpq4 emits as le/ge bounds, and the only form in which sets with
-// ranges like /8^+ can be used. MaxPrefixes caps the number of ranges. Cycles
-// are skipped unless re-entered under a different stack of operators, which
-// returns ErrCyclicOperator. The AFI constraint applies throughout.
+// ranges like /8^+ can be used. MaxPrefixes caps the number of ranges. Cycles,
+// including ones through range operators, resolve to the RFC's least fixpoint
+// (RS-A = X ∪ RS-B^+, RS-B = RS-A gives X ∪ X^+). The AFI constraint applies
+// throughout. A set of another class returns an error wrapping ErrSetClass.
 func (e *Expander) ExpandPrefixRanges(ctx context.Context, n types.SetName) (RangeSet, error) {
-	g, err := e.discover(ctx, n, true)
+	return e.expandRanges(ctx, n, e.maxPrefixes())
+}
+
+// expandRanges is ExpandPrefixRanges with a cap of maxRanges ranges.
+func (e *Expander) expandRanges(ctx context.Context, n types.SetName, maxRanges int) (RangeSet, error) {
+	if c := n.Class(); c != types.ClassAsSet && c != types.ClassRouteSet {
+		return RangeSet{}, fmt.Errorf("resolve: expand prefixes of %s: %w", n, ErrSetClass)
+	}
+	g, err := e.discover(ctx, n)
 	if err != nil {
 		return RangeSet{}, err
 	}
 	if err := e.fetchRoutes(ctx, g); err != nil {
 		return RangeSet{}, err
 	}
-	v := &evaluator{e: e, ctx: ctx, g: g, out: newRangeSet(), onStack: map[string]string{}, done: map[string]bool{}}
-	if err := v.walk(n, nil); err != nil {
+	v := &evaluator{e: e, ctx: ctx, g: g, out: newRangeSet(), done: map[evalState]bool{}, max: maxRanges}
+	if err := v.walk(n, opStack{}); err != nil {
 		return RangeSet{}, err
 	}
 	v.out.missing = g.missing
@@ -129,23 +142,32 @@ func (e *Expander) ExpandPrefixRanges(ctx context.Context, n types.SetName) (Ran
 // ExpandPrefixes returns the concrete prefixes denoted by a route-set or as-set:
 // ExpandPrefixRanges, materialized. MaxPrefixes caps the number of distinct
 // prefixes and is enforced while enumerating, so a single ^0-32 range cannot
-// exhaust memory, and duplicates are never charged against it.
+// exhaust memory, and duplicates are never charged against it. The context is
+// checked while enumerating, too, so even a range as large as the cap allows
+// stops promptly when ctx is cancelled.
 func (e *Expander) ExpandPrefixes(ctx context.Context, n types.SetName) (PrefixSet, error) {
-	ranges, err := e.ExpandPrefixRanges(ctx, n)
+	// Ranges are not capped here: overlapping ones ("/31" and "/31^+") are
+	// several ranges but no more prefixes, and only distinct prefixes count.
+	// The walk that finds them is bounded by MaxVisited.
+	ranges, err := e.expandRanges(ctx, n, math.MaxInt)
 	if err != nil {
 		return PrefixSet{}, err
 	}
 	out := newPrefixSet()
+	enumerated := 0
 	for _, r := range ranges.List() {
-		if err := ctx.Err(); err != nil {
-			return PrefixSet{}, err
-		}
 		for p := range r.All() {
+			if enumerated++; enumerated%ctxCheckEvery == 0 && ctx.Err() != nil {
+				return PrefixSet{}, ctx.Err()
+			}
 			out.add(p)
 			if out.Len() > e.maxPrefixes() {
-				return PrefixSet{}, ErrSetTooLarge{Name: n, Limit: LimitPrefixes, Count: out.Len()}
+				return PrefixSet{}, &SetTooLargeError{Name: n, Limit: LimitPrefixes, Max: e.maxPrefixes(), Count: out.Len()}
 			}
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return PrefixSet{}, err
 	}
 	out.missing = ranges.missing
 	return *out, nil
@@ -167,73 +189,98 @@ type setNode struct {
 }
 
 // discover fetches every set reachable from top breadth-first, so each set is
-// fetched once and first reached at its shortest distance. ExpandAS follows only
-// as-set members; prefix expansions also follow route-sets.
-func (e *Expander) discover(ctx context.Context, top types.SetName, prefixes bool) (*setGraph, error) {
+// fetched once and first reached at its shortest distance. It follows only the
+// nested sets RFC 2622 allows (see nestable), so from an as-set only as-sets.
+func (e *Expander) discover(ctx context.Context, top types.SetName) (*setGraph, error) {
 	type item struct {
 		name  types.SetName
 		depth int
 	}
 	g := &setGraph{top: top, nodes: map[string]*setNode{}}
-	seen := map[string]bool{top.Canonical(): true}
+	seen := map[string]bool{top.String(): true}
 	for queue := []item{{top, 0}}; len(queue) > 0; queue = queue[1:] {
 		it := queue[0]
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		if isAnySet(it.name) {
-			return nil, ErrAnySet{Name: it.name}
+			return nil, &AnySetError{Name: it.name}
 		}
 		set, err := e.Src.GetSet(ctx, it.name)
+		if err == nil && set == nil {
+			err = ErrNotFound // a Source that returns neither a set nor an error
+		}
+		if set != nil {
+			set = setValue(set)
+		}
 		if err != nil {
 			if !errors.Is(err, ErrNotFound) {
 				return nil, err
 			}
 			if it.depth == 0 {
-				return nil, fmt.Errorf("resolve: %s: %w", top, ErrNotFound)
+				return nil, fmt.Errorf("expand %s: %w", top, ErrNotFound)
 			}
 			g.missing = append(g.missing, it.name)
 			continue
 		}
 		nd := &setNode{set: set}
-		g.nodes[it.name.Canonical()] = nd
-		if refs := set.RefMntners(); len(refs) > 0 {
-			objs, err := e.Src.MembersByRef(ctx, it.name, refs)
+		g.nodes[it.name.String()] = nd
+		if len(set.RefMntners()) > 0 {
+			objs, err := e.Src.MembersByRef(ctx, set)
 			if err != nil {
 				return nil, err
 			}
 			for _, o := range objs {
-				if claimClassOK(set, o) && ClaimAllowed(o, it.name, refs) {
+				if o = value(o); claimClassOK(set, o) && ClaimAllowed(o, set) {
 					nd.claims = append(nd.claims, o)
 				}
 			}
 		}
 		for _, m := range set.SetMembers() {
-			if m.Kind != object.MemberSet || !follows(m.Set, prefixes) || seen[m.Set.Canonical()] {
+			if m.Kind != object.MemberSet || !nestable(it.name.Class(), m.Set.Class()) || seen[m.Set.String()] {
 				continue
 			}
 			if it.depth+1 > e.maxDepth() {
-				return nil, ErrSetTooLarge{Name: top, Limit: LimitDepth, Count: it.depth + 1}
+				return nil, &SetTooLargeError{Name: top, Limit: LimitDepth, Max: e.maxDepth(), Count: it.depth + 1}
 			}
 			if len(seen) >= e.maxVisited() {
-				return nil, ErrSetTooLarge{Name: top, Limit: LimitVisited, Count: len(seen) + 1}
+				return nil, &SetTooLargeError{Name: top, Limit: LimitVisited, Max: e.maxVisited(), Count: len(seen) + 1}
 			}
-			seen[m.Set.Canonical()] = true
+			seen[m.Set.String()] = true
 			queue = append(queue, item{m.Set, it.depth + 1})
 		}
 	}
-	sort.Slice(g.missing, func(i, j int) bool { return g.missing[i].Canonical() < g.missing[j].Canonical() })
+	sort.Slice(g.missing, func(i, j int) bool { return g.missing[i].String() < g.missing[j].String() })
 	return g, nil
 }
 
-// follows reports whether discovery traverses a nested set of this class.
-func follows(n types.SetName, prefixes bool) bool {
-	return n.Class() == types.AsSet || (prefixes && n.Class() == types.RouteSet)
+// setValue is value for a Set: a pointer to an AsSet or RouteSet becomes the
+// value, so type switches on the set see one form.
+func setValue(set object.Set) object.Set {
+	if v, ok := value(set).(object.Set); ok {
+		return v
+	}
+	return set
+}
+
+// nestable reports whether a set of class child may be a member of a set of
+// class parent (RFC 2622 §5.1-5.2): an as-set lists as-sets; a route-set lists
+// route-sets and as-sets (the routes their ASes originate). Other nestings are
+// invalid data and are not followed: a route-set inside an as-set would add
+// prefixes that no route object backs.
+func nestable(parent, child types.SetClass) bool {
+	switch parent {
+	case types.ClassAsSet:
+		return child == types.ClassAsSet
+	case types.ClassRouteSet:
+		return child == types.ClassRouteSet || child == types.ClassAsSet
+	}
+	return false
 }
 
 // isAnySet reports whether n is AS-ANY or RS-ANY.
 func isAnySet(n types.SetName) bool {
-	c := n.Canonical()
+	c := n.String()
 	return c == "AS-ANY" || c == "RS-ANY"
 }
 
@@ -289,65 +336,59 @@ func (e *Expander) fetchRoutes(ctx context.Context, g *setGraph) error {
 
 // ---- evaluation ----
 
-// evaluator builds a RangeSet from a discovered graph. Each set is walked once
-// per distinct stack of range operators leading to it (ops, outermost first).
+// evaluator builds a RangeSet from a discovered graph. Its states are (set,
+// operator stack) pairs: a set reached under the operators of the path leading
+// to it. Each state is walked once, and a set met again under an equivalent
+// stack is the same state, so cycles — with or without operators — terminate,
+// and the result is the union over every reachable state: RFC 2622's least
+// fixpoint of the set definitions.
 type evaluator struct {
-	e       *Expander
-	ctx     context.Context
-	g       *setGraph
-	out     *RangeSet
-	onStack map[string]string // canonical set on the current path -> its opsKey
-	done    map[string]bool   // canonical set + "|" + opsKey, fully walked
-	visits  int
+	e      *Expander
+	ctx    context.Context
+	g      *setGraph
+	out    *RangeSet
+	done   map[evalState]bool
+	visits int
+	max    int // cap on ranges
 }
 
-func opsKey(ops []types.RangeOperator) string {
-	parts := make([]string, len(ops))
-	for i, o := range ops {
-		parts[i] = o.String()
-	}
-	return strings.Join(parts, ",")
+type evalState struct {
+	set string // canonical set name
+	ops opStack
 }
 
-func (v *evaluator) walk(name types.SetName, ops []types.RangeOperator) error {
+func (v *evaluator) walk(name types.SetName, ops opStack) error {
 	if err := v.ctx.Err(); err != nil {
 		return err
 	}
-	canon, key := name.Canonical(), opsKey(ops)
+	canon := name.String()
+	v.done[evalState{canon, ops}] = true
 	if v.visits++; v.visits > v.e.maxVisited() {
-		return ErrSetTooLarge{Name: v.g.top, Limit: LimitVisited, Count: v.visits}
+		return &SetTooLargeError{Name: v.g.top, Limit: LimitVisited, Max: v.e.maxVisited(), Count: v.visits}
 	}
 	nd := v.g.nodes[canon]
-	v.onStack[canon] = key
-	defer delete(v.onStack, canon)
-
 	for _, m := range nd.set.SetMembers() {
 		switch m.Kind {
 		case object.MemberPrefixRange:
-			if err := v.add(m.Range, ops); err != nil {
+			if err := v.add(m.Range, &ops); err != nil {
 				return err
 			}
 		case object.MemberAS:
-			if err := v.addRoutes(v.g.routes[m.AS], appendOp(ops, m.Op)); err != nil {
+			if err := v.addRoutes(v.g.routes[m.AS], ops.push(m.Op)); err != nil {
 				return err
 			}
 		case object.MemberSet:
-			child := m.Set.Canonical()
-			if _, ok := v.g.nodes[child]; !ok {
-				continue // missing (reported) or a class discovery does not follow
+			if !nestable(name.Class(), m.Set.Class()) {
+				continue // e.g. a route-set listed in an as-set, even if reachable elsewhere
 			}
-			childOps := appendOp(ops, m.Op)
-			childKey := opsKey(childOps)
-			if stackKey, on := v.onStack[child]; on {
-				if stackKey != childKey {
-					return ErrCyclicOperator{Set: name, Member: m.Raw}
-				}
-				continue // re-entered under the same operators: already contributing
+			if _, ok := v.g.nodes[m.Set.String()]; !ok {
+				continue // missing (reported)
 			}
-			if v.done[child+"|"+childKey] {
-				continue
+			child := ops.push(m.Op)
+			if v.done[evalState{m.Set.String(), child}] {
+				continue // already walked, or on the current path: its ranges are already counted
 			}
-			if err := v.walk(m.Set, childOps); err != nil {
+			if err := v.walk(m.Set, child); err != nil {
 				return err
 			}
 		}
@@ -366,48 +407,34 @@ func (v *evaluator) walk(name types.SetName, ops []types.RangeOperator) error {
 			return err
 		}
 	}
-	v.done[canon+"|"+key] = true
 	return nil
 }
 
-// appendOp returns ops extended by op (a fresh slice), or ops if op is absent.
-func appendOp(ops []types.RangeOperator, op types.RangeOperator) []types.RangeOperator {
-	if op.IsZero() {
-		return ops
-	}
-	return append(ops[:len(ops):len(ops)], op)
-}
-
 // addRoutes adds each route as an exact range under ops.
-func (v *evaluator) addRoutes(routes []netip.Prefix, ops []types.RangeOperator) error {
+func (v *evaluator) addRoutes(routes []netip.Prefix, ops opStack) error {
 	for _, p := range routes {
 		if !p.IsValid() {
 			continue
 		}
 		p = p.Masked()
-		exact := types.PrefixRange{Prefix: p, Op: types.RangeExact, Lo: uint8(p.Bits()), Hi: uint8(p.Bits())}
-		if err := v.add(exact, ops); err != nil {
+		exact, _ := types.NewPrefixRange(p, p.Bits(), p.Bits())
+		if err := v.add(exact, &ops); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// add applies ops to r, innermost first, and records the result if it survives
-// the operators and the AFI constraint.
-func (v *evaluator) add(r types.PrefixRange, ops []types.RangeOperator) error {
-	for i := len(ops) - 1; i >= 0; i-- {
-		var ok bool
-		if r, ok = ops[i].Apply(r); !ok {
-			return nil // the operator deletes this prefix (RFC 2622 §5.2)
-		}
-	}
-	if !v.e.afiAllows(r.Prefix) {
+// add applies ops to r and records the result in canonical form if it survives
+// the operators and the AFI constraint and denotes at least one prefix.
+func (v *evaluator) add(r types.PrefixRange, ops *opStack) error {
+	r, ok := ops.apply(r)
+	if !ok || !v.e.afiAllows(r.Prefix()) {
 		return nil
 	}
 	v.out.add(r)
-	if v.out.Len() > v.e.maxPrefixes() {
-		return ErrSetTooLarge{Name: v.g.top, Limit: LimitPrefixes, Count: v.out.Len()}
+	if v.out.Len() > v.max {
+		return &SetTooLargeError{Name: v.g.top, Limit: LimitPrefixes, Max: v.max, Count: v.out.Len()}
 	}
 	return nil
 }

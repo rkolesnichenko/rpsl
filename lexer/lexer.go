@@ -6,7 +6,10 @@
 // which is the foundation of the library's lossless round-trip guarantee.
 package lexer
 
-import "strings"
+import (
+	"iter"
+	"strings"
+)
 
 // Kind classifies a token.
 type Kind uint8
@@ -19,8 +22,10 @@ const (
 	KindBlank
 	// KindComment is a standalone full-line comment (first byte is '#').
 	KindComment
-	// KindMalformed is a non-continuation, non-blank line with no ':' — its bytes
-	// are still preserved so round-trip holds, but it should be diagnosed.
+	// KindMalformed is any other line: one with no ':' before a '#', or a
+	// continuation-looking line (leading space, tab or '+') with no attribute
+	// to continue. Its bytes are preserved so round-trip holds; the rpsl
+	// façade diagnoses it (lexer/malformed-line).
 	KindMalformed
 )
 
@@ -101,10 +106,12 @@ func Tokenize(src string) []Token { return TokenizeAt(src, 1, 0) }
 // Segment position is reported in stream coordinates. Raw and Value are
 // unaffected.
 func TokenizeAt(src string, line, byteOffset int) []Token {
-	var toks []Token
+	// One token per line at most: size the slice once instead of growing it,
+	// which on large input would allocate several times its final size.
+	toks := make([]Token, 0, strings.Count(src, "\n")+1)
 	var cur *Token    // attribute being folded, or nil
 	var curStart int  // src offset where cur begins
-	var segs []string // logical value segments for cur
+	var segs []string // logical value segments for cur (reused)
 	var valOff int    // running offset within the joined value for the next segment
 	lineBase := line - 1
 
@@ -113,11 +120,11 @@ func TokenizeAt(src string, line, byteOffset int) []Token {
 			cur.Raw = src[curStart : cur.Span.EndByte-byteOffset] // a slice: no copying per line
 			cur.Value = strings.Join(segs, "\n")
 			toks = append(toks, *cur)
-			cur, segs, valOff = nil, nil, 0
+			cur, segs, valOff = nil, segs[:0], 0
 		}
 	}
 
-	for _, pl := range scanLines(src) {
+	for pl := range scanLines(src) {
 		endByte := pl.start + len(pl.text) + len(pl.term)
 		kind, isCont := classify(pl.text, cur != nil)
 
@@ -146,7 +153,7 @@ func TokenizeAt(src string, line, byteOffset int) []Token {
 			name, val, off := splitAttr(pl.text)
 			cur = &Token{Kind: KindAttribute, Name: name, Span: span}
 			curStart = pl.start
-			segs = []string{val}
+			segs = append(segs[:0], val)
 			cur.Segments = []Segment{{
 				ValStart: 0, ValEnd: len(val),
 				SrcLine: lineBase + pl.line, SrcCol: off + 1, SrcByte: byteOffset + pl.start + off,
@@ -160,11 +167,17 @@ func TokenizeAt(src string, line, byteOffset int) []Token {
 	return toks
 }
 
-// scanLines splits src into physical lines, preserving each line's terminator so
+// scanLines yields src's physical lines, preserving each line's terminator so
 // the bytes can be reassembled exactly. A "\r" at the very end of input (with no
-// "\n" after it) is treated as that line's terminator.
-func scanLines(src string) []physLine {
-	var lines []physLine
+// "\n" after it) is treated as that line's terminator. It is lazy: no table of
+// lines is built.
+func scanLines(src string) iter.Seq[physLine] {
+	return func(yield func(physLine) bool) {
+		scanLinesTo(src, yield)
+	}
+}
+
+func scanLinesTo(src string, yield func(physLine) bool) {
 	i, lineNo := 0, 1
 	for i < len(src) {
 		start := i
@@ -188,35 +201,66 @@ func scanLines(src string) []physLine {
 			text, term = src[start:j], ""
 			i = j
 		}
-		lines = append(lines, physLine{text: text, term: term, start: start, line: lineNo})
+		if !yield(physLine{text: text, term: term, start: start, line: lineNo}) {
+			return
+		}
 		lineNo++
 	}
-	return lines
 }
 
 // classify decides a physical line's kind. isCont is true when the line folds
 // into the in-progress attribute (haveCur reports whether one exists).
 func classify(text string, haveCur bool) (kind Kind, isCont bool) {
-	if strings.Trim(text, " \t") == "" {
+	switch {
+	case IsBlankLine(text):
 		return KindBlank, false
-	}
-	switch text[0] {
-	case ' ', '\t', '+':
+	case text[0] == ' ' || text[0] == '\t' || text[0] == '+':
 		if haveCur {
 			return KindAttribute, true
 		}
 		return KindMalformed, false
-	case '#':
+	case text[0] == '#':
 		return KindComment, false
-	}
-	content := text
-	if h := strings.IndexByte(content, '#'); h >= 0 {
-		content = content[:h]
-	}
-	if strings.IndexByte(content, ':') >= 0 {
+	case StartsAttribute(text):
 		return KindAttribute, false
 	}
 	return KindMalformed, false
+}
+
+// IsBlankLine reports whether a physical line, without its terminator ("\n",
+// "\r\n", or a "\r" ending the input), is blank: empty, or only spaces and
+// tabs. Any other byte, a lone '\r' included, makes it non-blank. Blank lines
+// separate objects.
+func IsBlankLine[T ~string | ~[]byte](line T) bool {
+	for i := 0; i < len(line); i++ {
+		if line[i] != ' ' && line[i] != '\t' {
+			return false
+		}
+	}
+	return true
+}
+
+// StartsAttribute reports whether a physical line, without its terminator,
+// begins an attribute: it does not start with a space, tab, '+' or '#' and has
+// a ':' before any '#'. The streaming parser splits objects with the same rule
+// the lexer tokenizes by, so the two always agree.
+func StartsAttribute[T ~string | ~[]byte](line T) bool {
+	if len(line) == 0 {
+		return false
+	}
+	switch line[0] {
+	case ' ', '\t', '+', '#':
+		return false
+	}
+	for i := 0; i < len(line); i++ {
+		switch line[i] {
+		case ':':
+			return true
+		case '#':
+			return false
+		}
+	}
+	return false
 }
 
 // splitAttr extracts the canonical (lowercased) attribute name, the
@@ -232,7 +276,7 @@ func splitAttr(text string) (name, value string, valOff int) {
 		v, off := trimPos(content, 0)
 		return "", v, off
 	}
-	name = strings.ToLower(strings.TrimSpace(content[:idx]))
+	name = CanonicalName(content[:idx])
 	value, valOff = trimPos(content, idx+1)
 	return name, value, valOff
 }
@@ -262,4 +306,25 @@ func trimPos(content string, from int) (value string, off int) {
 	trimmedLeft := strings.TrimLeft(rest, " \t")
 	off = from + (len(rest) - len(trimmedLeft))
 	return strings.TrimRight(trimmedLeft, " \t"), off
+}
+
+// CanonicalName returns an attribute name as RPSL compares it: ASCII letters
+// lower-cased and surrounding spaces and tabs removed. Only ASCII is folded, so
+// a name holding other bytes (a no-break space, a Kelvin sign that Unicode
+// lower-cases to 'k', a control byte) keeps them and fails validation rather
+// than turning into a valid-looking name.
+func CanonicalName(name string) string {
+	name = strings.Trim(name, " \t")
+	for i := 0; i < len(name); i++ {
+		if c := name[i]; 'A' <= c && c <= 'Z' {
+			b := []byte(name)
+			for j := i; j < len(b); j++ {
+				if 'A' <= b[j] && b[j] <= 'Z' {
+					b[j] += 'a' - 'A'
+				}
+			}
+			return string(b)
+		}
+	}
+	return name
 }

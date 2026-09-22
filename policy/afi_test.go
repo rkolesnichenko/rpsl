@@ -12,7 +12,7 @@ var (
 )
 
 func TestParseMpDefault(t *testing.T) {
-	d, diags := ParseDefault("afi ipv6.unicast to AS1")
+	d, diags := ParseMPDefault("afi ipv6.unicast to AS1")
 	if len(diags) != 0 {
 		t.Fatalf("diags = %+v", diags)
 	}
@@ -35,7 +35,7 @@ func TestParseDefaultUnscoped(t *testing.T) {
 }
 
 func TestParseExceptAFI(t *testing.T) {
-	imp, diags := ParseImport("from AS1 accept ANY except afi ipv6.unicast {from AS2 accept AS2}")
+	imp, diags := ParseMPImport("from AS1 accept ANY except afi ipv6.unicast {from AS2 accept AS2}")
 	if len(diags) != 0 {
 		t.Fatalf("diags = %+v", diags)
 	}
@@ -49,7 +49,7 @@ func TestParseExceptAFI(t *testing.T) {
 }
 
 func TestParseRefineAFI(t *testing.T) {
-	imp, diags := ParseImport("from AS1 accept ANY refine afi ipv4.unicast {from AS2 accept AS2}")
+	imp, diags := ParseMPImport("from AS1 accept ANY refine afi ipv4.unicast {from AS2 accept AS2}")
 	if len(diags) != 0 {
 		t.Fatalf("diags = %+v", diags)
 	}
@@ -63,7 +63,7 @@ func TestParseRefineAFI(t *testing.T) {
 }
 
 func TestImportAppliesTo(t *testing.T) {
-	scoped, _ := ParseImport("afi ipv6.unicast from AS1 accept ANY")
+	scoped, _ := ParseMPImport("afi ipv6.unicast from AS1 accept ANY")
 	if scoped.Unscoped() {
 		t.Errorf("scoped import reported unscoped")
 	}
@@ -87,7 +87,7 @@ func TestImportAppliesTo(t *testing.T) {
 }
 
 func TestExportAppliesTo(t *testing.T) {
-	scoped, _ := ParseExport("afi ipv6.unicast to AS1 announce ANY")
+	scoped, _ := ParseMPExport("afi ipv6.unicast to AS1 announce ANY")
 	if !scoped.AppliesTo(v6u) || scoped.AppliesTo(v4u) {
 		t.Errorf("ipv6 export AppliesTo mismatch")
 	}
@@ -98,7 +98,7 @@ func TestExportAppliesTo(t *testing.T) {
 }
 
 func TestDefaultAppliesToWildcard(t *testing.T) {
-	any, _ := ParseDefault("afi any to AS1")
+	any, _ := ParseMPDefault("afi any to AS1")
 	if !any.AppliesTo(v4u) || !any.AppliesTo(v6u) {
 		t.Errorf("afi any default should apply to both families, AFIs = %v", any.AFIs)
 	}

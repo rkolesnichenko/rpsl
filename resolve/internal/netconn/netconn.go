@@ -11,6 +11,16 @@ import (
 	"time"
 )
 
+// WithTimeout returns ctx bounded by timeout (unchanged if timeout <= 0). The
+// backends apply it once per query, so one deadline covers every stage — slot
+// wait, dial, I/O, a retry — instead of restarting at each.
+func WithTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
 // aLongTimeAgo is a non-zero time in the past; setting it as a deadline makes
 // every pending and future read or write on the connection fail immediately.
 var aLongTimeAgo = time.Unix(1, 0)

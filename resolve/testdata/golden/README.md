@@ -9,24 +9,31 @@ comments and ignored by `readGolden`.
 fails if the engine's output drifts — that drift is either a bug to root-cause
 or an intentional change that needs to be reflected here.
 
-| File | What it represents |
+| Files | What they represent |
 | --- | --- |
-| `as-example.asn` | `Expander.ExpandAS(AS-EXAMPLE)` — transitive member ASNs. |
-| `as-example.v4` | `Expander.ExpandPrefixes(AS-EXAMPLE)` with `AFI=AFIv4`. |
-| `rs-example.v4` | `Expander.ExpandPrefixes(RS-EXAMPLE)` with `AFI=AFIv4`. |
+| `<set>.asn` | The AS numbers of an as-set (`ExpandAS`). |
+| `<set>.v4`, `<set>.v6` | The IPv4 or IPv6 prefixes of a set (`ExpandPrefixes`). |
+
+`TestGoldenExpansion` lists the basket: nested and cyclic as-sets, the same
+as-set written as a folded list, indirect members that are honored and
+rejected (wrong maintainer, another source, `mbrs-by-ref: ANY`), a set defined
+in two sources, missing nested sets, and route-sets with range operators,
+IPv6 `mp-members` and nested route-sets and as-sets.
 
 ## Origin
 
-These are hand-checked expected expansions of the synthetic snapshot. bgpq4
-cannot run against an offline snapshot, so they are not bgpq4 output; the header
-comments record the equivalent `bgpq4` command (e.g. `bgpq4 -j -l x AS-EXAMPLE`)
-for cross-checking the same sets against a live registry.
-
-The optional live `bgpq4` differential (`diff_bgpq4_test.go`, gated on
-`RPSL_BGPQ4_SERVER` / `RPSL_BGPQ4_SET`) checks the same property against a
-live registry rather than against the offline goldens.
+Every golden is bgpq4's own output: `bgpq4` run on the snapshot served by the
+in-process IRRd in `internal/irrtest`, with the command in each file's header.
+`TestGoldensAreBgpq4Output` re-runs bgpq4 and fails if a golden no longer
+matches it; it skips when bgpq4 is not installed (CI installs it). The snapshot
+avoids the cases where the engine and bgpq4 knowingly differ
+(`../bgpq4/divergences.md`).
 
 ## Updating
 
-See `../snapshot/README.md`. There is no `-update` flag — goldens are
-hand-edited so the diff is reviewable.
+After editing the snapshot, regenerate the goldens from bgpq4 and review the
+diff:
+
+    go test -run TestGoldensAreBgpq4Output -update ./resolve
+
+`TestGoldenExpansion` then checks the engine against them.

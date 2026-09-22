@@ -115,7 +115,7 @@ func TestGetSetParsesMembers(t *testing.T) {
 	if ms[0].Kind != object.MemberAS || uint32(ms[0].AS) != 1 {
 		t.Errorf("member0 = %+v, want AS1", ms[0])
 	}
-	if ms[1].Kind != object.MemberSet || ms[1].Set.Canonical() != "AS-SUB" {
+	if ms[1].Kind != object.MemberSet || ms[1].Set.String() != "AS-SUB" {
 		t.Errorf("member1 = %+v, want set AS-SUB", ms[1])
 	}
 }
@@ -256,5 +256,44 @@ func TestKeepAliveEndToEnd(t *testing.T) {
 	}
 	if c := fs.conns.Load(); c != 1 {
 		t.Errorf("accepted %d connections, want 1", c)
+	}
+}
+
+// IRRd answers "!i" for an existing set with no members with D, as for a
+// missing one; "!m" tells them apart, so an empty set is empty, not missing.
+func TestGetSetEmptyIsNotMissing(t *testing.T) {
+	fs := newFakeServer(t, map[string]string{
+		"!mas-set,AS-EMPTY":    frame("as-set: AS-EMPTY\nsource: RADB"),
+		"!mroute-set,RS-EMPTY": frame("route-set: RS-EMPTY\nsource: RADB"),
+	})
+	src := &Source{Addr: fs.addr(), Timeout: 2 * time.Second}
+	for _, name := range []string{"AS-EMPTY", "RS-EMPTY"} {
+		set, err := src.GetSet(context.Background(), mustSet(t, name))
+		if err != nil || set == nil || len(set.SetMembers()) != 0 || set.SetName() != mustSet(t, name) {
+			t.Errorf("GetSet(%s) = %+v, %v; want the empty set", name, set, err)
+		}
+	}
+	if _, err := src.GetSet(context.Background(), mustSet(t, "AS-GONE")); !errors.Is(err, resolve.ErrNotFound) {
+		t.Errorf("GetSet(AS-GONE) err = %v, want ErrNotFound", err)
+	}
+	asns, err := (&resolve.Expander{Src: src}).ExpandAS(context.Background(), mustSet(t, "AS-EMPTY"))
+	if err != nil || asns.Len() != 0 {
+		t.Errorf("ExpandAS(AS-EMPTY) = %v, %v; want empty, no error", asns, err)
+	}
+}
+
+// A route answer holding something other than prefixes is an error, not a
+// shorter list.
+func TestRoutesRejectJunk(t *testing.T) {
+	fs := newFakeServer(t, map[string]string{
+		"!gAS1": frame("10.0.0.0/8 junk"),
+		"!6AS2": frame("2001:db8::/32 10.0.0.0/8/8"),
+	})
+	src := &Source{Addr: fs.addr(), Timeout: 2 * time.Second}
+	if got, err := src.OriginatedRoutes(context.Background(), 1, types.AFIv4); err == nil {
+		t.Errorf("!g with junk = %v, want an error", got)
+	}
+	if got, err := src.OriginatedRoutes(context.Background(), 2, types.AFIv6); err == nil {
+		t.Errorf("!6 with junk = %v, want an error", got)
 	}
 }

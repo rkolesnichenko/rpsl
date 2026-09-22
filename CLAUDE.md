@@ -42,7 +42,8 @@ resolve → object → policy → types → ast → lexer (never the reverse).
 - `Diagnostic`/`Severity` live in the `ast` module (so `object` can emit them); `rpsl` re-exports via aliases.
 - Net-using Source backends are isolated in `resolve/` sub-packages (irrd/whois/rdap) to keep core `resolve` socket-free.
 - Tests use in-process fake servers over a localhost listener + a `Dial` hook (no real network);
-  the bgpq4 differential is a checked-in golden snapshot, with an opt-in live diff gated on env vars.
+  the bgpq4 differential runs bgpq4 against an in-process IRRd (`resolve/internal/irrtest`) when bgpq4
+  is installed; the snapshot goldens are its checked-in output; a live diff is opt-in via env vars.
 
 ## Build order — work strictly in this sequence (design §12)
 
@@ -81,15 +82,17 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
 
 - **Dual membership**: union direct `members:`/`mp-members:` WITH indirect `member-of:` claims, but
   honor `mbrs-by-ref:` + the mntner check. Skipping the mntner check is a silent, hijack-relevant bug.
+  A claim must also come from the set's own `source:` (maintainer names are per-registry; IRRd agrees).
 - **Cycle detection**: as-sets reference each other cyclically. DFS with a visited set keyed by
   canonical set name; revisit = skip, not error (matches bgpq4).
 - **Fan-out guards**: enforce `MaxPrefixes` *during* enumeration by streaming ranges through
   `PrefixRange.All()` into a deduplicating set (duplicates are free; no `remaining+1` arithmetic).
   `MaxVisited` caps distinct sets fetched; `MaxDepth` caps the *shortest* nesting distance
   (breadth-first discovery, so results never depend on member order). All three return
-  `ErrSetTooLarge{Limit}`; none truncates silently.
+  `SetTooLargeError{Limit}`; none truncates silently.
 - **Range operators on members** (`RS-FOO^+`, `AS1^24`) compose along each path via
-  `RangeOperator.Apply`; a cycle re-entered under a different operator stack is `ErrCyclicOperator`.
+  `RangeOperator.Apply`. Evaluation states are (set, operator stack) with stacks compared by effect
+  (`resolve/opstack.go`), so cycles through operators reach the RFC fixpoint; there is no cyclic-operator error.
 - **AFI constraint**: v4 expansion drops route6/IPv6 mp-members and vice versa; `any` means both.
 - **Prefix-range operators** `^+ ^- ^n ^n-m`: first-class type with a capped `Materialize`.
 - **Dict ↔ decoder agreement**: if `object/profiles.go` lists an attribute on a class, the
@@ -107,14 +110,16 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
 
 - **`go test ./...` only covers the ROOT module** (rpsl, object, policy). Run everything
   (all six modules incl. examples/bulk-ripe under -race, gofmt, invariants) with
-  `scripts/check.sh`; `FUZZTIME=15s scripts/check.sh` also runs all nine fuzz targets.
+  `scripts/check.sh`; `FUZZTIME=15s scripts/check.sh` also runs all twelve fuzz targets.
 - `go test -run 'TestRoundTrip|TestStreamRoundTrip' .` — the lossless guard (root module).
-- Fuzz (must never panic): FuzzTokenize (lexer), FuzzAttributeList (ast), FuzzParseSetName,
-  FuzzParseRangeOperator (types), FuzzParseStream (root), FuzzParseImport,
+- Fuzz (must never panic): FuzzTokenize (lexer), FuzzAttributeList, FuzzEdit (ast), FuzzParseSetName,
+  FuzzParseRangeOperator, FuzzParsePrefixRange (types), FuzzParseStream, FuzzDecode (root), FuzzParseImport,
   FuzzParseASPathRegexp, FuzzParseFilter, FuzzParsePeering (policy).
-- Opt-in: `RPSL_REALDATA=.data/ripe go test -run TestRealData ./examples/bulk-ripe/bulk`
-  (dumps via scripts/fetch-ripe-dumps.sh); `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve`.
-- Releasing: RELEASING.md (tag order lexer/types → ast → root → resolve).
+- Opt-in: `RPSL_REALDATA=$PWD/.data/ripe go test -run TestRealData ./examples/bulk-ripe/bulk`
+  (dumps via scripts/fetch-ripe-dumps.sh); `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve`;
+  `RPSL_LIVE=1 go test -run TestRIPETemplatesAreCurrent ./object` (RIPE profile vs whois -t).
+- Releasing: RELEASING.md (tag order lexer/types → ast → root → resolve); rehearse first with
+  `scripts/release-dryrun.sh` (local proxy, publishes nothing).
 - Leaf isolation: `cd types && go list -deps ./... | grep rkolesnichenko` must show only itself.
 - Engine purity: `cd resolve && go list -deps .` must NOT include `net` (sockets live only
   in resolve/irrd, resolve/whois, resolve/rdap).

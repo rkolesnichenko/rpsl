@@ -14,3 +14,27 @@ as-set:   AS-EXAMPLE-LIST
 members:  AS64500, AS64501,
           AS-DOWNSTREAM
 source:   TEST
+
+as-set:      AS-CLAIMED
+members:     AS64500
+mbrs-by-ref: MNT-OK
+source:      TEST
+
+as-set:      AS-ANYREF
+members:     AS64500
+mbrs-by-ref: ANY
+source:      TEST
+
+as-set:   AS-PRECEDENCE
+members:  AS64500
+source:   TEST
+
+as-set:   AS-PRECEDENCE
+members:  AS64510
+remarks:  same name in RADB; TEST is listed first, so this one is not used
+source:   RADB
+
+as-set:   AS-WITH-MISSING
+members:  AS64501, AS-NOWHERE
+remarks:  AS-NOWHERE does not exist: it expands to nothing
+source:   TEST

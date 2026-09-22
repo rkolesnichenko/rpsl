@@ -28,14 +28,14 @@ func TestParseMembersByContainerClass(t *testing.T) {
 		}
 		return out
 	}
-	rs := parseMembers("AS1 AS2^+ garbage RS-X^24 10.0.0.0/8^+", types.RouteSet)
+	rs := parseMembers("AS1 AS2^+ garbage RS-X^24 10.0.0.0/8^+", types.ClassRouteSet)
 	if got := summarize(rs); !reflect.DeepEqual(got, []want{
 		{object.MemberAS, ""}, {object.MemberAS, "^+"}, {object.MemberInvalid, ""},
 		{object.MemberSet, "^24"}, {object.MemberPrefixRange, ""},
 	}) {
 		t.Errorf("route-set members = %+v", got)
 	}
-	as := parseMembers("AS1 AS2^+ 10.0.0.0/8", types.AsSet)
+	as := parseMembers("AS1 AS2^+ 10.0.0.0/8", types.ClassAsSet)
 	if got := summarize(as); !reflect.DeepEqual(got, []want{
 		{object.MemberAS, ""}, {object.MemberInvalid, ""}, {object.MemberInvalid, ""},
 	}) {

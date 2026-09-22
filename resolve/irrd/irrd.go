@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/netip"
 	"strconv"
@@ -39,17 +40,22 @@ import (
 // closed is retried once on a fresh one. Every query honours its context:
 // cancelling it, or its deadline passing, aborts a pending read at once.
 // A Source is safe for concurrent use; MaxConns bounds its concurrent
-// connections. A KeepAlive Source should be Close()d to release pooled
-// connections; it keeps working afterwards but no longer pools.
+// connections. Close releases pooled connections; queries after it return
+// ErrClosed. Like http.Transport, a Source must not be copied or have its
+// fields changed after first use.
+//
+// Sources lists IRR source names in priority order ("!s"): a set defined in
+// several of them is taken from the first, while routes are the union of all.
+// Each name must be letters, digits, '-' or '_'.
 type Source struct {
 	Addr        string                                      // "whois.radb.net:43"
-	Sources     string                                      // optional "!s" precedence, e.g. "RADB,RIPE"
-	Timeout     time.Duration                               // per-query dial+I/O deadline; 0 = DefaultTimeout, < 0 = none (ctx only)
-	MaxResponse int64                                       // cap on one response payload; 0 = 256 MiB
+	Sources     []string                                    // optional "!s" priority, e.g. {"RADB", "RIPE"}
+	Timeout     time.Duration                               // one deadline per query: slot wait, dial, I/O, retry; 0 = DefaultTimeout, < 0 = none (ctx only)
+	MaxResponse int64                                       // cap on one response payload; 0 = 256 MiB, < 0 = none
 	Dial        func(ctx context.Context) (net.Conn, error) // override transport in tests; nil = net.Dialer
 
 	KeepAlive bool // reuse persistent connections from a pool
-	MaxConns  int  // max concurrent connections, and pooled ones with KeepAlive (default 4)
+	MaxConns  int  // max concurrent connections, and pooled ones with KeepAlive; 0 = 4, < 0 = none
 
 	mu     sync.Mutex
 	idle   []*pconn
@@ -72,6 +78,12 @@ type pconn struct {
 // errNotFound is the internal sentinel for a 'D' (key not found) response.
 var errNotFound = errors.New("irrd: key not found")
 
+// ErrClosed is returned by queries on a Source after Close.
+var ErrClosed = errors.New("irrd: source closed")
+
+// defaultMaxConns is MaxConns when zero.
+const defaultMaxConns = 4
+
 // defaultMaxResponse caps a single IRRd response payload. 256 MiB dwarfs any
 // real "!i" or route payload; memory still grows only with the bytes that
 // actually arrive, whatever length a header claims.
@@ -88,19 +100,55 @@ func (s *Source) timeout() time.Duration {
 }
 
 func (s *Source) maxResponse() int64 {
-	if s.MaxResponse > 0 {
-		return s.MaxResponse
+	switch {
+	case s.MaxResponse == 0:
+		return defaultMaxResponse
+	case s.MaxResponse < 0:
+		return math.MaxInt64
 	}
-	return defaultMaxResponse
+	return s.MaxResponse
+}
+
+// sourceList validates Sources and returns the "!s" argument ("" for none).
+func (s *Source) sourceList() (string, error) {
+	names := make([]string, len(s.Sources))
+	for i, n := range s.Sources {
+		if !validSourceName(n) {
+			return "", fmt.Errorf("irrd: invalid source name %q", n)
+		}
+		names[i] = strings.ToUpper(n)
+	}
+	return strings.Join(names, ","), nil
+}
+
+// validSourceName reports whether n is a plain IRR source name: letters,
+// digits, '-' and '_' only, so it cannot carry another command or argument.
+func validSourceName(n string) bool {
+	if n == "" {
+		return false
+	}
+	for i := 0; i < len(n); i++ {
+		c := n[i]
+		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 // GetSet fetches a set's one-level membership via "!i" and synthesizes a typed
-// set object. A missing set maps to resolve.ErrNotFound.
+// set object. IRRd answers "!i" alike for a missing set and for one with no
+// members, so on that answer GetSet asks for the object itself ("!m"): a set
+// that exists is returned empty, and a missing one maps to resolve.ErrNotFound.
 func (s *Source) GetSet(ctx context.Context, name types.SetName) (object.Set, error) {
 	if name.IsZero() {
 		return nil, errors.New("irrd: empty set name")
 	}
 	payload, err := s.do(ctx, "!i"+name.String())
+	if errors.Is(err, errNotFound) {
+		_, err = s.do(ctx, "!m"+name.Class().String()+","+name.String())
+		payload = nil
+	}
 	if err != nil {
 		if errors.Is(err, errNotFound) {
 			return nil, resolve.ErrNotFound
@@ -108,7 +156,7 @@ func (s *Source) GetSet(ctx context.Context, name types.SetName) (object.Set, er
 		return nil, err
 	}
 	members := parseMembers(string(payload), name.Class())
-	if name.Class() == types.AsSet {
+	if name.Class() == types.ClassAsSet {
 		return object.AsSet{Name: name, Members: members}, nil
 	}
 	return object.RouteSet{Name: name, Members: members}, nil
@@ -138,11 +186,12 @@ func (s *Source) OriginatedRoutes(ctx context.Context, as types.ASN, afi types.A
 
 // MembersByRef returns nothing: indirect membership is already folded into the
 // server's "!i" result (see the package note).
-func (s *Source) MembersByRef(context.Context, types.SetName, []string) ([]object.Object, error) {
+func (s *Source) MembersByRef(context.Context, object.Set) ([]object.Object, error) {
 	return nil, nil
 }
 
-// routes runs a route query, treating not-found as an empty set.
+// routes runs a route query, treating not-found as an empty set. A token that
+// is not a prefix is an error: dropping it would shrink the result silently.
 func (s *Source) routes(ctx context.Context, cmd string) ([]netip.Prefix, error) {
 	payload, err := s.do(ctx, cmd)
 	if err != nil {
@@ -153,15 +202,28 @@ func (s *Source) routes(ctx context.Context, cmd string) ([]netip.Prefix, error)
 	}
 	var out []netip.Prefix
 	for _, tok := range strings.Fields(string(payload)) {
-		if p, err := netip.ParsePrefix(tok); err == nil {
-			out = append(out, p)
+		p, err := netip.ParsePrefix(tok)
+		if err != nil {
+			return nil, fmt.Errorf("irrd: %s: invalid prefix %q in the response", cmd, tok)
 		}
+		out = append(out, p)
 	}
 	return out, nil
 }
 
 // do runs one query, waiting for a connection slot (MaxConns) first.
 func (s *Source) do(ctx context.Context, cmd string) ([]byte, error) {
+	if _, err := s.sourceList(); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		return nil, ErrClosed
+	}
+	ctx, cancel := netconn.WithTimeout(ctx, s.timeout())
+	defer cancel()
 	if err := s.acquireSlot(ctx); err != nil {
 		return nil, err
 	}
@@ -174,7 +236,7 @@ func (s *Source) do(ctx context.Context, cmd string) ([]byte, error) {
 		return nil, netconn.Err(ctx, err)
 	}
 	defer conn.Close()
-	release := netconn.Bind(ctx, conn, s.timeout())
+	release := netconn.Bind(ctx, conn, 0)
 	defer release()
 	br := bufio.NewReader(conn)
 	// Without "!!" (persistent mode) IRRd answers one command and closes the
@@ -220,7 +282,7 @@ func (s *Source) doPooled(ctx context.Context, cmd string) ([]byte, error) {
 // exchange sends cmd on pc and reads its response, reporting whether pc is
 // still in a clean state to be pooled again.
 func (s *Source) exchange(ctx context.Context, pc *pconn, cmd string) (payload []byte, reusable bool, err error) {
-	release := netconn.Bind(ctx, pc.conn, s.timeout())
+	release := netconn.Bind(ctx, pc.conn, 0)
 	if _, err := fmt.Fprintf(pc.conn, "%s\n", cmd); err != nil {
 		release()
 		return nil, false, err
@@ -260,7 +322,7 @@ func (s *Source) newPConn(ctx context.Context) (*pconn, error) {
 	if err != nil {
 		return nil, err
 	}
-	release := netconn.Bind(ctx, conn, s.timeout())
+	release := netconn.Bind(ctx, conn, 0)
 	br := bufio.NewReader(conn)
 	if _, err = io.WriteString(conn, "!!\n"); err == nil { // persistent mode; no response
 		err = s.selectSources(conn, br)
@@ -278,17 +340,18 @@ func (s *Source) newPConn(ctx context.Context) (*pconn, error) {
 // selectSources sends the "!s" source list, if any. A server that refuses it
 // is an error, never a "not found" that would make every set look missing.
 func (s *Source) selectSources(conn net.Conn, br *bufio.Reader) error {
-	if s.Sources == "" {
-		return nil
+	list, err := s.sourceList()
+	if err != nil || list == "" {
+		return err
 	}
-	if _, err := fmt.Fprintf(conn, "!s%s\n", sanitizeLine(s.Sources)); err != nil {
+	if _, err := fmt.Fprintf(conn, "!s%s\n", list); err != nil {
 		return err
 	}
 	if _, err := readFrame(br, s.maxResponse()); err != nil {
 		if errors.Is(err, errNotFound) {
-			return fmt.Errorf("irrd: server rejected source list %q", s.Sources)
+			return fmt.Errorf("irrd: server rejected source list %q", list)
 		}
-		return fmt.Errorf("irrd: selecting sources %q: %w", s.Sources, err)
+		return fmt.Errorf("irrd: selecting sources %q: %w", list, err)
 	}
 	return nil
 }
@@ -308,15 +371,21 @@ func (s *Source) release(pc *pconn) {
 }
 
 func (s *Source) maxConns() int {
-	if s.MaxConns > 0 {
-		return s.MaxConns
+	switch {
+	case s.MaxConns == 0:
+		return defaultMaxConns
+	case s.MaxConns < 0:
+		return math.MaxInt
 	}
-	return 4
+	return s.MaxConns
 }
 
 // acquireSlot waits (honouring ctx) until fewer than MaxConns queries hold a
 // connection.
 func (s *Source) acquireSlot(ctx context.Context) error {
+	if s.MaxConns < 0 {
+		return ctx.Err() // unlimited: no semaphore
+	}
 	s.mu.Lock()
 	if s.slots == nil {
 		s.slots = make(chan struct{}, s.maxConns())
@@ -332,15 +401,18 @@ func (s *Source) acquireSlot(ctx context.Context) error {
 }
 
 func (s *Source) releaseSlot() {
+	if s.MaxConns < 0 {
+		return
+	}
 	s.mu.Lock()
 	slots := s.slots
 	s.mu.Unlock()
 	<-slots
 }
 
-// Close releases all pooled connections. Later queries still work, on fresh
-// connections that are no longer pooled. It is safe to call on a non-KeepAlive
-// Source (a no-op) and may be called multiple times.
+// Close releases all pooled connections; later queries return ErrClosed, and
+// queries already running finish without returning their connections to the
+// pool. It may be called more than once, and on a Source that never pooled.
 func (s *Source) Close() error {
 	s.mu.Lock()
 	conns := s.idle
@@ -357,20 +429,8 @@ func (s *Source) dial(ctx context.Context) (net.Conn, error) {
 	if s.Dial != nil {
 		return s.Dial(ctx)
 	}
-	d := net.Dialer{Timeout: s.timeout()}
+	var d net.Dialer // ctx carries the query's deadline
 	return d.DialContext(ctx, "tcp", s.Addr)
-}
-
-// sanitizeLine strips control characters from a value interpolated into a
-// line-oriented protocol command, so a stray newline in caller-supplied config
-// (e.g. Sources) cannot inject an extra command line.
-func sanitizeLine(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r < ' ' {
-			return -1
-		}
-		return r
-	}, s)
 }
 
 // readFrame parses one IRRd response: "A<len>\n<payload>C\n" (data; <len>
@@ -379,11 +439,10 @@ func sanitizeLine(s string) string {
 // rejected before it is read, and memory grows only with the bytes that arrive,
 // never with the length a header claims.
 func readFrame(br *bufio.Reader, max int64) ([]byte, error) {
-	header, err := br.ReadString('\n')
+	header, err := readStatusLine(br)
 	if err != nil {
 		return nil, err
 	}
-	header = strings.TrimRight(header, "\r\n")
 	if header == "" {
 		return nil, errors.New("irrd: empty response header")
 	}
@@ -403,13 +462,12 @@ func readFrame(br *bufio.Reader, max int64) ([]byte, error) {
 			}
 			return nil, err
 		}
-		trailer, err := br.ReadString('\n') // trailing "C" status line
+		trailer, err := readStatusLine(br) // the "C" status line that ends the frame
 		if err != nil {
 			return nil, err
 		}
-		if !strings.HasPrefix(trailer, "C") {
-			return nil, fmt.Errorf("irrd: missing 'C' status after payload, got %q",
-				strings.TrimRight(trailer, "\r\n"))
+		if trailer != "C" {
+			return nil, fmt.Errorf("irrd: expected 'C' status after payload, got %q", trailer)
 		}
 		return buf.Bytes(), nil
 	case 'C':
@@ -420,6 +478,34 @@ func readFrame(br *bufio.Reader, max int64) ([]byte, error) {
 		return nil, fmt.Errorf("irrd: query error: %s", strings.TrimSpace(header[1:]))
 	default:
 		return nil, fmt.Errorf("irrd: unexpected response %q", header)
+	}
+}
+
+// maxStatusLine bounds the header and status lines of a response ("A123",
+// "C", "D", "F message"), which MaxResponse does not cover.
+const maxStatusLine = 1 << 10
+
+// readStatusLine reads one response line without its terminator, refusing one
+// longer than maxStatusLine instead of buffering it.
+func readStatusLine(br *bufio.Reader) (string, error) {
+	var line []byte
+	for {
+		frag, err := br.ReadSlice('\n')
+		if len(line)+len(frag) > maxStatusLine {
+			return "", fmt.Errorf("irrd: response line longer than %d bytes", maxStatusLine)
+		}
+		line = append(line, frag...)
+		switch err {
+		case nil:
+			return strings.TrimRight(string(line), "\r\n"), nil
+		case bufio.ErrBufferFull:
+			continue
+		case io.EOF:
+			if len(line) > 0 {
+				err = io.ErrUnexpectedEOF
+			}
+		}
+		return "", err
 	}
 }
 

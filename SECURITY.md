@@ -29,10 +29,16 @@ any of them as a security-relevant bug.
   `FuzzTokenize`, `FuzzParseImport`, and `FuzzParseASPathRegexp` enforces this
   property.
 - **Streaming-mode memory cap.** `rpsl.ParseOptions.MaxObjectBytes` (default
-  `DefaultMaxObjectBytes`, 64 MiB, also applied by `Parse`) bounds each object,
-  the run of blank/comment lines before it, and every line as it is read, so a
-  hostile dump — no blank-line separators, a multi-GB line, or endless blank
-  lines — cannot drive the parser to OOM. A negative value disables the cap.
+  16 MiB) and `MaxObjectLines` (default 262,144), also applied by `Parse`, bound
+  each object, the run of blank/comment lines before it, and every line as it is
+  read, so a hostile dump — no blank-line separators, a multi-GB line, or
+  endless short lines — cannot drive the parser to OOM: with the defaults the
+  worst case peaks at about 150 MB. Lexer diagnostics are capped per object.
+  A negative value disables a cap. `ParseObject` applies no caps.
+- **Policy parser bounds.** A policy value over 1,048,576 tokens is refused
+  (`policy/too-long`), diagnostics stop after 100 per value, and AND/OR chains
+  are flat nodes while nesting is capped, so neither memory nor the depth of the
+  AST (and of any recursive walk over it) is attacker-controlled.
 - **Read errors are never hidden.** A failing reader (e.g. a corrupt gzip dump)
   ends the stream with an `rpsl/read-error` diagnostic instead of looking like a
   clean end of input.
@@ -45,25 +51,30 @@ any of them as a security-relevant bug.
   limits.
 - **Three fan-out budgets, all typed.** `MaxPrefixes` (default `1<<20`),
   `MaxVisited` (default `1<<17`), and `MaxDepth` (default 32, measured as the
-  shortest nesting distance) return `ErrSetTooLarge` naming the `Limit` on
+  shortest nesting distance) return `SetTooLargeError` naming the `Limit` on
   breach. A pathological IRR graph — wide, deep, or cyclic — cannot drive the
   engine to OOM, and no cap truncates a result silently.
 - **Cycle detection on every traversal.** Discovery fetches each set once;
-  revisits are skipped (`bgpq4` semantics), not errored. A cycle re-entered
-  under a different range operator returns `ErrCyclicOperator`.
+  revisits are skipped (`bgpq4` semantics), not errored. Evaluation states are
+  (set, operator stack) pairs with stacks compared by effect, so cycles through
+  range operators terminate at the RFC's fixpoint, and `MaxVisited` bounds the
+  states. Cancellation is checked inside the enumeration of a single range.
 
 ### Network backends
 
 - **Cancellation and timeouts.** Every `irrd`/`whois` query honours its
-  context (cancellation aborts a pending read at once) and a per-query
-  `Timeout` (default 60 s), so a stalled or hostile server cannot hang a caller.
+  context (cancellation aborts a pending read at once) and one per-query
+  `Timeout` deadline (default 60 s) covering the slot wait, dial, I/O and any
+  retry; every `rdap` request has the same (`Client.Timeout`). A stalled or
+  hostile server cannot hang a caller.
 - **`resolve/irrd`** — fresh connection per query by default; idle pool only
   with explicit opt-in (`KeepAlive`); `MaxConns` bounds concurrent connections;
-  `MaxResponse` caps a frame, and memory grows only with bytes actually
-  received, never with the length a header claims; set names are validated by
+  `MaxResponse` caps a frame's payload and status lines are capped at 1 KiB,
+  so memory grows only with bytes actually received, never with the length a
+  header claims; set names are validated by
   construction, so no query can carry an injected command.
 - **`resolve/whois`** — per-response `MaxResponse` body cap; server errors are
-  surfaced (`ErrServer`), so rate limiting cannot silently shrink a filter;
+  surfaced (`ServerError`), so rate limiting cannot silently shrink a filter;
   injected `Dial` for testability and for isolating the socket from the engine.
 - **`resolve/rdap`** — HTTPS-only base URL, bounded response body, capped
   redirect chain, scheme-checked on every hop; the built-in client refuses

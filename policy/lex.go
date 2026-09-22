@@ -15,6 +15,7 @@ const (
 	tComma                 // ,
 	tEq                    // =
 	tRegex                 // <...> AS-path regexp; text excludes the angle brackets
+	tStray                 // a '>' outside a regexp; diagnosed and removed by newParser
 	tEOF
 )
 
@@ -40,10 +41,25 @@ func isWordByte(c byte) bool {
 	return true
 }
 
-// tokenize splits a policy attribute value into tokens. It never fails: an
-// unterminated <...> regexp simply runs to end of input.
-func tokenize(src string) []token {
-	var toks []token
+// tokenize splits a policy value into tokens, ending with tEOF. It never
+// fails on malformed input (an unterminated <...> regexp runs to the end of the
+// input and a stray '>' is a tStray token, both for the parser to diagnose),
+// but reports false when the value has more than maxTokens tokens. It
+// counts first and then fills a slice of exactly that size, so memory stays
+// proportional to the tokens a value really has.
+func tokenize(src string) ([]token, bool) {
+	count := 0
+	if !scan(src, func(token) bool { count++; return count <= maxTokens+1 }) {
+		return nil, false
+	}
+	toks := make([]token, 0, count)
+	scan(src, func(t token) bool { toks = append(toks, t); return true })
+	return toks, true
+}
+
+// scan emits src's tokens, then tEOF, to emit; it stops early, reporting false,
+// when emit does.
+func scan(src string, emit func(token) bool) bool {
 	i, n := 0, len(src)
 	for i < n {
 		c := src[i]
@@ -51,26 +67,48 @@ func tokenize(src string) []token {
 		case c == ' ' || c == '\t' || c == '\r' || c == '\n':
 			i++
 		case c == '{':
-			toks = append(toks, token{tLBrace, "{", i, i + 1})
+			if !emit(token{tLBrace, "{", i, i + 1}) {
+				return false
+			}
 			i++
 		case c == '}':
-			toks = append(toks, token{tRBrace, "}", i, i + 1})
+			if !emit(token{tRBrace, "}", i, i + 1}) {
+				return false
+			}
 			i++
 		case c == '(':
-			toks = append(toks, token{tLParen, "(", i, i + 1})
+			if !emit(token{tLParen, "(", i, i + 1}) {
+				return false
+			}
 			i++
 		case c == ')':
-			toks = append(toks, token{tRParen, ")", i, i + 1})
+			if !emit(token{tRParen, ")", i, i + 1}) {
+				return false
+			}
 			i++
 		case c == ';':
-			toks = append(toks, token{tSemi, ";", i, i + 1})
+			if !emit(token{tSemi, ";", i, i + 1}) {
+				return false
+			}
 			i++
 		case c == ',':
-			toks = append(toks, token{tComma, ",", i, i + 1})
+			if !emit(token{tComma, ",", i, i + 1}) {
+				return false
+			}
 			i++
 		case c == '=':
-			toks = append(toks, token{tEq, "=", i, i + 1})
+			if !emit(token{tEq, "=", i, i + 1}) {
+				return false
+			}
 			i++
+		case (c == '<' || c == '>') && relOpAt(src, i) != "":
+			// "<<=", "<=", ">>=" and ">=" are action or comparison operators
+			// (RFC 2622 Figure 25), never a regexp delimiter.
+			op := relOpAt(src, i)
+			if !emit(token{tWord, op, i, i + len(op)}) {
+				return false
+			}
+			i += len(op)
 		case c == '<':
 			// Scan an AS-path regexp to the matching '>'. Kept raw; not nested.
 			j := i + 1
@@ -82,11 +120,15 @@ func tokenize(src string) []token {
 			if j < n { // include the '>' in the consumed span
 				end = j + 1
 			}
-			toks = append(toks, token{tRegex, body, i, end})
+			if !emit(token{tRegex, body, i, end}) {
+				return false
+			}
 			i = end
 		case c == '>':
-			// A '>' outside a <...> regexp is stray punctuation; skip it so the
-			// scanner always makes progress.
+			// A '>' outside a <...> regexp closes nothing.
+			if !emit(token{tStray, ">", i, i + 1}) {
+				return false
+			}
 			i++
 		default:
 			j := i
@@ -97,13 +139,27 @@ func tokenize(src string) []token {
 				i++
 				continue
 			}
-			toks = append(toks, token{tWord, src[i:j], i, j})
+			if !emit(token{tWord, src[i:j], i, j}) {
+				return false
+			}
 			i = j
 		}
 	}
-	toks = append(toks, token{tEOF, "", n, n})
-	return toks
+	return emit(token{tEOF, "", n, n})
 }
+
+// relOpAt returns the operator "<<=", "<=", ">>=" or ">=" at src[i:], or "".
+func relOpAt(src string, i int) string {
+	for _, op := range [...]string{"<<=", ">>=", "<=", ">="} {
+		if strings.HasPrefix(src[i:], op) {
+			return op
+		}
+	}
+	return ""
+}
+
+// closed reports whether a tRegex token ends with its '>'.
+func (t token) closed() bool { return t.end-t.start == len(t.text)+2 }
 
 // kw reports whether a word token equals the given keyword, case-insensitively.
 func (t token) kw(word string) bool {

@@ -36,6 +36,7 @@ type (
 	Severity   = ast.Severity
 )
 
+// The severities, re-exported from ast.
 const (
 	Info    = ast.Info
 	Warning = ast.Warning
@@ -46,7 +47,9 @@ const (
 // diagnostics. The returned object round-trips: obj.String() == text. Positions
 // are relative to text. Text holding more than one object still parses and
 // round-trips as one, with a Warning ("rpsl/multiple-objects"); use Parse for
-// dumps.
+// dumps. ParseObject applies no size caps — text is already in memory, and
+// parsing it costs a few hundred bytes per line — so for untrusted input of
+// unknown size, stream it through ParseWith instead.
 func ParseObject(text string) (*ast.Object, []Diagnostic) {
 	return parseObjectAt(text, 1, 0)
 }
@@ -71,15 +74,32 @@ func Validate(o *ast.Object, p Profile) []Diagnostic {
 	return p.Validate(o)
 }
 
+// maxLexerDiagnostics caps the per-line lexer diagnostics (malformed lines,
+// invalid attribute names) reported for one object; the rest are counted in one
+// "lexer/too-many-errors" diagnostic, so hostile input cannot turn every line
+// into a retained Diagnostic.
+const maxLexerDiagnostics = 100
+
 // diagnose reports what the lexer surfaced: malformed lines, attribute names
 // RPSL does not allow, and a second object inside what should be one.
 func diagnose(toks []lexer.Token) []Diagnostic {
 	var ds []Diagnostic
+	lineDiags, extra := 0, 0
+	var firstExtra lexer.Span
+	perLine := func(d Diagnostic) {
+		if lineDiags++; lineDiags <= maxLexerDiagnostics {
+			ds = append(ds, d)
+			return
+		}
+		if extra++; extra == 1 {
+			firstExtra = d.Span
+		}
+	}
 	seenAttr, blankAfterAttr, warned := false, false, false
 	for _, t := range toks {
 		switch t.Kind {
 		case lexer.KindMalformed:
-			ds = append(ds, ast.Diagnostic{
+			perLine(ast.Diagnostic{
 				Severity: ast.Error,
 				Message:  "line is not a valid attribute, continuation, comment, or blank",
 				Span:     t.Span,
@@ -89,7 +109,7 @@ func diagnose(toks []lexer.Token) []Diagnostic {
 			blankAfterAttr = seenAttr
 		case lexer.KindAttribute:
 			if !validAttrName(t.Name) {
-				ds = append(ds, ast.Diagnostic{
+				perLine(ast.Diagnostic{
 					Severity: ast.Error,
 					Message:  fmt.Sprintf("invalid attribute name %q", t.Name),
 					Span:     t.Span,
@@ -107,6 +127,14 @@ func diagnose(toks []lexer.Token) []Diagnostic {
 			}
 			seenAttr = true
 		}
+	}
+	if extra > 0 {
+		ds = append(ds, ast.Diagnostic{
+			Severity: ast.Error,
+			Message:  fmt.Sprintf("%d more malformed lines or invalid attribute names not reported", extra),
+			Span:     firstExtra,
+			Rule:     "lexer/too-many-errors",
+		})
 	}
 	return ds
 }

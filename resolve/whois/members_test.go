@@ -33,10 +33,10 @@ func TestWhoisMembersByRefListValues(t *testing.T) {
 	resp := "route: 198.51.100.0/24\norigin: AS10\nmember-of: RS-OTHER, RS-REF\nmnt-by: MAINT-X, MAINT-GOOD\nsource: TEST\n\n" +
 		"route: 203.0.113.0/24\norigin: AS20\nmember-of: RS-REF\nmnt-by: MAINT-EVIL, MAINT-WORSE\nsource: TEST\n"
 	fw := newFakeWhois(t, map[string]string{
-		"-r -i member-of -T route,route6,aut-num,as-set RS-REF": resp,
+		"-r -T route,route6,aut-num,as-set -i member-of RS-REF": resp,
 	})
 	src := &Source{Addr: fw.addr(), Timeout: 2 * time.Second}
-	got, err := src.MembersByRef(context.Background(), mustSet(t, "RS-REF"), []string{"MAINT-A", "MAINT-GOOD"})
+	got, err := src.MembersByRef(context.Background(), refSet(t, "RS-REF", "TEST", "MAINT-A", "MAINT-GOOD"))
 	if err != nil {
 		t.Fatalf("MembersByRef: %v", err)
 	}
@@ -57,7 +57,10 @@ func TestWhoisRejectsZeroSetName(t *testing.T) {
 	if _, err := src.GetSet(context.Background(), types.SetName{}); err == nil {
 		t.Error("GetSet(zero SetName) succeeded, want an error")
 	}
-	if _, err := src.MembersByRef(context.Background(), types.SetName{}, []string{"ANY"}); err == nil {
+	if _, err := src.MembersByRef(context.Background(), object.RouteSet{MbrsByRef: []string{"ANY"}}); err == nil {
 		t.Error("MembersByRef(zero SetName) succeeded, want an error")
+	}
+	if _, err := src.MembersByRef(context.Background(), nil); err == nil {
+		t.Error("MembersByRef(nil) succeeded, want an error")
 	}
 }

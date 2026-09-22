@@ -2,7 +2,6 @@ package types
 
 import (
 	"fmt"
-	"net/netip"
 	"strconv"
 	"strings"
 )
@@ -77,47 +76,31 @@ func (o RangeOperator) String() string {
 	}
 }
 
-// Apply composes o (the outer operator) over r (RFC 2622 §5.2): an outer ^n-m
-// distributes over an inner ^k-l and becomes ^max(n,k)-m if m >= max(n,k);
-// otherwise the prefix is deleted and ok is false. ^+ and ^- resolve against
-// r's own prefix length, and m is clamped to the address family's bit length.
-// The zero operator returns r unchanged.
+// Apply composes o (the outer operator) over r (RFC 2622 §2, §5.2): an outer
+// ^n-m distributes over an inner ^k-l and becomes ^max(n,k)-m if m >= max(n,k);
+// otherwise the prefix is deleted and ok is false. An outer ^+ becomes ^k-32 and
+// an outer ^- becomes ^(k+1)-32 (for IPv6, -128): the operator applies to every
+// prefix the inner range contains. m is clamped to the family's bit length. The
+// zero operator returns r unchanged.
 func (o RangeOperator) Apply(r PrefixRange) (_ PrefixRange, ok bool) {
 	if o.IsZero() {
 		return r, true
 	}
-	bits, maxBits := r.Prefix.Bits(), r.Prefix.Addr().BitLen()
+	if r.IsZero() {
+		return PrefixRange{}, false
+	}
+	k, maxBits := r.Lo(), r.prefix.Addr().BitLen()
 	n, m := int(o.N), int(o.M)
 	switch o.Op {
 	case RangePlus:
-		n, m = bits, maxBits
+		n, m = k, maxBits
 	case RangeMinus:
-		n, m = bits+1, maxBits
+		n, m = k+1, maxBits
 	}
 	m = min(m, maxBits)
-	lo := max(n, int(r.Lo))
+	lo := max(n, k)
 	if lo > m {
 		return PrefixRange{}, false
 	}
-	return normalizedRange(r.Prefix, lo, m), true
-}
-
-// normalizedRange builds the PrefixRange covering lengths [lo, hi] of p, using
-// the most specific operator spelling that denotes that window.
-func normalizedRange(p netip.Prefix, lo, hi int) PrefixRange {
-	bits, maxBits := p.Bits(), p.Addr().BitLen()
-	r := PrefixRange{Prefix: p, Lo: uint8(lo), Hi: uint8(hi)}
-	switch {
-	case lo == bits && hi == bits:
-		r.Op = RangeExact
-	case lo == bits && hi == maxBits:
-		r.Op = RangePlus
-	case lo == bits+1 && hi == maxBits:
-		r.Op = RangeMinus
-	case lo == hi:
-		r.Op = RangeLength
-	default:
-		r.Op = RangeRange
-	}
-	return r
+	return NewPrefixRange(r.prefix, lo, m)
 }

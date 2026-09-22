@@ -15,6 +15,7 @@ const (
 	AFIAny                    // any
 )
 
+// String returns "ipv4", "ipv6", "any" or "unspecified".
 func (a AFI) String() string {
 	switch a {
 	case AFIv4:
@@ -32,20 +33,18 @@ func (a AFI) String() string {
 type SAFI uint8
 
 const (
-	SAFIUnspecified SAFI = iota // no sub-family given (defaults to unicast in practice)
+	SAFIUnspecified SAFI = iota // no sub-family given: unicast and multicast (RFC 4012 §2.2)
 	SAFIUnicast                 // unicast
 	SAFIMulticast               // multicast
-	SAFIAny                     // any
 )
 
+// String returns "unicast", "multicast" or "unspecified".
 func (s SAFI) String() string {
 	switch s {
 	case SAFIUnicast:
 		return "unicast"
 	case SAFIMulticast:
 		return "multicast"
-	case SAFIAny:
-		return "any"
 	default:
 		return "unspecified"
 	}
@@ -59,10 +58,10 @@ type AddrFamily struct {
 	SAFI SAFI
 }
 
-// ParseAddrFamily parses an afi token: "ipv4", "ipv6", "any" optionally suffixed
-// with ".unicast", ".multicast", or ".any". It is case-insensitive.
+// ParseAddrFamily parses an RFC 4012 afi token: "ipv4", "ipv6" or "any",
+// optionally suffixed with ".unicast" or ".multicast". It is case-insensitive.
 func ParseAddrFamily(s string) (AddrFamily, error) {
-	t := strings.ToLower(strings.TrimSpace(s))
+	t := strings.ToLower(strings.Trim(s, " \t"))
 	if t == "" {
 		return AddrFamily{}, fmt.Errorf("rpsl/types: invalid afi: empty")
 	}
@@ -89,8 +88,6 @@ func ParseAddrFamily(s string) (AddrFamily, error) {
 		af.SAFI = SAFIUnicast
 	case "multicast":
 		af.SAFI = SAFIMulticast
-	case "any":
-		af.SAFI = SAFIAny
 	default:
 		return AddrFamily{}, fmt.Errorf("rpsl/types: invalid afi %q: unknown sub-family %q", s, right)
 	}
@@ -107,14 +104,14 @@ func (a AddrFamily) String() string {
 }
 
 // Covers reports whether address family a (which may be a wildcard such as
-// "any" or "ipv4.any") includes the concrete family b. AFIAny covers any AFI;
-// SAFIAny or SAFIUnspecified covers any SAFI; otherwise the components must
-// match exactly.
+// "any" or "ipv4") includes the concrete family b. AFIAny covers any AFI and
+// SAFIUnspecified covers unicast and multicast (RFC 4012 §2.2); otherwise the
+// components must match exactly.
 func (a AddrFamily) Covers(b AddrFamily) bool {
 	if a.AFI != AFIAny && a.AFI != b.AFI {
 		return false
 	}
-	if a.SAFI != SAFIAny && a.SAFI != SAFIUnspecified && a.SAFI != b.SAFI {
+	if a.SAFI != SAFIUnspecified && a.SAFI != b.SAFI {
 		return false
 	}
 	return true

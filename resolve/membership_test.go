@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/rkolesnichenko/rpsl/object"
-	"github.com/rkolesnichenko/rpsl/types"
 )
 
 // The standard RPSL list form (RFC 2622 §2) — comma-separated members,
@@ -47,29 +46,38 @@ func TestInvalidMembersAreSkipped(t *testing.T) {
 }
 
 func TestClaimAllowed(t *testing.T) {
-	claimant := decode(t, "route: 192.0.2.0/24\norigin: AS1\nmember-of: RS-X, rs-y\nmnt-by: MNT-C, MNT-B\nsource: TEST\n")
+	claimant := decode(t, "route: 192.0.2.0/24\norigin: AS1\nmember-of: RS-X, rs-y\nmnt-by: MNT-C, MNT-B,\nsource: TEST\n")
 	unclaimed := decode(t, "route: 192.0.2.0/24\norigin: AS1\nmnt-by: MNT-B\nsource: TEST\n")
 	cases := []struct {
-		name string
-		obj  object.Object
-		set  string
-		refs []string
-		want bool
+		name   string
+		obj    object.Object
+		set    string
+		source string
+		refs   []string
+		want   bool
 	}{
-		{"listed mntner", claimant, "RS-Y", []string{"MNT-B"}, true},
-		{"mntner match is case-insensitive", claimant, "RS-Y", []string{"mnt-b"}, true},
-		{"set match is case-insensitive", claimant, "rs-x", []string{"MNT-C"}, true},
-		{"ANY admits any maintainer", claimant, "RS-Y", []string{"ANY"}, true},
-		{"any is case-insensitive", claimant, "RS-Y", []string{"any"}, true},
-		{"mntner not listed", claimant, "RS-Y", []string{"MNT-Q"}, false},
-		{"no mbrs-by-ref", claimant, "RS-Y", nil, false},
-		{"set not claimed", claimant, "RS-Z", []string{"ANY"}, false},
-		{"no member-of at all", unclaimed, "RS-Y", []string{"ANY"}, false},
+		{"listed mntner", claimant, "RS-Y", "TEST", []string{"MNT-B"}, true},
+		{"mntner match is case-insensitive", claimant, "RS-Y", "TEST", []string{"mnt-b"}, true},
+		{"set match is case-insensitive", claimant, "rs-x", "TEST", []string{"MNT-C"}, true},
+		{"ANY admits any maintainer", claimant, "RS-Y", "TEST", []string{"ANY"}, true},
+		{"any is case-insensitive", claimant, "RS-Y", "TEST", []string{"any"}, true},
+		{"mntner not listed", claimant, "RS-Y", "TEST", []string{"MNT-Q"}, false},
+		{"no mbrs-by-ref", claimant, "RS-Y", "TEST", nil, false},
+		{"empty mbrs-by-ref item", claimant, "RS-Y", "TEST", []string{"", " "}, false},
+		{"set not claimed", claimant, "RS-Z", "TEST", []string{"ANY"}, false},
+		{"no member-of at all", unclaimed, "RS-Y", "TEST", []string{"ANY"}, false},
+		{"source is case-insensitive", claimant, "RS-Y", "test", []string{"MNT-B"}, true},
+		{"claim from another source", claimant, "RS-Y", "RADB", []string{"ANY"}, false},
+		{"set without a source", claimant, "RS-Y", "", []string{"ANY"}, false},
 	}
 	for _, c := range cases {
-		if got := ClaimAllowed(c.obj, mustSet(t, c.set), c.refs); got != c.want {
+		set := object.RouteSet{Name: mustSet(t, c.set), MbrsByRef: c.refs, Common: object.Common{Source: c.source}}
+		if got := ClaimAllowed(c.obj, set); got != c.want {
 			t.Errorf("%s: ClaimAllowed = %v, want %v", c.name, got, c.want)
 		}
+	}
+	if ClaimAllowed(nil, object.RouteSet{}) || ClaimAllowed(claimant, nil) {
+		t.Error("ClaimAllowed with a nil object or set = true, want false")
 	}
 }
 
@@ -80,8 +88,8 @@ type lyingSource struct {
 	extra []object.Object
 }
 
-func (l lyingSource) MembersByRef(ctx context.Context, set types.SetName, refs []string) ([]object.Object, error) {
-	objs, err := l.MemSource.MembersByRef(ctx, set, refs)
+func (l lyingSource) MembersByRef(ctx context.Context, set object.Set) ([]object.Object, error) {
+	objs, err := l.MemSource.MembersByRef(ctx, set)
 	return append(objs, l.extra...), err
 }
 
@@ -96,6 +104,8 @@ func TestEngineRechecksIndirectClaims(t *testing.T) {
 		decode(t, "aut-num: AS666\nas-name: EVIL\nmember-of: AS-FOO\nmnt-by: MNT-EVIL\nsource: TEST\n"), // wrong mntner
 		decode(t, "aut-num: AS667\nas-name: EVIL\nmnt-by: MNT-A\nsource: TEST\n"),                       // claims nothing
 		decode(t, "route: 203.0.113.0/24\norigin: AS1\nmember-of: RS-FOO\nmnt-by: MNT-EVIL\nsource: TEST\n"),
+		decode(t, "aut-num: AS668\nas-name: EVIL\nmember-of: AS-FOO\nmnt-by: MNT-A\nsource: RADB\n"), // other source
+		decode(t, "route: 233.252.0.0/24\norigin: AS1\nmember-of: RS-FOO\nmnt-by: MNT-A\nsource: RADB\n"),
 	}}
 	e := &Expander{Src: src}
 	asns, err := e.ExpandAS(context.Background(), mustSet(t, "AS-FOO"))
@@ -122,12 +132,58 @@ func TestResultSetsString(t *testing.T) {
 		asns.String():          "[AS1 AS2]",
 		pfx.String():           "[198.51.100.0/24]",
 		ranges.String():        "[10.0.0.0/8 192.0.2.0/24^+]",
-		(ASSet{}).String():     "[]",
+		(ASNSet{}).String():    "[]",
 		(PrefixSet{}).String(): "[]",
 		(RangeSet{}).String():  "[]",
 	} {
 		if got != want {
 			t.Errorf("String() = %q, want %q", got, want)
+		}
+	}
+}
+
+// A real RIPE route whose key line is followed by "+" continuation lines must
+// still expand (its decoded prefix was "…/24\n\n" and silently dropped).
+func TestRouteWithBlankContinuationExpands(t *testing.T) {
+	src := corpus(t,
+		"route:   91.207.181.0/24\n+\n+\norigin:  AS48275\nsource:  RIPE\n",
+		asSet("AS-X", "AS48275"),
+	)
+	got, err := (&Expander{Src: src}).ExpandPrefixes(context.Background(), mustSet(t, "AS-X"))
+	if want := []netip.Prefix{netipMust("91.207.181.0/24")}; err != nil || !reflect.DeepEqual(got.List(), want) {
+		t.Errorf("ExpandPrefixes(AS-X) = %v, %v; want %v", got.List(), err, want)
+	}
+}
+
+// Maintainer names are unique only within one registry, so an indirect member
+// must come from the set's own source (as IRRd requires): a RADB route whose
+// mnt-by happens to name the RIPE set's mbrs-by-ref maintainer must not join it.
+// Sources compare case-insensitively; an absent source matches only an absent
+// source.
+func TestClaimsRequireSameSource(t *testing.T) {
+	src := corpus(t,
+		"route-set: RS-FOO\nmembers: 192.0.2.0/24\nmbrs-by-ref: MNT-FOO\nsource: RIPE\n",
+		"route: 198.51.100.0/24\norigin: AS1\nmember-of: RS-FOO\nmnt-by: MNT-FOO\nsource: ripe\n",
+		"route: 203.0.113.0/24\norigin: AS666\nmember-of: RS-FOO\nmnt-by: MNT-FOO\nsource: RADB\n",
+		"route: 233.252.0.0/24\norigin: AS667\nmember-of: RS-FOO\nmnt-by: MNT-FOO\n",
+		"as-set: AS-FOO\nmembers: AS1\nmbrs-by-ref: ANY\nsource: RIPE\n",
+		"aut-num: AS2\nas-name: TWO\nmember-of: AS-FOO\nmnt-by: MNT-X\nsource: RIPE\n",
+		"aut-num: AS666\nas-name: EVIL\nmember-of: AS-FOO\nmnt-by: MNT-X\nsource: RADB\n",
+		"as-set: AS-NOSRC\nmembers: AS1\nmbrs-by-ref: ANY\n",
+		"aut-num: AS3\nas-name: THREE\nmember-of: AS-NOSRC\nmnt-by: MNT-X\n",
+		"aut-num: AS668\nas-name: EVIL\nmember-of: AS-NOSRC\nmnt-by: MNT-X\nsource: RADB\n",
+	)
+	ctx := context.Background()
+	e := &Expander{Src: src}
+	pfx, err := e.ExpandPrefixes(ctx, mustSet(t, "RS-FOO"))
+	if want := []netip.Prefix{netipMust("192.0.2.0/24"), netipMust("198.51.100.0/24")}; err != nil ||
+		!reflect.DeepEqual(pfx.List(), want) {
+		t.Errorf("ExpandPrefixes(RS-FOO) = %v, %v; want %v", pfx.List(), err, want)
+	}
+	for set, want := range map[string][]uint32{"AS-FOO": {1, 2}, "AS-NOSRC": {1, 3}} {
+		asns, err := e.ExpandAS(ctx, mustSet(t, set))
+		if err != nil || !reflect.DeepEqual(asnList(asns), want) {
+			t.Errorf("ExpandAS(%s) = %v, %v; want %v", set, asnList(asns), err, want)
 		}
 	}
 }

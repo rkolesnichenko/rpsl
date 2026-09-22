@@ -3,7 +3,10 @@ package ast
 import (
 	"errors"
 	"runtime"
+	"strings"
 	"testing"
+
+	"github.com/rkolesnichenko/rpsl/lexer"
 )
 
 func TestSetReplacesInPlace(t *testing.T) {
@@ -112,5 +115,51 @@ func TestAppendIsLinear(t *testing.T) {
 	small, large := cost(10000), cost(20000)
 	if ratio := float64(large) / float64(small); ratio > 3 {
 		t.Errorf("allocation grew %.1fx when appends doubled (%d -> %d bytes); want ~2x", ratio, small, large)
+	}
+}
+
+// On an object with no attributes yet, what it holds (comments, stray lines)
+// comes before the new attribute, so re-parsing never folds a stray indented
+// line into the new value and a header comment stays on top.
+func TestAppendToTriviaOnlyObject(t *testing.T) {
+	for _, c := range []struct{ src, want string }{
+		{"  orphan line\n", "  orphan line\nremarks: x\n"},
+		{"# header\n", "# header\nremarks: x\n"},
+		{"\tindented junk", "\tindented junk\nremarks: x\n"},
+	} {
+		o := parse(c.src)
+		if err := o.Append("remarks", "x"); err != nil {
+			t.Fatal(err)
+		}
+		if got := o.String(); got != c.want {
+			t.Errorf("Append on %q: %q, want %q", c.src, got, c.want)
+		}
+		if a, ok := parse(o.String()).GetFirst("remarks"); !ok || a.Value != "x" {
+			t.Errorf("re-parse of %q: remarks = %q", o.String(), a.Value)
+		}
+		o = parse(c.src)
+		if err := o.Set("remarks", "x"); err != nil || o.String() != c.want {
+			t.Errorf("Set on %q: %q, %v; want %q", c.src, o.String(), err, c.want)
+		}
+	}
+}
+
+// A lone '\r' that ends the input is a line ending: Append completes it to
+// "\r\n" instead of adding a second one after it, which turned the '\r' into
+// part of the line (found by FuzzEdit).
+func TestAppendAfterLoneCR(t *testing.T) {
+	for _, src := range []string{"a: 1\r\nb: 2\r", "a: 1\r\n\r", "a: 1\r"} {
+		o := New(lexer.Tokenize(src))
+		if err := o.Append("c", "3"); err != nil {
+			t.Fatal(err)
+		}
+		toks := lexer.Tokenize(o.String())
+		var values []string
+		for _, a := range New(toks).Attributes() {
+			values = append(values, a.Name+"="+a.Value)
+		}
+		if malformed(toks) != 0 || values[len(values)-1] != "c=3" || strings.Contains(strings.Join(values, " "), "\r") {
+			t.Errorf("Append after %q gives %q: %q, %d malformed lines", src, o.String(), values, malformed(toks))
+		}
 	}
 }

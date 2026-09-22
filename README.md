@@ -1,5 +1,8 @@
 # rpsl
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/rkolesnichenko/rpsl.svg)](https://pkg.go.dev/github.com/rkolesnichenko/rpsl)
+[![ci](https://github.com/rkolesnichenko/rpsl/actions/workflows/ci.yml/badge.svg)](https://github.com/rkolesnichenko/rpsl/actions/workflows/ci.yml)
+
 A complete RPSL parser, type system, policy AST, and set-expansion engine for Go.
 
 `rpsl` takes raw RPSL — the text of RIPE / ARIN / RADB IRR database objects — and
@@ -19,6 +22,9 @@ dictionary, `except`/`refine`). Real RIPE/IRRd data deviates from the spec, so t
 parser targets IRRd/RIPE reality with the RFCs as the skeleton.
 
 ## Status
+
+Every layer ships in v0.1.0, the first release. Until v1.0.0, a minor version
+may change the API; the [changelog](CHANGELOG.md) says how.
 
 | Layer | What it does | State |
 | --- | --- | --- |
@@ -180,7 +186,7 @@ prefixes, _ := e.ExpandPrefixes(context.Background(), name) // 10.0.0.0/8, 192.0
 ```
 
 `ExpandPrefixes` enforces `MaxPrefixes` *during* enumeration and returns a typed
-`resolve.ErrSetTooLarge` rather than OOM-ing — real customer-cone as-sets expand
+`*resolve.SetTooLargeError` rather than OOM-ing — real customer-cone as-sets expand
 to hundreds of thousands of prefixes.
 
 ### Live source
@@ -193,7 +199,7 @@ import "github.com/rkolesnichenko/rpsl/resolve/irrd"
 
 irr := &irrd.Source{
 	Addr:      "whois.radb.net:43",
-	Sources:   "RADB,RIPE", // IRR precedence
+	Sources:   []string{"RADB", "RIPE"}, // IRR precedence
 	Timeout:   10 * time.Second,
 	KeepAlive: true,         // pool persistent connections
 }
@@ -230,25 +236,30 @@ covers only the root; run everything with:
 
 ```sh
 scripts/check.sh               # every module: build, vet, test -race; gofmt; invariants
-FUZZTIME=15s scripts/check.sh  # ... plus all nine fuzz targets (what CI runs)
+FUZZTIME=15s scripts/check.sh  # ... plus all twelve fuzz targets (what CI runs)
 ```
 
 - **Lossless round-trip** — `go test -run TestRoundTrip .` for single objects,
   `TestStreamRoundTrip` and `FuzzParseStream` for streams.
-- **Fuzz** (must never panic, must never drop input): `FuzzTokenize`,
-  `FuzzAttributeList`, `FuzzParseSetName`, `FuzzParseRangeOperator`,
-  `FuzzParseStream`, `FuzzParseImport`, `FuzzParseASPathRegexp`,
+- **Fuzz** (never panic, never drop input, and hold each parser's properties —
+  see design §11): `FuzzTokenize`, `FuzzAttributeList`, `FuzzEdit`,
+  `FuzzParseSetName`, `FuzzParseRangeOperator`, `FuzzParsePrefixRange`,
+  `FuzzParseStream`, `FuzzDecode`, `FuzzParseImport`, `FuzzParseASPathRegexp`,
   `FuzzParseFilter`, `FuzzParsePeering`.
 - **Real data (opt-in)** — `scripts/fetch-ripe-dumps.sh` downloads RIPE split
-  dumps; `RPSL_REALDATA=.data/ripe go test -run TestRealData ./examples/bulk-ripe/bulk`
+  dumps; `RPSL_REALDATA=$PWD/.data/ripe go test -run TestRealData ./examples/bulk-ripe/bulk`
   checks lossless streaming, error rates, and order-independent expansion of the
   largest real sets.
 - **Live backends (opt-in)** — `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve`
-  queries RADB, RIPE and RDAP read-only.
-- **Expansion correctness** — `resolve` ships hand-checked golden expansions of a
-  synthetic snapshot (`resolve/testdata/`) and property tests against an
-  independent reachability oracle, run on every `go test`; an optional live
-  `bgpq4` diff is gated on `RPSL_BGPQ4_SERVER` / `RPSL_BGPQ4_SET`.
+  queries RADB, RIPE and RDAP read-only;
+  `RPSL_LIVE=1 go test -run TestRIPETemplatesAreCurrent ./object` checks that the
+  RIPE profile's template fixtures still match whois.ripe.net.
+- **Expansion correctness** — every `go test` holds the engine and all three
+  Sources to a brute-force model of RFC 2622 on thousands of random IRRs. With
+  `bgpq4` installed, bgpq4 itself expands the same IRRs and the snapshot whose
+  goldens are its output; the few known differences are pinned in
+  `resolve/testdata/bgpq4/divergences.md`; on the RIPE dumps, 304 of 305 sampled
+  sets expand exactly as bgpq4 expands them (the other hits bgpq4's `^n` bug).
 
 ## Releasing
 
@@ -262,12 +273,14 @@ locally through the workspace, so:
 
 Publishing tags each module and bumps its siblings' `require`s in dependency
 order (`lexer`, `types` → `ast` → root → `resolve`); the exact procedure is in
-[`RELEASING.md`](RELEASING.md).
+[`RELEASING.md`](RELEASING.md), and `scripts/release-dryrun.sh` rehearses it
+end to end against a local proxy without publishing anything.
 
 ## Further reading
 
 - GoDoc: [pkg.go.dev/github.com/rkolesnichenko/rpsl](https://pkg.go.dev/github.com/rkolesnichenko/rpsl)
 - Design doc: [`docs/rpsl-go-design.md`](docs/rpsl-go-design.md)
+- Diagnostic rules and severities: [`docs/diagnostics.md`](docs/diagnostics.md)
 - RFCs: [2622](https://www.rfc-editor.org/rfc/rfc2622),
   [2650](https://www.rfc-editor.org/rfc/rfc2650),
   [4012](https://www.rfc-editor.org/rfc/rfc4012)

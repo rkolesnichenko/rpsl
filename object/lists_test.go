@@ -25,13 +25,13 @@ func TestParseSetMember(t *testing.T) {
 		rng       string
 		op        types.RangeOperator
 	}{
-		{"AS1", types.AsSet, MemberAS, 1, "", "", types.RangeOperator{}},
-		{"AS-FOO", types.AsSet, MemberSet, 0, "AS-FOO", "", types.RangeOperator{}},
-		{"RS-FOO", types.AsSet, MemberSet, 0, "RS-FOO", "", types.RangeOperator{}}, // mismatch is a decoder warning, not a parse error
-		{"AS1^24", types.RouteSet, MemberAS, 1, "", "", op("24")},
-		{"RS-FOO^+", types.RouteSet, MemberSet, 0, "RS-FOO", "", op("+")},
-		{"AS-FOO^-", types.RouteSet, MemberSet, 0, "AS-FOO", "", op("-")},
-		{"10.0.0.0/8^16-24", types.RouteSet, MemberPrefixRange, 0, "", "10.0.0.0/8^16-24", types.RangeOperator{}},
+		{"AS1", types.ClassAsSet, MemberAS, 1, "", "", types.RangeOperator{}},
+		{"AS-FOO", types.ClassAsSet, MemberSet, 0, "AS-FOO", "", types.RangeOperator{}},
+		{"RS-FOO", types.ClassAsSet, MemberSet, 0, "RS-FOO", "", types.RangeOperator{}}, // mismatch is a decoder warning, not a parse error
+		{"AS1^24", types.ClassRouteSet, MemberAS, 1, "", "", op("24")},
+		{"RS-FOO^+", types.ClassRouteSet, MemberSet, 0, "RS-FOO", "", op("+")},
+		{"AS-FOO^-", types.ClassRouteSet, MemberSet, 0, "AS-FOO", "", op("-")},
+		{"10.0.0.0/8^16-24", types.ClassRouteSet, MemberPrefixRange, 0, "", "10.0.0.0/8^16-24", types.RangeOperator{}},
 	}
 	for _, c := range cases {
 		m, err := ParseSetMember(c.item, c.container)
@@ -39,7 +39,7 @@ func TestParseSetMember(t *testing.T) {
 			t.Errorf("ParseSetMember(%q, %v) unexpected err: %v", c.item, c.container, err)
 			continue
 		}
-		if m.Kind != c.kind || m.AS != c.as || m.Set.Canonical() != c.set || m.Op != c.op || m.Raw != c.item {
+		if m.Kind != c.kind || m.AS != c.as || m.Set.String() != c.set || m.Op != c.op || m.Raw != c.item {
 			t.Errorf("ParseSetMember(%q, %v) = %+v", c.item, c.container, m)
 		}
 		if c.rng != "" && m.Range.String() != c.rng {
@@ -55,14 +55,14 @@ func TestParseSetMemberRejects(t *testing.T) {
 		item      string
 		container types.SetClass
 	}{
-		{"garbage!!", types.RouteSet},
-		{"AS1 AS2", types.AsSet},       // whitespace is not a list separator
-		{"AS1^+", types.AsSet},         // operators are route-set only
-		{"192.0.2.0/24", types.AsSet},  // prefixes are route-set only
-		{"AS1^", types.RouteSet},       // empty operator
-		{"RS-FOO^+24", types.RouteSet}, // signed operator
-		{"RS-FOO^+^+", types.RouteSet}, // doubled operator
-		{"", types.AsSet},
+		{"garbage!!", types.ClassRouteSet},
+		{"AS1 AS2", types.ClassAsSet},       // whitespace is not a list separator
+		{"AS1^+", types.ClassAsSet},         // operators are route-set only
+		{"192.0.2.0/24", types.ClassAsSet},  // prefixes are route-set only
+		{"AS1^", types.ClassRouteSet},       // empty operator
+		{"RS-FOO^+24", types.ClassRouteSet}, // signed operator
+		{"RS-FOO^+^+", types.ClassRouteSet}, // doubled operator
+		{"", types.ClassAsSet},
 	} {
 		m, err := ParseSetMember(c.item, c.container)
 		if err == nil || m.Kind != MemberInvalid || m.Raw != c.item {
@@ -88,7 +88,7 @@ func TestDecodeCommaSeparatedMembers(t *testing.T) {
 	if !reflect.DeepEqual(got, []string{"AS1", "AS2", "AS-BAR", "AS3"}) {
 		t.Errorf("members = %q, want [AS1 AS2 AS-BAR AS3]", got)
 	}
-	if s.Members[2].Kind != MemberSet || s.Members[2].Set.Canonical() != "AS-BAR" {
+	if s.Members[2].Kind != MemberSet || s.Members[2].Set.String() != "AS-BAR" {
 		t.Errorf("member 2 = %+v, want set AS-BAR", s.Members[2])
 	}
 }
@@ -102,7 +102,7 @@ func TestDecodeRouteSetMemberOperators(t *testing.T) {
 	if len(m) != 3 {
 		t.Fatalf("members = %+v, want 3", m)
 	}
-	if m[0].Kind != MemberSet || m[0].Set.Canonical() != "RS-B" || m[0].Op.String() != "^+" {
+	if m[0].Kind != MemberSet || m[0].Set.String() != "RS-B" || m[0].Op.String() != "^+" {
 		t.Errorf("member 0 = %+v, want RS-B with ^+", m[0])
 	}
 	if m[1].Kind != MemberAS || m[1].AS != 5 || m[1].Op.String() != "^24" {
@@ -114,18 +114,18 @@ func TestDecodeRouteSetMemberOperators(t *testing.T) {
 }
 
 // An unparseable item is kept as MemberInvalid between its valid neighbours,
-// and its Warning points at the item itself, not the whole attribute.
+// and its Error points at the item itself, not the whole attribute.
 func TestInvalidMemberDiagnosedAtItem(t *testing.T) {
 	obj, diags := Decode(parse("as-set: AS-X\nmembers: AS1, garbage!!, AS2\n"))
 	m := obj.(AsSet).Members
 	if len(m) != 3 || m[0].AS != 1 || m[1].Kind != MemberInvalid || m[1].Raw != "garbage!!" || m[2].AS != 2 {
 		t.Fatalf("members = %+v, want AS1, invalid garbage!!, AS2", m)
 	}
-	if len(diags) != 1 || diags[0].Severity != ast.Warning || diags[0].Rule != "object/as-set-members" {
-		t.Fatalf("diags = %+v, want one object/as-set-members warning", diags)
+	if len(diags) != 1 || diags[0].Severity != ast.Error || diags[0].Rule != "object/as-set-members" {
+		t.Fatalf("diags = %+v, want one object/as-set-members error", diags)
 	}
 	if sp := diags[0].Span; sp.StartLine != 2 || sp.StartCol != 15 || sp.EndCol != 24 {
-		t.Errorf("warning span = %d:%d-%d, want 2:15-24 (the item)", sp.StartLine, sp.StartCol, sp.EndCol)
+		t.Errorf("error span = %d:%d-%d, want 2:15-24 (the item)", sp.StartLine, sp.StartCol, sp.EndCol)
 	}
 }
 
@@ -177,7 +177,7 @@ func TestListAttributesSplit(t *testing.T) {
 	canon := func(ns []types.SetName) []string {
 		var out []string
 		for _, n := range ns {
-			out = append(out, n.Canonical())
+			out = append(out, n.String())
 		}
 		return out
 	}

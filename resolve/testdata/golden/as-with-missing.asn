@@ -1,0 +1,3 @@
+# bgpq4 -j -p -l x -L 64 -S TEST,RADB -t AS-WITH-MISSING, against testdata/snapshot served by
+# internal/irrtest. Regenerate: go test -run TestGoldensAreBgpq4Output -update .
+AS64501

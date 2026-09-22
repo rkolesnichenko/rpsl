@@ -1,0 +1,9 @@
+# bgpq4 -j -p -l x -L 64 -S TEST,RADB -6 RS-RANGES, against testdata/snapshot served by
+# internal/irrtest. Regenerate: go test -run TestGoldensAreBgpq4Output -update .
+2001:db8:1::/127
+2001:db8:1::/128
+2001:db8:1::1/128
+2001:db8:1::2/127
+2001:db8:1::2/128
+2001:db8:1::3/128
+2001:db8:2::/48

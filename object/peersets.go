@@ -11,27 +11,37 @@ import (
 // RFC 4012).
 type PeeringSet struct {
 	Common
-	Name     types.SetName
-	Peerings []policy.Peering // parsed peering:/mp-peering: specs, in document order
-	raw      *ast.Object
+	Registry
+	Name       types.SetName
+	Peerings   []policy.Peering // parsed peering: specs, in document order
+	MpPeerings []policy.Peering // parsed RFC 4012 mp-peering: specs, in document order
+	raw        *ast.Object
 }
 
-func (s PeeringSet) Class() string    { return "peering-set" }
+// Class returns "peering-set".
+func (s PeeringSet) Class() string { return "peering-set" }
+
+// Raw returns the object's lossless source, or nil for one built without it.
 func (s PeeringSet) Raw() *ast.Object { return s.raw }
 
 func decodePeeringSet(d *decoder) PeeringSet {
 	ps := PeeringSet{
-		Common: d.common("peering-set"),
-		Name:   d.setKey("peering-set", "object/peering-set-name", types.PeeringSet),
-		raw:    d.o,
+		Common:   d.common("peering-set"),
+		Registry: d.registry("peering-set"),
+		Name:     d.setKey("peering-set", "object/peering-set-name", types.ClassPeeringSet),
+		raw:      d.o,
 	}
 	for _, a := range d.o.Attributes() {
-		if a.Name != "peering" && a.Name != "mp-peering" {
-			continue
+		switch a.Name {
+		case "peering":
+			pe, ds := policy.ParsePeering(a.Value)
+			ps.Peerings = append(ps.Peerings, pe)
+			d.rebase(a, ds)
+		case "mp-peering":
+			pe, ds := policy.ParsePeering(a.Value)
+			ps.MpPeerings = append(ps.MpPeerings, pe)
+			d.rebase(a, ds)
 		}
-		pe, ds := policy.ParsePeering(a.Value)
-		ps.Peerings = append(ps.Peerings, pe)
-		d.rebase(a, ds)
 	}
 	return ps
 }
@@ -41,20 +51,25 @@ func decodePeeringSet(d *decoder) PeeringSet {
 // either is nil when absent.
 type FilterSet struct {
 	Common
+	Registry
 	Name     types.SetName
 	Filter   policy.Filter
 	MpFilter policy.Filter
 	raw      *ast.Object
 }
 
-func (s FilterSet) Class() string    { return "filter-set" }
+// Class returns "filter-set".
+func (s FilterSet) Class() string { return "filter-set" }
+
+// Raw returns the object's lossless source, or nil for one built without it.
 func (s FilterSet) Raw() *ast.Object { return s.raw }
 
 func decodeFilterSet(d *decoder) FilterSet {
 	fs := FilterSet{
-		Common: d.common("filter-set"),
-		Name:   d.setKey("filter-set", "object/filter-set-name", types.FilterSet),
-		raw:    d.o,
+		Common:   d.common("filter-set"),
+		Registry: d.registry("filter-set"),
+		Name:     d.setKey("filter-set", "object/filter-set-name", types.ClassFilterSet),
+		raw:      d.o,
 	}
 	parse := func(name string) policy.Filter {
 		a, ok := d.o.GetFirst(name)
@@ -74,6 +89,7 @@ func decodeFilterSet(d *decoder) FilterSet {
 // kept as their raw text. MbrsByRef enables indirect membership.
 type RtrSet struct {
 	Common
+	Registry
 	Name      types.SetName
 	Members   []string
 	MpMembers []string
@@ -81,13 +97,17 @@ type RtrSet struct {
 	raw       *ast.Object
 }
 
-func (s RtrSet) Class() string    { return "rtr-set" }
+// Class returns "rtr-set".
+func (s RtrSet) Class() string { return "rtr-set" }
+
+// Raw returns the object's lossless source, or nil for one built without it.
 func (s RtrSet) Raw() *ast.Object { return s.raw }
 
 func decodeRtrSet(d *decoder) RtrSet {
 	return RtrSet{
 		Common:    d.common("rtr-set"),
-		Name:      d.setKey("rtr-set", "object/rtr-set-name", types.RtrSet),
+		Registry:  d.registry("rtr-set"),
+		Name:      d.setKey("rtr-set", "object/rtr-set-name", types.ClassRtrSet),
 		Members:   d.list("members"),
 		MpMembers: d.list("mp-members"),
 		MbrsByRef: d.list("mbrs-by-ref"),

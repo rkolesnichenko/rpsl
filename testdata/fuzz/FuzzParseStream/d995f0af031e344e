@@ -1,0 +1,5 @@
+go test fuzz v1
+string("\n00\n:")
+uint16(1)
+byte('\x02')
+byte('\x01')

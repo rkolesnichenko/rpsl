@@ -1,0 +1,4 @@
+# bgpq4 -j -p -l x -L 64 -S TEST,RADB -4 RS-CLAIMED, against testdata/snapshot served by
+# internal/irrtest. Regenerate: go test -run TestGoldensAreBgpq4Output -update .
+192.0.2.128/25
+198.51.100.128/25

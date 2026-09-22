@@ -57,7 +57,7 @@ func mustSet(t *testing.T, s string) types.SetName {
 	return n
 }
 
-func asnList(s ASSet) []uint32 {
+func asnList(s ASNSet) []uint32 {
 	out := make([]uint32, 0, s.Len())
 	for _, a := range s.List() {
 		out = append(out, uint32(a))
@@ -148,14 +148,14 @@ func TestExpandPrefixesMaxPrefixes(t *testing.T) {
 	src := corpus(t, routeSet("RS-BIG", "0.0.0.0/0^+"))
 	e := &Expander{Src: src, MaxPrefixes: 10}
 	_, err := e.ExpandPrefixes(context.Background(), mustSet(t, "RS-BIG"))
-	var tooLarge ErrSetTooLarge
+	var tooLarge *SetTooLargeError
 	if !errors.As(err, &tooLarge) {
-		t.Fatalf("err = %v, want ErrSetTooLarge", err)
+		t.Fatalf("err = %v, want SetTooLargeError", err)
 	}
 }
 
 // A pathologically wide IRR graph (10k unique as-sets at depth 1) is bounded
-// by MaxVisited; we set it to 50 and expect ErrSetTooLarge before exhausting
+// by MaxVisited; we set it to 50 and expect SetTooLargeError before exhausting
 // memory.
 func TestExpandASMaxVisited(t *testing.T) {
 	var texts []string
@@ -168,9 +168,9 @@ func TestExpandASMaxVisited(t *testing.T) {
 	src := corpus(t, texts...)
 	e := &Expander{Src: src, MaxVisited: 50}
 	_, err := e.ExpandAS(context.Background(), mustSet(t, "AS-WIDE"))
-	var tooLarge ErrSetTooLarge
+	var tooLarge *SetTooLargeError
 	if !errors.As(err, &tooLarge) {
-		t.Fatalf("err = %v, want ErrSetTooLarge", err)
+		t.Fatalf("err = %v, want SetTooLargeError", err)
 	}
 	if tooLarge.Count <= 50 {
 		t.Errorf("Count = %d, want > MaxVisited (50)", tooLarge.Count)
@@ -216,21 +216,21 @@ func (b *blockingSource) GetSet(ctx context.Context, _ types.SetName) (object.Se
 func (b *blockingSource) OriginatedRoutes(context.Context, types.ASN, types.AFI) ([]netip.Prefix, error) {
 	return nil, nil
 }
-func (b *blockingSource) MembersByRef(context.Context, types.SetName, []string) ([]object.Object, error) {
+func (b *blockingSource) MembersByRef(context.Context, object.Set) ([]object.Object, error) {
 	return nil, nil
 }
 
 // TestExpandPrefixesBudgetAcrossMembers exercises the materialize budget fix:
 // two ranges that each fit alone (6 prefixes from a /29^+ = 1+2+4+8 → bounded
 // by the cap, but their union exceeds the 10-prefix MaxPrefixes). The engine
-// must surface ErrSetTooLarge whose Count actually exceeds the cap.
+// must surface SetTooLargeError whose Count actually exceeds the cap.
 func TestExpandPrefixesBudgetAcrossMembers(t *testing.T) {
 	src := corpus(t, routeSet("RS-MULTI", "192.0.2.0/29^+", "198.51.100.0/29^+"))
 	e := &Expander{Src: src, MaxPrefixes: 10}
 	_, err := e.ExpandPrefixes(context.Background(), mustSet(t, "RS-MULTI"))
-	var tooLarge ErrSetTooLarge
+	var tooLarge *SetTooLargeError
 	if !errors.As(err, &tooLarge) {
-		t.Fatalf("err = %v, want ErrSetTooLarge", err)
+		t.Fatalf("err = %v, want SetTooLargeError", err)
 	}
 	if tooLarge.Count <= 10 {
 		t.Errorf("Count = %d, want > MaxPrefixes (10)", tooLarge.Count)

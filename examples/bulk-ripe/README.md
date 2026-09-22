@@ -105,11 +105,20 @@ the same dumps:
 
 ```sh
 scripts/fetch-ripe-dumps.sh
-RPSL_REALDATA=.data/ripe go test -run TestRealData -v ./examples/bulk-ripe/bulk
+RPSL_REALDATA=$PWD/.data/ripe go test -run TestRealData -v ./examples/bulk-ripe/bulk
 ```
 
-For every dump it requires a lossless stream (SHA-256 of input = SHA-256 of
-the re-serialized objects), no stream-level diagnostics, and each error family
-under 0.1 % of objects (of policy values, for `policy/*`). With all five dumps
-present it also expands the 20 largest as-sets and route-sets twice, in
-opposite input orders, and requires identical results.
+The path must be absolute (`go test` runs in the package directory). For
+every dump it requires:
+
+- a lossless stream (SHA-256 of input = SHA-256 of the re-serialized objects)
+  and no stream-level diagnostics;
+- a valid prefix on every route and route6 (one that fails to decode is
+  silently missing from every expansion);
+- Errors of any one family (`object/`, `policy/`, `dict/`, …) on at most 0.1 %
+  of the objects, and at least 3 tolerated for small dumps.
+
+With the as-set, route-set, route, route6 and aut-num dumps present it also
+expands the 20 largest as-sets and route-sets twice, in opposite input orders,
+and requires identical results. The filter-set and peering-set dumps exercise
+the policy parser's filter and peering grammar.

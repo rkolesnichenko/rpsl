@@ -27,39 +27,96 @@ type ClassSpec struct {
 }
 
 // Profile is a named class/attribute dictionary. The built-in profiles are RIPE
-// (permissive, mirrors IRRd/RIPE reality) and RFCStrict (RFC 2622/2650/4012 only).
-// The dictionary is data-driven so callers can supply their own profile.
+// (the RIPE Database's own templates) and RFCStrict (the RFC 2622, 2725, 2726
+// and 4012 tables). The dictionary is data-driven so callers can supply their
+// own with NewProfile. A Profile is read-only: its accessors return copies, so no user
+// of a shared profile such as RIPE can change what Validate does for another.
 type Profile struct {
-	Name    string
-	Classes map[string]ClassSpec
+	name    string
+	classes map[string]ClassSpec
+}
+
+// NewProfile returns a profile with the given class schemas, keyed by class
+// name. It copies classes, so later changes to the map do not affect it.
+func NewProfile(name string, classes map[string]ClassSpec) Profile {
+	c := make(map[string]ClassSpec, len(classes))
+	for class, spec := range classes {
+		c[class] = spec.clone()
+	}
+	return Profile{name: name, classes: c}
+}
+
+// Name returns the profile's name, e.g. "RIPE".
+func (p Profile) Name() string { return p.name }
+
+// Class returns a copy of the schema for class, and whether the profile
+// defines it.
+func (p Profile) Class(class string) (ClassSpec, bool) {
+	spec, ok := p.classes[class]
+	return spec.clone(), ok
+}
+
+// Classes returns the names of the classes the profile defines, sorted.
+func (p Profile) Classes() []string {
+	names := make([]string, 0, len(p.classes))
+	for class := range p.classes {
+		names = append(names, class)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// clone returns a deep copy of c.
+func (c ClassSpec) clone() ClassSpec {
+	out := ClassSpec{AllowUnknown: c.AllowUnknown}
+	if c.Attrs != nil {
+		out.Attrs = make(map[string]AttrSpec, len(c.Attrs))
+		for name, as := range c.Attrs {
+			out.Attrs[name] = as
+		}
+	}
+	for _, group := range c.OneOf {
+		out.OneOf = append(out.OneOf, append([]string(nil), group...))
+	}
+	return out
 }
 
 // Validate checks o against the profile and returns diagnostics for: an unknown
 // class (dict/unknown-class), unknown attributes (dict/unknown-attr, suppressed
-// when the class allows them), missing required attributes (dict/missing-required),
-// (including an unmet OneOf group), and single-valued attributes appearing more
-// than once (dict/cardinality). It
+// when the class allows them), missing required attributes, including one that
+// is present but empty and an unmet OneOf group (dict/missing-required), and
+// single-valued attributes appearing more than once (dict/cardinality). It
 // never mutates o and is independent of Decode, so parsing stays resilient and
 // validation is opt-in.
 func (p Profile) Validate(o *ast.Object) []ast.Diagnostic {
+	if o == nil {
+		return nil
+	}
 	class := o.Class()
-	spec, ok := p.Classes[class]
+	spec, ok := p.classes[class]
 	if !ok {
 		return []ast.Diagnostic{diag(ast.Error, "dict/unknown-class",
-			"class "+strconv.Quote(class)+" is not defined in profile "+p.Name,
+			"class "+strconv.Quote(class)+" is not defined in profile "+p.name,
 			classSpan(o, class))}
 	}
 
 	var diags []ast.Diagnostic
-	counts := map[string]int{}
+	counts := map[string]int{} // occurrences, for cardinality
+	filled := map[string]int{} // occurrences with a value, for presence
+	firstEmpty := map[string]ast.Attribute{}
 	for _, a := range o.Attributes() {
 		counts[a.Name]++
+		if strings.TrimSpace(a.Value) != "" {
+			filled[a.Name]++
+		} else if _, seen := firstEmpty[a.Name]; !seen {
+			firstEmpty[a.Name] = a
+		}
 		as, known := spec.Attrs[a.Name]
 		if !known {
 			if !spec.AllowUnknown {
 				diags = append(diags, diag(ast.Warning, "dict/unknown-attr",
 					"attribute "+strconv.Quote(a.Name)+" is not valid for class "+
-						strconv.Quote(class)+" in profile "+p.Name, a.Span))
+						strconv.Quote(class)+" in profile "+p.name, a.Span))
 			}
 			continue
 		}
@@ -69,15 +126,21 @@ func (p Profile) Validate(o *ast.Object) []ast.Diagnostic {
 		}
 	}
 
-	// Missing-required, reported in a deterministic (sorted) order.
+	// Missing-required, reported in a deterministic (sorted) order. A required
+	// attribute whose every occurrence is empty is reported at the first one.
 	var missing []string
 	for name, as := range spec.Attrs {
-		if as.Required && counts[name] == 0 {
+		if as.Required && filled[name] == 0 {
 			missing = append(missing, name)
 		}
 	}
 	sort.Strings(missing)
 	for _, name := range missing {
+		if a, ok := firstEmpty[name]; ok {
+			diags = append(diags, diag(ast.Error, "dict/missing-required",
+				"required attribute "+strconv.Quote(name)+" is empty", a.Span))
+			continue
+		}
 		diags = append(diags, diag(ast.Error, "dict/missing-required",
 			"required attribute "+strconv.Quote(name)+" is missing for class "+
 				strconv.Quote(class), classSpan(o, class)))
@@ -85,7 +148,7 @@ func (p Profile) Validate(o *ast.Object) []ast.Diagnostic {
 	for _, group := range spec.OneOf {
 		present := false
 		for _, name := range group {
-			present = present || counts[name] > 0
+			present = present || filled[name] > 0
 		}
 		if !present {
 			quoted := make([]string, len(group))

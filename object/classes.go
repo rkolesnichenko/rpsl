@@ -12,25 +12,36 @@ import (
 // into the policy AST; each policy diagnostic is re-based onto its attribute.
 type AutNum struct {
 	Common
-	AS       types.ASN
-	AsName   string
-	MemberOf []types.SetName
-	Imports  []policy.Import
-	Exports  []policy.Export
-	Defaults []policy.Default
-	raw      *ast.Object
+	Registry
+	AS        types.ASN
+	AsName    string
+	MemberOf  []types.SetName
+	Imports   []policy.Import
+	Exports   []policy.Export
+	Defaults  []policy.Default
+	ImportVia []string // import-via: values, raw (RIPE)
+	ExportVia []string // export-via: values, raw (RIPE)
+	Status    string
+	raw       *ast.Object
 }
 
-func (a AutNum) Class() string    { return "aut-num" }
+// Class returns "aut-num".
+func (a AutNum) Class() string { return "aut-num" }
+
+// Raw returns the object's lossless source, or nil for one built without it.
 func (a AutNum) Raw() *ast.Object { return a.raw }
 
 func decodeAutNum(d *decoder) AutNum {
 	an := AutNum{
-		Common:   d.common("aut-num"),
-		AS:       d.asn("aut-num", "object/aut-num-as"),
-		AsName:   d.str("as-name"),
-		MemberOf: d.setNames("member-of", "object/aut-num-member-of"),
-		raw:      d.o,
+		Common:    d.common("aut-num"),
+		Registry:  d.registry("aut-num"),
+		AS:        d.asn("aut-num", "object/aut-num-as"),
+		AsName:    d.str("as-name"),
+		MemberOf:  d.memberOf("aut-num", types.ClassAsSet),
+		ImportVia: d.all("import-via"),
+		ExportVia: d.all("export-via"),
+		Status:    d.str("status"),
+		raw:       d.o,
 	}
 	// import: and mp-import: are unioned into Imports (design §6) in document
 	// order, because the order of policies is their precedence (design §4); the
@@ -71,42 +82,55 @@ func decodeAutNum(d *decoder) AutNum {
 }
 
 // Mntner is a maintainer object. Auth lines are kept raw and uninterpreted.
+// ReferralBy (RFC 2725) names the maintainer that created this one.
 type Mntner struct {
 	Common
-	Handle string
-	Auth   []string
-	UpdTo  []string
-	MntNfy []string
-	raw    *ast.Object
+	Registry
+	Handle     string
+	Auth       []string
+	UpdTo      []string
+	MntNfy     []string
+	ReferralBy []string
+	raw        *ast.Object
 }
 
-func (m Mntner) Class() string    { return "mntner" }
+// Class returns "mntner".
+func (m Mntner) Class() string { return "mntner" }
+
+// Raw returns the object's lossless source, or nil for one built without it.
 func (m Mntner) Raw() *ast.Object { return m.raw }
 
 func decodeMntner(d *decoder) Mntner {
 	return Mntner{
-		Common: d.common("mntner"),
-		Handle: d.key("mntner"),
-		Auth:   d.all("auth"),
-		UpdTo:  d.all("upd-to"),
-		MntNfy: d.all("mnt-nfy"),
-		raw:    d.o,
+		Common:     d.common("mntner"),
+		Registry:   d.registry("mntner"),
+		Handle:     d.key("mntner"),
+		Auth:       d.all("auth"),
+		UpdTo:      d.all("upd-to"),
+		MntNfy:     d.all("mnt-nfy"),
+		ReferralBy: d.list("referral-by"),
+		raw:        d.o,
 	}
 }
 
 // Person is a contact person object.
 type Person struct {
 	Common
+	Registry
 	Name    string
 	NicHdl  types.NICHandle
 	Address []string
 	Phone   []string
 	FaxNo   []string
 	Email   []string
+	Contact []string
 	raw     *ast.Object
 }
 
-func (p Person) Class() string    { return "person" }
+// Class returns "person".
+func (p Person) Class() string { return "person" }
+
+// Raw returns the object's lossless source, or nil for one built without it.
 func (p Person) Raw() *ast.Object { return p.raw }
 
 func decodePerson(d *decoder) Person {
@@ -115,31 +139,39 @@ func decodePerson(d *decoder) Person {
 		nh = hs[0]
 	}
 	return Person{
-		Common:  d.common("person"),
-		Name:    d.key("person"),
-		NicHdl:  nh,
-		Address: d.all("address"),
-		Phone:   d.all("phone"),
-		FaxNo:   d.all("fax-no"),
-		Email:   d.all("e-mail"),
-		raw:     d.o,
+		Common:   d.common("person"),
+		Registry: d.registry("person"),
+		Name:     d.key("person"),
+		NicHdl:   nh,
+		Address:  d.all("address"),
+		Phone:    d.all("phone"),
+		FaxNo:    d.all("fax-no"),
+		Email:    d.all("e-mail"),
+		Contact:  d.all("contact"),
+		raw:      d.o,
 	}
 }
 
 // Role is a contact role object (a team behind a single handle).
 type Role struct {
 	Common
-	Name    string
-	NicHdl  types.NICHandle
-	Trouble []string
-	Address []string
-	Phone   []string
-	FaxNo   []string
-	Email   []string
-	raw     *ast.Object
+	Registry
+	Name         string
+	NicHdl       types.NICHandle
+	Trouble      []string
+	Address      []string
+	Phone        []string
+	FaxNo        []string
+	Email        []string
+	Contact      []string
+	AbuseMailbox string
+	raw          *ast.Object
 }
 
-func (r Role) Class() string    { return "role" }
+// Class returns "role".
+func (r Role) Class() string { return "role" }
+
+// Raw returns the object's lossless source, or nil for one built without it.
 func (r Role) Raw() *ast.Object { return r.raw }
 
 func decodeRole(d *decoder) Role {
@@ -148,15 +180,18 @@ func decodeRole(d *decoder) Role {
 		nh = hs[0]
 	}
 	return Role{
-		Common:  d.common("role"),
-		Name:    d.key("role"),
-		NicHdl:  nh,
-		Trouble: d.all("trouble"),
-		Address: d.all("address"),
-		Phone:   d.all("phone"),
-		FaxNo:   d.all("fax-no"),
-		Email:   d.all("e-mail"),
-		raw:     d.o,
+		Common:       d.common("role"),
+		Registry:     d.registry("role"),
+		Name:         d.key("role"),
+		NicHdl:       nh,
+		Trouble:      d.all("trouble"),
+		Address:      d.all("address"),
+		Phone:        d.all("phone"),
+		FaxNo:        d.all("fax-no"),
+		Email:        d.all("e-mail"),
+		Contact:      d.all("contact"),
+		AbuseMailbox: d.str("abuse-mailbox"),
+		raw:          d.o,
 	}
 }
 
@@ -166,11 +201,13 @@ func decodeRole(d *decoder) Role {
 // aggregation) are kept as raw text.
 type Route struct {
 	Common
+	Registry
 	Prefix      netip.Prefix
 	Origin      types.ASN
 	MemberOf    []types.SetName
 	Holes       []netip.Prefix
 	Pingable    []string
+	PingHdl     []types.NICHandle
 	Inject      []string
 	Components  string
 	AggrBndry   string
@@ -179,18 +216,23 @@ type Route struct {
 	raw         *ast.Object
 }
 
-func (r Route) Class() string    { return "route" }
+// Class returns "route".
+func (r Route) Class() string { return "route" }
+
+// Raw returns the object's lossless source, or nil for one built without it.
 func (r Route) Raw() *ast.Object { return r.raw }
 
 func decodeRoute(d *decoder) Route {
 	pfx := d.routePrefix("route", false)
 	return Route{
 		Common:      d.common("route"),
+		Registry:    d.registry("route"),
 		Prefix:      pfx,
 		Origin:      d.asn("origin", "object/route-origin"),
-		MemberOf:    d.setNames("member-of", "object/route-member-of"),
+		MemberOf:    d.memberOf("route", types.ClassRouteSet),
 		Holes:       d.holes("route", pfx),
 		Pingable:    d.all("pingable"),
+		PingHdl:     d.nicHandles("ping-hdl", "object/route-ping-hdl"),
 		Inject:      d.all("inject"),
 		Components:  d.str("components"),
 		AggrBndry:   d.str("aggr-bndry"),
@@ -204,11 +246,13 @@ func decodeRoute(d *decoder) Route {
 // and warnings.
 type Route6 struct {
 	Common
+	Registry
 	Prefix      netip.Prefix
 	Origin      types.ASN
 	MemberOf    []types.SetName
 	Holes       []netip.Prefix
 	Pingable    []string
+	PingHdl     []types.NICHandle
 	Inject      []string
 	Components  string
 	AggrBndry   string
@@ -217,18 +261,23 @@ type Route6 struct {
 	raw         *ast.Object
 }
 
-func (r Route6) Class() string    { return "route6" }
+// Class returns "route6".
+func (r Route6) Class() string { return "route6" }
+
+// Raw returns the object's lossless source, or nil for one built without it.
 func (r Route6) Raw() *ast.Object { return r.raw }
 
 func decodeRoute6(d *decoder) Route6 {
 	pfx := d.routePrefix("route6", true)
 	return Route6{
 		Common:      d.common("route6"),
+		Registry:    d.registry("route6"),
 		Prefix:      pfx,
 		Origin:      d.asn("origin", "object/route6-origin"),
-		MemberOf:    d.setNames("member-of", "object/route6-member-of"),
+		MemberOf:    d.memberOf("route6", types.ClassRouteSet),
 		Holes:       d.holes("route6", pfx),
 		Pingable:    d.all("pingable"),
+		PingHdl:     d.nicHandles("ping-hdl", "object/route6-ping-hdl"),
 		Inject:      d.all("inject"),
 		Components:  d.str("components"),
 		AggrBndry:   d.str("aggr-bndry"),
@@ -239,10 +288,13 @@ func decodeRoute6(d *decoder) Route6 {
 }
 
 // AsSet is an as-set: a named, possibly nested collection of ASNs. MpMembers
-// carries the RFC 4012 mp-members: list, which RIPE/IRRd reality admits on
-// as-set objects even where strict RFC 4012 does not (see object/profiles.go).
+// carries mp-members: values. RFC 4012 defines mp-members only for route-set
+// and rtr-set and RIPE's template has none on as-set, so both profiles flag
+// it, but it is still read so that a set from an IRR that accepts it expands in
+// full.
 type AsSet struct {
 	Common
+	Registry
 	Name      types.SetName
 	Members   []SetMember
 	MpMembers []SetMember
@@ -250,15 +302,19 @@ type AsSet struct {
 	raw       *ast.Object
 }
 
-func (s AsSet) Class() string    { return "as-set" }
+// Class returns "as-set".
+func (s AsSet) Class() string { return "as-set" }
+
+// Raw returns the object's lossless source, or nil for one built without it.
 func (s AsSet) Raw() *ast.Object { return s.raw }
 
 func decodeAsSet(d *decoder) AsSet {
 	return AsSet{
 		Common:    d.common("as-set"),
-		Name:      d.setKey("as-set", "object/as-set-name", types.AsSet),
-		Members:   d.members("members", "object/as-set-members", types.AsSet),
-		MpMembers: d.members("mp-members", "object/as-set-mp-members", types.AsSet),
+		Registry:  d.registry("as-set"),
+		Name:      d.setKey("as-set", "object/as-set-name", types.ClassAsSet),
+		Members:   d.members("members", "object/as-set-members", types.ClassAsSet),
+		MpMembers: d.members("mp-members", "object/as-set-mp-members", types.ClassAsSet),
 		MbrsByRef: d.list("mbrs-by-ref"),
 		raw:       d.o,
 	}
@@ -268,6 +324,7 @@ func decodeAsSet(d *decoder) AsSet {
 // names, and ASNs. MpMembers carries the RFC 4012 mp-members: list.
 type RouteSet struct {
 	Common
+	Registry
 	Name      types.SetName
 	Members   []SetMember
 	MpMembers []SetMember
@@ -275,15 +332,19 @@ type RouteSet struct {
 	raw       *ast.Object
 }
 
-func (s RouteSet) Class() string    { return "route-set" }
+// Class returns "route-set".
+func (s RouteSet) Class() string { return "route-set" }
+
+// Raw returns the object's lossless source, or nil for one built without it.
 func (s RouteSet) Raw() *ast.Object { return s.raw }
 
 func decodeRouteSet(d *decoder) RouteSet {
 	return RouteSet{
 		Common:    d.common("route-set"),
-		Name:      d.setKey("route-set", "object/route-set-name", types.RouteSet),
-		Members:   d.members("members", "object/route-set-members", types.RouteSet),
-		MpMembers: d.members("mp-members", "object/route-set-mp-members", types.RouteSet),
+		Registry:  d.registry("route-set"),
+		Name:      d.setKey("route-set", "object/route-set-name", types.ClassRouteSet),
+		Members:   d.members("members", "object/route-set-members", types.ClassRouteSet),
+		MpMembers: d.members("mp-members", "object/route-set-mp-members", types.ClassRouteSet),
 		MbrsByRef: d.list("mbrs-by-ref"),
 		raw:       d.o,
 	}

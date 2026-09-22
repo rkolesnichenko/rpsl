@@ -1,6 +1,7 @@
 package object
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/rkolesnichenko/rpsl/ast"
@@ -54,8 +55,16 @@ source:  RIPE
 	if len(strict) != 1 || strict[0].Rule != "dict/unknown-attr" {
 		t.Errorf("RFCStrict diags = %+v, want exactly one dict/unknown-attr for created:", strict)
 	}
-	if ripe := RIPE.Validate(o); len(ripe) != 0 {
-		t.Errorf("RIPE flagged created:, diags = %+v", ripe)
+	// The RIPE templates have created: but no changed: (removed from the RIPE
+	// Database) and no tech-c: on routes, so RIPE flags exactly those two.
+	ripe := RIPE.Validate(o)
+	if len(ripe) != 2 || ripe[0].Rule != "dict/unknown-attr" || !strings.Contains(ripe[0].Message, `"tech-c"`) ||
+		!strings.Contains(ripe[1].Message, `"changed"`) {
+		t.Errorf("RIPE diags = %+v, want dict/unknown-attr for tech-c: and changed:", ripe)
+	}
+	ripeRoute := parse("route: 192.0.2.0/24\norigin: AS65000\nmnt-by: MAINT-EX\ncreated: 2020-01-01T00:00:00Z\nsource: RIPE\n")
+	if d := RIPE.Validate(ripeRoute); len(d) != 0 {
+		t.Errorf("RIPE flagged a template-valid route: %+v", d)
 	}
 }
 
@@ -67,6 +76,24 @@ mnt-by: MAINT-EX
 	d := RFCStrict.Validate(o)
 	if !ruleSet(d)["dict/missing-required"] {
 		t.Errorf("missing source: not reported, diags = %+v", d)
+	}
+}
+
+// A required attribute with no value is as good as missing: it is reported
+// at the attribute. An empty member of a one-of group does not satisfy it.
+func TestValidateEmptyRequired(t *testing.T) {
+	d := RIPE.Validate(parse("route: 192.0.2.0/24\norigin:\nmnt-by: MAINT-EX\nsource: RIPE\n"))
+	if len(d) != 1 || d[0].Rule != "dict/missing-required" || !strings.Contains(d[0].Message, `"origin" is empty`) ||
+		d[0].Span.StartLine != 2 {
+		t.Errorf("empty origin: diags = %+v, want one dict/missing-required on line 2", d)
+	}
+	d = RIPE.Validate(parse("route: 192.0.2.0/24\norigin: AS1\nmnt-by: MAINT-EX\nsource: # none\n"))
+	if len(d) != 1 || !strings.Contains(d[0].Message, `"source" is empty`) {
+		t.Errorf("comment-only source: diags = %+v, want it reported empty", d)
+	}
+	o := parse("filter-set: FLTR-X\nfilter:\ntech-c: X1-RIPE\nadmin-c: X1-RIPE\nmnt-by: M\nsource: RIPE\n")
+	if got := missingRequired(RIPE.Validate(o)); len(got) != 1 || !strings.Contains(got[0], "one of") {
+		t.Errorf("empty filter: missing-required = %q, want the one-of group", got)
 	}
 }
 

@@ -2,6 +2,7 @@ package object
 
 import (
 	"fmt"
+	"net/netip"
 	"strings"
 	"unicode"
 
@@ -19,6 +20,7 @@ const (
 	MemberPrefixRange                   // a prefix with optional range op (route-set only)
 )
 
+// String returns the kind's name, e.g. "as" or "prefix-range".
 func (k MemberKind) String() string {
 	switch k {
 	case MemberAS:
@@ -48,7 +50,7 @@ type SetMember struct {
 
 // ParseSetMember parses one list item of a members:/mp-members: value for a
 // set of class container. Range operators and prefix-ranges are accepted only
-// for types.RouteSet. On failure it returns a MemberInvalid member (never a
+// for types.ClassRouteSet. On failure it returns a MemberInvalid member (never a
 // MemberAS) carrying Raw, plus an error. A nested set of a different class is
 // not an error here; the decoder flags it separately.
 func ParseSetMember(item string, container types.SetClass) (SetMember, error) {
@@ -57,7 +59,7 @@ func ParseSetMember(item string, container types.SetClass) (SetMember, error) {
 	if s == "" || strings.ContainsFunc(s, unicode.IsSpace) {
 		return m, fmt.Errorf("invalid %s member %q", container, item)
 	}
-	routeSet := container == types.RouteSet
+	routeSet := container == types.ClassRouteSet
 	base, opText, hasOp := strings.Cut(s, "^")
 
 	var op types.RangeOperator
@@ -101,30 +103,44 @@ func ParseSetMember(item string, container types.SetClass) (SetMember, error) {
 // route-sets and as-sets (the routes their ASes originate).
 func nestable(container, member types.SetClass) bool {
 	switch container {
-	case types.RouteSet:
-		return member == types.RouteSet || member == types.AsSet
-	case types.SetClassUnknown:
+	case types.ClassRouteSet:
+		return member == types.ClassRouteSet || member == types.ClassAsSet
+	case types.ClassUnknown:
 		return true
 	}
 	return member == container
 }
 
 // members parses every item of every name attribute into SetMembers for a set
-// of class container. An unparseable item is kept as MemberInvalid with a
-// Warning at the item's own span; a nested set of a class the container may not
-// list is kept but flagged with a Warning.
+// of class container. An unparseable item is kept as MemberInvalid with an
+// Error at the item's own span (the engine skips it); a nested set of a class
+// the container may not list is kept but flagged with a Warning.
 func (d *decoder) members(name, rule string, container types.SetClass) []SetMember {
 	var out []SetMember
 	for _, it := range d.listItems(name) {
 		m, err := ParseSetMember(it.Value, container)
 		switch {
-		case err != nil:
-			d.diagAt(ast.Warning, it.span(), rule, err.Error())
+		case err != nil: // dropped from the typed struct (and from expansion): an Error
+			d.diagAt(ast.Error, it.span(), rule, err.Error())
 		case m.Kind == MemberSet && !nestable(container, m.Set.Class()):
 			d.diagAt(ast.Warning, it.span(), rule, fmt.Sprintf("set member %q has class %s, expected %s",
 				it.Value, m.Set.Class(), container))
+		case m.Kind == MemberPrefixRange && hasHostBits(it.Value):
+			d.diagAt(ast.Warning, it.span(), rule+"-host-bits", fmt.Sprintf(
+				"member %q has host bits set; it is read as %s", it.Value, m.Range))
+		case m.Kind == MemberPrefixRange && name == "members" && m.Range.Prefix().Addr().Is6():
+			d.diagAt(ast.Warning, it.span(), rule+"-afi", fmt.Sprintf(
+				"IPv6 member %q belongs in mp-members: (RFC 4012 §4.2); members: is IPv4 only", it.Value))
 		}
 		out = append(out, m)
 	}
 	return out
+}
+
+// hasHostBits reports whether the prefix of a prefix-range text ("a/n" or
+// "a/n^op") has bits set beyond its length, which ParsePrefixRange clears.
+func hasHostBits(text string) bool {
+	base, _, _ := strings.Cut(strings.TrimSpace(text), "^")
+	p, err := netip.ParsePrefix(base)
+	return err == nil && p != p.Masked()
 }

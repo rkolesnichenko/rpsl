@@ -2,8 +2,10 @@
 // WHOIS query protocol (TCP/43), distinct from the IRRd "!" protocol. It fetches
 // raw RPSL objects and reuses the library's own parser/decoder, so it resolves
 // indirect (mbrs-by-ref) membership itself via inverse queries — unlike the IRRd
-// backend, which relies on server-side "!i" expansion. Network access is
-// confined to this sub-package; the core resolve engine stays pure.
+// backend, which relies on server-side "!i" expansion. It works against both
+// the RIPE Database and IRRd servers (whois.radb.net): queries put every flag
+// before "-i attr value", which IRRd requires. Network access is confined to
+// this sub-package; the core resolve engine stays pure.
 package whois
 
 import (
@@ -12,8 +14,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -29,13 +33,14 @@ import (
 // whois.radb.net, …). Each query uses one connection: the query is sent, the
 // full response is read until the server closes, and objects are parsed with the
 // library's own stack. Every query honours its context: cancelling it, or its
-// deadline passing, aborts a pending read at once. A server error other than
-// "no entries" (%ERROR:101) is returned as ErrServer, never as an empty result.
+// deadline passing, aborts a pending read at once. A server error — RIPE's
+// "%ERROR:NNN" other than 101 ("no entries"), or IRRd's "%% ERROR:" — is
+// returned as ServerError, never as an empty result.
 type Source struct {
 	Addr        string                                      // "whois.ripe.net:43"
-	Sources     string                                      // optional "-s SOURCE" filter
-	Timeout     time.Duration                               // per-query dial+I/O deadline; 0 = DefaultTimeout, < 0 = none (ctx only)
-	MaxResponse int64                                       // per-call response byte cap; 0 = default (maxResponse)
+	Sources     []string                                    // optional "-s" filter: only objects from these sources
+	Timeout     time.Duration                               // one deadline per query, dial and I/O; 0 = DefaultTimeout, < 0 = none (ctx only)
+	MaxResponse int64                                       // per-call response byte cap; 0 = 256 MiB, < 0 = none
 	Dial        func(ctx context.Context) (net.Conn, error) // override transport in tests; nil = net.Dialer
 }
 
@@ -55,15 +60,21 @@ func (s *Source) timeout() time.Duration {
 	return s.Timeout
 }
 
-// ErrServer is a WHOIS server error reply, e.g. "%ERROR:201: access denied"
-// (RIPE's rate limiting). "%ERROR:101: no entries found" is not an error: it
-// becomes resolve.ErrNotFound or an empty result.
-type ErrServer struct {
+// ServerError is a WHOIS server error reply: RIPE's "%ERROR:201: access denied"
+// (rate limiting) with Code 201, or IRRd's "%% ERROR: One or more selected
+// sources are unavailable." with Code 0 (IRRd errors carry no code).
+// It is returned as a *ServerError. "%ERROR:101: no entries found" is not an
+// error: it becomes resolve.ErrNotFound or an empty result.
+type ServerError struct {
 	Code    int
 	Message string
 }
 
-func (e ErrServer) Error() string {
+// Error implements error.
+func (e *ServerError) Error() string {
+	if e.Code == 0 {
+		return "whois: server error: " + e.Message
+	}
 	return fmt.Sprintf("whois: server error %d: %s", e.Code, e.Message)
 }
 
@@ -73,13 +84,18 @@ func (e ErrServer) Error() string {
 const maxResponse = 256 << 20
 
 func (s *Source) maxResponse() int64 {
-	if s.MaxResponse > 0 {
-		return s.MaxResponse
+	switch {
+	case s.MaxResponse == 0:
+		return maxResponse
+	case s.MaxResponse < 0:
+		return math.MaxInt64
 	}
-	return maxResponse
+	return s.MaxResponse
 }
 
-// GetSet fetches an as-set or route-set object by name.
+// GetSet fetches an as-set or route-set object by name. When the server
+// returns it from several sources, the one from the source listed first in
+// Sources wins; without Sources, the first the server returns.
 func (s *Source) GetSet(ctx context.Context, name types.SetName) (object.Set, error) {
 	if name.IsZero() {
 		return nil, errors.New("whois: empty set name")
@@ -88,19 +104,31 @@ func (s *Source) GetSet(ctx context.Context, name types.SetName) (object.Set, er
 	if err != nil {
 		return nil, err
 	}
-	want := name.Canonical()
+	var best object.Set
+	bestRank := len(s.Sources)
 	for _, o := range objs {
-		if set, ok := o.(object.Set); ok && set.SetName().Canonical() == want {
-			return set, nil
+		set, ok := o.(object.Set)
+		if !ok || set.SetName() != name {
+			continue
+		}
+		rank := slices.IndexFunc(s.Sources, func(n string) bool { return strings.EqualFold(n, set.SetSource()) })
+		if rank < 0 {
+			rank = len(s.Sources)
+		}
+		if best == nil || rank < bestRank {
+			best, bestRank = set, rank
 		}
 	}
-	return nil, resolve.ErrNotFound
+	if best == nil {
+		return nil, resolve.ErrNotFound
+	}
+	return best, nil
 }
 
 // OriginatedRoutes returns prefixes originated by as, via the inverse "origin"
 // query, filtered to afi.
 func (s *Source) OriginatedRoutes(ctx context.Context, as types.ASN, afi types.AFI) ([]netip.Prefix, error) {
-	objs, err := s.queryObjects(ctx, "-r -i origin -T route,route6 "+as.String())
+	objs, err := s.queryObjects(ctx, "-r -T route,route6 -i origin "+as.String())
 	if err != nil {
 		return nil, err
 	}
@@ -122,20 +150,20 @@ func (s *Source) OriginatedRoutes(ctx context.Context, as types.ASN, afi types.A
 	return out, nil
 }
 
-// MembersByRef returns objects that claim member-of set and are maintained by
-// one of mntners (or any, if "ANY" is listed), via the inverse "member-of"
-// query plus resolve.ClaimAllowed — real indirect-membership resolution.
-func (s *Source) MembersByRef(ctx context.Context, set types.SetName, mntners []string) ([]object.Object, error) {
-	if set.IsZero() {
+// MembersByRef returns the objects whose membership claim in set is honored,
+// via the inverse "member-of" query plus resolve.ClaimAllowed (maintainer and
+// same-source check) — real indirect-membership resolution.
+func (s *Source) MembersByRef(ctx context.Context, set object.Set) ([]object.Object, error) {
+	if set == nil || set.SetName().IsZero() {
 		return nil, errors.New("whois: empty set name")
 	}
-	objs, err := s.queryObjects(ctx, "-r -i member-of -T route,route6,aut-num,as-set "+set.String())
+	objs, err := s.queryObjects(ctx, "-r -T route,route6,aut-num,as-set -i member-of "+set.SetName().String())
 	if err != nil {
 		return nil, err
 	}
 	var out []object.Object
 	for _, o := range objs {
-		if resolve.ClaimAllowed(o, set, mntners) {
+		if resolve.ClaimAllowed(o, set) {
 			out = append(out, o)
 		}
 	}
@@ -144,8 +172,15 @@ func (s *Source) MembersByRef(ctx context.Context, set types.SetName, mntners []
 
 // queryObjects runs one WHOIS query and decodes every object in the response.
 func (s *Source) queryObjects(ctx context.Context, q string) ([]object.Object, error) {
-	if s.Sources != "" {
-		q = "-s " + sanitizeLine(s.Sources) + " " + q
+	if len(s.Sources) > 0 {
+		names := make([]string, len(s.Sources))
+		for i, n := range s.Sources {
+			if !validSourceName(n) {
+				return nil, fmt.Errorf("whois: invalid source name %q", n)
+			}
+			names[i] = strings.ToUpper(n)
+		}
+		q = "-s " + strings.Join(names, ",") + " " + q
 	}
 	data, err := s.query(ctx, q)
 	if err != nil {
@@ -153,7 +188,7 @@ func (s *Source) queryObjects(ctx context.Context, q string) ([]object.Object, e
 	}
 	text, serr := scanResponse(data)
 	if serr != nil {
-		return nil, *serr
+		return nil, serr
 	}
 	var out []object.Object
 	for raw := range rpsl.Parse(bytes.NewReader(text)) {
@@ -171,12 +206,14 @@ func (s *Source) queryObjects(ctx context.Context, q string) ([]object.Object, e
 
 // query sends one query line and reads the full response until the server closes.
 func (s *Source) query(ctx context.Context, q string) ([]byte, error) {
+	ctx, cancel := netconn.WithTimeout(ctx, s.timeout())
+	defer cancel()
 	conn, err := s.dial(ctx)
 	if err != nil {
 		return nil, netconn.Err(ctx, err)
 	}
 	defer conn.Close()
-	release := netconn.Bind(ctx, conn, s.timeout())
+	release := netconn.Bind(ctx, conn, 0)
 	defer release()
 	if _, err := io.WriteString(conn, q+"\n"); err != nil {
 		return nil, netconn.Err(ctx, err)
@@ -184,7 +221,11 @@ func (s *Source) query(ctx context.Context, q string) ([]byte, error) {
 	// Bound the read: read up to max+1 and reject if the server tried to send
 	// more, rather than letting io.ReadAll grow without limit.
 	max := s.maxResponse()
-	data, err := io.ReadAll(io.LimitReader(conn, max+1))
+	r := io.Reader(conn)
+	if max < math.MaxInt64 {
+		r = io.LimitReader(conn, max+1)
+	}
+	data, err := io.ReadAll(r)
 	if err != nil {
 		return nil, netconn.Err(ctx, err)
 	}
@@ -198,16 +239,17 @@ func (s *Source) dial(ctx context.Context) (net.Conn, error) {
 	if s.Dial != nil {
 		return s.Dial(ctx)
 	}
-	d := net.Dialer{Timeout: s.timeout()}
+	var d net.Dialer // ctx carries the query's deadline
 	return d.DialContext(ctx, "tcp", s.Addr)
 }
 
-// scanResponse blanks out the RIPE-style "%" server-comment lines of a WHOIS
-// response — they are not RPSL, and one glued to an object ("%ERROR:101: …"
-// has colons) would otherwise parse as its first attribute — and returns the
-// first %ERROR other than 101 ("no entries found"), if any.
-func scanResponse(data []byte) ([]byte, *ErrServer) {
-	var serr *ErrServer
+// scanResponse blanks out the "%" server-comment lines of a WHOIS response —
+// they are not RPSL, and one glued to an object ("%ERROR:101: …" has colons)
+// would otherwise parse as its first attribute — and returns the first server
+// error, if any: RIPE's "%ERROR:NNN: msg" other than 101 ("no entries found"),
+// or IRRd's "%% ERROR: msg" (Code 0).
+func scanResponse(data []byte) ([]byte, *ServerError) {
+	var serr *ServerError
 	lines := bytes.SplitAfter(data, []byte("\n"))
 	for i, l := range lines {
 		if len(l) == 0 || l[0] != '%' {
@@ -216,24 +258,30 @@ func scanResponse(data []byte) ([]byte, *ErrServer) {
 		if rest, ok := bytes.CutPrefix(l, []byte("%ERROR:")); ok && serr == nil {
 			codeText, msg, _ := bytes.Cut(rest, []byte(":"))
 			if code, err := strconv.Atoi(string(codeText)); err == nil && code != 101 {
-				serr = &ErrServer{Code: code, Message: strings.TrimSpace(string(msg))}
+				serr = &ServerError{Code: code, Message: strings.TrimSpace(string(msg))}
 			}
+		}
+		if rest, ok := bytes.CutPrefix(l, []byte("%% ERROR:")); ok && serr == nil {
+			serr = &ServerError{Message: strings.TrimSpace(string(rest))}
 		}
 		lines[i] = []byte("\n")
 	}
 	return bytes.Join(lines, nil), serr
 }
 
-// sanitizeLine strips control characters from a value interpolated into the
-// single-line WHOIS query, so a stray newline in caller-supplied config (e.g.
-// Sources) cannot inject an extra query line.
-func sanitizeLine(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r < ' ' {
-			return -1
+// validSourceName reports whether n is a plain IRR source name: letters,
+// digits, '-' and '_' only, so it cannot carry a flag or another query line.
+func validSourceName(n string) bool {
+	if n == "" {
+		return false
+	}
+	for i := 0; i < len(n); i++ {
+		c := n[i]
+		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '-' || c == '_') {
+			return false
 		}
-		return r
-	}, s)
+	}
+	return true
 }
 
 func afiMatches(afi types.AFI, p netip.Prefix) bool {

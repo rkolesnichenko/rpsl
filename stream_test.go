@@ -230,17 +230,3 @@ func TestParseObjectDiagnostics(t *testing.T) {
 		}
 	}
 }
-
-// FuzzParseStream: unbounded streaming never panics and is lossless.
-func FuzzParseStream(f *testing.F) {
-	for _, s := range []string{"a: 1\n\nb: 2\n", "# c\n\n\n", "a: 1\r\n\r\n", " x\n\na:\n+\n", ""} {
-		f.Add(s)
-	}
-	f.Fuzz(func(t *testing.T, s string) {
-		objs, _, _ := streamAll(strings.NewReader(s), ParseOptions{MaxObjectBytes: -1})
-		if got := strings.Join(objs, ""); got != s {
-			t.Fatalf("stream round trip of %q gave %q", s, got)
-		}
-		streamAll(strings.NewReader(s), ParseOptions{MaxObjectBytes: 7}) // must not panic
-	})
-}

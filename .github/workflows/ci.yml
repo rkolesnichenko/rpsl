@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   check:
     name: check (go ${{ matrix.go }})
@@ -17,11 +20,16 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
+          # setup-go keys its cache on go.sum by default; the modules have
+          # none until their siblings are released, so key on every go.mod.
+          cache-dependency-path: "**/go.mod"
+      - name: Install bgpq4 (for the engine's differential tests)
+        run: sudo apt-get update && sudo apt-get install -y bgpq4
       - name: Install staticcheck and govulncheck
         if: matrix.go == 'stable'
         run: |
-          go install honnef.co/go/tools/cmd/staticcheck@latest
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install honnef.co/go/tools/cmd/staticcheck@v0.8.1   # 2026.2.1
+          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
       - name: scripts/check.sh
         run: scripts/check.sh
         env:

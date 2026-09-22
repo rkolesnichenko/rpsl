@@ -11,7 +11,11 @@
 // RFC 4012 (RPSLng): afi scoping and mp-import/mp-export/mp-default.
 package policy
 
-import "github.com/rkolesnichenko/rpsl/types"
+import (
+	"net/netip"
+
+	"github.com/rkolesnichenko/rpsl/types"
+)
 
 // Import is a parsed import: or mp-import: value. Protocol/IntoProtocol hold the
 // optional "protocol X"/"into Y" prefixes ("" when absent). MP marks an
@@ -90,13 +94,47 @@ type PeerAction struct {
 type Peering interface{ isPeering() }
 
 // PeeringAS is an AS expression with optional router expressions: Router is the
-// peer-side expression and AtRouter the local one after "at". Both are kept as
-// raw text of the whole expression (e.g. "rtrs-a AND 192.0.2.1"); "" if absent.
+// peer-side expression and AtRouter the local one after "at"; nil if absent.
 type PeeringAS struct {
 	AS       ASExpr
-	Router   string
-	AtRouter string
+	Router   RouterExpr
+	AtRouter RouterExpr
 }
+
+// RouterExpr is the sealed router-expression node (RFC 2622 §5.6, RFC 4012):
+// router addresses, inet-rtr names and rtr-sets under AND, OR and EXCEPT.
+type RouterExpr interface{ isRouterExpr() }
+
+// RouterAddr is a router's IPv4 or IPv6 address.
+type RouterAddr struct{ Addr netip.Addr }
+
+// RouterName is an inet-rtr name, a DNS name such as "rtr1.example.net".
+type RouterName struct{ Name string }
+
+// RouterSetRef is a reference to an rtr-set (rtrs-…).
+type RouterSetRef struct{ Name types.SetName }
+
+// RouterExprBinary combines two router expressions with AND, OR, or EXCEPT.
+type RouterExprBinary struct {
+	Op   RouterOp
+	L, R RouterExpr
+}
+
+func (RouterAddr) isRouterExpr()       {}
+func (RouterName) isRouterExpr()       {}
+func (RouterSetRef) isRouterExpr()     {}
+func (RouterExprBinary) isRouterExpr() {}
+
+// RouterOp is a boolean operator over router expressions. As for AS
+// expressions, EXCEPT binds like AND and OR is lowest (RFC 2622 §5.6).
+type RouterOp uint8
+
+// The router-expression operators.
+const (
+	RouterAnd RouterOp = iota
+	RouterOr
+	RouterExcept
+)
 
 // PeeringSetRef is a reference to a peering-set (prng-…).
 type PeeringSetRef struct{ Name types.SetName }
@@ -140,19 +178,26 @@ func (ASExprBinary) isASExpr()  {}
 // lowest (RFC 2622 §5.6).
 type ASOp uint8
 
+// The AS-expression operators.
 const (
 	ASAnd ASOp = iota
 	ASOr
 	ASExcept
 )
 
-// Action is one routing-policy action: an rp-attribute assignment, append, or
-// method call. For Assign/Append, Value is the right-hand side; for Method,
-// Value is the raw "method(args)" text (method internals are not interpreted).
+// Action is one routing-policy action (RFC 2622 §7): an rp-attribute
+// assignment ("pref = 100"), append ("community .= {1:2}") or method call
+// ("community.append(1:2)", "aspath.prepend(AS1)"). Attr is the rp-attribute
+// and Method the method, both lower-cased; Value is the right-hand side of an
+// assignment or append, Args a method call's comma-separated arguments, and
+// Raw the action as written.
 type Action struct {
-	Attr  string
-	Op    ActionOp
-	Value string
+	Attr   string
+	Method string
+	Op     ActionOp
+	Args   []string
+	Value  string
+	Raw    string
 }
 
 // ActionOp distinguishes the three action forms.
@@ -208,12 +253,35 @@ type FilterPathRE struct {
 	Regexp *ASPathRE
 }
 
-// FilterCommunity is a community(...) method call, kept raw for now.
-type FilterCommunity struct{ Raw string }
+// FilterCommunity is a community test (RFC 2622 §7): community(…) and
+// community.contains(…) match routes carrying all of Values (Op
+// CommunityContains); community == {…} matches routes carrying exactly them
+// (CommunityEquals). Raw is the term as written.
+type FilterCommunity struct {
+	Op     CommunityOp
+	Values []string
+	Raw    string
+}
 
-// FilterAnd, FilterOr, FilterNot form the boolean tree over filter leaves.
-type FilterAnd struct{ L, R Filter }
-type FilterOr struct{ L, R Filter }
+// CommunityOp is the comparison a FilterCommunity makes.
+type CommunityOp uint8
+
+// The community comparisons.
+const (
+	CommunityContains CommunityOp = iota // community(…), community.contains(…)
+	CommunityEquals                      // community == {…}
+)
+
+// FilterAnd matches what all of its two or more Terms match. A chain
+// "a AND b AND c" is one node, so a long filter is a wide node rather than a
+// deep tree; parentheses keep their own node.
+type FilterAnd struct{ Terms []Filter }
+
+// FilterOr matches what any of its two or more Terms matches: "a OR b OR c",
+// and the implicit OR "a b c", are one node.
+type FilterOr struct{ Terms []Filter }
+
+// FilterNot matches what Inner does not.
 type FilterNot struct{ Inner Filter }
 
 func (FilterAny) isFilter()         {}

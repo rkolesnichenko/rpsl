@@ -12,11 +12,11 @@ func TestParseSetNameTemplate(t *testing.T) {
 		class types.SetClass
 		inst  string // Instantiate(AS5).String()
 	}{
-		{"AS8821:AS-CUSTOMERS:PeerAS", types.AsSet, "AS8821:AS-CUSTOMERS:AS5"},
-		{"PeerAS:AS-TO-GRNET", types.AsSet, "AS5:AS-TO-GRNET"},
-		{"peeras:as-x", types.AsSet, "AS5:as-x"},
-		{"AS1:RS-FOO:PeerAS", types.RouteSet, "AS1:RS-FOO:AS5"},
-		{"AS1:FLTR-X:PEERAS", types.FilterSet, "AS1:FLTR-X:AS5"},
+		{"AS8821:AS-CUSTOMERS:PeerAS", types.ClassAsSet, "AS8821:AS-CUSTOMERS:AS5"},
+		{"PeerAS:AS-TO-GRNET", types.ClassAsSet, "AS5:AS-TO-GRNET"},
+		{"peeras:as-x", types.ClassAsSet, "AS5:AS-X"}, // SetName is canonical
+		{"AS1:RS-FOO:PeerAS", types.ClassRouteSet, "AS1:RS-FOO:AS5"},
+		{"AS1:FLTR-X:PEERAS", types.ClassFilterSet, "AS1:FLTR-X:AS5"},
 	}
 	for _, c := range cases {
 		tpl, err := ParseSetNameTemplate(c.in)

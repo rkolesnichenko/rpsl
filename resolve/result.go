@@ -9,28 +9,28 @@ import (
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
-// ASSet is a deduplicated set of ASNs produced by ExpandAS.
-type ASSet struct {
+// ASNSet is a deduplicated set of ASNs produced by ExpandAS.
+type ASNSet struct {
 	m       map[types.ASN]struct{}
 	missing []types.SetName
 }
 
 // Missing lists the nested sets that were referenced but not found, sorted by
 // canonical name. They expanded to nothing (as in bgpq4).
-func (s ASSet) Missing() []types.SetName { return s.missing }
+func (s ASNSet) Missing() []types.SetName { return s.missing }
 
-func newASSet() *ASSet { return &ASSet{m: make(map[types.ASN]struct{})} }
+func newASSet() *ASNSet { return &ASNSet{m: make(map[types.ASN]struct{})} }
 
-func (s *ASSet) add(a types.ASN) { s.m[a] = struct{}{} }
+func (s *ASNSet) add(a types.ASN) { s.m[a] = struct{}{} }
 
 // Has reports membership.
-func (s ASSet) Has(a types.ASN) bool { _, ok := s.m[a]; return ok }
+func (s ASNSet) Has(a types.ASN) bool { _, ok := s.m[a]; return ok }
 
 // Len reports the number of distinct ASNs.
-func (s ASSet) Len() int { return len(s.m) }
+func (s ASNSet) Len() int { return len(s.m) }
 
 // List returns the ASNs in ascending order (deterministic for tests/output).
-func (s ASSet) List() []types.ASN {
+func (s ASNSet) List() []types.ASN {
 	out := make([]types.ASN, 0, len(s.m))
 	for a := range s.m {
 		out = append(out, a)
@@ -46,7 +46,7 @@ type PrefixSet struct {
 }
 
 // Missing lists the nested sets that were referenced but not found; see
-// ASSet.Missing.
+// ASNSet.Missing.
 func (s PrefixSet) Missing() []types.SetName { return s.missing }
 
 func newPrefixSet() *PrefixSet { return &PrefixSet{m: make(map[netip.Prefix]struct{})} }
@@ -76,7 +76,8 @@ func (s PrefixSet) List() []netip.Prefix {
 
 // RangeSet is a deduplicated set of prefix ranges produced by
 // ExpandPrefixRanges: the expansion before materialization, as bgpq4 emits it
-// with le/ge bounds.
+// with le/ge bounds. Ranges are held in canonical form (types.PrefixRange.
+// Canonical), so equivalent spellings count once.
 type RangeSet struct {
 	m       map[types.PrefixRange]struct{}
 	missing []types.SetName
@@ -86,14 +87,17 @@ func newRangeSet() *RangeSet { return &RangeSet{m: make(map[types.PrefixRange]st
 
 func (s *RangeSet) add(r types.PrefixRange) { s.m[r] = struct{}{} }
 
-// Has reports membership.
-func (s RangeSet) Has(r types.PrefixRange) bool { _, ok := s.m[r]; return ok }
+// Has reports whether the set holds a range denoting the same prefixes as r.
+func (s RangeSet) Has(r types.PrefixRange) bool {
+	_, ok := s.m[r]
+	return ok
+}
 
 // Len reports the number of distinct ranges.
 func (s RangeSet) Len() int { return len(s.m) }
 
 // Missing lists the nested sets that were referenced but not found; see
-// ASSet.Missing.
+// ASNSet.Missing.
 func (s RangeSet) Missing() []types.SetName { return s.missing }
 
 // List returns the ranges ordered by address, prefix length, then window.
@@ -104,22 +108,22 @@ func (s RangeSet) List() []types.PrefixRange {
 	}
 	sort.Slice(out, func(i, j int) bool {
 		a, b := out[i], out[j]
-		if c := a.Prefix.Addr().Compare(b.Prefix.Addr()); c != 0 {
+		if c := a.Prefix().Addr().Compare(b.Prefix().Addr()); c != 0 {
 			return c < 0
 		}
-		if a.Prefix.Bits() != b.Prefix.Bits() {
-			return a.Prefix.Bits() < b.Prefix.Bits()
+		if a.Prefix().Bits() != b.Prefix().Bits() {
+			return a.Prefix().Bits() < b.Prefix().Bits()
 		}
-		if a.Lo != b.Lo {
-			return a.Lo < b.Lo
+		if a.Lo() != b.Lo() {
+			return a.Lo() < b.Lo()
 		}
-		return a.Hi < b.Hi
+		return a.Hi() < b.Hi()
 	})
 	return out
 }
 
 // String lists the ASNs in ascending order, e.g. "[AS1 AS2]".
-func (s ASSet) String() string { return listString(s.List()) }
+func (s ASNSet) String() string { return listString(s.List()) }
 
 // String lists the prefixes in List order.
 func (s PrefixSet) String() string { return listString(s.List()) }

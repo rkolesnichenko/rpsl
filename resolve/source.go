@@ -20,6 +20,11 @@ import (
 // Missing(); for the top-level set it returns an error wrapping ErrNotFound.
 var ErrNotFound = errors.New("resolve: set not found")
 
+// ErrSetClass is returned when the named set's class does not fit the
+// expansion: ExpandAS takes an as-set; ExpandPrefixes and ExpandPrefixRanges
+// take an as-set or a route-set.
+var ErrSetClass = errors.New("resolve: set class does not fit this expansion")
+
 // Limit identifies which Expander cap an expansion exceeded.
 type Limit uint8
 
@@ -29,6 +34,7 @@ const (
 	LimitDepth                 // MaxDepth: shortest nesting distance from the top set
 )
 
+// String returns the name of the Expander field the limit is, e.g. "MaxVisited".
 func (l Limit) String() string {
 	switch l {
 	case LimitVisited:
@@ -40,38 +46,29 @@ func (l Limit) String() string {
 	}
 }
 
-// ErrSetTooLarge reports that an expansion exceeded one of the Expander's caps.
-// It is returned as soon as the cap trips, before the full result is built.
-// Count is the value reached when it tripped (at least the cap plus one).
-type ErrSetTooLarge struct {
+// SetTooLargeError reports that an expansion exceeded one of the Expander's caps.
+// It is returned, as a *SetTooLargeError, as soon as the cap trips, before the
+// full result is built: Max is the cap and Count the value reached (at least
+// Max+1).
+type SetTooLargeError struct {
 	Name  types.SetName
 	Limit Limit
+	Max   int
 	Count int
 }
 
-func (e ErrSetTooLarge) Error() string {
-	return fmt.Sprintf("resolve: expansion of %s exceeds %s (%d)", e.Name.Canonical(), e.Limit, e.Count)
+// Error implements error.
+func (e *SetTooLargeError) Error() string {
+	return fmt.Sprintf("resolve: expansion of %s exceeds %s (%d): reached %d", e.Name, e.Limit, e.Max, e.Count)
 }
 
-// ErrCyclicOperator reports a range operator applied along a cycle: a set is
-// re-entered from inside its own expansion under a different stack of operators
-// (e.g. RS-A lists RS-B^+ and RS-B lists RS-A). Composing that exactly needs a
-// fixpoint computation, so the engine refuses rather than return a result that
-// is too small.
-type ErrCyclicOperator struct {
-	Set    types.SetName // the set containing the member that closes the cycle
-	Member string        // that member's text
-}
+// AnySetError reports a reference to AS-ANY or RS-ANY, which denote every AS or
+// every route in the IRR (RFC 2622 §5) and cannot be expanded. It is returned
+// as an *AnySetError.
+type AnySetError struct{ Name types.SetName }
 
-func (e ErrCyclicOperator) Error() string {
-	return fmt.Sprintf("resolve: %s member %q closes a cycle under a range operator", e.Set, e.Member)
-}
-
-// ErrAnySet reports a reference to AS-ANY or RS-ANY, which denote every AS or
-// every route in the IRR (RFC 2622 §5) and cannot be expanded.
-type ErrAnySet struct{ Name types.SetName }
-
-func (e ErrAnySet) Error() string {
+// Error implements error.
+func (e *AnySetError) Error() string {
 	return fmt.Sprintf("resolve: %s denotes the whole IRR and cannot be expanded", e.Name)
 }
 
@@ -86,19 +83,25 @@ func (e ErrAnySet) Error() string {
 // slice — duplicating the join client-side would only over-collect. Custom
 // Source authors must decide which world they are in; see resolve/whois and
 // resolve/irrd for the two reference implementations.
+//
+// ErrNotFound means a missing set and nothing else: OriginatedRoutes and
+// MembersByRef report "nothing there" as an empty result, not an error, and any
+// other error aborts the expansion.
 type Source interface {
 	// GetSet fetches a set object by name. It returns ErrNotFound (wrapped is
-	// fine) when the set does not exist.
+	// fine) when the set does not exist; a nil set with a nil error is treated
+	// the same way.
 	GetSet(ctx context.Context, name types.SetName) (object.Set, error)
 
 	// OriginatedRoutes returns the prefixes a given AS originates, filtered to
 	// the requested address family (types.AFIUnspecified or AFIAny = all).
 	OriginatedRoutes(ctx context.Context, as types.ASN, afi types.AFI) ([]netip.Prefix, error)
 
-	// MembersByRef returns objects that claim member-of the given set and are
-	// maintained by one of the listed mntners (the mbrs-by-ref mechanism);
-	// "ANY" in mntners means any maintainer qualifies. Implementations should
-	// filter with ClaimAllowed. The Expander re-applies ClaimAllowed to every
-	// returned object, so an over-inclusive result cannot widen a set.
-	MembersByRef(ctx context.Context, set types.SetName, mntners []string) ([]object.Object, error)
+	// MembersByRef returns the objects whose claim of membership in set is
+	// honored (the mbrs-by-ref mechanism): they name the set in member-of, are
+	// maintained by one of set.RefMntners() ("ANY" admits any maintainer), and
+	// come from set.SetSource(). Implementations should filter with
+	// ClaimAllowed. The Expander re-applies ClaimAllowed to every returned
+	// object, so an over-inclusive result cannot widen a set.
+	MembersByRef(ctx context.Context, set object.Set) ([]object.Object, error)
 }

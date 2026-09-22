@@ -19,15 +19,15 @@
     "route-set": 1,
     "route6": 1
   },
-  "diagnostics_total": 10,
+  "diagnostics_total": 24,
   "diagnostics_by_severity": {
-    "error": 10
+    "error": 24
   },
   "by_rule": [
     {
       "rule": "dict/missing-required",
       "severity": "error",
-      "count": 7,
+      "count": 21,
       "first_span": "L16:C1"
     },
     {
@@ -67,7 +67,7 @@
     {
       "set": "RS-EXAMPLES",
       "class": "route-set",
-      "asns": 1,
+      "asns": 0,
       "prefixes": 3,
       "elapsed_ns": 0
     }

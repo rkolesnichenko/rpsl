@@ -10,8 +10,10 @@ type Set interface {
 	SetName() types.SetName  // the set's own name
 	SetMembers() []SetMember // direct members: members: plus mp-members:
 	RefMntners() []string    // mbrs-by-ref: maintainers enabling indirect membership
+	SetSource() string       // source: the registry the set belongs to ("" if absent)
 }
 
+// SetName returns the set's name.
 func (s AsSet) SetName() types.SetName { return s.Name }
 
 // SetMembers returns the union of members: and mp-members: as a fresh slice so
@@ -22,8 +24,14 @@ func (s AsSet) SetMembers() []SetMember {
 	out = append(out, s.MpMembers...)
 	return out
 }
+
+// RefMntners returns the mbrs-by-ref maintainers.
 func (s AsSet) RefMntners() []string { return s.MbrsByRef }
 
+// SetSource returns the set's source: attribute.
+func (s AsSet) SetSource() string { return s.Source }
+
+// SetName returns the set's name.
 func (s RouteSet) SetName() types.SetName { return s.Name }
 
 // SetMembers returns the union of members: and mp-members: as a fresh slice so
@@ -35,7 +43,11 @@ func (s RouteSet) SetMembers() []SetMember {
 	return out
 }
 
+// RefMntners returns the mbrs-by-ref maintainers.
 func (s RouteSet) RefMntners() []string { return s.MbrsByRef }
+
+// SetSource returns the set's source: attribute.
+func (s RouteSet) SetSource() string { return s.Source }
 
 // Compile-time checks that the set classes satisfy Set.
 var (

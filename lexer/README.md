@@ -30,6 +30,10 @@ test, so `go test` keeps it honest.
 
 ```go
 func Tokenize(src string) []Token
+func TokenizeAt(src string, line, byteOffset int) []Token // positions in stream coordinates
+func IsBlankLine[T ~string | ~[]byte](line T) bool       // the line rules, shared with rpsl.Parse
+func StartsAttribute[T ~string | ~[]byte](line T) bool
+func CanonicalName(name string) string                     // ASCII lower-case, spaces/tabs trimmed
 ```
 
 ```go

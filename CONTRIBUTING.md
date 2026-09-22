@@ -37,7 +37,7 @@ structural invariants — with:
 
 ```sh
 scripts/check.sh
-FUZZTIME=15s scripts/check.sh   # also runs all nine fuzz targets (as CI does)
+FUZZTIME=15s scripts/check.sh   # also runs all twelve fuzz targets (as CI does)
 ```
 
 Per-target subsets you'll reach for often:
@@ -45,12 +45,20 @@ Per-target subsets you'll reach for often:
 - **Lossless round-trip guard** (ROOT module): `go test -run 'TestRoundTrip|TestStreamRoundTrip' .`
 - **A single fuzz target** (must never panic): e.g.
   `go test -run='^$' -fuzz='^FuzzParseImport$' -fuzztime=30s ./policy`
-- **Golden expansions**: hand-checked expectations for a synthetic snapshot
-  under `resolve/testdata/`, run on every `go test`. The optional live `bgpq4`
-  diff is gated on `RPSL_BGPQ4_SERVER` / `RPSL_BGPQ4_SET`.
+- **Expansion against a model and against bgpq4**: `go test -run 'TestModel|TestBgpq4|TestGolden' ./resolve`.
+  The model oracle and backend equivalence always run; the bgpq4 differential
+  and the check that the goldens under `resolve/testdata/golden` are bgpq4's
+  output run when `bgpq4` is installed (`brew install bgpq4`, `apt install
+  bgpq4`). After editing the snapshot, regenerate the goldens with
+  `go test -run TestGoldensAreBgpq4Output -update ./resolve` and review the
+  diff. Known differences from bgpq4 are pinned in
+  `resolve/testdata/bgpq4/divergences.md`. With `RPSL_REALDATA` set,
+  `TestBgpq4RealData` compares real RIPE sets too.
 - **Real-data regression** (opt-in): `scripts/fetch-ripe-dumps.sh`, then
-  `RPSL_REALDATA=.data/ripe go test -run TestRealData ./examples/bulk-ripe/bulk`.
-- **Live backends** (opt-in, read-only): `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve`.
+  `RPSL_REALDATA=$PWD/.data/ripe go test -run TestRealData ./examples/bulk-ripe/bulk`.
+- **Live backends** (opt-in, read-only): `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve`,
+  and `RPSL_LIVE=1 go test -run TestRIPETemplatesAreCurrent ./object` for the
+  RIPE templates the RIPE profile is built from (`object/testdata/ripe-templates`).
 - **GB-scale integration harness:** `go run ./examples/bulk-ripe --json <dump>.gz`
 
 ## Non-negotiables
@@ -70,7 +78,7 @@ make a change pass:
 4. **Dict ↔ decoder agreement.** If `object/profiles.go` lists an attribute on a
    class, the matching `decodeXxx` must surface it on the typed struct.
    Otherwise data is silently dropped on `Decode`.
-   `TestDecoderSurfacesEveryProfiledAttribute` enforces this.
+   `TestEveryAttributeLandsInItsOwnField` enforces this.
 5. **Imports run strictly downward.**
    `resolve → object → policy → types → ast → lexer`. Go forbids import cycles,
    but `object` and `policy` share the root module, so keep the direction by

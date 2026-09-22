@@ -131,3 +131,25 @@ func safeIdx(s string, i int) string {
 	}
 	return string(s[i])
 }
+
+// Attribute names are canonicalized with ASCII rules only: lower-cased, with
+// spaces and tabs trimmed. Anything else stays in the name (so the façade
+// reports it as invalid) instead of being folded into a valid-looking one.
+func TestCanonicalNameIsASCII(t *testing.T) {
+	for in, want := range map[string]string{
+		"AS-Name":     "as-name",
+		" \tdescr \t": "descr",
+		"route ":      "route ", // no-break space is not trimmed
+		"\vroute":     "\vroute",
+		"Key":         "Key", // Kelvin sign: not lowered to ASCII 'k'
+		"MNT-BY":      "mnt-by",
+		"Ä-attr":      "Ä-attr",
+	} {
+		if got := CanonicalName(in); got != want {
+			t.Errorf("CanonicalName(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if toks := Tokenize("Key: x\n"); toks[0].Name != "Key" {
+		t.Errorf("Tokenize name = %q", toks[0].Name)
+	}
+}

@@ -1,0 +1,2 @@
+# bgpq4 -j -p -l x -L 64 -S TEST,RADB -6 AS-CLAIMED, against testdata/snapshot served by
+# internal/irrtest. Regenerate: go test -run TestGoldensAreBgpq4Output -update .

@@ -39,13 +39,17 @@ import (
 // Defensive defaults: the BaseURL scheme must be https (set AllowInsecure to
 // opt into http and internal targets for testing/internal use); response bodies
 // are bounded by MaxResponse (default 8 MiB; well above any real registration
-// record).
+// record); and each request is bounded by Timeout (default DefaultTimeout), so
+// a server that never answers cannot block a lookup forever. A Client is safe
+// for concurrent use; like http.Transport, it must not be copied or have its
+// fields changed after first use.
 type Client struct {
 	BaseURL       string
 	HTTP          *http.Client
-	MaxResponse   int64  // per-call body cap; 0 = default (defaultMaxResponse)
-	AllowInsecure bool   // permit http:// BaseURLs, http redirects, and internal targets
-	UserAgent     string // User-Agent header; "" = "rpsl-go"
+	MaxResponse   int64         // per-call body cap; 0 = default (defaultMaxResponse)
+	AllowInsecure bool          // permit http:// BaseURLs, http redirects, and internal targets
+	UserAgent     string        // User-Agent header; "" = "rpsl-go"
+	Timeout       time.Duration // per-request deadline; 0 = DefaultTimeout, < 0 = none (ctx only)
 
 	once        sync.Once
 	builtinHTTP *http.Client
@@ -56,6 +60,20 @@ type Client struct {
 // pathologically large but plausibly legitimate responses, while bounding the
 // allocation a hostile server can force.
 const defaultMaxResponse = 8 << 20
+
+// DefaultTimeout is the per-request deadline used when Client.Timeout is zero,
+// matching the irrd and whois backends.
+const DefaultTimeout = 60 * time.Second
+
+func (c *Client) timeout() time.Duration {
+	switch {
+	case c.Timeout == 0:
+		return DefaultTimeout
+	case c.Timeout < 0:
+		return 0
+	}
+	return c.Timeout
+}
 
 func (c *Client) maxResponse() int64 {
 	if c.MaxResponse > 0 {
@@ -72,32 +90,35 @@ type Entity struct {
 
 // Autnum is the parsed subset of an RDAP autnum response.
 type Autnum struct {
-	Handle      string   `json:"handle"`
-	StartAutnum uint32   `json:"startAutnum"`
-	EndAutnum   uint32   `json:"endAutnum"`
-	Name        string   `json:"name"`
-	Country     string   `json:"country"`
-	Status      []string `json:"status"`
-	Entities    []Entity `json:"entities"`
+	Handle      string    `json:"handle"`
+	StartAutnum types.ASN `json:"startAutnum"`
+	EndAutnum   types.ASN `json:"endAutnum"`
+	Name        string    `json:"name"`
+	Country     string    `json:"country"`
+	Status      []string  `json:"status"`
+	Entities    []Entity  `json:"entities"`
 }
 
 // IPNetwork is the parsed subset of an RDAP ip network response.
 type IPNetwork struct {
-	Handle       string   `json:"handle"`
-	StartAddress string   `json:"startAddress"`
-	EndAddress   string   `json:"endAddress"`
-	Name         string   `json:"name"`
-	Country      string   `json:"country"`
-	Type         string   `json:"type"`
-	Status       []string `json:"status"`
-	Entities     []Entity `json:"entities"`
+	Handle       string     `json:"handle"`
+	StartAddress netip.Addr `json:"startAddress"`
+	EndAddress   netip.Addr `json:"endAddress"`
+	Name         string     `json:"name"`
+	Country      string     `json:"country"`
+	Type         string     `json:"type"`
+	Status       []string   `json:"status"`
+	Entities     []Entity   `json:"entities"`
 }
 
-// ErrRateLimited is returned for a 429 response. RetryAfter is the server's
-// Retry-After hint (0 when absent or unparseable); retry policy is the caller's.
-type ErrRateLimited struct{ RetryAfter time.Duration }
+// RateLimitedError is returned, as a *RateLimitedError, for a 429 response.
+// RetryAfter is the server's
+// Retry-After hint (0 when absent or unparseable, at most maxRetryAfter);
+// retry policy is the caller's.
+type RateLimitedError struct{ RetryAfter time.Duration }
 
-func (e ErrRateLimited) Error() string {
+// Error implements error.
+func (e *RateLimitedError) Error() string {
 	return fmt.Sprintf("rdap: rate limited (retry after %v)", e.RetryAfter)
 }
 
@@ -122,7 +143,11 @@ func (c *Client) LookupAutnum(ctx context.Context, as types.ASN) (*Autnum, error
 }
 
 // LookupIP fetches registration data for a prefix via GET {BaseURL}/ip/{cidr}.
+// An invalid prefix is an error, and no request is made.
 func (c *Client) LookupIP(ctx context.Context, prefix netip.Prefix) (*IPNetwork, error) {
+	if !prefix.IsValid() {
+		return nil, errors.New("rdap: invalid prefix")
+	}
 	var out IPNetwork
 	if err := c.get(ctx, "/ip/"+prefix.Masked().String(), &out); err != nil {
 		return nil, err
@@ -134,6 +159,11 @@ func (c *Client) get(ctx context.Context, path string, dst any) error {
 	target := strings.TrimRight(c.BaseURL, "/") + path
 	if err := c.validateURL(target); err != nil {
 		return err
+	}
+	if t := c.timeout(); t > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, t)
+		defer cancel()
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
@@ -163,7 +193,7 @@ func (c *Client) get(ctx context.Context, path string, dst any) error {
 	case http.StatusNotFound:
 		return ErrNotFound
 	case http.StatusTooManyRequests:
-		return ErrRateLimited{RetryAfter: retryAfter(resp.Header.Get("Retry-After"))}
+		return &RateLimitedError{RetryAfter: retryAfter(resp.Header.Get("Retry-After"))}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("rdap: unexpected status %s for %s", resp.Status, path)
@@ -212,7 +242,11 @@ func (c *Client) validateURL(raw string) error {
 
 // retryAfter parses a Retry-After header: delay-seconds or an HTTP-date.
 func retryAfter(v string) time.Duration {
-	if secs, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && secs >= 0 {
+	v = strings.TrimSpace(v)
+	if secs, err := strconv.ParseUint(v, 10, 64); err == nil || errors.Is(err, strconv.ErrRange) {
+		if err != nil || secs > uint64(maxRetryAfter/time.Second) {
+			return maxRetryAfter
+		}
 		return time.Duration(secs) * time.Second
 	}
 	if t, err := http.ParseTime(v); err == nil {
@@ -222,6 +256,10 @@ func retryAfter(v string) time.Duration {
 	}
 	return 0
 }
+
+// maxRetryAfter caps a Retry-After hint; servers ask for seconds or minutes, and
+// a larger value would overflow time.Duration into a negative wait.
+const maxRetryAfter = 24 * time.Hour
 
 // defaultHTTP returns the built-in client used when c.HTTP is nil, created once
 // so connections are reused. Its dialer applies guardDial (unless
@@ -273,15 +311,21 @@ func guardDial(_, address string, _ syscall.RawConn) error {
 
 // forbiddenPrefixes are special-purpose ranges beyond what netip classifies:
 // "this network", CGNAT, IETF protocol assignments, benchmarking, reserved
-// (incl. broadcast), and the NAT64 prefixes that can reach internal IPv4.
+// (incl. broadcast), deprecated site-local IPv6, and the IPv6 forms that carry
+// or tunnel to an IPv4 address — NAT64, IPv4-compatible, 6to4 and Teredo — so
+// none can reach an internal IPv4 host.
 var forbiddenPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("0.0.0.0/8"),
 	netip.MustParsePrefix("100.64.0.0/10"),
 	netip.MustParsePrefix("192.0.0.0/24"),
 	netip.MustParsePrefix("198.18.0.0/15"),
 	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("fec0::/10"),
+	netip.MustParsePrefix("::/96"),
 	netip.MustParsePrefix("64:ff9b::/96"),
 	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("2001::/32"),
+	netip.MustParsePrefix("2002::/16"),
 }
 
 // isForbiddenAddr reports whether ip belongs to a range a public RDAP server

@@ -45,6 +45,8 @@ func (a Attribute) SpanAt(valStart, valEnd int) lexer.Span {
 
 // Object is an ordered collection of attributes. Order is significant in RPSL
 // (e.g. import: precedence), so attributes are stored as a slice, never a map.
+// Its read methods treat a nil *Object as empty, so a typed object that carries
+// no source text (Raw() == nil) is safe to read.
 type Object struct {
 	attrs []Attribute
 	trail string // trivia after the last attribute (within object scope)
@@ -54,7 +56,13 @@ type Object struct {
 // Non-attribute tokens are retained as round-trip trivia attached to the
 // following attribute, or as trailing trivia if none follows.
 func New(toks []lexer.Token) *Object {
-	o := &Object{}
+	n := 0
+	for _, t := range toks {
+		if t.Kind == lexer.KindAttribute {
+			n++
+		}
+	}
+	o := &Object{attrs: make([]Attribute, 0, n)}
 	var lead strings.Builder
 	for _, t := range toks {
 		if t.Kind != lexer.KindAttribute {
@@ -78,7 +86,7 @@ func New(toks []lexer.Token) *Object {
 
 // Class reports the object's class: the name of its first attribute.
 func (o *Object) Class() string {
-	if len(o.attrs) == 0 {
+	if o == nil || len(o.attrs) == 0 {
 		return ""
 	}
 	return o.attrs[0].Name
@@ -86,7 +94,7 @@ func (o *Object) Class() string {
 
 // Key reports the primary-key value: the value of the class-defining first attribute.
 func (o *Object) Key() string {
-	if len(o.attrs) == 0 {
+	if o == nil || len(o.attrs) == 0 {
 		return ""
 	}
 	return o.attrs[0].Value
@@ -94,7 +102,10 @@ func (o *Object) Key() string {
 
 // GetFirst returns the first attribute with the given name (case-insensitive).
 func (o *Object) GetFirst(name string) (Attribute, bool) {
-	name = strings.ToLower(name)
+	if o == nil {
+		return Attribute{}, false
+	}
+	name = lexer.CanonicalName(name)
 	for _, a := range o.attrs {
 		if a.Name == name {
 			return a, true
@@ -105,7 +116,10 @@ func (o *Object) GetFirst(name string) (Attribute, bool) {
 
 // GetAll returns every attribute with the given name, in document order.
 func (o *Object) GetAll(name string) []Attribute {
-	name = strings.ToLower(name)
+	if o == nil {
+		return nil
+	}
+	name = lexer.CanonicalName(name)
 	var out []Attribute
 	for _, a := range o.attrs {
 		if a.Name == name {
@@ -125,11 +139,17 @@ func (o *Object) Has(name string) bool {
 // copy, so mutating the slice does not affect the object (validation and other
 // consumers iterate it read-only).
 func (o *Object) Attributes() []Attribute {
+	if o == nil {
+		return nil
+	}
 	return append([]Attribute(nil), o.attrs...)
 }
 
 // String re-serializes the object byte-for-byte with the source it was parsed from.
 func (o *Object) String() string {
+	if o == nil {
+		return ""
+	}
 	var b strings.Builder
 	for _, a := range o.attrs {
 		b.WriteString(a.lead)
@@ -156,9 +176,19 @@ func (o *Object) Append(name, value string) error {
 	if err != nil {
 		return err
 	}
-	o.ensureTrailingNewline()
-	o.attrs = append(o.attrs, newAttr(name, value, name+": ", o.lineEnding()))
+	o.appendAttr(newAttr(name, value, name+": ", o.lineEnding()))
 	return nil
+}
+
+// appendAttr adds a to the end of the object. On an object with no attributes
+// yet, everything it holds is trivia, and it goes before a: after a, an
+// indented stray line would read as a continuation of a's value.
+func (o *Object) appendAttr(a Attribute) {
+	o.ensureTrailingNewline()
+	if len(o.attrs) == 0 {
+		a.lead, o.trail = o.trail, ""
+	}
+	o.attrs = append(o.attrs, a)
 }
 
 // Set replaces every attribute named name with one attribute per value, written
@@ -204,8 +234,7 @@ func (o *Object) Set(name string, values ...string) error {
 	o.trail = carry + o.trail
 	if !found {
 		for _, v := range values {
-			o.ensureTrailingNewline()
-			o.attrs = append(o.attrs, newAttr(name, v, name+": ", o.lineEnding()))
+			o.appendAttr(newAttr(name, v, name+": ", o.lineEnding()))
 		}
 	}
 	return nil
@@ -213,7 +242,7 @@ func (o *Object) Set(name string, values ...string) error {
 
 // checkAttr lower-cases and validates an attribute name and value.
 func checkAttr(name, value string) (string, error) {
-	name = strings.ToLower(strings.TrimSpace(name))
+	name = lexer.CanonicalName(name)
 	if name == "" || !isLetter(name[0]) {
 		return "", fmt.Errorf("%w: name %q", ErrInvalidAttribute, name)
 	}
@@ -285,20 +314,28 @@ func (o *Object) lineEnding() string {
 	return "\n"
 }
 
-// ensureTrailingNewline guarantees the serialization ends with a newline so a
-// freshly appended attribute starts on its own line. It inspects only the last
-// piece written, so repeated Appends stay linear.
+// ensureTrailingNewline guarantees that an attribute appended next starts on a
+// line of its own: it goes after the last attribute, or — with none — after the
+// trivia. A trailing '\r' already ends a line and is completed to "\r\n"; a
+// second line ending after it would make it part of the line. It inspects only
+// the last piece written, so repeated Appends stay linear.
 func (o *Object) ensureTrailingNewline() {
-	switch n := len(o.attrs); {
-	case o.trail != "":
-		if !strings.HasSuffix(o.trail, "\n") {
-			o.trail += o.lineEnding()
-		}
-	case n > 0:
-		if !strings.HasSuffix(o.attrs[n-1].Raw, "\n") {
-			o.attrs[n-1].Raw += o.lineEnding()
-		}
+	if n := len(o.attrs); n > 0 {
+		o.attrs[n-1].Raw = terminate(o.attrs[n-1].Raw, o.lineEnding())
+	} else {
+		o.trail = terminate(o.trail, o.lineEnding())
 	}
+}
+
+// terminate returns s ending with a line ending.
+func terminate(s, ending string) string {
+	switch {
+	case s == "" || strings.HasSuffix(s, "\n"):
+		return s
+	case strings.HasSuffix(s, "\r"):
+		return s + "\n"
+	}
+	return s + ending
 }
 
 // inlineComment extracts the comment (after '#') on an attribute's name line.

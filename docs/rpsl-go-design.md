@@ -82,7 +82,7 @@ type Segment struct {
 }
 ```
 
-The scanner is a hand-written state machine over `bufio.Scanner` lines (not regex). Folding is done in the lexer so the `Value` handed up is already the logical value, while `Raw` lets `ast` reproduce the original.
+The scanner is a hand-written state machine over the lines of its input (not regex), read lazily. Folding is done in the lexer so the `Value` handed up is already the logical value, while `Raw` lets `ast` reproduce the original. Its line rules — what is blank, what starts an attribute — are exported (`IsBlankLine`, `StartsAttribute`) and used by the streaming parser too, so the stream never splits objects differently from how the lexer reads them.
 
 ### 3.1 The total-partition invariant
 
@@ -139,23 +139,27 @@ type ASN uint32                  // 32-bit ASNs; ParseASN("AS65001") -> 65001
 func (a ASN) String() string     // "AS65001"
 
 type SetName struct {            // hierarchical: AS1:AS-CUSTOMERS
-    name, canon string            // unexported: only ParseSetName builds one
-    class       SetClass          // shared by every set component
+    canon string                  // unexported: only ParseSetName builds one
+    class SetClass                // shared by every set component
 }
 // ParseSetName enforces RFC 2622 §2/§5: set components use [A-Za-z0-9_-] and end
 // in a letter or digit, at least one component is a set, all set components
 // share a class. So a SetName is safe to interpolate into an IRRd/whois query.
-// Class(), String() (original spelling), Canonical() (identity / map key),
-// Components(), IsZero(). Comparable; == is spelling-exact.
+// It holds only the canonical form (set components upper-cased, ASNs asplain),
+// so every spelling of a name is == and one map key: Class(), String(),
+// Components(), IsZero(). The original spelling stays in the ast layer.
 
-type SetClass uint8 // AsSet ("as-"), RouteSet ("rs-"), RtrSet ("rtrs-"),
-                    // FilterSet ("fltr-"), PeeringSet ("prng-")
+type SetClass uint8 // ClassAsSet ("as-"), ClassRouteSet ("rs-"), ClassRtrSet
+                    // ("rtrs-"), ClassFilterSet ("fltr-"), ClassPeeringSet ("prng-")
 
 type PrefixRange struct {        // 192.0.2.0/24^+  /  ^-  /  ^24  /  ^24-28
-    Prefix netip.Prefix
-    Op     RangeOp              // Exact, Minus, Plus, Length(n), Range(n,m)
-    Lo, Hi uint8
+    prefix netip.Prefix          // opaque and canonical: host bits cleared
+    lo, hi uint8                 // the window of lengths it denotes
 }
+// NewPrefixRange(p, lo, hi) and ParsePrefixRange build one; Prefix(), Lo(),
+// Hi() read it and Op() is the most specific spelling of its window, so
+// "/8^24-24" and "/8^24" are == and one map key. IsEmpty() reports a range that
+// denotes nothing, such as a parsed "192.0.2.1/32^-".
 // Materialize enumerates concrete prefixes the range denotes, bounded by a cap.
 func (r PrefixRange) Materialize(maxPrefixes int) ([]netip.Prefix, error)
 
@@ -163,8 +167,10 @@ type RangeOperator struct {      // an operator without a prefix: RS-FOO^+, AS1^
     Op   RangeOp
     N, M uint8
 }
-// Apply composes an outer operator over a range (RFC 2622 §5.2): ^n-m over
-// ^k-l becomes ^max(n,k)-m if m >= max(n,k), otherwise the prefix is deleted.
+// Apply composes an outer operator over a range (RFC 2622 §2, §5.2): ^n-m over
+// ^k-l becomes ^max(n,k)-m if m >= max(n,k), otherwise the prefix is deleted;
+// ^+ over ^k-l is ^k-32 and ^- is ^(k+1)-32 (the operator applies to every
+// prefix the inner range contains).
 func (o RangeOperator) Apply(r PrefixRange) (PrefixRange, bool)
 
 type AddrFamily struct { AFI AFI; SAFI SAFI } // RFC 4012 afi dictionary
@@ -195,8 +201,20 @@ type Common struct {
     Source  string
 }
 
+// Registry holds what RIPE's templates add across classes (org:, abuse-c:,
+// mnt-lower:, mnt-routes:, created:, …); embedded beside Common, so every
+// attribute either profile lists has a typed home.
+type Registry struct {
+    Org           []string
+    SponsoringOrg string
+    AbuseC        types.NICHandle
+    MntLower, MntRoutes, MntDomains, MntIrt, MntRef []string
+    Created, LastModified string
+}
+
 type AutNum struct {
     Common
+    Registry
     AS       types.ASN
     AsName   string
     MemberOf []types.SetName
@@ -208,15 +226,17 @@ type AutNum struct {
 
 type AsSet struct {
     Common
+    Registry
     Name      types.SetName
     Members   []SetMember // ASNs and nested set names (raw, unexpanded)
-    MpMembers []SetMember // RFC 4012 mp-members
+    MpMembers []SetMember // mp-members: some IRRs accept it on as-sets; RFC 4012 and RIPE do not
     MbrsByRef []string    // mntner names enabling indirect membership
     raw       *ast.Object
 }
 
 type RouteSet struct {
     Common
+    Registry
     Name      types.SetName
     Members   []SetMember // prefix-ranges, set names, or AS numbers (with ^op)
     MpMembers []SetMember // RFC 4012 mp-members (may carry IPv6)
@@ -226,6 +246,7 @@ type RouteSet struct {
 
 type Route struct {             // Route6 has the same shape
     Common
+    Registry
     Prefix   netip.Prefix
     Origin   types.ASN
     MemberOf []types.SetName    // indirect route-set membership claims
@@ -237,7 +258,7 @@ type Route struct {             // Route6 has the same shape
 
 Decoding into a typed object is fallible *per attribute*: `DecodeAutNum` returns the `AutNum` it could build plus a `[]Diagnostic` for the lines it couldn't, rather than failing whole-object. This is the resilience principle made concrete.
 
-Every attribute a validation profile (`object/profiles.go`) lists for a class is surfaced on that class's struct; `TestDecoderSurfacesEveryProfiledAttribute` enforces the agreement by reflection, so a profile entry without a decoder — data silently dropped on `Decode` — fails the build.
+Every attribute a validation profile (`object/profiles.go`) lists for a class is surfaced on that class's struct, in its own field; `TestEveryAttributeLandsInItsOwnField` enforces the agreement by reflection — each attribute's value must land in the field named for it, and each of a class's own fields must be fed by some attribute — so a profile entry without a decoder, or a decoder writing the wrong field, fails the build.
 
 ---
 
@@ -256,6 +277,8 @@ expr        = term [";"] ("EXCEPT" | "REFINE") [afi-list] expr   (* right-recurs
 term        = factor | "{" { expr ";" } [expr] "}"
 factor      = peer-clause {peer-clause} ("accept" | "announce") filter
 peer-clause = ("from" | "to") peering ["action" action {";" action} [";"]]
+action      = rp-attr ("=" | ".=") value | rp-attr "." method "(" args ")"
+            | rp-attr ("+=" | "-=" | "*=" | "/=" | "<<=" | ">>=") value   (* RFC 2622 Fig. 25 *)
 peering     = as-expr [router-expr] ["at" router-expr] | prng-name | "<" regexp ">"
 as-expr     = as-and {"OR" as-and}
 as-and      = as-prim {("AND" | "EXCEPT") as-prim}       (* EXCEPT binds like AND *)
@@ -264,13 +287,29 @@ filter      = f-and {["OR"] f-and}                       (* "x y" is "x OR y" *)
 f-and       = f-not {"AND" f-not}
 f-not       = "NOT" f-not | f-prim
 f-prim      = "(" filter ")" | "{" prefix-ranges "}" [op] | "<" regexp ">" | "ANY"
-            | ("PeerAS" | ASN | set-name | set-template) [op] | rp-attr-method "(" … ")"
+            | ("PeerAS" | ASN | set-name | set-template) [op]
+            | ("community" | "community.contains") "(" … ")"   (* RFC 2622 §7 *)
+            | "community" "==" "{" community {"," community} "}"
 default     = [afi-list] "to" peering ["action" …] ["networks" filter] [";"] EOF
 ```
 
+A term followed by `(` is an implicit OR with a group (`AS1 (AS2 OR AS3)`), never a
+method call. Only the route tests `community(…)` and `community.contains(…)` are
+filters; a method that modifies a route (`aspath.prepend(…)`, `community.append(…)`)
+is an action and is diagnosed (`policy/filter-method`), as is an unterminated call.
+
 `set-template` is a set name with `PeerAS` components (`AS1:AS-CUSTOMERS:PeerAS`),
 an IRR convention common in RIPE data. An mp-* value with no afi clause applies to
-every family (RFC 4012 §2.5); a legacy import:/export:/default: to ipv4.unicast.
+every family (RFC 4012 §2.5); a legacy import:/export:/default: to ipv4.unicast,
+and an afi clause in one is an error (it is RFC 4012 mp-* syntax) and is ignored.
+
+An action is one of the forms above, one per `;`: `pref=10 med=20` or two method
+calls without a `;` between them are `policy/action`, not one action with an odd
+value. The Figure 25 assignments other than `=` and `.=` are the operator methods
+they name (`med += 5` is Method `operator+=`); a comparison (`pref == 10`) tests a
+route and is never an action. A prefix list needs its commas. `NOT` is not an AS-
+or router-expression operator — RFC 2622 §5.6 example 6 uses it, but the grammar
+has none — so it is diagnosed with a pointer to `EXCEPT`.
 
 Modeled as a sealed interface hierarchy (Go's stand-in for sum types — the pattern you'd reach for coming from a real type-system language):
 
@@ -291,6 +330,7 @@ type Except struct{ Left, Right Expr; AFIs []types.AddrFamily }
 type Refine struct{ Left, Right Expr; AFIs []types.AddrFamily }
 
 type Peering interface{ isPeering() }           // PeeringAS{AS, Router, AtRouter}, PeeringSetRef, PeeringRegexp
+type RouterExpr interface{ isRouterExpr() }     // RouterAddr, RouterName, RouterSetRef, RouterExprBinary{AND|OR|EXCEPT}
 type ASExpr interface{ isASExpr() }             // ASNum, ASSetRef, ASSetTemplate, ASExprBinary{AND|OR|EXCEPT}
 
 type Filter interface{ isFilter() }             // sealed; Op = range operator on the term
@@ -301,21 +341,27 @@ type FilterASExpr struct{ AS ASExpr; Op types.RangeOperator }
 type FilterSetRef struct{ Name types.SetName; Op types.RangeOperator }
 type FilterSetTemplate struct{ Template SetNameTemplate; Op types.RangeOperator }
 type FilterPathRE struct{ Raw string; Regexp *ASPathRE } // structured; see below
-type FilterCommunity struct{ Raw string }
-type FilterAnd struct{ L, R Filter }
-type FilterOr struct{ L, R Filter }
+type FilterCommunity struct{ Op CommunityOp; Values []string; Raw string } // community(…), == {…}
+type FilterAnd struct{ Terms []Filter } // "a AND b AND c": one node, 2+ terms
+type FilterOr struct{ Terms []Filter }  // "a OR b", and implicit "a b c"
 type FilterNot struct{ Inner Filter }
 ```
 
 AS-path regexps parse into their own sealed tree (`ASPathExpr`): anchors `^`/`$` as
 atoms anywhere, `.`, ASNs, as-sets, templates, `PeerAS`, `[...]`/`[^...]` classes
 with `AS1 - AS10` ranges, `* + ? {m,n}` and the same-AS `~* ~+ ~{m,n}` forms,
-concatenation and `|`. An unknown byte is an error, never skipped.
+concatenation and `|`. An unknown byte is an error, never skipped, and so is a
+term that names any other kind of set (`<RS-FOO>`, RFC 2622 §5.4), an empty `<>`,
+a `<` never closed and a `>` that closes nothing. A bare number (`<3333>`) is read
+as that AS with a warning, since RPSL writes `AS3333`. Regexp diagnostics point at
+the offending token, not the whole `<…>`.
 
 Two deliberate calls here:
 
 - **AS-path regular expressions** (`<...>`) are parsed into their own AST (operators `^ $ . * + ? | ( ) { }` over AS / as-set terms) but *not evaluated* against live paths — evaluation is a BGP-table concern, not a registry concern. Keeping them structured (rather than as opaque strings) means a consumer can still translate them to a router config, which is the main real use.
-- **Actions** are kept as typed key/op/value triples rather than fully interpreting every RP-attribute, because the RP-attribute dictionary is open-ended (RFC 2622 §9 / the `dictionary` object). The common ones (`pref`, `med`, `community`, `aspath.prepend`) get typed helpers; the rest round-trip faithfully.
+- **Actions** are kept as typed `{Attr, Method, Op, Args, Value, Raw}` records (`community.append(1:2)` is Attr `community`, Method `append`) rather than fully interpreting every RP-attribute, because the RP-attribute dictionary is open-ended (RFC 2622 §9 / the `dictionary` object). The common ones (`pref`, `med`, `community`, `aspath.prepend`) get typed helpers; the rest round-trip faithfully.
+
+Resource bounds: a value over 1,048,576 tokens is refused before its tokens are built (`policy/too-long`; the largest real value, a RIPE IPv6 bogon filter-set, has about 236,000), diagnostics stop after 100 per value (`policy/too-many-errors`), and nesting — parentheses, braces, NOT, AS-expression operators, AS-path quantifiers — is capped at 1,000. With AND/OR chains flat, the AST is never deeper than that cap, so a consumer's recursive walk cannot overflow its stack.
 
 The parser for this layer is a hand-written recursive-descent parser over a small token stream (operators, parens, braces, keywords, identifiers, prefixes). Recursive descent — not a parser generator — because the error recovery needs to be good (resume at the next `;` or `}`) and because the grammar is small enough that a generator adds dependency weight without buying much.
 
@@ -341,8 +387,9 @@ type Source interface {
     OriginatedRoutes(ctx context.Context, as types.ASN, afi types.AFI) ([]netip.Prefix, error)
 
     // MembersByRef supports the mbrs-by-ref / member-of indirect mechanism:
-    // objects maintained by listed mntners that claim member-of this set.
-    MembersByRef(ctx context.Context, set types.SetName, mntners []string) ([]object.Object, error)
+    // objects from the set's own source, maintained by one of its mbrs-by-ref
+    // mntners, that claim member-of this set (filtered with ClaimAllowed).
+    MembersByRef(ctx context.Context, set object.Set) ([]object.Object, error)
 }
 ```
 
@@ -353,7 +400,9 @@ Backends to ship: an in-memory `Source` (for tests and for loading an IRRd snaps
 A set's members come from **two** places and the engine must union them:
 
 1. **Direct** — the `members:` / `mp-members:` attribute lists ASNs, prefix-ranges, and nested set names.
-2. **Indirect** — other objects assert `member-of:` *this* set. Per RFC 2622 this is only honored when the set carries `mbrs-by-ref:` and the asserting object is maintained by one of the listed mntners (or `mbrs-by-ref: ANY`). Skipping the mntner check is a common correctness bug; the engine enforces it via `Source.MembersByRef`.
+2. **Indirect** — other objects assert `member-of:` *this* set. Per RFC 2622 this is only honored when the set carries `mbrs-by-ref:` and the asserting object is maintained by one of the listed mntners (or `mbrs-by-ref: ANY`). Skipping the mntner check is a common correctness bug; the engine enforces it via `Source.MembersByRef` and re-checks every claim with `ClaimAllowed`.
+
+   The claim must also come from the set's own `source:`. Maintainer names are unique only within one registry, so without this rule anyone who registers a same-named mntner in a permissive IRR (RADB) could add members to a RIPE set once several IRRs are loaded together. IRRd applies the same rule (its mbrs-by-ref index is keyed by source and set), so `RIPE-NONAUTH` does not claim into `RIPE`. An absent source matches only an absent source.
 
 ### 8.3 Traversal, cycles, and limits
 
@@ -367,7 +416,7 @@ type Expander struct {
 }
 
 // ExpandAS returns the ASNs of every as-set reachable from n, plus indirect aut-num members.
-func (e *Expander) ExpandAS(ctx context.Context, n types.SetName) (ASSet, error)
+func (e *Expander) ExpandAS(ctx context.Context, n types.SetName) (ASNSet, error)
 
 // ExpandPrefixRanges returns the prefix ranges of a route-set or as-set (routes
 // of member ASes), with member range operators composed — bgpq4's le/ge form.
@@ -382,10 +431,11 @@ func (e *Expander) ExpandPrefixes(ctx context.Context, n types.SetName) (PrefixS
 Engine mechanics that matter:
 
 - **Two phases.** *Discovery* walks the set graph breadth-first from the named set, fetching every reachable set once — so a set's depth is its shortest nesting distance and the result never depends on member order — together with its indirect members and, for prefix expansions, each member AS's routes (once per AS per call). *Evaluation* builds the result from that graph with no further I/O. Caching *across* calls belongs to the `Source`, because freshness policy varies.
-- **Cycle detection.** as-sets reference each other, sometimes cyclically (`AS-A` includes `AS-B` includes `AS-A`). A revisit is skipped, not an error (matches `bgpq4` behavior). With range operators, evaluation walks each set once per distinct operator stack; a set re-entered under the *same* stack is skipped exactly, but one re-entered under a *different* stack (`RS-A` lists `RS-B^+`, `RS-B` lists `RS-A`) would need a fixpoint, so it returns `ErrCyclicOperator` rather than an undersized result.
+- **Class rules.** Discovery and evaluation follow only the nestings RFC 2622 §5.1-5.2 allows: an as-set lists as-sets; a route-set lists route-sets and as-sets. A route-set listed inside an as-set is invalid data and is not followed — otherwise any nested as-set could inject prefixes that no route object backs. `ExpandAS` takes an as-set and the prefix expansions an as-set or route-set; any other class returns `ErrSetClass`.
+- **Cycle detection.** as-sets reference each other, sometimes cyclically (`AS-A` includes `AS-B` includes `AS-A`). A revisit is skipped, not an error (matches `bgpq4` behavior). With range operators, evaluation states are (set, operator stack) pairs, and a stack is identified by what it does — for each family, the lower bound it maps each inner lower bound to (or deletion) and the upper bound the outermost operator sets — so `^+^+` and `^+` are one state. The states are finite: every reachable one is walked once, and cycles through operators (`RS-A` lists `RS-B^+`, `RS-B` lists `RS-A`) terminate at the RFC's least fixpoint rather than being refused. `MaxVisited` bounds the states walked.
 - **Range operators on members.** `RS-FOO^+` applies to each range of RS-FOO and `AS1^24` to each route AS1 originates, composing along the path with `types.RangeOperator.Apply` (RFC 2622 §5.2).
-- **Fan-out guards (three of them).** Real as-sets (e.g. some tier-1 customer cones) expand to *hundreds of thousands* of prefixes. `MaxPrefixes` bounds distinct output, `MaxVisited` (default `1<<17` = 131,072) bounds the sets fetched, and `MaxDepth` (default 32) bounds the shortest nesting distance. Each returns `ErrSetTooLarge{Name, Limit, Count}` naming the cap — the caller decides whether to chunk or reject; none truncates a result silently.
-- **Missing and unexpandable sets.** A missing top-level set is an error wrapping `ErrNotFound`; missing nested sets expand to nothing, as in bgpq4, and are listed by the result's `Missing()`. `AS-ANY`/`RS-ANY` denote the whole IRR and return `ErrAnySet`.
+- **Fan-out guards (three of them).** Real as-sets (e.g. some tier-1 customer cones) expand to *hundreds of thousands* of prefixes. `MaxPrefixes` bounds distinct output, `MaxVisited` (default `1<<17` = 131,072) bounds the sets fetched, and `MaxDepth` (default 32) bounds the shortest nesting distance. Each returns a `*SetTooLargeError{Name, Limit, Max, Count}` naming the cap — the caller decides whether to chunk or reject; none truncates a result silently.
+- **Missing and unexpandable sets.** A missing top-level set is an error wrapping `ErrNotFound`; missing nested sets expand to nothing, as in bgpq4, and are listed by the result's `Missing()`. An existing set with no members is empty, not missing, in every backend: IRRd answers `!i` alike for both, so the irrd `Source` checks with `!m`. `AS-ANY`/`RS-ANY` denote the whole IRR and return `AnySetError`.
 - **Indirect membership.** Per RFC 2622 §5.1-5.2, an as-set's indirect members are aut-nums and a route-set's are routes; each claim must pass `ClaimAllowed` (member-of + mbrs-by-ref mntner check), which the engine re-applies to whatever the `Source` returns.
 - **AFI constraint.** A v4 expansion must drop `route6`-only members and `mp-members` IPv6 entries, and vice versa. The `afi` dictionary from RFC 4012 makes this explicit; `any` means both.
 - **Source precedence.** When the same set name exists in multiple IRRs, the `Source` decides which wins (`irrd.Source.Sources`, `NewMemSource(objs, "RIPE", "RADB")`). Hijack-relevant; surfaced as configuration, not buried.
@@ -421,14 +471,18 @@ func Parse(r io.Reader) iter.Seq2[*ast.Object, []Diagnostic]  // Go 1.23 iterato
 // ParseWith is Parse with explicit options.
 func ParseWith(r io.Reader, opts ParseOptions) iter.Seq2[*ast.Object, []Diagnostic]
 
-const DefaultMaxObjectBytes = 64 << 20
+const DefaultMaxObjectBytes = 16 << 20 // largest RIPE object: ~2 MB
+const DefaultMaxObjectLines = 1 << 18  // longest RIPE object: ~20,000 lines
 
 type ParseOptions struct {
-    // MaxObjectBytes caps one object's source and, separately, the blank/comment
-    // lines before it; over-long lines are discarded as they stream. 0 means
-    // DefaultMaxObjectBytes, negative means unlimited. Breaches are diagnosed
-    // ("rpsl/object-too-large", "rpsl/trivia-too-large") and parsing resumes.
+    // MaxObjectBytes and MaxObjectLines cap one object and, separately, the
+    // blank/comment lines before it; over-long lines are discarded as they
+    // stream. 0 means the default, negative means unlimited. Breaches are
+    // diagnosed ("rpsl/object-too-large", "rpsl/trivia-too-large") and parsing
+    // resumes. With the defaults, no input makes the parser use more than about
+    // 150 MB; ParseObject, whose text is already in memory, applies no caps.
     MaxObjectBytes int64
+    MaxObjectLines int
 }
 
 // Decode upgrades a generic object to its typed form.
@@ -471,7 +525,7 @@ type Diagnostic struct {
 
 A spec-pure parser dies on real data. Budget explicitly for:
 
-- **RIPE deviations.** RIPE's RPSL diverged from RFC 2622 over 25 years (extra attributes, dropped features, `auth:` formats, `abuse-c:`). The class/attribute dictionary should be data-driven (a loadable table), with a built-in RIPE profile and an RFC-strict profile, so you can validate against either.
+- **RIPE deviations.** RIPE's RPSL diverged from RFC 2622 over 25 years (extra attributes, dropped features, `auth:` formats, `abuse-c:`). The class/attribute dictionary is data-driven (a loadable table), with a built-in RIPE profile and an RFC-strict profile, so you can validate against either. The RIPE profile is RIPE's own templates (`whois -t <class>`, kept in `object/testdata/ripe-templates` and checked by `TestRIPEProfileMatchesTemplates`, and against whois.ripe.net by the live test); the RFC-strict profile follows the tables of RFC 2622, 2725, 2726 and 4012.
 - **`changed:` / legacy attributes** that RFC strict mode rejects but every historical dump contains.
 - **Empty and `+`-only continuation lines** inside `remarks:`/`descr:` (see §3) — the classic round-trip breaker.
 - **`mbrs-by-ref: ANY`** — indirect membership open to any maintainer; easy to either over- or under-apply.
@@ -484,17 +538,24 @@ A spec-pure parser dies on real data. Budget explicitly for:
 
 ## 11. Testing strategy
 
-The correctness bar is "matches the tools operators already trust," so testing is differential and corpus-driven:
+The correctness bar is "matches the tools operators already trust," so testing is differential and corpus-driven, and the suite is judged by whether it catches bugs: each bug the reviews found was put back in, one at a time, and a test had to fail.
 
 1. **Golden round-trip corpus.** A directory of real objects from RIPE/RADB/ARIN; assert `Parse → String` is byte-identical. This guards the lossless property and catches lexer regressions.
-2. **Policy-AST table tests** straight out of the RFC 2622/4012 examples (they're conveniently exhaustive — `pref`, multi-peering, `except`/`refine`, `afi` scoping).
-3. **Differential expansion tests vs. `bgpq4`.** For a fixed offline IRR snapshot, expand a basket of as-sets/route-sets and compare against checked-in golden expansions (hand-checked; `bgpq4` cannot read an offline snapshot, so each golden file records the equivalent `bgpq4 -j` command). An opt-in live diff against `bgpq4` itself runs when `RPSL_BGPQ4_SERVER`/`RPSL_BGPQ4_SET` are set. Any divergence is a bug in one of them — and finding `bgpq4` bugs would itself be a credibility win.
-4. **Fuzzing** (`go test -fuzz`) of every parser that takes untrusted text: lexer, attribute lists, set names, range operators, the stream, and the policy parser (import, filter, peering, AS-path regexp). RPSL text from the internet is adversarial by nature; the parser must never panic, only diagnose, and the stream fuzzer also checks that no byte is lost.
-5. **Fan-out / cycle property tests** with synthetic set graphs (generated cyclic and deep nestings) against a brute-force oracle, to verify results, limits and termination.
-6. **Real-data regression** (opt-in, `RPSL_REALDATA`). Streams the RIPE split dumps (`scripts/fetch-ripe-dumps.sh`) and checks that the stream is lossless, raises no stream-level diagnostics, and keeps each error family under 0.1 % of objects (of policy values for `policy/*`); then expands the largest real as-sets and route-sets twice, in opposite input orders, and requires identical results.
-7. **Live smoke test** (opt-in, `RPSL_LIVE=1`). Queries RADB, RIPE whois and RIPE RDAP read-only and asserts only stable facts (AS3333 originates 193.0.0.0/21). It is what caught IRRd closing the connection after one command without `!!`.
+2. **Policy tests from the RFCs.** Table tests for the grammar's forms, and every routing-policy example in RFC 2622, 2650 and 4012 kept verbatim in `policy/testdata/rfc-examples.txt`: each must parse clean, except the one the parser rejects on purpose (RFC 2622's `NOT` in a peering).
+3. **A model of the engine.** Random IRRs — as-sets and route-sets in two sources, range operators on every kind of member, indirect members honored and rejected, cycles, missing and invalid members, `AS-ANY` — are expanded by the engine and by a brute-force oracle that evaluates RFC 2622 straight from the generator's model, never from parsed text. They must agree on AS numbers, prefixes of each family, `Missing()`, and on `MaxDepth`/`MaxPrefixes` holding exactly at the true depth and size. The same IRRs are served by `resolve/internal/irrtest`, an in-process server that answers the IRRd and whois protocols as IRRd does, so `irrd.Source`, `whois.Source` and `MemSource` are held to the same oracle.
+4. **Differential expansion vs. `bgpq4`.** A real `bgpq4` binary queries `irrtest` serving the same objects the engine expands (bgpq4 recurses through as-sets itself with `-L`; route-sets it asks the server to resolve with `!i…,1`, which `irrtest` implements as IRRd does). Random IRRs must expand identically, AS numbers and both families' prefixes; the golden expansions of the snapshot in `resolve/testdata` are bgpq4's own output, re-checked whenever bgpq4 is installed (CI installs it). Where the two knowingly differ — bgpq4 drops the single-length `^n` form (a bgpq4 bug), neither IRRd nor bgpq4 applies range operators on set and AS members, bgpq4 follows route-sets listed in as-sets — the difference is pinned in `resolve/testdata/bgpq4/divergences.md` and a test, so a change on either side fails. An opt-in run (`RPSL_REALDATA`) does the same for the largest and a random sample of real RIPE sets. An older opt-in diff against bgpq4 on a live IRR runs when `RPSL_BGPQ4_SERVER`/`RPSL_BGPQ4_SET` are set.
+5. **Fuzzing** (`go test -fuzz`) of every parser that takes untrusted text — lexer, attribute lists, set names, range operators, prefix ranges, the stream, decoding, editing, and the policy parser (import, filter, peering, AS-path regexp) — for properties, not only for panics:
+   - every token's span and segments point at its bytes, and its kind follows the line rules the stream shares;
+   - the stream is lossless, splits objects where the lexer sees them end, yields each object exactly as `ParseObject` reads its text (positions shifted), resumes after a break, and under caps drops only whole, diagnosed objects;
+   - `Append`/`Set` produce text that parses back to exactly the edit, other attributes' bytes untouched;
+   - `Decode` and `Validate` keep diagnostics inside the object, and a clean object decodes the same after changes RPSL gives no meaning to (`+` lines, name case, trailing spaces, CRLF);
+   - policy diagnostics stay in the value and under the cap, the AST under the nesting cap, and keyword case or extra whitespace change nothing.
+6. **Engine property tests** with synthetic set graphs (cyclic and deep nestings, operator cycles) against brute-force oracles, to verify results, limits and termination, and an oracle for `RangeOperator.Apply` against the per-prefix meaning of RFC 2622 §2.
+7. **Contracts.** Every attribute a validation profile lists lands in its own field of the typed struct (`TestEveryAttributeLandsInItsOwnField`), and every diagnostic rule the library emits is in `docs/diagnostics.md` with its severity, and every rule listed there is emitted (`TestDiagnosticRulesAreDocumented`).
+8. **Real-data regression** (opt-in, `RPSL_REALDATA`). Streams the RIPE split dumps (`scripts/fetch-ripe-dumps.sh`: as-set, route-set, route, route6, aut-num, filter-set, peering-set) and checks that the stream is lossless, raises no stream-level diagnostics, decodes every route and route6 to a valid prefix, and puts Errors of any one family on at most 0.1 % of objects (at least 3 tolerated); then expands the largest real as-sets and route-sets twice, in opposite input orders, and requires identical results.
+9. **Live smoke test** (opt-in, `RPSL_LIVE=1`). Queries RADB (over both the IRRd protocol and whois), RIPE whois and RIPE RDAP read-only and asserts only stable facts (AS3333 originates 193.0.0.0/21; a made-up set is not found). It caught IRRd closing the connection after one command without `!!`, and IRRd's whois parser needing every flag before `-i`. `TestRIPETemplatesAreCurrent` (in `object`, same switch) compares the RIPE template fixtures with whois.ripe.net, so a template change there fails a test here.
 
-`scripts/check.sh` runs 1–5 for every module (plus gofmt, staticcheck, govulncheck and the leaf-isolation and engine-purity invariants); CI runs it with a short `FUZZTIME` on Go 1.23 and the latest stable Go.
+`scripts/check.sh` runs 1–7 for every module under the race detector, with per-package coverage (plus gofmt, staticcheck, govulncheck and the leaf-isolation and engine-purity invariants); CI installs bgpq4 and runs it with a short `FUZZTIME` on Go 1.23 and the latest stable Go.
 
 ---
 

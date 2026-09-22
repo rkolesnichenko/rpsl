@@ -205,7 +205,7 @@ func printPlaintext(w io.Writer, r *bulk.Report) {
 			note := ""
 			switch {
 			case s.Truncated:
-				note = "truncated (ErrSetTooLarge)"
+				note = "truncated (SetTooLargeError)"
 			case s.Err != "":
 				note = "err: " + s.Err
 			}

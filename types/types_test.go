@@ -2,6 +2,7 @@ package types
 
 import (
 	"net/netip"
+	"strings"
 	"testing"
 )
 
@@ -40,24 +41,23 @@ func TestParseSetName(t *testing.T) {
 	cases := []struct {
 		in    string
 		class SetClass
-		str   string // String(): the trimmed original spelling
-		canon string
+		str   string // String(): the canonical form
 	}{
-		{"AS-FOO", AsSet, "AS-FOO", "AS-FOO"},
-		{"as-foo", AsSet, "as-foo", "AS-FOO"},
-		{"AS-51155_customers", AsSet, "AS-51155_customers", "AS-51155_CUSTOMERS"},
-		{"RS-BAR", RouteSet, "RS-BAR", "RS-BAR"},
-		{"RTRS-X", RtrSet, "RTRS-X", "RTRS-X"},
-		{"FLTR-Y", FilterSet, "FLTR-Y", "FLTR-Y"},
-		{"PRNG-Z", PeeringSet, "PRNG-Z", "PRNG-Z"},
-		{"AS-ANY", AsSet, "AS-ANY", "AS-ANY"},
-		{"RS-ANY", RouteSet, "RS-ANY", "RS-ANY"},
-		{"AS3333:AS-CUSTOMERS", AsSet, "AS3333:AS-CUSTOMERS", "AS3333:AS-CUSTOMERS"},
-		{"AS-X:AS1:AS-Y", AsSet, "AS-X:AS1:AS-Y", "AS-X:AS1:AS-Y"},
-		{"as3333:as-foo", AsSet, "as3333:as-foo", "AS3333:AS-FOO"},
-		{"AS007:AS-X", AsSet, "AS007:AS-X", "AS7:AS-X"},       // ASN components normalized
-		{"AS1.10:AS-X", AsSet, "AS1.10:AS-X", "AS65546:AS-X"}, // asdot normalized
-		{"  AS-FOO\t", AsSet, "AS-FOO", "AS-FOO"},             // outer whitespace trimmed
+		{"AS-FOO", ClassAsSet, "AS-FOO"},
+		{"as-foo", ClassAsSet, "AS-FOO"},
+		{"AS-51155_customers", ClassAsSet, "AS-51155_CUSTOMERS"},
+		{"RS-BAR", ClassRouteSet, "RS-BAR"},
+		{"RTRS-X", ClassRtrSet, "RTRS-X"},
+		{"FLTR-Y", ClassFilterSet, "FLTR-Y"},
+		{"PRNG-Z", ClassPeeringSet, "PRNG-Z"},
+		{"AS-ANY", ClassAsSet, "AS-ANY"},
+		{"RS-ANY", ClassRouteSet, "RS-ANY"},
+		{"AS3333:AS-CUSTOMERS", ClassAsSet, "AS3333:AS-CUSTOMERS"},
+		{"AS-X:AS1:AS-Y", ClassAsSet, "AS-X:AS1:AS-Y"},
+		{"as3333:as-foo", ClassAsSet, "AS3333:AS-FOO"},
+		{"AS007:AS-X", ClassAsSet, "AS7:AS-X"},      // ASN components normalized
+		{"AS1.10:AS-X", ClassAsSet, "AS65546:AS-X"}, // asdot normalized
+		{"  AS-FOO\t", ClassAsSet, "AS-FOO"},        // outer whitespace trimmed
 	}
 	for _, c := range cases {
 		n, err := ParseSetName(c.in)
@@ -70,9 +70,6 @@ func TestParseSetName(t *testing.T) {
 		}
 		if n.String() != c.str {
 			t.Errorf("ParseSetName(%q).String() = %q, want %q", c.in, n.String(), c.str)
-		}
-		if n.Canonical() != c.canon {
-			t.Errorf("ParseSetName(%q).Canonical() = %q, want %q", c.in, n.Canonical(), c.canon)
 		}
 		if n.IsZero() {
 			t.Errorf("ParseSetName(%q).IsZero() = true", c.in)
@@ -113,16 +110,10 @@ func TestSetNameValueSemantics(t *testing.T) {
 	b, _ := ParseSetName("AS1:AS-X")
 	lower, _ := ParseSetName("as1:as-x")
 
-	// Comparable: usable as a map key, == is spelling-exact.
+	// Comparable: usable as a map key, and == ignores spelling.
 	seen := map[SetName]bool{a: true}
-	if !seen[b] {
-		t.Error("identically spelled SetNames are not == (map lookup missed)")
-	}
-	if a == lower {
-		t.Error("differently spelled SetNames compare ==; == must be spelling-exact")
-	}
-	if a.Canonical() != lower.Canonical() {
-		t.Errorf("Canonical differs: %q vs %q", a.Canonical(), lower.Canonical())
+	if !seen[b] || a != lower {
+		t.Error("spellings of one name are not == (map lookup missed)")
 	}
 
 	// Components returns a fresh slice; mutating it cannot alter the name.
@@ -136,7 +127,7 @@ func TestSetNameValueSemantics(t *testing.T) {
 	}
 
 	var zero SetName
-	if !zero.IsZero() || zero.String() != "" || zero.Class() != SetClassUnknown {
+	if !zero.IsZero() || zero.String() != "" || zero.Class() != ClassUnknown {
 		t.Errorf("zero SetName: IsZero=%v String=%q Class=%v", zero.IsZero(), zero.String(), zero.Class())
 	}
 }
@@ -171,12 +162,41 @@ func TestParsePrefixRange(t *testing.T) {
 		if !c.ok {
 			continue
 		}
-		if r.Op != c.op || r.Lo != c.lo || r.Hi != c.hi {
+		if r.Op() != c.op || r.Lo() != int(c.lo) || r.Hi() != int(c.hi) {
 			t.Errorf("ParsePrefixRange(%q) = {op=%d lo=%d hi=%d}, want {op=%d lo=%d hi=%d}",
-				c.in, r.Op, r.Lo, r.Hi, c.op, c.lo, c.hi)
+				c.in, r.Op(), r.Lo(), r.Hi(), c.op, c.lo, c.hi)
 		}
 		if r.String() != c.in {
 			t.Errorf("String = %q, want %q", r.String(), c.in)
+		}
+	}
+}
+
+// TestParsePrefixRangeIsCanonical: a parsed range is in canonical form, so
+// equal meanings compare equal (and dedup in maps) whatever their spelling.
+func TestParsePrefixRangeIsCanonical(t *testing.T) {
+	for in, want := range map[string]string{
+		"10.0.0.0/8^24-24":  "10.0.0.0/8^24",
+		"10.0.0.0/8^8-32":   "10.0.0.0/8^+",
+		"10.0.0.0/8^9-32":   "10.0.0.0/8^-",
+		"10.0.0.0/8^8":      "10.0.0.0/8",
+		"10.0.0.0/8^8-8":    "10.0.0.0/8",
+		"0.0.0.0/0^0-32":    "0.0.0.0/0^+",
+		"10.0.0.1/8^+":      "10.0.0.0/8^+", // host bits cleared
+		"10.0.0.1/8":        "10.0.0.0/8",
+		"2001:db8::1/32^48": "2001:db8::/32^48",
+		"192.0.2.1/32^-":    "192.0.2.1/32^-", // denotes nothing; kept as written
+	} {
+		r, err := ParsePrefixRange(in)
+		if err != nil {
+			t.Errorf("ParsePrefixRange(%q): %v", in, err)
+			continue
+		}
+		if r.String() != want {
+			t.Errorf("ParsePrefixRange(%q) = %s, want %s", in, r, want)
+		}
+		if w, _ := ParsePrefixRange(want); r != w {
+			t.Errorf("ParsePrefixRange(%q) = %+v, not == ParsePrefixRange(%q) = %+v", in, r, want, w)
 		}
 	}
 }
@@ -226,6 +246,120 @@ func TestParseNICHandle(t *testing.T) {
 	for _, in := range []string{"", "1EX-RIPE", "EX@RIPE"} {
 		if _, err := ParseNICHandle(in); err == nil {
 			t.Errorf("ParseNICHandle(%q) expected error", in)
+		}
+	}
+}
+
+// PrefixRange is opaque and always canonical: NewPrefixRange and
+// ParsePrefixRange agree, and == compares meaning.
+func TestNewPrefixRange(t *testing.T) {
+	p := netip.MustParsePrefix("10.0.0.1/8")
+	r, ok := NewPrefixRange(p, 8, 32)
+	if !ok || r.Prefix() != netip.MustParsePrefix("10.0.0.0/8") || r.Lo() != 8 || r.Hi() != 32 || r.Op() != RangePlus {
+		t.Errorf("NewPrefixRange(10.0.0.1/8, 8, 32) = %v %v (%v %d %d %v)", r, ok, r.Prefix(), r.Lo(), r.Hi(), r.Op())
+	}
+	if parsed, _ := ParsePrefixRange("10.0.0.0/8^+"); parsed != r {
+		t.Errorf("ParsePrefixRange(10.0.0.0/8^+) = %v, not == NewPrefixRange", parsed)
+	}
+	if r, ok := NewPrefixRange(p, 0, 99); !ok || r.Lo() != 8 || r.Hi() != 32 {
+		t.Errorf("window clamps to the prefix and family: %v %v", r, ok)
+	}
+	for _, bad := range []struct{ lo, hi int }{{25, 24}, {33, 40}} {
+		if r, ok := NewPrefixRange(p, bad.lo, bad.hi); ok {
+			t.Errorf("NewPrefixRange(/8, %d, %d) = %v, want no range", bad.lo, bad.hi, r)
+		}
+	}
+	if r, ok := NewPrefixRange(netip.Prefix{}, 0, 32); ok || !r.IsZero() {
+		t.Errorf("NewPrefixRange(invalid) = %v, %v", r, ok)
+	}
+	var zero PrefixRange
+	if !zero.IsZero() || zero.String() != "" || !zero.IsEmpty() {
+		t.Errorf("zero PrefixRange: IsZero %v, String %q, IsEmpty %v", zero.IsZero(), zero.String(), zero.IsEmpty())
+	}
+	host, err := ParsePrefixRange("192.0.2.1/32^-")
+	if err != nil || !host.IsEmpty() || host.IsZero() || host.String() != "192.0.2.1/32^-" {
+		t.Errorf("host ^- = %v, %v; want an empty range that prints as written", host, err)
+	}
+}
+
+// RPSL names are case-insensitive, so SetName stores only the canonical form:
+// every spelling of a name is == and one map key, and String is canonical.
+func TestSetNameIsCanonical(t *testing.T) {
+	a, _ := ParseSetName("as-foo")
+	b, _ := ParseSetName("AS-FOO")
+	c, _ := ParseSetName("As007:as-x")
+	if a != b || a.String() != "AS-FOO" || c.String() != "AS7:AS-X" {
+		t.Errorf("as-foo %q, AS-FOO %q, As007:as-x %q", a, b, c)
+	}
+	seen := map[SetName]bool{a: true}
+	if !seen[b] {
+		t.Error("AS-FOO is a different map key from as-foo")
+	}
+	if got := c.Components(); len(got) != 2 || got[0] != "AS7" || got[1] != "AS-X" {
+		t.Errorf("Components = %q", got)
+	}
+	if c.Class() != ClassAsSet {
+		t.Errorf("Class = %v", c.Class())
+	}
+}
+
+// Only ASCII spaces and tabs are trimmed; other whitespace is a malformed value.
+// Values are tokens: no whitespace inside.
+func TestParsersAreASCIIStrict(t *testing.T) {
+	bad := map[string]func(string) error{
+		"ASN":         func(s string) error { _, err := ParseASN(s); return err },
+		"SetName":     func(s string) error { _, err := ParseSetName(s); return err },
+		"NICHandle":   func(s string) error { _, err := ParseNICHandle(s); return err },
+		"PrefixRange": func(s string) error { _, err := ParsePrefixRange(s); return err },
+		"AddrFamily":  func(s string) error { _, err := ParseAddrFamily(s); return err },
+	}
+	inputs := map[string][]string{
+		"ASN":         {" AS1", "AS1\u0085"},
+		"SetName":     {" AS-FOO", "AS-FOO "},
+		"NICHandle":   {" EX1-RIPE"},
+		"PrefixRange": {" 10.0.0.0/8", "10.0.0.0/8 ^+", "10.0.0.0/ 8"},
+		"AddrFamily":  {" ipv4"},
+	}
+	for kind, ins := range inputs {
+		for _, in := range ins {
+			if bad[kind](in) == nil {
+				t.Errorf("Parse%s(%q) accepted", kind, in)
+			}
+		}
+	}
+	if _, err := ParseASN(" \tAS1\t "); err != nil {
+		t.Errorf("ASCII spaces and tabs are trimmed: %v", err)
+	}
+}
+
+// A set name is at most 1,024 bytes: longer names are not real and must not
+// reach a query line.
+func TestSetNameLengthCap(t *testing.T) {
+	if _, err := ParseSetName("AS-" + strings.Repeat("X", 1021)); err != nil {
+		t.Errorf("a 1,024-byte name: %v", err)
+	}
+	if _, err := ParseSetName("AS-" + strings.Repeat("X", 1022)); err == nil {
+		t.Error("a 1,025-byte name was accepted")
+	}
+}
+
+// NIC handles: letters, digits and single hyphens, starting with a letter and
+// ending with a letter or digit, stored upper-case so they compare
+// case-insensitively.
+func TestNICHandleSyntax(t *testing.T) {
+	for _, bad := range []string{"A-", "A--B", "AB1-RIPE-", "-AB", "1AB", "AB_1", "AB 1", "", strings.Repeat("A", 31)} {
+		if h, err := ParseNICHandle(bad); err == nil {
+			t.Errorf("ParseNICHandle(%q) = %q, want error", bad, h)
+		}
+	}
+	a, _ := ParseNICHandle("dumy-ripe")
+	b, _ := ParseNICHandle("DUMY-RIPE")
+	if a != b || a.String() != "DUMY-RIPE" {
+		t.Errorf("dumy-ripe = %q, DUMY-RIPE = %q; want equal, upper-case", a, b)
+	}
+	for _, ok := range []string{"A", "AUTO-1", "JD123-ARIN", "APPLEC-1-Z", "EX1-RIPE"} {
+		if _, err := ParseNICHandle(ok); err != nil {
+			t.Errorf("ParseNICHandle(%q): %v", ok, err)
 		}
 	}
 }

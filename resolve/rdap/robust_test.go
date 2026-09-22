@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/rkolesnichenko/rpsl/types"
 )
 
 func TestForbiddenAddresses(t *testing.T) {
@@ -18,12 +20,16 @@ func TestForbiddenAddresses(t *testing.T) {
 		"127.0.0.1", "::1", "10.1.2.3", "192.168.0.1", "169.254.1.1", "fe80::1", "fc00::1",
 		"0.1.2.3", "100.64.0.1", "::ffff:100.64.0.1", "::ffff:127.0.0.1", // 4in6 is unwrapped first
 		"192.0.0.8", "198.18.0.1", "240.0.0.1", "255.255.255.255", "64:ff9b::a00:1", "::",
+		"fec0::1",             // deprecated site-local
+		"::a00:1",             // IPv4-compatible, carrying 10.0.0.1
+		"2002:a00:1::1",       // 6to4, carrying 10.0.0.1
+		"2001:0:4136:e378::1", // Teredo
 	} {
 		if !isForbiddenAddr(netip.MustParseAddr(a)) {
 			t.Errorf("%s is not forbidden", a)
 		}
 	}
-	for _, a := range []string{"93.184.216.34", "2606:4700::1", "193.0.6.139"} {
+	for _, a := range []string{"93.184.216.34", "2606:4700::1", "193.0.6.139", "2001:4860:4860::8888", "2003::1"} {
 		if isForbiddenAddr(netip.MustParseAddr(a)) {
 			t.Errorf("public address %s is forbidden", a)
 		}
@@ -116,9 +122,9 @@ func TestRateLimited(t *testing.T) {
 	})
 	c := &Client{BaseURL: rec.srv.URL, AllowInsecure: true}
 	_, err := c.LookupAutnum(context.Background(), 1)
-	var rl ErrRateLimited
+	var rl *RateLimitedError
 	if !errors.As(err, &rl) || rl.RetryAfter != 120*time.Second {
-		t.Errorf("err = %v (%+v), want ErrRateLimited{RetryAfter: 2m}", err, rl)
+		t.Errorf("err = %v (%+v), want RateLimitedError{RetryAfter: 2m}", err, rl)
 	}
 }
 
@@ -136,5 +142,57 @@ func TestErrorBodiesAreDrained(t *testing.T) {
 	}
 	if n := rec.conns.Load(); n != 1 {
 		t.Errorf("two requests used %d connections, want 1 (the 404 body was not drained)", n)
+	}
+}
+
+// A server that accepts a request and never answers must not block forever:
+// Timeout (default DefaultTimeout) bounds every request.
+func TestRequestTimeout(t *testing.T) {
+	hang := make(chan struct{})
+	rec := newRecorder(t, func(http.ResponseWriter, *http.Request) { <-hang })
+	t.Cleanup(func() { close(hang) }) // runs before the server's Close, which waits for handlers
+	c := &Client{BaseURL: rec.srv.URL, AllowInsecure: true, Timeout: 200 * time.Millisecond}
+	start := time.Now()
+	_, err := c.LookupAutnum(context.Background(), 1)
+	if took := time.Since(start); !errors.Is(err, context.DeadlineExceeded) || took > 2*time.Second {
+		t.Errorf("LookupAutnum = %v after %v; want context.DeadlineExceeded after ~200ms", err, took)
+	}
+	for in, want := range map[time.Duration]time.Duration{0: DefaultTimeout, -1: 0, 5 * time.Second: 5 * time.Second} {
+		if got := (&Client{Timeout: in}).timeout(); got != want {
+			t.Errorf("Timeout %v resolves to %v, want %v", in, got, want)
+		}
+	}
+}
+
+// Retry-After values too large for a time.Duration are capped, not wrapped
+// around to a negative wait.
+func TestRetryAfterIsCapped(t *testing.T) {
+	for _, v := range []string{"9999999999", "99999999999999999999"} {
+		if d := retryAfter(v); d != maxRetryAfter {
+			t.Errorf("retryAfter(%q) = %v, want %v", v, d, maxRetryAfter)
+		}
+	}
+	if d := retryAfter("120"); d != 2*time.Minute {
+		t.Errorf("retryAfter(120) = %v", d)
+	}
+}
+
+// Registration numbers and addresses decode to the library's types.
+func TestTypedFields(t *testing.T) {
+	rec := newRecorder(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/autnum/") {
+			w.Write([]byte(`{"handle":"AS3333","startAutnum":3333,"endAutnum":3333,"name":"RIPE-NCC-AS"}`))
+			return
+		}
+		w.Write([]byte(`{"handle":"193.0.0.0 - 193.0.7.255","startAddress":"193.0.0.0","endAddress":"193.0.7.255"}`))
+	})
+	c := &Client{BaseURL: rec.srv.URL, AllowInsecure: true}
+	a, err := c.LookupAutnum(context.Background(), 3333)
+	if err != nil || a.StartAutnum != types.ASN(3333) || a.EndAutnum != types.ASN(3333) {
+		t.Errorf("autnum = %+v, %v", a, err)
+	}
+	n, err := c.LookupIP(context.Background(), netip.MustParsePrefix("193.0.0.0/21"))
+	if err != nil || n.StartAddress != netip.MustParseAddr("193.0.0.0") || n.EndAddress != netip.MustParseAddr("193.0.7.255") {
+		t.Errorf("ip network = %+v, %v", n, err)
 	}
 }

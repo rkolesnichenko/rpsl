@@ -3,9 +3,10 @@
 // peering-set, filter-set, rtr-set, inet-rtr, inetnum, inet6num, as-block, irt,
 // domain and organisation. Every attribute a validation profile lists for a
 // class is surfaced on its typed struct (the RFC 2622 §3.1 common attributes via
-// the embedded Common). Decoding is fallible per-attribute: a malformed value is
-// skipped with a Diagnostic, never aborting the whole object, and Raw always
-// drops back to the lossless ast.Object. Other classes decode to Generic.
+// the embedded Common, RIPE's cross-class ones via the embedded Registry).
+// Decoding is fallible per-attribute: a malformed value is skipped with a
+// Diagnostic, never aborting the whole object, and Raw always drops back to the
+// lossless ast.Object. Other classes decode to Generic.
 package object
 
 import (
@@ -29,7 +30,10 @@ type Object interface {
 // classes still satisfy Object.
 type Generic struct{ raw *ast.Object }
 
-func (g Generic) Class() string    { return g.raw.Class() }
+// Class returns the class name of the underlying object.
+func (g Generic) Class() string { return g.raw.Class() }
+
+// Raw returns the object's lossless source, or nil for one built without it.
 func (g Generic) Raw() *ast.Object { return g.raw }
 
 // decoder removes per-attribute boilerplate and centralizes diagnostics. Each
@@ -103,10 +107,16 @@ func (d *decoder) list(name string) []string {
 	return out
 }
 
+// scalar returns a's logical value trimmed at both ends. A "+" or comment-only
+// continuation line contributes an empty line to the value, so without this
+// "route: 192.0.2.0/24" followed by a "+" line would be "192.0.2.0/24\n" and
+// fail to parse. Interior line breaks are kept; the raw text is untouched.
+func scalar(a ast.Attribute) string { return strings.Trim(a.Value, " \t\r\n") }
+
 // str returns the first value for name, or "" if absent.
 func (d *decoder) str(name string) string {
 	if a, ok := d.o.GetFirst(name); ok {
-		return a.Value
+		return scalar(a)
 	}
 	return ""
 }
@@ -119,18 +129,29 @@ func (d *decoder) all(name string) []string {
 	}
 	out := make([]string, len(attrs))
 	for i, a := range attrs {
-		out[i] = a.Value
+		out[i] = scalar(a)
 	}
 	return out
+}
+
+// emptyKey reports a class's key attribute that has no value, with one Error
+// ("object/empty-key") for every class alike, and returns true so the caller
+// skips its own parse error.
+func (d *decoder) emptyKey(a ast.Attribute) bool {
+	if a.Name != d.o.Class() || scalar(a) != "" {
+		return false
+	}
+	d.errf(a, "object/empty-key", a.Name+" object has an empty key")
+	return true
 }
 
 // asn parses the first value of name as an ASN; diag + zero value on failure.
 func (d *decoder) asn(name, rule string) types.ASN {
 	a, ok := d.o.GetFirst(name)
-	if !ok {
+	if !ok || d.emptyKey(a) {
 		return 0
 	}
-	v, err := types.ParseASN(a.Value)
+	v, err := types.ParseASN(scalar(a))
 	if err != nil {
 		d.errf(a, rule, err.Error())
 		return 0
@@ -141,10 +162,10 @@ func (d *decoder) asn(name, rule string) types.ASN {
 // prefix parses the first value of name as a netip.Prefix.
 func (d *decoder) prefix(name, rule string) netip.Prefix {
 	a, ok := d.o.GetFirst(name)
-	if !ok {
+	if !ok || d.emptyKey(a) {
 		return netip.Prefix{}
 	}
-	p, err := netip.ParsePrefix(a.Value)
+	p, err := netip.ParsePrefix(scalar(a))
 	if err != nil {
 		d.errf(a, rule, err.Error())
 		return netip.Prefix{}
@@ -152,35 +173,42 @@ func (d *decoder) prefix(name, rule string) netip.Prefix {
 	return p
 }
 
-// addrRange parses the first value of name as an inetnum-style address range
-// "lo - hi" (e.g. "192.0.2.0 - 192.0.2.255"). Returns the zero Addrs on failure.
+// addrRange parses the first value of name as an inetnum address range
+// "lo - hi" (e.g. "192.0.2.0 - 192.0.2.255") of IPv4 addresses with lo <= hi.
+// Returns the zero Addrs on failure.
 func (d *decoder) addrRange(name, rule string) (lo, hi netip.Addr) {
 	a, ok := d.o.GetFirst(name)
-	if !ok {
+	if !ok || d.emptyKey(a) {
 		return netip.Addr{}, netip.Addr{}
 	}
-	l, h, found := strings.Cut(a.Value, "-")
+	l, h, found := strings.Cut(scalar(a), "-")
 	if !found {
 		d.errf(a, rule, "expected 'lo - hi' address range")
 		return netip.Addr{}, netip.Addr{}
 	}
 	lo, err1 := netip.ParseAddr(strings.TrimSpace(l))
 	hi, err2 := netip.ParseAddr(strings.TrimSpace(h))
-	if err1 != nil || err2 != nil {
-		d.errf(a, rule, "invalid address range "+a.Value)
-		return netip.Addr{}, netip.Addr{}
+	switch {
+	case err1 != nil || err2 != nil:
+		d.errf(a, rule, "invalid address range "+scalar(a))
+	case !lo.Is4() || !hi.Is4():
+		d.errf(a, rule, "address range "+scalar(a)+" is not IPv4")
+	case lo.Compare(hi) > 0:
+		d.errf(a, rule, fmt.Sprintf("address range starts at %s, after its end %s", lo, hi))
+	default:
+		return lo, hi
 	}
-	return lo, hi
+	return netip.Addr{}, netip.Addr{}
 }
 
 // asnRange parses the first value of name as an as-block range "ASlo - AShi"
-// (e.g. "AS1 - AS10"). Returns zero ASNs on failure.
+// (e.g. "AS1 - AS10") with lo <= hi. Returns zero ASNs on failure.
 func (d *decoder) asnRange(name, rule string) (lo, hi types.ASN) {
 	a, ok := d.o.GetFirst(name)
-	if !ok {
+	if !ok || d.emptyKey(a) {
 		return 0, 0
 	}
-	l, h, found := strings.Cut(a.Value, "-")
+	l, h, found := strings.Cut(scalar(a), "-")
 	if !found {
 		d.errf(a, rule, "expected 'ASlo - AShi' range")
 		return 0, 0
@@ -188,7 +216,11 @@ func (d *decoder) asnRange(name, rule string) (lo, hi types.ASN) {
 	lo, err1 := types.ParseASN(strings.TrimSpace(l))
 	hi, err2 := types.ParseASN(strings.TrimSpace(h))
 	if err1 != nil || err2 != nil {
-		d.errf(a, rule, "invalid as-block range "+a.Value)
+		d.errf(a, rule, "invalid as-block range "+scalar(a))
+		return 0, 0
+	}
+	if lo > hi {
+		d.errf(a, rule, fmt.Sprintf("as-block range starts at %s, after its end %s", lo, hi))
 		return 0, 0
 	}
 	return lo, hi
@@ -198,7 +230,7 @@ func (d *decoder) asnRange(name, rule string) (lo, hi types.ASN) {
 func (d *decoder) nicHandles(name, rule string) []types.NICHandle {
 	var out []types.NICHandle
 	for _, a := range d.o.GetAll(name) {
-		h, err := types.ParseNICHandle(a.Value)
+		h, err := types.ParseNICHandle(scalar(a))
 		if err != nil {
 			d.errf(a, rule, err.Error())
 			continue
@@ -236,17 +268,52 @@ func (d *decoder) common(class string) Common {
 	}
 }
 
+// Registry holds the attributes RIPE's templates add across classes: the
+// owning organisation, the abuse contact, the maintainers of lower-level
+// objects, and the timestamps RIPE sets on every object. It is embedded in each
+// typed class beside Common; a field stays empty on a class whose template does
+// not list its attribute.
+type Registry struct {
+	Org           []string        // org: organisation handles
+	SponsoringOrg string          // sponsoring-org: the sponsoring LIR's organisation
+	AbuseC        types.NICHandle // abuse-c: the role object holding the abuse mailbox
+	MntLower      []string        // mnt-lower: maintainers of more-specific objects
+	MntRoutes     []string        // mnt-routes: values raw, as they may carry a prefix list
+	MntDomains    []string        // mnt-domains: maintainers of reverse domains
+	MntIrt        []string        // mnt-irt: irt objects
+	MntRef        []string        // mnt-ref: maintainers allowed to reference an organisation
+	Created       string          // created: RFC 3339 time, as RIPE writes it
+	LastModified  string          // last-modified: RFC 3339 time
+}
+
+// registry decodes the RIPE registry attributes of a class object.
+func (d *decoder) registry(class string) Registry {
+	var abuse types.NICHandle
+	if hs := d.nicHandles("abuse-c", "object/"+class+"-abuse-c"); len(hs) > 0 {
+		abuse = hs[0]
+	}
+	return Registry{
+		Org:           d.list("org"),
+		SponsoringOrg: d.str("sponsoring-org"),
+		AbuseC:        abuse,
+		MntLower:      d.list("mnt-lower"),
+		MntRoutes:     d.all("mnt-routes"),
+		MntDomains:    d.list("mnt-domains"),
+		MntIrt:        d.list("mnt-irt"),
+		MntRef:        d.list("mnt-ref"),
+		Created:       d.str("created"),
+		LastModified:  d.str("last-modified"),
+	}
+}
+
 // key returns the value of a class's own (key) attribute, diagnosing an empty
 // one.
 func (d *decoder) key(class string) string {
 	a, ok := d.o.GetFirst(class)
-	if !ok {
+	if !ok || d.emptyKey(a) {
 		return ""
 	}
-	if a.Value == "" {
-		d.errf(a, "object/empty-key", class+" object has an empty key")
-	}
-	return a.Value
+	return scalar(a)
 }
 
 // setKey parses the set's own name from its class-defining first attribute
@@ -254,17 +321,17 @@ func (d *decoder) key(class string) string {
 // Warning when the name's prefix denotes a different class ("route-set: AS-FOO").
 func (d *decoder) setKey(class, rule string, want types.SetClass) types.SetName {
 	a, ok := d.o.GetFirst(class)
-	if !ok {
+	if !ok || d.emptyKey(a) {
 		return types.SetName{}
 	}
-	n, err := types.ParseSetName(a.Value)
+	n, err := types.ParseSetName(scalar(a))
 	if err != nil {
 		d.errf(a, rule, err.Error())
 		return types.SetName{}
 	}
 	if n.Class() != want {
 		d.warnf(a, "object/"+class+"-name-class",
-			fmt.Sprintf("%s %q is named like a %s", class, a.Value, n.Class()))
+			fmt.Sprintf("%s %q is named like a %s", class, scalar(a), n.Class()))
 	}
 	return n
 }
@@ -290,8 +357,9 @@ func (d *decoder) routePrefix(class string, v6 bool) netip.Prefix {
 	return p
 }
 
-// holes decodes a route's holes: list, warning on a hole that is not a
-// more-specific of route itself.
+// holes decodes a route's holes: list, warning on a hole with host bits set
+// (it is read as its network) and on one that is not a more-specific of route
+// itself.
 func (d *decoder) holes(class string, route netip.Prefix) []netip.Prefix {
 	var out []netip.Prefix
 	for _, it := range d.listItems("holes") {
@@ -299,6 +367,11 @@ func (d *decoder) holes(class string, route netip.Prefix) []netip.Prefix {
 		if err != nil {
 			d.diagAt(ast.Error, it.span(), "object/"+class+"-holes", err.Error())
 			continue
+		}
+		if h != h.Masked() {
+			d.diagAt(ast.Warning, it.span(), "object/"+class+"-holes-host-bits",
+				fmt.Sprintf("hole %s has host bits set; it is read as %s", h, h.Masked()))
+			h = h.Masked()
 		}
 		if route.IsValid() && (!route.Masked().Contains(h.Addr()) || h.Bits() < route.Bits()) {
 			d.diagAt(ast.Warning, it.span(), "object/"+class+"-holes-outside",
@@ -309,14 +382,23 @@ func (d *decoder) holes(class string, route netip.Prefix) []netip.Prefix {
 	return out
 }
 
-// setNames parses every list item of name as a SetName, skipping bad ones.
-func (d *decoder) setNames(name, rule string) []types.SetName {
+// memberOf decodes a member-of: list, skipping names that do not parse and
+// warning on a set of a class the object cannot join (RFC 2622 §5: an aut-num
+// joins as-sets, a route route-sets, an inet-rtr rtr-sets). Such a name is
+// kept; the engine never reads it, as it takes only the claims its class rules
+// allow.
+func (d *decoder) memberOf(class string, want types.SetClass) []types.SetName {
+	rule := "object/" + class + "-member-of"
 	var out []types.SetName
-	for _, it := range d.listItems(name) {
+	for _, it := range d.listItems("member-of") {
 		n, err := types.ParseSetName(it.Value)
 		if err != nil {
 			d.diagAt(ast.Error, it.span(), rule, err.Error())
 			continue
+		}
+		if n.Class() != want {
+			d.diagAt(ast.Warning, it.span(), rule+"-class",
+				fmt.Sprintf("%s %s is a %s; a %s can only be a member of a %s", class, n, n.Class(), class, want))
 		}
 		out = append(out, n)
 	}

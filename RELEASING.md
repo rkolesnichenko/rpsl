@@ -10,68 +10,103 @@ tidied once the versions it requires are on the proxy.
 lexer, types  →  ast  →  root (rpsl: façade, object, policy)  →  resolve  →  examples/bulk-ripe
 ```
 
-Nested modules are tagged with their directory as a prefix (`lexer/v0.1.0`);
-the root module uses a plain tag (`v0.1.0`). The root module's zip excludes the
-nested modules, and Go copies the root `LICENSE` into each nested zip, so
-pkg.go.dev detects the license everywhere.
+Nested modules are tagged with their directory as a prefix (`lexer/v0.1.0`); the
+root module uses a plain tag (`v0.1.0`). `examples/bulk-ripe` is not tagged — it
+is a harness, not a library — but its `require`s are bumped so it builds outside
+the workspace. The root module's zip excludes the nested modules, and the Go
+command adds the root `LICENSE` to each nested module's zip, so pkg.go.dev
+detects the license everywhere.
 
-## One-time setup
+**A published version is permanent.** Once the Go proxy has fetched a tag, that
+version is cached forever and cannot be changed, only retracted. Rehearse first.
 
-1. Create `github.com/rkolesnichenko/rpsl` on GitHub, add it as `origin`, and
-   push `main`. CI (`.github/workflows/ci.yml`) starts running on that push.
-2. Check the tree is clean and green: `FUZZTIME=15s scripts/check.sh`.
+## Before the first release
+
+The proxy cannot fetch a private repository. Make
+`github.com/rkolesnichenko/rpsl` public (Settings → General → Danger Zone →
+Change visibility) before pushing any tag.
+
+## Pre-flight
+
+Every item must pass on the commit you are about to release.
+
+1. `FUZZTIME=15s scripts/check.sh` — every module under `-race`, gofmt,
+   staticcheck, govulncheck (CI installs them), the invariants, all fuzz targets.
+2. `RPSL_REALDATA=$PWD/.data/ripe go test -run TestRealData ./examples/bulk-ripe/bulk`
+   and, in `resolve`, `RPSL_REALDATA=$PWD/../.data/ripe go test -run TestBgpq4RealData .`
+   (dumps via `scripts/fetch-ripe-dumps.sh`).
+3. `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve` and
+   `RPSL_LIVE=1 go test -run TestRIPETemplatesAreCurrent ./object`.
+4. **`scripts/release-dryrun.sh v0.1.0`** — performs every step below in a
+   temporary repository against a local proxy, builds and tests each module with
+   `GOWORK=off`, checks that a consumer of each module gets only what it
+   requires, runs each module's tests from its published zip, and lists the
+   files each release commit must hold. It publishes nothing.
+5. `CHANGELOG.md`: the release's section is dated (`## [0.1.0] - YYYY-MM-DD`)
+   and a new empty `## [Unreleased]` sits above it. Commit that, push `main`, and
+   wait for CI to pass on it.
 
 ## Each release (example: v0.1.0)
 
-Run every `go mod tidy` with `GOWORK=off`, so it resolves siblings from the
-proxy exactly as a consumer would. Never commit `replace` directives.
+Run every command from the repository root. Every `go mod tidy` runs with
+`GOWORK=off`, so it resolves siblings from the proxy exactly as a consumer
+would. Commit the `go.sum` files by name: they are new, and `git commit -am`
+skips new files, which would publish a module that does not build. Never commit
+`replace` directives.
 
 ```sh
 V=v0.1.0
+M=github.com/rkolesnichenko/rpsl
+export GOWORK=off
 
-# 1. Leaves with no sibling dependencies.
+# 1. The leaves, which require no sibling.
 git tag lexer/$V && git tag types/$V && git push origin lexer/$V types/$V
+GOPROXY=https://proxy.golang.org go list -m $M/lexer@$V $M/types@$V   # the proxy fetches them
 
 # 2. ast (requires lexer).
-(cd ast && go mod edit -require=github.com/rkolesnichenko/rpsl/lexer@$V && GOWORK=off go mod tidy)
-git commit -am "ast: require lexer $V" && git tag ast/$V && git push origin main ast/$V
+(cd ast && go mod edit -require=$M/lexer@$V && go mod tidy && go build ./... && go test ./...)
+git add ast/go.mod ast/go.sum && git commit -m "ast: require lexer $V"
+git tag ast/$V && git push origin main ast/$V
+GOPROXY=https://proxy.golang.org go list -m $M/ast@$V
 
-# 3. Root module (requires ast, lexer, types).
-go mod edit -require=github.com/rkolesnichenko/rpsl/ast@$V \
-            -require=github.com/rkolesnichenko/rpsl/lexer@$V \
-            -require=github.com/rkolesnichenko/rpsl/types@$V
-GOWORK=off go mod tidy
-git commit -am "rpsl: require leaves $V" && git tag $V && git push origin main $V
+# 3. The root module (requires ast, lexer, types).
+go mod edit -require=$M/ast@$V -require=$M/lexer@$V -require=$M/types@$V
+go mod tidy && go build ./... && go test ./...
+git add go.mod go.sum && git commit -m "rpsl: require the leaves at $V"
+git tag $V && git push origin main $V
+GOPROXY=https://proxy.golang.org go list -m $M@$V
 
 # 4. resolve (requires the root module and the leaves).
-(cd resolve && go mod edit -require=github.com/rkolesnichenko/rpsl@$V \
-    -require=github.com/rkolesnichenko/rpsl/ast@$V \
-    -require=github.com/rkolesnichenko/rpsl/lexer@$V \
-    -require=github.com/rkolesnichenko/rpsl/types@$V && GOWORK=off go mod tidy)
-git commit -am "resolve: require $V" && git tag resolve/$V && git push origin main resolve/$V
+(cd resolve && go mod edit -require=$M@$V -require=$M/ast@$V -require=$M/lexer@$V -require=$M/types@$V &&
+    go mod tidy && go build ./... && go test ./...)
+git add resolve/go.mod resolve/go.sum && git commit -m "resolve: require $V"
+git tag resolve/$V && git push origin main resolve/$V
+GOPROXY=https://proxy.golang.org go list -m $M/resolve@$V
 
-# 5. The example module (optional tag; bump so it builds outside the workspace).
-(cd examples/bulk-ripe && for m in rpsl rpsl/ast rpsl/lexer rpsl/resolve rpsl/types; do
-    go mod edit -require=github.com/rkolesnichenko/$m@$V; done && GOWORK=off go mod tidy)
-git commit -am "examples: require $V" && git push origin main
+# 5. The example module: not tagged, bumped so it builds outside the workspace.
+(cd examples/bulk-ripe && for m in "" /ast /lexer /resolve /types; do go mod edit -require=$M$m@$V; done &&
+    go mod tidy && go build ./... && go test ./...)
+git add examples/bulk-ripe/go.mod examples/bulk-ripe/go.sum && git commit -m "examples: require $V"
+git push origin main
 ```
 
-If `go mod tidy` cannot find a just-pushed tag, the proxy has not seen it yet:
-request it once with `GOPROXY=https://proxy.golang.org go list -m <module>@$V`.
+`git status` must be clean after each commit. If a `go mod tidy` cannot find a
+just-pushed tag, the proxy has not seen it yet: run the `go list -m` line for it
+again.
 
-## Verify
+## After
 
-```sh
-for m in rpsl rpsl/lexer rpsl/ast rpsl/types rpsl/resolve; do
-  GOPROXY=https://proxy.golang.org GOWORK=off go list -m github.com/rkolesnichenko/$m@$V
-done
-```
+- pkg.go.dev picks the modules up from the proxy within minutes; request them at
+  `https://pkg.go.dev/github.com/rkolesnichenko/rpsl@v0.1.0` (and `/lexer`,
+  `/ast`, `/types`, `/resolve`) if they do not appear.
+- A fresh consumer module that runs `go get github.com/rkolesnichenko/rpsl/types`
+  must end up with only that module in its `go.mod` (leaf isolation); the dry run
+  already checked this against the rehearsal proxy.
+- Development continues through `go.work`, which overrides the released
+  `require`s with the local modules.
 
-This also triggers pkg.go.dev indexing. A fresh consumer module that
-`go get`s `github.com/rkolesnichenko/rpsl/types` should end up with only that
-module in its `go.mod` (leaf isolation).
+## A broken release
 
-## Changelog
-
-Move the `[Unreleased]` entries in `CHANGELOG.md` under `## [0.1.0] - <date>`
-before tagging, and start a new empty `[Unreleased]` section.
+A published version cannot be replaced. Add a `retract` directive for it to the
+module's `go.mod`, fix the problem, and release the next patch version, which
+carries the retraction.
