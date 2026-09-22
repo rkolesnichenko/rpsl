@@ -16,8 +16,8 @@ jobs:
       matrix:
         go: ["1.23.x", "stable"] # the go.mod floor and the latest release
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go }}
           # setup-go keys its cache on go.sum by default; the modules have
