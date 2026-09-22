@@ -2,7 +2,8 @@
 
 Thanks for your interest in `rpsl`. This document covers what a contributor needs
 to know to run the test suite, respect the library's non-negotiable invariants,
-and submit changes.
+and submit changes. Everyone taking part is expected to follow the
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Prerequisites
 
