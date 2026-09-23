@@ -62,10 +62,12 @@ Per-target subsets you'll reach for often:
   `testdata/fuzz/<Target>/`. Commit it with the fix: every `go test` replays it
   from then on.
 - **Real-data regression** (opt-in): `scripts/fetch-irr-dumps.sh` downloads the
-  public dumps of RIPE, APNIC, ARIN, AFRINIC, LACNIC and RADB (about 470 MB) into
-  `.data/`, then `RPSL_REALDATA=$PWD/.data go test -run TestRealData ./examples/bulk-ripe/bulk`
-  checks them all. A registry's dump artefacts, and the problems in its data too
-  frequent for the error limit (RADB's names where a NIC handle belongs), are
+  public dumps of RIPE, APNIC, ARIN, AFRINIC, LACNIC, RADB and the ten IRRs RADB
+  mirrors (about 480 MB) into `.data/`, then
+  `RPSL_REALDATA=$PWD/.data go test -run TestRealData ./examples/bulk-ripe/bulk`
+  checks them all. A registry's dump artefacts, the problems in its data too
+  frequent for the error limit (names where a NIC handle belongs, in RADB and
+  its mirrors), and any family whose limit it raises (TC's misused policies) are
   listed in the test with their reasons; anything else fails it.
 - **Live backends** (opt-in, read-only): `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve`,
   and `RPSL_LIVE=1 go test -run TestRIPETemplatesAreCurrent ./object` for the

@@ -265,8 +265,8 @@ FUZZTIME=15s scripts/check.sh  # ... plus every fuzz target (what CI runs)
   `FuzzParseInterface`, `FuzzParsePeer`, `FuzzParseRPAttribute`,
   `FuzzParseTypedef`, `FuzzParseProtocol`, `FuzzFilterString` (policy).
 - **Real data (opt-in)** — `scripts/fetch-irr-dumps.sh` downloads the public
-  dumps of RIPE, APNIC, ARIN, AFRINIC, LACNIC and RADB (about 12.8 million
-  objects); `RPSL_REALDATA=$PWD/.data go test -run TestRealData ./examples/bulk-ripe/bulk`
+  dumps of RIPE, APNIC, ARIN, AFRINIC, LACNIC, RADB and the ten IRRs RADB
+  mirrors (about 13.3 million objects); `RPSL_REALDATA=$PWD/.data go test -run TestRealData ./examples/bulk-ripe/bulk`
   checks lossless streaming, error rates, and order-independent expansion of the
   largest real sets.
 - **Live backends (opt-in)** — `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve`

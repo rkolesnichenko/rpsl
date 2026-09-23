@@ -56,8 +56,9 @@ streams without holding objects.
 RIPE publishes split daily dumps at
 `https://ftp.ripe.net/ripe/dbase/split/`, and APNIC at
 `https://ftp.apnic.net/apnic/whois/`; ARIN, AFRINIC, LACNIC and RADB publish one
-file each. `scripts/fetch-irr-dumps.sh [registry ...]` (from the repository
-root) downloads all of them into `.data/<registry>/`. RADB's dump
+file each, and RADB also serves the ten IRRs it mirrors (NTTCOM, ALTDB, JPIRR,
+TC, …). `scripts/fetch-irr-dumps.sh [registry ...]` (from the repository root)
+downloads all of them into `.data/<registry>/`. RADB's dump
 (`ftp://ftp.radb.net/radb/dbase/`) is the other common target — its 1.4 million
 objects are a useful regression test for memory behavior.
 
@@ -123,8 +124,10 @@ Only RIPE's dumps are validated against the RIPE profile, which describes
 RIPE's templates rather than the other registries'. A registry's dump artefacts
 (RIPE removes some `auth:` lines; ARIN's file ends with a line reading `EOF`)
 are listed in the test with their reasons, as is a problem in a registry's own
-data too frequent for the error limit (RADB's person names where a NIC handle
-belongs): its diagnostics are counted and logged rather than failing the test.
+data too frequent for the error limit (person names where a NIC handle belongs,
+in RADB and its mirrors): its diagnostics are counted and logged rather than
+failing the test. A registry whose data misuses RPSL more often than the limit
+allows raises that one family's limit, with its reason (TC's policies).
 
 For RIPE and APNIC, whose dumps come one class per file, it also expands the 20
 largest as-sets and route-sets twice, in opposite input orders, and requires

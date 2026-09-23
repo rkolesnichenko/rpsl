@@ -130,7 +130,7 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   FuzzParseComponents, FuzzParseAggrMtd, FuzzParseIfaddr, FuzzParseInterface, FuzzParsePeer,
   FuzzParseRPAttribute, FuzzParseTypedef, FuzzParseProtocol, FuzzFilterString (policy).
 - Opt-in: `RPSL_REALDATA=$PWD/.data go test -run TestRealData ./examples/bulk-ripe/bulk`
-  (RIPE, APNIC, ARIN, AFRINIC, LACNIC, RADB dumps via scripts/fetch-irr-dumps.sh);
+  (RIPE, APNIC, ARIN, AFRINIC, LACNIC, RADB and RADB's ten mirrors, via scripts/fetch-irr-dumps.sh);
   `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve`;
   `RPSL_LIVE=1 go test -run TestRIPETemplatesAreCurrent ./object` (RIPE profile vs whois -t).
 - Releasing: RELEASING.md (tag order lexer/types → ast → root → resolve); rehearse first with

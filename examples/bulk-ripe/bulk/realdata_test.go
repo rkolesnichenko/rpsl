@@ -23,7 +23,9 @@ import (
 
 // TestRealData is the opt-in real-data regression. Point RPSL_REALDATA at the
 // directory scripts/fetch-irr-dumps.sh fills: one subdirectory of dumps per
-// registry (ripe, apnic, arin, afrinic, lacnic, radb). A directory holding
+// registry (ripe, apnic, arin, afrinic, lacnic, radb, and the IRRs RADB
+// mirrors: altdb, bboi, bell, canarie, jpirr, nestegg, nttcom, panix, reach,
+// tc). A directory holding
 // ripe.db.*.gz files itself is read as RIPE, the layout this test once used.
 //
 // For every dump present it checks that streaming is lossless and raises no
@@ -72,6 +74,11 @@ type registry struct {
 	// general error limit. Each is listed with its reason; the diagnostics it
 	// names are counted and logged rather than failing the test.
 	dataProblem func(d rpsl.Diagnostic) string
+	// limits raises the error limit of a diagnostic family for a registry
+	// whose data misuses RPSL more often than maxErrorRate allows. The limit
+	// still catches a regression in that family; each is listed with its
+	// reason and what was measured.
+	limits map[string]float64
 	// expandPrefix names the split dumps the expansion check reads
 	// (<prefix>.db.<class>.gz); "" for a registry published as one file.
 	expandPrefix string
@@ -94,18 +101,38 @@ var registries = []registry{
 	}},
 	{name: "afrinic"},
 	{name: "lacnic"},
-	{name: "radb", dataProblem: func(d rpsl.Diagnostic) string {
-		// About 15,000 RADB objects hold a person's name where a NIC handle
-		// belongs ("admin-c: Eric Cluett"), which IRRd accepts only as legacy
-		// data. A name is not a handle, so the library rejects it.
-		if m := nicHandleError.FindStringSubmatch(d.Message); m != nil && strings.Contains(m[1], " ") {
-			return "names where a NIC handle belongs"
-		}
-		return ""
+	{name: "radb", dataProblem: legacyNames},
+	// The IRRs RADB mirrors.
+	{name: "altdb", dataProblem: legacyNames},
+	{name: "bboi", dataProblem: legacyNames},
+	{name: "bell", dataProblem: legacyNames},
+	{name: "canarie", dataProblem: legacyNames},
+	{name: "jpirr", dataProblem: legacyNames},
+	{name: "nestegg", dataProblem: legacyNames},
+	{name: "nttcom", dataProblem: legacyNames},
+	{name: "panix", dataProblem: legacyNames},
+	{name: "reach", dataProblem: legacyNames},
+	{name: "tc", dataProblem: legacyNames, limits: map[string]float64{
+		// TC's aut-nums often misuse RPSL: "accept ANY except FLTR-BOGONS"
+		// (EXCEPT joins policies, not filters), "action pref 100" without
+		// its "=", a value continued into a remarks: line. Measured on
+		// 2026-09-23: policy Errors on 0.51% of objects.
+		"policy": 0.01,
 	}},
 }
 
 var nicHandleError = regexp.MustCompile(`invalid NIC handle "([^"]*)"`)
+
+// legacyNames is the data problem of RADB and the IRRs it mirrors: a person's
+// name where a NIC handle belongs ("admin-c: Eric Cluett"; about 15,000 RADB
+// objects, and in most mirrors). IRRd accepts it only as legacy data
+// (irrdnet/irrd#60); a name is not a handle, so the library rejects it.
+func legacyNames(d rpsl.Diagnostic) string {
+	if m := nicHandleError.FindStringSubmatch(d.Message); m != nil && strings.Contains(m[1], " ") {
+		return "names where a NIC handle belongs"
+	}
+	return ""
+}
 
 func hasDumps(dir, pattern string) bool {
 	m, _ := filepath.Glob(filepath.Join(dir, pattern))
@@ -233,11 +260,14 @@ func checkDump(t *testing.T, reg registry, path string) {
 	if !reflect.DeepEqual(in.Sum(nil), out.Sum(nil)) {
 		t.Error("the stream is not lossless: concatenated objects differ from the input")
 	}
-	allowed := max(int(maxErrorRate*float64(objects)), minTolerated)
 	for family, n := range failing {
-		if n > allowed {
+		rate := maxErrorRate
+		if r, ok := reg.limits[family]; ok {
+			rate = r
+		}
+		if allowed := max(int(rate*float64(objects)), minTolerated); n > allowed {
 			t.Errorf("%d of %d objects have %s/* errors; at most %d (%.1f%%) are tolerated",
-				n, objects, family, allowed, 100*maxErrorRate)
+				n, objects, family, allowed, 100*rate)
 		}
 	}
 	for why, n := range problems {
