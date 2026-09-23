@@ -39,6 +39,7 @@ attribute of it.
 | `object/route-set-members-afi` | Warning | An IPv6 prefix in a route-set's `members:`, which RFC 4012 §4.2 keeps IPv4-only (IPv6 belongs in `mp-members:`). |
 | `object/<class>-member-of-class` | Warning | A `member-of:` naming a set of a class the object cannot join: an aut-num joins as-sets, a route or route6 route-sets, an inet-rtr rtr-sets. |
 | `object/list-empty-item` | Warning | An empty item in a comma-separated list (`AS1,,AS2`). |
+| `object/list-line-break` | Warning | Items of a list separated by a line break without a comma (`members: AS1`, continued by a line `AS2`); they are read as separate items, as IRRd does. Once per attribute, at the first such item. |
 | `object/<class>-name-class` | Warning | A set named like another class (`route-set: AS-FOO`). |
 | `object/route-afi`, `object/route6-afi` | Warning | An IPv6 `route` or IPv4 `route6`. |
 | `object/<class>-host-bits` | Warning | A route, route6 or inet6num prefix with host bits set. |

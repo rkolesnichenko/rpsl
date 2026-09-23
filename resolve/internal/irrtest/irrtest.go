@@ -147,7 +147,8 @@ func (db *DB) find(sel []string, class, key string) (entry, bool) {
 	return entry{}, false
 }
 
-// items returns the comma-separated items of every name attribute of o.
+// items returns the items of every name attribute of o, split at commas and
+// line breaks as IRRd splits them (see ast.Attribute.List).
 func items(o *ast.Object, name string) []string {
 	var out []string
 	for _, a := range o.GetAll(name) {

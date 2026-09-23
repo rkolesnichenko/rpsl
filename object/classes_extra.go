@@ -22,7 +22,10 @@ type Inetnum struct {
 	Geoloc    string
 	Prefixlen string
 	Language  []string
-	raw       *ast.Object
+	// AssignmentSize is the prefix length of the assignments an
+	// AGGREGATED-BY-LIR range is made of (RIPE), as written.
+	AssignmentSize string
+	raw            *ast.Object
 }
 
 // Class returns "inetnum".
@@ -34,18 +37,19 @@ func (i Inetnum) Raw() *ast.Object { return i.raw }
 func decodeInetnum(d *decoder) Inetnum {
 	lo, hi := d.addrRange("inetnum", "object/inetnum-range")
 	return Inetnum{
-		Common:    d.common("inetnum"),
-		Registry:  d.registry("inetnum"),
-		Lo:        lo,
-		Hi:        hi,
-		Netname:   d.str("netname"),
-		Country:   d.all("country"),
-		Status:    d.str("status"),
-		Geofeed:   d.str("geofeed"),
-		Geoloc:    d.str("geoloc"),
-		Prefixlen: d.str("prefixlen"),
-		Language:  d.all("language"),
-		raw:       d.o,
+		Common:         d.common("inetnum"),
+		Registry:       d.registry("inetnum"),
+		Lo:             lo,
+		Hi:             hi,
+		Netname:        d.str("netname"),
+		Country:        d.all("country"),
+		Status:         d.str("status"),
+		Geofeed:        d.str("geofeed"),
+		Geoloc:         d.str("geoloc"),
+		Prefixlen:      d.str("prefixlen"),
+		Language:       d.all("language"),
+		AssignmentSize: d.str("assignment-size"),
+		raw:            d.o,
 	}
 }
 
@@ -63,7 +67,10 @@ type Inet6num struct {
 	Geoloc    string
 	Prefixlen string
 	Language  []string
-	raw       *ast.Object
+	// AssignmentSize is the prefix length of the assignments an
+	// AGGREGATED-BY-LIR range is made of (RIPE), as written.
+	AssignmentSize string
+	raw            *ast.Object
 }
 
 // Class returns "inet6num".
@@ -74,17 +81,18 @@ func (i Inet6num) Raw() *ast.Object { return i.raw }
 
 func decodeInet6num(d *decoder) Inet6num {
 	return Inet6num{
-		Common:    d.common("inet6num"),
-		Registry:  d.registry("inet6num"),
-		Prefix:    d.inet6numPrefix(),
-		Netname:   d.str("netname"),
-		Country:   d.all("country"),
-		Status:    d.str("status"),
-		Geofeed:   d.str("geofeed"),
-		Geoloc:    d.str("geoloc"),
-		Prefixlen: d.str("prefixlen"),
-		Language:  d.all("language"),
-		raw:       d.o,
+		Common:         d.common("inet6num"),
+		Registry:       d.registry("inet6num"),
+		Prefix:         d.inet6numPrefix(),
+		Netname:        d.str("netname"),
+		Country:        d.all("country"),
+		Status:         d.str("status"),
+		Geofeed:        d.str("geofeed"),
+		Geoloc:         d.str("geoloc"),
+		Prefixlen:      d.str("prefixlen"),
+		Language:       d.all("language"),
+		AssignmentSize: d.str("assignment-size"),
+		raw:            d.o,
 	}
 }
 

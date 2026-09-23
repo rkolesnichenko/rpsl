@@ -5,19 +5,22 @@ import (
 	"strings"
 )
 
-// AuthMethod is the scheme an auth: line names (RFC 2622 §3.2, RFC 2725 §5,
-// and RIPE's SSO extension).
+// AuthMethod is the scheme an auth: line names (RFC 2622 §3.1, RFC 2725 §5,
+// RIPE's SSO extension, and IRRd's BCRYPT-PW and IRRD-INTERNAL-AUTH).
 type AuthMethod uint8
 
 // The authentication schemes seen on mntner and irt objects.
 const (
-	AuthUnknown AuthMethod = iota // a scheme this library does not know
-	AuthNone                      // NONE: no authentication
-	AuthMD5                       // MD5-PW <crypt>
-	AuthCrypt                     // CRYPT-PW <crypt>
-	AuthPGPKey                    // PGPKEY-<id>: the key-cert object holding the key
-	AuthX509                      // X509-<n>: the key-cert object holding the certificate
-	AuthSSO                       // SSO <account>: RIPE single sign-on
+	AuthUnknown      AuthMethod = iota // a scheme this library does not know
+	AuthNone                           // NONE: no authentication
+	AuthMD5                            // MD5-PW <crypt>
+	AuthCrypt                          // CRYPT-PW <crypt>
+	AuthPGPKey                         // PGPKEY-<id>: the key-cert object holding the key
+	AuthX509                           // X509-<n>: the key-cert object holding the certificate
+	AuthSSO                            // SSO <account>: RIPE single sign-on
+	AuthBcrypt                         // BCRYPT-PW <hash>: IRRd's password hash
+	AuthMailFrom                       // MAIL-FROM <regexp>: the update's sender matches (RFC 2622; forgeable)
+	AuthIRRdInternal                   // IRRD-INTERNAL-AUTH: credentials kept inside IRRd, none in the object
 )
 
 // String returns the scheme's RPSL keyword, or "unknown".
@@ -35,6 +38,12 @@ func (m AuthMethod) String() string {
 		return "X509"
 	case AuthSSO:
 		return "SSO"
+	case AuthBcrypt:
+		return "BCRYPT-PW"
+	case AuthMailFrom:
+		return "MAIL-FROM"
+	case AuthIRRdInternal:
+		return "IRRD-INTERNAL-AUTH"
 	}
 	return "unknown"
 }
@@ -75,6 +84,14 @@ func ParseAuth(s string) (Auth, error) {
 		a.Method, a.Value = AuthCrypt, cred
 	case up == "SSO":
 		a.Method, a.Value = AuthSSO, cred
+	case up == "BCRYPT-PW":
+		a.Method, a.Value = AuthBcrypt, cred
+	case up == "MAIL-FROM":
+		a.Method, a.Value = AuthMailFrom, cred
+	case up == "IRRD-INTERNAL-AUTH":
+		// A maintainer moved to IRRd's web interface: its users and API keys
+		// live in IRRd's database, so the line carries no credential.
+		a.Method = AuthIRRdInternal
 	case strings.HasPrefix(up, "PGPKEY-"):
 		// The scheme is the key-cert handle itself, so there is no credential.
 		a.Method, a.Value = AuthPGPKey, word
@@ -83,7 +100,7 @@ func ParseAuth(s string) (Auth, error) {
 	default:
 		return a, fmt.Errorf("rpsl/object: unknown auth scheme %q", word)
 	}
-	if a.Value == "" && a.Method != AuthNone {
+	if a.Value == "" && a.Method != AuthNone && a.Method != AuthIRRdInternal {
 		return a, fmt.Errorf("rpsl/object: auth scheme %s has no credential", a.Method)
 	}
 	return a, nil

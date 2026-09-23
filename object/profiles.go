@@ -131,15 +131,15 @@ func ripeClasses() map[string]ClassSpec {
 	set("inet6num", nil,
 		reqS("inet6num"), reqS("netname"), opt("descr"), req("country"), optS("geofeed"), optS("geoloc"),
 		optS("prefixlen"), opt("language"), optS("org"), optS("sponsoring-org"), req("admin-c"),
-		req("tech-c"), optS("abuse-c"), reqS("status"), opt("remarks"), opt("notify"), req("mnt-by"),
-		opt("mnt-lower"), opt("mnt-routes"), opt("mnt-domains"), opt("mnt-irt"), optS("created"),
-		optS("last-modified"), reqS("source"))
+		req("tech-c"), optS("abuse-c"), reqS("status"), optS("assignment-size"), opt("remarks"),
+		opt("notify"), req("mnt-by"), opt("mnt-lower"), opt("mnt-routes"), opt("mnt-domains"), opt("mnt-irt"),
+		optS("created"), optS("last-modified"), reqS("source"))
 	set("inetnum", nil,
 		reqS("inetnum"), reqS("netname"), opt("descr"), req("country"), optS("geofeed"), optS("geoloc"),
 		optS("prefixlen"), opt("language"), optS("org"), optS("sponsoring-org"), req("admin-c"),
-		req("tech-c"), optS("abuse-c"), reqS("status"), opt("remarks"), opt("notify"), req("mnt-by"),
-		opt("mnt-lower"), opt("mnt-domains"), opt("mnt-routes"), opt("mnt-irt"), optS("created"),
-		optS("last-modified"), reqS("source"))
+		req("tech-c"), optS("abuse-c"), reqS("status"), optS("assignment-size"), opt("remarks"),
+		opt("notify"), req("mnt-by"), opt("mnt-lower"), opt("mnt-domains"), opt("mnt-routes"), opt("mnt-irt"),
+		optS("created"), optS("last-modified"), reqS("source"))
 	set("irt", nil,
 		reqS("irt"), req("address"), opt("phone"), opt("fax-no"), req("e-mail"), opt("signature"),
 		opt("contact"), opt("encryption"), opt("org"), req("admin-c"), req("tech-c"), req("auth"),

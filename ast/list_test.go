@@ -56,3 +56,41 @@ func TestAttributeListFolded(t *testing.T) {
 		}
 	}
 }
+
+// A line break separates list items as a comma does, as IRRd reads lists (it
+// joins a value's lines with commas). An empty item next to a line break is
+// not an item; one between commas on a line still is, for the decoder to warn.
+func TestAttributeListLineBreaks(t *testing.T) {
+	for _, c := range []struct {
+		src  string
+		want []string
+	}{
+		{"members: AS1\n AS2\n", []string{"AS1", "AS2"}},
+		{"members: AS1\n AS2\n\tAS-X\n", []string{"AS1", "AS2", "AS-X"}},
+		{"members: AS1,\n AS2\n", []string{"AS1", "AS2"}},
+		{"members: AS1\n ,AS2\n", []string{"AS1", "AS2"}},
+		{"members: AS1\n+\n AS2\n", []string{"AS1", "AS2"}},
+		// A line break separates only between content: blank lines at an end of
+		// the value mean nothing, so this is "AS1," with its trailing empty item.
+		{"members: AS1,\n+\n", []string{"AS1", ""}},
+		{"members: ,\n+\n", []string{"", ""}},
+		{"members: AS1\n+\n", []string{"AS1"}},
+		{"members: AS1 AS2\n AS3\n", []string{"AS1 AS2", "AS3"}},
+		{"members: AS1,,AS2\n AS3\n", []string{"AS1", "", "AS2", "AS3"}},
+		{"members: AS1, # note\n AS2 # more\n AS3\n", []string{"AS1", "AS2", "AS3"}},
+		{"members: ,AS1\n", []string{"", "AS1"}},
+		{"members: AS1,\n", []string{"AS1", ""}},
+	} {
+		a, _ := parse(c.src).GetFirst("members")
+		var got []string
+		for _, it := range a.List() {
+			got = append(got, it.Value)
+			if a.Value[it.Start:it.End] != it.Value {
+				t.Errorf("%q: item %+v does not match its slice of Value", c.src, it)
+			}
+		}
+		if !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%q: List() = %q, want %q", c.src, got, c.want)
+		}
+	}
+}

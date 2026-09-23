@@ -145,6 +145,7 @@ func TestDiagnosticRulesAreDocumented(t *testing.T) {
 		{"object/route-set-members-afi", obj("route-set: RS-X\nmembers: 2001:db8::/32\n")},
 		{"object/aut-num-member-of-class", obj("aut-num: AS1\nmember-of: RS-X\n")},
 		{"object/list-empty-item", obj("as-set: AS-X\nmembers: AS1,,AS2\n")},
+		{"object/list-line-break", obj("as-set: AS-X\nmembers: AS1\n AS2\n")},
 		{"object/route-set-name-class", obj("route-set: AS-X\n")},
 		{"object/route-afi", obj("route: 2001:db8::/32\norigin: AS1\n")},
 		{"object/route6-afi", obj("route6: 192.0.2.0/24\norigin: AS1\n")},

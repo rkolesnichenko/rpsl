@@ -83,12 +83,22 @@ type listItem struct {
 
 func (it listItem) span() lexer.Span { return it.attr.SpanAt(it.Start, it.End) }
 
-// listItems returns the comma-separated items (RFC 2622 §2) of every name
-// attribute in document order, recording a Warning for each empty item.
+// listItems returns the items of every name attribute in document order,
+// recording a Warning for each empty item and one per attribute whose items a
+// line break separates without a comma: RPSL separates them with commas (RFC
+// 2622 §2), and IRRd reads a line break as one (see ast.Attribute.List).
 func (d *decoder) listItems(name string) []listItem {
 	var out []listItem
 	for _, a := range d.o.GetAll(name) {
-		for _, it := range a.List() {
+		items := a.List()
+		for i, it := range items {
+			if i > 0 && !strings.Contains(a.Value[items[i-1].End:it.Start], ",") {
+				d.diagAt(ast.Warning, a.SpanAt(it.Start, it.End), "object/list-line-break",
+					name+" items are separated by a line break without a comma; they are read as separate items, as IRRd does")
+				break
+			}
+		}
+		for _, it := range items {
 			if it.Value == "" {
 				d.diagAt(ast.Warning, a.SpanAt(it.Start, it.End), "object/list-empty-item",
 					"empty item in "+name+" list")

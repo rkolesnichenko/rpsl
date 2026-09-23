@@ -35,12 +35,19 @@ import (
 var ErrUnsupportedMethod = errors.New("auth: no verifier for this scheme")
 
 // Credential is what a would-be updater presents. Which fields matter depends
-// on the scheme: a password for MD5-PW and CRYPT-PW, a signature over Message
-// for PGPKEY and X509.
+// on the scheme: a password for MD5-PW, CRYPT-PW and BCRYPT-PW, a signature
+// over Message for PGPKEY and X509, the sender's address for MAIL-FROM.
+//
+// MAIL-FROM (RFC 2622 §3.1) accepts an update whose sender matches the line's
+// regular expression; a sender address is easily forged, and RFC 2725 calls it
+// "a very weak authentication check". IRRD-INTERNAL-AUTH marks a maintainer
+// whose users and API keys IRRd keeps in its own database, so a Verifier for
+// it needs that database, and one without it reports ErrUnsupportedMethod.
 type Credential struct {
 	Password  string
 	Signature []byte
 	Message   []byte // the object text the signature covers
+	From      string // the update's sender address, for MAIL-FROM
 }
 
 // Verifier decides whether a credential satisfies one auth: line. Implementing

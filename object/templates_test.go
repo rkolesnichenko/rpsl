@@ -84,7 +84,7 @@ func TestRIPEProfileMatchesTemplates(t *testing.T) {
 
 // templateLine matches an attribute line of "whois -t" output, as the fixtures
 // keep them.
-var templateLine = regexp.MustCompile(`^[a-z0-9-]+:[ \t]+\[`)
+var templateLine = regexp.MustCompile(`^[a-z0-9-]+:[ \t]*\[`)
 
 // fetchTemplate queries whois.ripe.net for class's template (attribute lines
 // only), retrying a few times because RIPE rate-limits bursts of queries.
@@ -160,5 +160,23 @@ func TestRIPETemplatesAreCurrent(t *testing.T) {
 		if got != string(want) {
 			t.Errorf("%s: whois.ripe.net template differs from %s:\n%s", class, f, got)
 		}
+	}
+}
+
+// RIPE prints a name that fills the column with no space before "[":
+// "assignment-size:[optional]". A pattern that required one dropped the
+// attribute from the fixtures, the profile and the live check alike.
+func TestTemplateLineWithoutSpace(t *testing.T) {
+	for _, line := range []string{
+		"assignment-size:[optional]   [single]     [ ]",
+		"status:         [mandatory]  [single]     [ ]",
+	} {
+		if !templateLine.MatchString(line) {
+			t.Errorf("templateLine does not match %q", line)
+		}
+	}
+	tmpl := parseTemplate(t, "status:         [mandatory]  [single]     [ ]\nassignment-size:[optional]   [single]     [ ]\n")
+	if _, ok := tmpl.attrs["assignment-size"]; !ok {
+		t.Errorf("parseTemplate lost assignment-size: %+v", tmpl.attrs)
 	}
 }

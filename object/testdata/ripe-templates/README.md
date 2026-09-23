@@ -9,5 +9,5 @@ RIPE Database, so a template change there shows up as a test failure here.
 Refresh with:
 
     for c in $(ls *.txt | sed 's/.txt$//'); do
-      whois -h whois.ripe.net -t $c | grep -E '^[a-z0-9-]+:[[:space:]]+\[' > $c.txt
+      whois -h whois.ripe.net -t $c | grep -E '^[a-z0-9-]+:[[:space:]]*\[' > $c.txt
     done

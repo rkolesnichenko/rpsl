@@ -9,6 +9,41 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A line break separates list items, as in IRRd.** IRRd joins the lines of
+  a value with commas, so a set whose members are listed one per line without
+  commas has all of them; this library read such a value as one invalid member
+  and dropped it, so the set expanded to less than IRRd and bgpq4 return. RADB
+  holds 293 such values (209 as-sets, 83 route-set `members:`/`mp-members:`,
+  one `notify:`), at least 600 members. They are now read as separate items,
+  with one Warning per attribute.
+- **`assignment-size:` is in the RIPE profile.** RIPE prints it in its
+  templates as `assignment-size:[optional]`, with no space before the `[`, and
+  the pattern that reads templates required one, so the attribute was missing
+  from the profile and the typed objects: 74,575 RIPE inetnum and inet6num
+  objects were reported as having an unknown attribute. The template check
+  now reads such lines.
+
+### Added
+
+- **`object.AuthBcrypt`, `AuthMailFrom` and `AuthIRRdInternal`**: the
+  `BCRYPT-PW` password hash IRRd uses, RFC 2622's `MAIL-FROM`, and IRRd's
+  `IRRD-INTERNAL-AUTH`, which were unknown schemes with a Warning (31,488
+  `auth:` lines in seven registries).
+- **`auth.Credential.From`**, the update's sender address, so a `Verifier` can
+  check a `MAIL-FROM` line (a forgeable check; see the package documentation).
+- **`object.Inetnum.AssignmentSize`** and **`object.Inet6num.AssignmentSize`**.
+- **New Warning `object/list-line-break`**, for list items separated by a line
+  break without a comma.
+
+### Changed
+
+- **`ast.Attribute.List` splits items at line breaks as well as at commas.**
+  An empty item next to a line break between lines of the value (a comma
+  ending a line, a `+` blank line) is not an item, as in IRRd; one between
+  commas on a line, or at either end of the value, still is.
+
 ## [0.6.2] - 2026-09-23
 
 ### Fixed
