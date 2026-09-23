@@ -61,8 +61,11 @@ Per-target subsets you'll reach for often:
 - **A fuzz failure:** Go saves the failing input under the package's
   `testdata/fuzz/<Target>/`. Commit it with the fix: every `go test` replays it
   from then on.
-- **Real-data regression** (opt-in): `scripts/fetch-ripe-dumps.sh`, then
-  `RPSL_REALDATA=$PWD/.data/ripe go test -run TestRealData ./examples/bulk-ripe/bulk`.
+- **Real-data regression** (opt-in): `scripts/fetch-irr-dumps.sh` downloads the
+  public dumps of RIPE, APNIC, ARIN, AFRINIC, LACNIC and RADB (about 470 MB) into
+  `.data/`, then `RPSL_REALDATA=$PWD/.data go test -run TestRealData ./examples/bulk-ripe/bulk`
+  checks them all. A registry's dump artefacts, and the library gaps its data
+  has found, are listed in the test with their reasons; anything else fails it.
 - **Live backends** (opt-in, read-only): `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve`,
   and `RPSL_LIVE=1 go test -run TestRIPETemplatesAreCurrent ./object` for the
   RIPE templates the RIPE profile is built from (`object/testdata/ripe-templates`).

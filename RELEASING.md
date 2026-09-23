@@ -32,9 +32,9 @@ Every item must pass on the commit you are about to release.
 
 1. `FUZZTIME=15s scripts/check.sh` — every module under `-race`, gofmt,
    staticcheck, govulncheck (CI installs them), the invariants, all fuzz targets.
-2. `RPSL_REALDATA=$PWD/.data/ripe go test -run TestRealData ./examples/bulk-ripe/bulk`
-   and, in `resolve`, `RPSL_REALDATA=$PWD/../.data/ripe go test -run TestBgpq4RealData .`
-   (dumps via `scripts/fetch-ripe-dumps.sh`).
+2. `RPSL_REALDATA=$PWD/.data go test -run TestRealData ./examples/bulk-ripe/bulk`
+   and, in `resolve`, `RPSL_REALDATA=$PWD/../.data go test -run TestBgpq4RealData .`
+   (dumps via `scripts/fetch-irr-dumps.sh`).
 3. `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve` and
    `RPSL_LIVE=1 go test -run TestRIPETemplatesAreCurrent ./object`.
 4. **`scripts/release-dryrun.sh vX.Y.Z`**, with the version you are about to

@@ -28,7 +28,10 @@ import (
 func TestBgpq4RealData(t *testing.T) {
 	dir := os.Getenv("RPSL_REALDATA")
 	if dir == "" {
-		t.Skip("set RPSL_REALDATA to the directory of the RIPE split dumps (scripts/fetch-ripe-dumps.sh)")
+		t.Skip("set RPSL_REALDATA to the directory scripts/fetch-irr-dumps.sh fills")
+	}
+	if st, err := os.Stat(filepath.Join(dir, "ripe")); err == nil && st.IsDir() {
+		dir = filepath.Join(dir, "ripe") // the RIPE dumps; RPSL_REALDATA may also name them directly
 	}
 	needBgpq4(t)
 	db := irrtest.New()

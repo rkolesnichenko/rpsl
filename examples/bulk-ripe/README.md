@@ -54,11 +54,12 @@ streams without holding objects.
 ## Where to get a real dump
 
 RIPE publishes split daily dumps at
-`https://ftp.ripe.net/ripe/dbase/split/`; `scripts/fetch-ripe-dumps.sh` (from
-the repository root) downloads `ripe.db.{as-set,route-set,route,route6,aut-num}.gz`
-into `.data/ripe`. RADB's full dump
-(`https://ftp.radb.net/radb/dbase/`) is the other common target — it is
-significantly larger and a useful regression test for memory behavior.
+`https://ftp.ripe.net/ripe/dbase/split/`, and APNIC at
+`https://ftp.apnic.net/apnic/whois/`; ARIN, AFRINIC, LACNIC and RADB publish one
+file each. `scripts/fetch-irr-dumps.sh [registry ...]` (from the repository
+root) downloads all of them into `.data/<registry>/`. RADB's dump
+(`ftp://ftp.radb.net/radb/dbase/`) is the other common target — its 1.4 million
+objects are a useful regression test for memory behavior.
 
 ## What good output looks like
 
@@ -104,8 +105,8 @@ so you can land directly on the offending byte range.
 the same dumps:
 
 ```sh
-scripts/fetch-ripe-dumps.sh
-RPSL_REALDATA=$PWD/.data/ripe go test -run TestRealData -v ./examples/bulk-ripe/bulk
+scripts/fetch-irr-dumps.sh
+RPSL_REALDATA=$PWD/.data go test -run TestRealData -v ./examples/bulk-ripe/bulk
 ```
 
 The path must be absolute (`go test` runs in the package directory). For
@@ -118,7 +119,13 @@ every dump it requires:
 - Errors of any one family (`object/`, `policy/`, `dict/`, …) on at most 0.1 %
   of the objects, and at least 3 tolerated for small dumps.
 
-With the as-set, route-set, route, route6 and aut-num dumps present it also
-expands the 20 largest as-sets and route-sets twice, in opposite input orders,
-and requires identical results. The filter-set and peering-set dumps exercise
-the policy parser's filter and peering grammar.
+Only RIPE's dumps are validated against the RIPE profile, which describes
+RIPE's templates rather than the other registries'. A registry's dump artefacts
+(RIPE removes some `auth:` lines; ARIN's file ends with a line reading `EOF`)
+are listed in the test with their reasons, and failures due to a known library
+gap are counted by cause and logged rather than failing the test.
+
+For RIPE and APNIC, whose dumps come one class per file, it also expands the 20
+largest as-sets and route-sets twice, in opposite input orders, and requires
+identical results. The filter-set and peering-set dumps exercise the policy
+parser's filter and peering grammar.

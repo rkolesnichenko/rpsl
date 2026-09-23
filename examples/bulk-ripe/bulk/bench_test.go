@@ -21,7 +21,8 @@ import (
 // The real-data benchmarks measure the library on the RIPE split dumps, which
 // the generated inputs of the other benchmarks only imitate. Like the
 // real-data tests they are opt-in: set RPSL_REALDATA to the directory
-// scripts/fetch-ripe-dumps.sh fills.
+// scripts/fetch-irr-dumps.sh fills (its ripe/ subdirectory is read, or the
+// directory itself when it holds the RIPE dumps).
 
 // realDump returns the named dump decompressed, so a benchmark measures
 // parsing rather than gzip.
@@ -29,9 +30,13 @@ func realDump(b *testing.B, class string) []byte {
 	b.Helper()
 	dir := os.Getenv("RPSL_REALDATA")
 	if dir == "" {
-		b.Skip("set RPSL_REALDATA to a directory of RIPE split dumps (see scripts/fetch-ripe-dumps.sh)")
+		b.Skip("set RPSL_REALDATA to the directory scripts/fetch-irr-dumps.sh fills")
 	}
-	f, err := os.Open(filepath.Join(dir, "ripe.db."+class+".gz"))
+	path := filepath.Join(dir, "ripe", "ripe.db."+class+".gz")
+	if _, err := os.Stat(path); err != nil {
+		path = filepath.Join(dir, "ripe.db."+class+".gz")
+	}
+	f, err := os.Open(path)
 	if err != nil {
 		b.Skipf("%v", err)
 	}
