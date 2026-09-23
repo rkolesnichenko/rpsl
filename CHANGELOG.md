@@ -9,6 +9,8 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-23
+
 ### Added
 
 - **`types.ParseAddr`, `types.ParsePrefix` and `types.PaddedIPv4`**: `netip`'s
@@ -271,7 +273,8 @@ The first release. There is no earlier version to migrate from.
   values do; a few common RP-attributes have typed helpers.
 - **`rdap` is not a `Source`.** RDAP serves registration data, not IRR sets.
 
-[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.2.0...v0.3.0
