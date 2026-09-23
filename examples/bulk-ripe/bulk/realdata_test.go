@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/rkolesnichenko/rpsl"
 	"github.com/rkolesnichenko/rpsl/object"
+	"github.com/rkolesnichenko/rpsl/policy"
 )
 
 // TestRealData is the opt-in real-data regression. Point RPSL_REALDATA at a
@@ -71,7 +73,7 @@ func checkDump(t *testing.T, path string) {
 	}
 	in, out := sha256.New(), sha256.New()
 	var objects, policies int
-	var badRoutes []string
+	var badRoutes, badVia []string
 	failing := map[string]int{} // family -> objects with an Error in it
 	start := time.Now()
 	for obj, diags := range rpsl.Parse(io.TeeReader(gz, in)) {
@@ -104,12 +106,28 @@ func checkDump(t *testing.T, path string) {
 			switch strings.TrimPrefix(a.Name, "mp-") {
 			case "import", "export", "default", "filter", "peering":
 				policies++
+			case "import-via", "export-via":
+				// RIPE data has no malformed via policy, so any Error is a
+				// parser regression, not bad data.
+				policies++
+				parse := func(v string) []rpsl.Diagnostic { _, d := policy.ParseImportVia(v); return d }
+				if a.Name == "export-via" {
+					parse = func(v string) []rpsl.Diagnostic { _, d := policy.ParseExportVia(v); return d }
+				}
+				for _, d := range parse(a.Value) {
+					if d.Severity == rpsl.Error {
+						badVia = append(badVia, fmt.Sprintf("%s %s: %s: %s", obj.Key(), a.Name, d.Rule, d.Message))
+					}
+				}
 			}
 		}
 	}
 	if len(badRoutes) > 0 {
 		// An undecodable route prefix is dropped from every expansion.
 		t.Errorf("%d route objects have no valid prefix, e.g. %q", len(badRoutes), badRoutes[:min(5, len(badRoutes))])
+	}
+	if len(badVia) > 0 {
+		t.Errorf("%d via policies have errors, e.g. %q", len(badVia), badVia[:min(5, len(badVia))])
 	}
 	if !reflect.DeepEqual(in.Sum(nil), out.Sum(nil)) {
 		t.Error("the stream is not lossless: concatenated objects differ from the input")

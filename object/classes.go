@@ -13,14 +13,21 @@ import (
 type AutNum struct {
 	Common
 	Registry
-	AS        types.ASN
-	AsName    string
-	MemberOf  []types.SetName
-	Imports   []policy.Import
-	Exports   []policy.Export
-	Defaults  []policy.Default
-	ImportVia []string // import-via: values, raw (RIPE)
-	ExportVia []string // export-via: values, raw (RIPE)
+	AS       types.ASN
+	AsName   string
+	MemberOf []types.SetName
+	Imports  []policy.Import
+	Exports  []policy.Export
+	Defaults []policy.Default
+	// ImportVia and ExportVia are the import-via: and export-via: policies
+	// (draft-ietf-grow-rpsl-via; RIPE), in document order. They are kept apart
+	// from Imports and Exports: every clause names a peering the routes pass
+	// through (PeerAction.Via), and a consumer that ignored it would read a
+	// route-server policy as one for a direct peering. The draft resolves
+	// overlaps across via and plain policies by specification order; the
+	// attributes' order is in Raw.
+	ImportVia []policy.Import
+	ExportVia []policy.Export
 	Status    string
 	raw       *ast.Object
 }
@@ -33,15 +40,13 @@ func (a AutNum) Raw() *ast.Object { return a.raw }
 
 func decodeAutNum(d *decoder) AutNum {
 	an := AutNum{
-		Common:    d.common("aut-num"),
-		Registry:  d.registry("aut-num"),
-		AS:        d.asn("aut-num", "object/aut-num-as"),
-		AsName:    d.str("as-name"),
-		MemberOf:  d.memberOf("aut-num", types.ClassAsSet),
-		ImportVia: d.all("import-via"),
-		ExportVia: d.all("export-via"),
-		Status:    d.str("status"),
-		raw:       d.o,
+		Common:   d.common("aut-num"),
+		Registry: d.registry("aut-num"),
+		AS:       d.asn("aut-num", "object/aut-num-as"),
+		AsName:   d.str("as-name"),
+		MemberOf: d.memberOf("aut-num", types.ClassAsSet),
+		Status:   d.str("status"),
+		raw:      d.o,
 	}
 	// import: and mp-import: are unioned into Imports (design §6) in document
 	// order, because the order of policies is their precedence (design §4); the
@@ -65,6 +70,14 @@ func decodeAutNum(d *decoder) AutNum {
 			var exp policy.Export
 			exp, ds = parse(a.Value)
 			an.Exports = append(an.Exports, exp)
+		case "import-via":
+			var imp policy.Import
+			imp, ds = policy.ParseImportVia(a.Value)
+			an.ImportVia = append(an.ImportVia, imp)
+		case "export-via":
+			var exp policy.Export
+			exp, ds = policy.ParseExportVia(a.Value)
+			an.ExportVia = append(an.ExportVia, exp)
 		case "default", "mp-default":
 			parse := policy.ParseDefault
 			if a.Name == "mp-default" {

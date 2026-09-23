@@ -15,17 +15,23 @@ import "strings"
 // (design §1.3). resolve.Expander is where that belongs.
 
 // Term is one flattened policy: a peering, the actions attached to it, and the
-// filter in effect for it once EXCEPT and REFINE have been resolved.
+// filter in effect for it once EXCEPT and REFINE have been resolved. Via is
+// the peering the routes pass through, for a term of an import-via: or
+// export-via: policy, and nil otherwise.
 type Term struct {
+	Via     Peering
 	Peering Peering
 	Actions []Action
 	Filter  Filter
 }
 
-// String renders the term as "<peering> [action …] <filter>".
+// String renders the term as "<peering> [via <peering>] [action …] | <filter>".
 func (t Term) String() string {
 	var b strings.Builder
 	b.WriteString(exprText(t.Peering))
+	if t.Via != nil {
+		b.WriteString(" via " + exprText(t.Via))
+	}
 	if len(t.Actions) > 0 {
 		b.WriteString(" action " + actionsString(t.Actions))
 	}
@@ -53,7 +59,7 @@ func flatten(e Expr, depth int) []Term {
 	case Factor:
 		out := make([]Term, 0, len(x.Peers))
 		for _, p := range x.Peers {
-			out = append(out, Term{Peering: p.Peering, Actions: p.Actions, Filter: x.Filter})
+			out = append(out, Term{Via: p.Via, Peering: p.Peering, Actions: p.Actions, Filter: x.Filter})
 		}
 		return out
 	case ExprList:
@@ -71,8 +77,9 @@ func flatten(e Expr, depth int) []Term {
 }
 
 // refineTerms is the cartesian refinement of RFC 2622 §6.5: one term per pair
-// of left and right terms whose peerings intersect, carrying the more specific
-// peering, both actions in order, and the conjunction of both filters.
+// of left and right terms whose peerings — and via peerings, in a via policy —
+// intersect, carrying the more specific of each, both actions in order, and
+// the conjunction of both filters.
 func refineTerms(left, right []Term) []Term {
 	var out []Term
 	for _, l := range left {
@@ -81,7 +88,12 @@ func refineTerms(left, right []Term) []Term {
 			if !ok {
 				continue
 			}
+			via, ok := intersectVias(l.Via, r.Via)
+			if !ok {
+				continue
+			}
 			out = append(out, Term{
+				Via:     via,
 				Peering: pe,
 				Actions: concatActions(l.Actions, r.Actions),
 				Filter:  andFilters(l.Filter, r.Filter),
@@ -103,6 +115,7 @@ func exceptTerms(left, right []Term) []Term {
 	for _, l := range left {
 		for _, r := range right {
 			out = append(out, Term{
+				Via:     r.Via,
 				Peering: r.Peering,
 				Actions: r.Actions,
 				Filter:  andFilters(l.Filter, r.Filter),
@@ -121,7 +134,7 @@ func exceptTerms(left, right []Term) []Term {
 		if rest != nil {
 			f = andFilters(f, FilterNot{Inner: rest})
 		}
-		out = append(out, Term{Peering: l.Peering, Actions: l.Actions, Filter: f})
+		out = append(out, Term{Via: l.Via, Peering: l.Peering, Actions: l.Actions, Filter: f})
 	}
 	return out
 }
@@ -142,6 +155,15 @@ func intersectPeerings(a, b Peering) (Peering, bool) {
 		return a, true
 	}
 	return nil, false
+}
+
+// intersectVias is intersectPeerings for via peerings, which are absent from
+// every policy but import-via: and export-via:; two absent ones meet.
+func intersectVias(a, b Peering) (Peering, bool) {
+	if a == nil && b == nil {
+		return nil, true
+	}
+	return intersectPeerings(a, b)
 }
 
 // isAnyPeering reports whether the peering is AS-ANY, which meets every peering.

@@ -155,6 +155,7 @@ func TestDiagnosticRulesAreDocumented(t *testing.T) {
 		{"policy/empty", imp("{ }")},
 		{"policy/expect-peering", imp("accept ANY")},
 		{"policy/expect-filter", imp("from AS1")},
+		{"policy/via", obj("aut-num: AS1\nimport-via: from AS1 accept ANY\n")},
 		{"policy/peering", imp("from RS-X accept ANY")},
 		{"policy/as-expr", imp("from (AS1 accept ANY")},
 		{"policy/router", imp("from AS1 PEERING accept ANY")},

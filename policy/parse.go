@@ -163,6 +163,10 @@ type parser struct {
 	depth  int
 	bailed bool // nesting cap hit: the rest of the value is abandoned
 	mp     bool // an mp-* value, where an afi clause is allowed
+	// via is the peer keyword ("from" or "to") of an import-via: or
+	// export-via: value, whose clauses start with a via peering (via.go);
+	// "" for every other policy.
+	via string
 	// stops are extra keywords that end a clause, a peering or a router
 	// expression. The import:/export:/default: grammar sets none; the
 	// sub-grammars of inject:, interface: and peer: add their own keywords so
@@ -389,6 +393,8 @@ func (p *parser) parseAFIs() []types.AddrFamily {
 		p.advance()
 		if p.cur().kind == tComma {
 			p.advance()
+		} else if p.via != "" {
+			break // a via peering follows the list, not a keyword
 		}
 	}
 	if len(afis) == 0 {
@@ -468,6 +474,9 @@ func (p *parser) parseTerm(peerKw, filterKw string) Expr {
 // followed by a "<filterKw> <filter>" clause. A factor missing either part is
 // diagnosed and skipped to its end.
 func (p *parser) parseFactor(peerKw, filterKw string) Factor {
+	if p.via != "" {
+		return p.parseViaFactor(peerKw, filterKw)
+	}
 	var f Factor
 	for p.cur().kw(peerKw) {
 		p.advance()
@@ -651,16 +660,16 @@ func (p *parser) parseASPrim() (ASExpr, bool) {
 // Routers written side by side without an operator are diagnosed and the rest
 // of the router expression skipped.
 func (p *parser) parseRouterExpr() RouterExpr {
-	if p.peeringStop(p.cur()) || p.cur().kw("at") {
+	if p.peeringStop(p.cur()) || p.cur().kw("at") || p.startsNextVia(p.cur()) {
 		return nil
 	}
 	before := len(p.diags)
 	e := p.parseRouterOr()
-	if t := p.cur(); !p.peeringStop(t) && !t.kw("at") && !p.bailed {
+	if t := p.cur(); !p.peeringStop(t) && !t.kw("at") && !p.startsNextVia(t) && !p.bailed {
 		if len(p.diags) == before { // else the error is already reported
 			p.errf(t, "policy/router", "expected AND, OR or EXCEPT before "+quote(t.text)+" in router expression")
 		}
-		for !p.peeringStop(p.cur()) && !p.cur().kw("at") {
+		for !p.peeringStop(p.cur()) && !p.cur().kw("at") && !p.startsNextVia(p.cur()) {
 			p.advance()
 		}
 	}
@@ -820,7 +829,7 @@ func (p *parser) inRegexp(t token, start, end int) token {
 // does not follow the action grammar is diagnosed and left out.
 func (p *parser) parseActions() []Action {
 	var actions []Action
-	for !p.atEOF() && !p.clauseKw(p.cur()) && p.cur().kind != tRBrace {
+	for !p.atEOF() && !p.clauseKw(p.cur()) && p.cur().kind != tRBrace && !p.actionsEndBeforeVia() {
 		start := p.cur().start
 		end := start
 		depth := 0

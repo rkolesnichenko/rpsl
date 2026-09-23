@@ -198,7 +198,9 @@ func joinFilters(terms []Filter, sep string, prec int) string {
 	return strings.Join(parts, sep)
 }
 
-// String renders one peering clause with its actions.
+// String renders one peering clause with its actions. A via peering is left
+// out: it stands before the clause's "from" or "to", which a policy's String
+// writes and a PeerAction does not know.
 func (p PeerAction) String() string {
 	s := exprText(p.Peering)
 	if len(p.Actions) > 0 {
@@ -372,6 +374,9 @@ func exprString(e Expr, peerKw, filterKw string) string {
 	case Factor:
 		var b strings.Builder
 		for _, p := range x.Peers {
+			if p.Via != nil {
+				b.WriteString(exprText(p.Via) + " ")
+			}
 			b.WriteString(peerKw + " " + p.String() + " ")
 		}
 		b.WriteString(filterKw + " " + filterString(x.Filter, precOr))

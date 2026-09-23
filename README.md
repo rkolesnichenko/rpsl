@@ -39,7 +39,9 @@ RFC 4012 (RPSLng) is supported: `mp-import`/`mp-export`/`mp-default`, the `afi`
 dictionary and `afi`-scoped policies (`Import`/`Export`/`Default`/`Except`/
 `Refine` expose `AppliesTo`), `except`/`refine` — which `policy.Flatten`
 resolves into the terms a policy denotes — `route6`, `mp-members`, and the
-`interface:` and `mp-peer:` forms. The expansion engine applies an
+`interface:` and `mp-peer:` forms. RIPE's `import-via:` and `export-via:`
+(draft-ietf-grow-rpsl-via) parse into the same AST, with the peering routes pass
+through on each clause's `Via`. The expansion engine applies an
 address-family constraint via `Expander.AFI`. A SAFI has no meaning in set
 expansion — no set member carries one — so it applies only where RFC 4012 puts
 it, in `Import`/`Export`/`Default.AppliesTo`.
@@ -70,7 +72,7 @@ Imports run strictly downward — `resolve → object → policy → types → a
 | --- | --- | --- | --- |
 | `rpsl` | `github.com/rkolesnichenko/rpsl` | Façade: `ParseObject`, `Parse` (streaming), `Decode`, `Validate` | `object`, `ast`, `lexer` |
 | `object` | `…/rpsl/object` | Typed classes (`AutNum`, `Route`, `AsSet`, …) + `Decode` | `policy`, `types`, `ast` |
-| `policy` | `…/rpsl/policy` | Routing-policy AST + `ParseImport`/`ParseExport`/`ParseDefault` (and `ParseMP*`) | `types`, `ast`, `lexer` |
+| `policy` | `…/rpsl/policy` | Routing-policy AST + `ParseImport`/`ParseExport`/`ParseDefault` (and `ParseMP*`, `ParseImportVia`/`ParseExportVia`) | `types`, `ast`, `lexer` |
 | `types` | `…/rpsl/types` | Leaf value types: `ASN`, `SetName`, `PrefixRange`, `AddrFamily`, `NICHandle` | — |
 | `ast` | `…/rpsl/ast` | Generic lossless `Object`/`Attribute` model; `Diagnostic`/`Severity` | `lexer` |
 | `lexer` | `…/rpsl/lexer` | Hand-written scanner; total-partition `Tokenize` | — |

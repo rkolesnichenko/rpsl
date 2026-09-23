@@ -9,6 +9,24 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **`import-via:` and `export-via:` are parsed** (draft-ietf-grow-rpsl-via,
+  implemented by the RIPE Database; 1,784 values in 312 RIPE aut-nums).
+  `policy.ParseImportVia` and `ParseExportVia` (and their `…With` variants)
+  read them into the `Import`/`Export` AST: each clause's `PeerAction.Via` is
+  the peering the routes pass through, such as an exchange's route server. They
+  are MP, so without an `afi` clause they apply to every family; `String`,
+  `AppliesTo` and `Flatten` (`Term.Via`) work on them as on any policy.
+- New rule `policy/via` (Error): a via clause with no via peering is dropped.
+
+### Changed
+
+- **`AutNum.ImportVia` and `ExportVia` are `[]policy.Import` and
+  `[]policy.Export`**, not raw `[]string`. They stay separate from `Imports`
+  and `Exports`. For the text as written, use `String()` (canonical form) or
+  the attributes in `Raw()`.
+
 ## [0.2.0] - 2026-09-23
 
 Closes the gaps between what v0.1.0 shipped and what the RFCs and this project's

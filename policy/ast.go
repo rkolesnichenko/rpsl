@@ -87,7 +87,11 @@ func (Except) isExpr()   {}
 func (Refine) isExpr()   {}
 
 // PeerAction pairs one peering specification with its optional action list.
+// Via is set only in an import-via: or export-via: clause ("<via> from
+// <peering>", draft-ietf-grow-rpsl-via): the peering the routes pass through,
+// such as an exchange's route server. It is nil in every other policy.
 type PeerAction struct {
+	Via     Peering
 	Peering Peering
 	Actions []Action
 }

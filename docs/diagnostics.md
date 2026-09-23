@@ -53,6 +53,7 @@ attribute of it.
 | --- | --- | --- |
 | `policy/empty` | Error or Warning | An empty policy value (Error); an empty `{ }` expression, which has no effect (Warning). |
 | `policy/expect-peering`, `policy/expect-filter` | Error | A factor without its `from`/`to` or `accept`/`announce` part. |
+| `policy/via` | Error | An `import-via:` or `export-via:` clause with no via peering before its `from`/`to`; the clause is dropped. |
 | `policy/peering`, `policy/as-expr` | Error | A malformed peering or AS expression, including `NOT`, which is not an AS-expression operator (write `EXCEPT`). |
 | `policy/router` | Warning or Error | A router expression term that is not a router: a single-label name (Warning — real policies use labels such as `PEERING`), or an invalid term, `NOT`, a dangling or missing operator (Error). |
 | `policy/protocol` | Error | `protocol` or `into` without a protocol name. |

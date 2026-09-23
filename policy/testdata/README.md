@@ -8,6 +8,13 @@ Every routing-policy example in RFC 2622, RFC 2650 and RFC 4012, one per line
 with its RFC and line number. `TestRFCExamples` parses each and expects no
 diagnostic, or exactly the rules after `## expect:`.
 
+## `via-examples.txt`
+
+Every policy example in draft-ietf-grow-rpsl-via-01 (`import-via:`,
+`export-via:` and the plain `export:` values beside them), one per line.
+`TestViaExamples` parses each, expects no diagnostic, and checks that every
+clause keeps its via peering and that the rendering parses back unchanged.
+
 ## `fuzz/FuzzParseImport/`
 
 Seed corpus for `FuzzParseImport` in `policy/fuzz_test.go`. Each file is a

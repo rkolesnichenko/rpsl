@@ -216,13 +216,15 @@ type Registry struct {
 type AutNum struct {
     Common
     Registry
-    AS       types.ASN
-    AsName   string
-    MemberOf []types.SetName
-    Imports  []policy.Import  // parsed import: AND mp-import:, in document order
-    Exports  []policy.Export  // parsed export: AND mp-export:
-    Defaults []policy.Default // parsed default: AND mp-default:
-    raw      *ast.Object
+    AS        types.ASN
+    AsName    string
+    MemberOf  []types.SetName
+    Imports   []policy.Import  // parsed import: AND mp-import:, in document order
+    Exports   []policy.Export  // parsed export: AND mp-export:
+    Defaults  []policy.Default // parsed default: AND mp-default:
+    ImportVia []policy.Import  // parsed import-via:, kept apart from Imports (§7)
+    ExportVia []policy.Export  // parsed export-via:
+    raw       *ast.Object
 }
 
 type AsSet struct {
@@ -277,7 +279,9 @@ expr        = term [";"] ("EXCEPT" | "REFINE") [afi-list] expr   (* right-recurs
             | term                                                   "performed right to left" *)
 term        = factor | "{" { expr ";" } [expr] "}"
 factor      = peer-clause {peer-clause} ("accept" | "announce") filter
+            | via-clause {via-clause} ("accept" | "announce") filter   (* import-via:, export-via: *)
 peer-clause = ("from" | "to") peering ["action" action {";" action} [";"]]
+via-clause  = peering ("from" | "to") peering ["action" action {";" action} [";"]]
 action      = rp-attr ("=" | ".=") value | rp-attr "." method "(" args ")"
             | rp-attr ("+=" | "-=" | "*=" | "/=" | "<<=" | ">>=") value   (* RFC 2622 Fig. 25 *)
 peering     = as-expr [router-expr] ["at" router-expr] | prng-name | "<" regexp ">"
@@ -303,6 +307,20 @@ is an action and is diagnosed (`policy/filter-method`), as is an unterminated ca
 an IRR convention common in RIPE data. An mp-* value with no afi clause applies to
 every family (RFC 4012 §2.5); a legacy import:/export:/default: to ipv4.unicast,
 and an afi clause in one is an error (it is RFC 4012 mp-* syntax) and is ignored.
+
+`import-via:` and `export-via:` (draft-ietf-grow-rpsl-via, implemented by RIPE)
+are mp-import:/mp-export: whose every clause first names the peering the routes
+pass through — an exchange's route server — as `PeerAction.Via`: `AS6777 from
+AS15562 accept AS-SNIJDERS`. They are MP, so no afi clause means every family.
+Two readings keep a clause boundary unambiguous where the next clause's via
+peering follows the previous clause directly: an action list ends where a
+segment runs up to the peer keyword (`… med=100; AS6777 from …`), and a word
+that can only begin a peering — an AS number, an as-set or peering-set name —
+ends a router expression rather than extending it. A clause with no via peering
+is `policy/via` and is dropped. `AutNum` keeps these policies apart from
+`Imports`/`Exports`, so a consumer that does not read `Via` cannot mistake a
+route-server policy for a direct peering; `Flatten` carries `Via` into each
+`Term` and REFINE meets two terms only where their via peerings meet too.
 
 An action is one of the forms above, one per `;`: `pref=10 med=20` or two method
 calls without a `;` between them are `policy/action`, not one action with an odd

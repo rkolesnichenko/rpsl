@@ -1,0 +1,19 @@
+# Every policy example in draft-ietf-grow-rpsl-via-01 ("The import-via and
+# export-via attributes in RPSL Policy Specifications"), as written, with a
+# value continued over several lines joined into one. The syntax templates of
+# Figure 1 are left out. TestViaExamples parses each and expects no diagnostic,
+# or the rules after "## expect:".
+
+# Figure 2
+import-via: AS6777 from AS15562 action pref = 2; accept AS-SNIJDERS
+export-via: AS6777 to AS15562 action community.={15562:40}; announce AS-SNIJDERS
+import-via: AS15562:AS-ROUTESERVERS from AS15562:AS-CUSTOMERS accept NOT ANY
+export-via: AS15562:AS-ROUTESERVERS to AS15562:AS-CUSTOMERS announce NOT ANY
+import-via: AS6777 from AS4247483647 accept AS4247483647
+export-via: AS6777 to AS4247483647 action community.={15562:40}; announce AS-SNIJDERS
+# Figure 3
+export: to AS6777 195.69.144.255 announce AS15562
+export-via: AS6777 195.69.144.255 to AS-AMS-IX-RS announce AS-SNIJDERS
+# Figure 4
+export-via: AS6777 195.69.144.255 to AS-AMS-IX-RS announce AS-SNIJDERS
+export: to AS6777 195.69.144.255 announce AS15562

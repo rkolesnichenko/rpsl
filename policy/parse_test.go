@@ -312,7 +312,9 @@ func TestParseMpFilterIPv6(t *testing.T) {
 	}
 }
 
-// FuzzParseImport asserts the parser never panics on arbitrary input.
+// FuzzParseImport asserts the parser never panics on arbitrary input, read as
+// every policy attribute: import:, mp-export:, default:, import-via: and
+// export-via:.
 func FuzzParseImport(f *testing.F) {
 	for _, s := range []string{
 		"from AS1 accept ANY",
@@ -333,6 +335,13 @@ func FuzzParseImport(f *testing.F) {
 		"from AS1 accept " + strings.Repeat("(", 2000) + "ANY" + strings.Repeat(")", 2000),
 		"from AS1 accept " + strings.Repeat("not ", 2000) + "ANY",
 		strings.Repeat("{", 2000) + "from AS1 accept ANY",
+		// import-via: and export-via: (draft-ietf-grow-rpsl-via)
+		"AS6777 from AS15562 action pref = 2; accept AS-SNIJDERS",
+		"AS6777 195.69.144.255 to AS-AMS-IX-RS announce AS-SNIJDERS",
+		"afi ipv4.unicast, ipv6.unicast AS8631 from AS-MSKROUTESERVER action pref=100; accept AS-MSKROUTESERVER",
+		"afi ipv6.unicast AS47498 at ( 2001:7f8:ca:1::111 OR 2001:7f8:ca:1::222 ) to AS-FOGIXP announce { 2001:67c:2ea8::/48 }",
+		"AS6777 from AS-ANY accept ANY refine AS8631 from AS1 accept AS1",
+		"{ AS6777 from AS1 accept AS1; from AS2 accept AS2 }",
 	} {
 		f.Add(s)
 	}
@@ -340,12 +349,27 @@ func FuzzParseImport(f *testing.F) {
 		imp, pi := parseImport(s, false)
 		exp, pe := parseExport(s, true)
 		def, pd := parseDefault(s, false)
-		for _, p := range []*parser{pi, pe, pd} {
+		iv, piv := parseImportVia(s, Options{})
+		ev, pev := parseExportVia(s, Options{})
+		for _, p := range []*parser{pi, pe, pd, piv, pev} {
 			assertNothingDropped(t, s, p)
 		}
 		checkParse(t, s, imp, pi.diags, func(v string) (any, []ast.Diagnostic) { return ParseImport(v) })
 		checkParse(t, s, exp, pe.diags, func(v string) (any, []ast.Diagnostic) { return ParseMPExport(v) })
 		checkParse(t, s, def, pd.diags, func(v string) (any, []ast.Diagnostic) { return ParseDefault(v) })
+		checkParse(t, s, iv, piv.diags, func(v string) (any, []ast.Diagnostic) { return ParseImportVia(v) })
+		checkParse(t, s, ev, pev.diags, func(v string) (any, []ast.Diagnostic) { return ParseExportVia(v) })
+		// A clean via policy renders to text that parses back to the same policy.
+		if len(piv.diags) == 0 {
+			if again, ds := ParseImportVia(iv.String()); len(ds) != 0 || again.String() != iv.String() {
+				t.Fatalf("%q renders as %q, which parses back as %q %v", s, iv.String(), again.String(), diagRules(ds))
+			}
+		}
+		if len(pev.diags) == 0 {
+			if again, ds := ParseExportVia(ev.String()); len(ds) != 0 || again.String() != ev.String() {
+				t.Fatalf("%q renders as %q, which parses back as %q %v", s, ev.String(), again.String(), diagRules(ds))
+			}
+		}
 	})
 }
 

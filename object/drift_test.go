@@ -128,6 +128,10 @@ func marker(class, attr string, i int) (value, needle string) {
 		return "from " + as + " accept ANY", as
 	case "export", "mp-export":
 		return "to " + as + " announce ANY", as
+	case "import-via":
+		return "AS1 from " + as + " accept ANY", as
+	case "export-via":
+		return "AS1 to " + as + " announce ANY", as
 	case "default", "mp-default":
 		return "to " + as, as
 	}
