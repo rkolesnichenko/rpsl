@@ -243,7 +243,7 @@ func TestParseNICHandle(t *testing.T) {
 			t.Errorf("ParseNICHandle(%q) unexpected err: %v", in, err)
 		}
 	}
-	for _, in := range []string{"", "1EX-RIPE", "EX@RIPE"} {
+	for _, in := range []string{"", "EX@RIPE", "Eric Cluett"} {
 		if _, err := ParseNICHandle(in); err == nil {
 			t.Errorf("ParseNICHandle(%q) expected error", in)
 		}
@@ -343,11 +343,13 @@ func TestSetNameLengthCap(t *testing.T) {
 	}
 }
 
-// NIC handles: letters, digits and single hyphens, starting with a letter and
-// ending with a letter or digit, stored upper-case so they compare
-// case-insensitively.
+// NIC handles: RFC 2622's object-name characters — letters, digits, '_' and
+// single hyphens — starting with a letter or, as ARIN's own handles do, a digit,
+// ending with a letter or digit, at most 64 long, stored upper-case so they
+// compare case-insensitively. A name with spaces is not a handle.
 func TestNICHandleSyntax(t *testing.T) {
-	for _, bad := range []string{"A-", "A--B", "AB1-RIPE-", "-AB", "1AB", "AB_1", "AB 1", "", strings.Repeat("A", 31)} {
+	for _, bad := range []string{"A-", "A_", "_A", "-AB", "A--B", "AB1-RIPE-", "AB 1", "Eric Cluett", "a.b", "a@b", "",
+		strings.Repeat("A", 65)} {
 		if h, err := ParseNICHandle(bad); err == nil {
 			t.Errorf("ParseNICHandle(%q) = %q, want error", bad, h)
 		}
@@ -357,9 +359,22 @@ func TestNICHandleSyntax(t *testing.T) {
 	if a != b || a.String() != "DUMY-RIPE" {
 		t.Errorf("dumy-ripe = %q, DUMY-RIPE = %q; want equal, upper-case", a, b)
 	}
-	for _, ok := range []string{"A", "AUTO-1", "JD123-ARIN", "APPLEC-1-Z", "EX1-RIPE"} {
+	for _, ok := range []string{"A", "AUTO-1", "JD123-ARIN", "APPLEC-1-Z", "EX1-RIPE", "1NO-ARIN", "2NOC-ARIN",
+		"VAGNER_BRASILEIRO", "AB_1", "1AB", strings.Repeat("A", 64)} {
 		if _, err := ParseNICHandle(ok); err != nil {
 			t.Errorf("ParseNICHandle(%q): %v", ok, err)
+		}
+	}
+}
+
+// UnmarshalText reads handles with the same grammar as ParseNICHandle.
+func TestNICHandleUnmarshalAgrees(t *testing.T) {
+	for _, in := range []string{"1NO-ARIN", "VAGNER_BRASILEIRO", "Eric Cluett", "A-", strings.Repeat("A", 65)} {
+		want, wantErr := ParseNICHandle(in)
+		var got NICHandle
+		gotErr := got.UnmarshalText([]byte(in))
+		if (gotErr == nil) != (wantErr == nil) || got != want {
+			t.Errorf("%q: UnmarshalText = %q, %v; ParseNICHandle = %q, %v", in, got, gotErr, want, wantErr)
 		}
 	}
 }

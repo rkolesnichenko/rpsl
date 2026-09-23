@@ -122,8 +122,9 @@ every dump it requires:
 Only RIPE's dumps are validated against the RIPE profile, which describes
 RIPE's templates rather than the other registries'. A registry's dump artefacts
 (RIPE removes some `auth:` lines; ARIN's file ends with a line reading `EOF`)
-are listed in the test with their reasons, and failures due to a known library
-gap are counted by cause and logged rather than failing the test.
+are listed in the test with their reasons, as is a problem in a registry's own
+data too frequent for the error limit (RADB's person names where a NIC handle
+belongs): its diagnostics are counted and logged rather than failing the test.
 
 For RIPE and APNIC, whose dumps come one class per file, it also expands the 20
 largest as-sets and route-sets twice, in opposite input orders, and requires

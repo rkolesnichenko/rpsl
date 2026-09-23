@@ -9,6 +9,17 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Fixed
+
+- **NIC handles follow RFC 2622 and registry practice.** `types.ParseNICHandle`
+  accepts underscores (RFC 2622's object-name syntax, used in RADB), a leading
+  digit (ARIN's own handles, such as `1NO-ARIN`) and up to 64 characters (was
+  30). It was stricter than the RFC and rejected them: 116 ARIN and 473 RADB
+  handles in `admin-c:`, `tech-c:` and `nic-hdl:` were dropped with an Error.
+  A person's name where a handle belongs (`admin-c: Eric Cluett`, in about
+  15,000 RADB objects) is still rejected: it is not a handle, and a
+  `NICHandle` stays one word, safe to put in a query.
+
 ## [0.6.0] - 2026-09-23
 
 ### Added

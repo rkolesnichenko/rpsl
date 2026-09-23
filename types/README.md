@@ -21,7 +21,7 @@ prefix-ranges pays nothing for the rest of the library.
 | `PrefixRange` | `ParsePrefixRange("192.0.2.0/24^25-28")` | `^+ ^- ^n ^n-m`; opaque and canonical (host bits cleared, spellings `==`); `NewPrefixRange`; `All()`/`Materialize(cap)` enumerate; `Contains`/`Intersect` compare |
 | `RangeOperator` | `ParseRangeOperator("24-32")` | an operator without a prefix, as in `RS-FOO^+`; `Apply` composes per RFC 2622 §5.2 |
 | `AddrFamily` / `AFI` / `SAFI` | `ParseAddrFamily("ipv4.unicast")` | RFC 4012 afi dictionary; `any` means both |
-| `NICHandle` | `ParseNICHandle("EX1-RIPE")` | case-insensitive, held upper-case |
+| `NICHandle` | `ParseNICHandle("EX1-RIPE")`, `"1NO-ARIN"`, `"VAGNER_BRASILEIRO"` | RFC 2622 object-name characters (letters, digits, `_`, `-`), a leading digit allowed, at most 64; a name with spaces is rejected, so a handle is always one safe word; case-insensitive, held upper-case |
 | `RouterID` | `ParseRouterID("rtr.example.net")`, `"192.0.2.1"` | an rtr-set member or inet-rtr: an address or a DNS name; canonical, so spellings are `==` |
 | `netip.Addr` / `netip.Prefix` | `ParseAddr("064.006.160.001")`, `ParsePrefix(…)` | `netip`'s grammar, except that zero-padded IPv4 octets are read as decimal, as RPSL writes addresses and IRRd reads them; `PaddedIPv4` reports the spelling |
 

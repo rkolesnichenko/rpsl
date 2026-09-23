@@ -66,6 +66,12 @@ type registry struct {
 	// dumps rather than by the data or this library. Each is listed with its
 	// reason; everything else still counts.
 	artefact func(obj *ast.Object, d rpsl.Diagnostic) bool
+	// dataProblem names a known problem in the registry's own data that a
+	// diagnostic reports correctly, or returns "": the library is right to
+	// reject the value, and the registry holds too many such values for the
+	// general error limit. Each is listed with its reason; the diagnostics it
+	// names are counted and logged rather than failing the test.
+	dataProblem func(d rpsl.Diagnostic) string
 	// expandPrefix names the split dumps the expansion check reads
 	// (<prefix>.db.<class>.gz); "" for a registry published as one file.
 	expandPrefix string
@@ -88,27 +94,15 @@ var registries = []registry{
 	}},
 	{name: "afrinic"},
 	{name: "lacnic"},
-	{name: "radb"},
-}
-
-// knownGap names the library gap a failure is due to, or "" for any other
-// cause. They are the gaps the real data of other registries found, each to be
-// fixed in its own change; when one is, its case goes and the test holds the
-// data to it.
-func knownGap(d rpsl.Diagnostic) string {
-	if d.Severity != rpsl.Error || !strings.HasPrefix(d.Rule, "object/") {
+	{name: "radb", dataProblem: func(d rpsl.Diagnostic) string {
+		// About 15,000 RADB objects hold a person's name where a NIC handle
+		// belongs ("admin-c: Eric Cluett"), which IRRd accepts only as legacy
+		// data. A name is not a handle, so the library rejects it.
+		if m := nicHandleError.FindStringSubmatch(d.Message); m != nil && strings.Contains(m[1], " ") {
+			return "names where a NIC handle belongs"
+		}
 		return ""
-	}
-	m := nicHandleError.FindStringSubmatch(d.Message)
-	switch {
-	case m == nil:
-		return ""
-	case m[1] != "" && m[1][0] >= '0' && m[1][0] <= '9':
-		return "NIC handles starting with a digit (ARIN)"
-	case strings.Contains(m[1], " "):
-		return "names where a NIC handle belongs (RADB)"
-	}
-	return ""
+	}},
 }
 
 var nicHandleError = regexp.MustCompile(`invalid NIC handle "([^"]*)"`)
@@ -162,8 +156,8 @@ func checkDump(t *testing.T, reg registry, path string) {
 	in, out := sha256.New(), sha256.New()
 	var objects, policies, artefacts int
 	var badRoutes, badVia []string
-	gaps := map[string]int{}    // known gap -> diagnostics or routes
-	failing := map[string]int{} // family -> objects with an Error in it
+	problems := map[string]int{} // declared data problem -> diagnostics
+	failing := map[string]int{}  // family -> objects with an Error in it
 	start := time.Now()
 	for obj, diags := range rpsl.Parse(io.TeeReader(gz, in)) {
 		objects++
@@ -199,8 +193,8 @@ func checkDump(t *testing.T, reg registry, path string) {
 				artefacts++
 				continue
 			}
-			if g := knownGap(d); g != "" {
-				gaps[g]++
+			if reg.dataProblem != nil && reg.dataProblem(d) != "" {
+				problems[reg.dataProblem(d)]++
 				continue
 			}
 			families[strings.SplitN(d.Rule, "/", 2)[0]] = true
@@ -246,8 +240,8 @@ func checkDump(t *testing.T, reg registry, path string) {
 				n, objects, family, allowed, 100*maxErrorRate)
 		}
 	}
-	for g, n := range gaps {
-		t.Logf("known library gap, not counted: %d × %s", n, g)
+	for why, n := range problems {
+		t.Logf("declared data problem, not counted: %d × %s", n, why)
 	}
 	t.Logf("%d objects, %d policy values, %d dump artefacts, objects with errors by family %v, %v",
 		objects, policies, artefacts, failing, time.Since(start).Round(time.Millisecond))

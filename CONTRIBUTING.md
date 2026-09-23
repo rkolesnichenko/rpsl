@@ -64,8 +64,9 @@ Per-target subsets you'll reach for often:
 - **Real-data regression** (opt-in): `scripts/fetch-irr-dumps.sh` downloads the
   public dumps of RIPE, APNIC, ARIN, AFRINIC, LACNIC and RADB (about 470 MB) into
   `.data/`, then `RPSL_REALDATA=$PWD/.data go test -run TestRealData ./examples/bulk-ripe/bulk`
-  checks them all. A registry's dump artefacts, and the library gaps its data
-  has found, are listed in the test with their reasons; anything else fails it.
+  checks them all. A registry's dump artefacts, and the problems in its data too
+  frequent for the error limit (RADB's names where a NIC handle belongs), are
+  listed in the test with their reasons; anything else fails it.
 - **Live backends** (opt-in, read-only): `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve`,
   and `RPSL_LIVE=1 go test -run TestRIPETemplatesAreCurrent ./object` for the
   RIPE templates the RIPE profile is built from (`object/testdata/ripe-templates`).
