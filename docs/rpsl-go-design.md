@@ -28,7 +28,7 @@ rpsl/                  # ROOT module: top-level façade + object/ + policy/
   lexer/               # separate go-get module: tokens, scanner, line-folding
   ast/                 # separate go-get module: generic Object/Attribute + Diagnostic/Severity
   types/               # separate go-get module: ASN, Prefix, PrefixRange, NICHandle, SetName, AddrFamily, …
-  auth/                # RFC 2725 authorisation model; cryptography injected
+  auth/                # RFC 2725 authorisation model (+ RIPE's mnt-irt: consent); cryptography injected
   resolve/             # separate go-get module: pure expansion Expander + Source interface
     irrd/              #   socket-using Source over an IRRd query port
     whois/             #   socket-using Source over plain WHOIS (RIPE-DB)
@@ -600,7 +600,7 @@ sub-grammar of RFC 2622 §8.1 and §9 parsed, the `policy` AST with canonical `S
 engine expanding every set class — including `EvalFilter` over the enumerable fragment of the
 filter language — with in-memory, dump and caching `Source`s, optional concurrency and the
 bgpq4 differential, the three live backends in `resolve/{irrd,whois,rdap}`, and the `auth`
-package for RFC 2725. See [README.md#Status](../README.md#status) for the same matrix in
+package for RFC 2725 and RIPE's `mnt-irt:` consent rule. See [README.md#Status](../README.md#status) for the same matrix in
 shipping form.
 
 Three limits are deliberate and are not gaps. AS-path regexps are parsed but never evaluated

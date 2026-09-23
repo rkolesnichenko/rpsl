@@ -11,7 +11,9 @@
 //
 // In scope: parsing and matching auth: schemes, the hierarchical authorisation
 // of RFC 2725 §4 — which is what stops one maintainer registering a route in
-// another's address space — and the referral-by chains of RFC 2725 §9.
+// another's address space — the referral-by chains of RFC 2725 §9, and the
+// RIPE Database's rule that adding an mnt-irt: reference needs the consent of
+// the irt it names (MntIrtChange).
 //
 // Out of scope: the update-transaction protocol of RFC 2725 §7, and any
 // cryptographic verification.
@@ -87,7 +89,13 @@ func (d Decision) String() string {
 //
 // A nil Verifier checks nothing and reports every line as unsupported.
 func CheckMntner(ctx context.Context, m object.Mntner, cred Credential, v Verifier) (ok, unsupported bool, err error) {
-	for _, a := range m.Auth {
+	return checkAuth(ctx, m.Auth, cred, v)
+}
+
+// checkAuth reports whether cred satisfies any of the auth: lines, for
+// CheckMntner and CheckIrt.
+func checkAuth(ctx context.Context, lines []object.Auth, cred Credential, v Verifier) (ok, unsupported bool, err error) {
+	for _, a := range lines {
 		if v == nil {
 			unsupported = true
 			continue

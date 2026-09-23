@@ -9,6 +9,16 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **`mnt-irt:` authorisation** (`auth`), the RIPE Database's rule that
+  pointing an inetnum or inet6num at an incident response team needs that
+  team's consent. `MntIrtChange` decides an update: only `mnt-irt:` references
+  it adds are checked, and the credential of any one added irt is enough, as in
+  RIPE's own implementation. `AddedMntIrt`, `CheckIrt` and `CheckIrts` are the
+  pieces, and `IrtRegistry` looks irt objects up. It is a separate interface,
+  so an existing `Registry` implementation is unaffected.
+
 ## [0.4.0] - 2026-09-23
 
 ### Changed

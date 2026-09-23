@@ -33,7 +33,7 @@ Every layer ships. Until v1.0.0, a minor version may change the API; the
 | `policy` | RFC 2622 §6 routing-policy parser → sealed-interface AST, and the §8.1/§9 attribute sub-grammars | shipped |
 | `resolve` | Pure expansion engine for as-set, route-set, rtr-set, peering-set and filter-set, + in-memory, dump and caching `Source`s | shipped |
 | `resolve/{irrd,whois,rdap}` | Live IRRd / WHOIS / RDAP backends | shipped |
-| `auth` | RFC 2725 authorisation, with cryptography injected | shipped |
+| `auth` | RFC 2725 authorisation and RIPE's `mnt-irt:` consent, with cryptography injected | shipped |
 
 RFC 4012 (RPSLng) is supported: `mp-import`/`mp-export`/`mp-default`, the `afi`
 dictionary and `afi`-scoped policies (`Import`/`Export`/`Default`/`Except`/
