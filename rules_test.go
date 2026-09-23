@@ -170,6 +170,7 @@ func TestDiagnosticRulesAreDocumented(t *testing.T) {
 		{"policy/prefix-list", imp("from AS1 accept {192.0.2.0/24,}")},
 		{"policy/host-bits", imp("from AS1 accept {192.0.2.1/24}")},
 		{"policy/leading-zeros", imp("from AS1 accept {064.006.160.000/19}")},
+		{"policy/unicode-space", imp("from AS1\u00a0accept ANY")},
 		{"policy/range-op", imp("from AS1 accept AS-X^+24")},
 		{"policy/as-path-regexp", imp("from AS1 accept <RS-X>")},
 		{"policy/as-path-regexp", imp("from AS1 accept <3333>")},

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/rkolesnichenko/rpsl/ast"
 	"github.com/rkolesnichenko/rpsl/lexer"
@@ -166,6 +167,9 @@ type parser struct {
 	// export-via: value, whose clauses start with a via peering (via.go);
 	// "" for every other policy.
 	via string
+	// afterExcept: the next factor is the right-hand side of an EXCEPT, where
+	// a filter term instead of from/to gets a hint (exceptHint).
+	afterExcept bool
 	// stops are extra keywords that end a clause, a peering or a router
 	// expression. The import:/export:/default: grammar sets none; the
 	// sub-grammars of inject:, interface: and peer: add their own keywords so
@@ -212,6 +216,7 @@ func newParser(s string) *parser {
 	if ok {
 		p := &parser{src: s, toks: toks}
 		p.checkDelimiters()
+		p.checkUnicodeSpace()
 		return p
 	}
 	p := &parser{src: s, toks: []token{{tEOF, "", len(s), len(s)}}}
@@ -320,7 +325,7 @@ func (p *parser) finish() {
 		p.advance()
 	}
 	if !p.atEOF() {
-		p.errf(p.cur(), "policy/trailing", "unexpected "+quote(p.cur().text)+" after the policy expression")
+		p.errf(p.cur(), "policy/trailing", "unexpected "+describe(p.cur())+" after the policy expression")
 	}
 }
 
@@ -385,7 +390,7 @@ func (p *parser) parseAFIs() []types.AddrFamily {
 		}
 		af, err := types.ParseAddrFamily(t.text)
 		if err != nil {
-			p.errf(t, "policy/afi", "invalid address family "+quote(t.text))
+			p.errf(t, "policy/afi", "invalid address family "+describe(t))
 			return afis
 		}
 		afis = append(afis, af)
@@ -426,6 +431,7 @@ func (p *parser) parseExpr(peerKw, filterKw string) Expr {
 	case p.cur().kw("except"):
 		p.advance()
 		afis := p.parseAFIs()
+		p.afterExcept = true
 		return Except{Left: left, AFIs: afis, MP: p.mp, Right: p.parseExpr(peerKw, filterKw)}
 	case p.cur().kw("refine"):
 		p.advance()
@@ -438,6 +444,9 @@ func (p *parser) parseExpr(peerKw, filterKw string) Expr {
 // parseTerm parses a single factor or a brace-enclosed list of expressions, each
 // terminated by ';' (optional before the closing brace).
 func (p *parser) parseTerm(peerKw, filterKw string) Expr {
+	if p.cur().kind == tLBrace {
+		p.afterExcept = false // a { } list of policies: the brace answers the EXCEPT
+	}
 	if p.cur().kind != tLBrace {
 		return p.parseFactor(peerKw, filterKw)
 	}
@@ -473,6 +482,13 @@ func (p *parser) parseTerm(peerKw, filterKw string) Expr {
 // followed by a "<filterKw> <filter>" clause. A factor missing either part is
 // diagnosed and skipped to its end.
 func (p *parser) parseFactor(peerKw, filterKw string) Factor {
+	afterExcept := p.afterExcept
+	p.afterExcept = false
+	if afterExcept && p.startsFilterTerm(p.cur()) && !p.cur().kw(peerKw) && !p.startsPeeringHere() {
+		p.errf(p.cur(), "policy/expect-peering", exceptHint(peerKw, p.cur()))
+		p.sync()
+		return Factor{}
+	}
 	if p.via != "" {
 		return p.parseViaFactor(peerKw, filterKw)
 	}
@@ -640,13 +656,13 @@ func (p *parser) parseASPrim() (ASExpr, bool) {
 		if sn.Class() == types.ClassAsSet {
 			return ASSetRef{Name: sn}, true
 		}
-		p.errf(t, "policy/peering", quote(t.text)+" is a "+sn.Class().String()+", not an as-set")
+		p.errf(t, "policy/peering", describe(t)+" is a "+sn.Class().String()+", not an as-set")
 		return nil, false
 	}
 	if tpl, err := ParseSetNameTemplate(t.text); err == nil && tpl.Class() == types.ClassAsSet {
 		return ASSetTemplate{Template: tpl}, true
 	}
-	p.errf(t, "policy/peering", "invalid peering term "+quote(t.text))
+	p.errf(t, "policy/peering", "invalid peering term "+describe(t))
 	return nil, false
 }
 
@@ -666,7 +682,7 @@ func (p *parser) parseRouterExpr() RouterExpr {
 	e := p.parseRouterOr()
 	if t := p.cur(); !p.peeringStop(t) && !t.kw("at") && !p.startsNextVia(t) && !p.bailed {
 		if len(p.diags) == before { // else the error is already reported
-			p.errf(t, "policy/router", "expected AND, OR or EXCEPT before "+quote(t.text)+" in router expression")
+			p.errf(t, "policy/router", "expected AND, OR or EXCEPT before "+describe(t)+" in router expression")
 		}
 		for !p.peeringStop(p.cur()) && !p.cur().kw("at") && !p.startsNextVia(p.cur()) {
 			p.advance()
@@ -752,17 +768,17 @@ func (p *parser) parseRouterPrim() RouterExpr {
 		if sn.Class() == types.ClassRtrSet {
 			return RouterSetRef{Name: sn}
 		}
-		p.errf(t, "policy/router", quote(t.text)+" is a "+sn.Class().String()+", not a router or rtr-set")
+		p.errf(t, "policy/router", describe(t)+" is a "+sn.Class().String()+", not a router or rtr-set")
 		return nil
 	}
 	switch labels := dnsLabels(t.text); {
 	case labels > 1:
 		return RouterName{Name: t.text}
 	case labels == 1:
-		p.warnf(t, "policy/router", quote(t.text)+" is not a router address, rtr-set or fully qualified inet-rtr name")
+		p.warnf(t, "policy/router", describe(t)+" is not a router address, rtr-set or fully qualified inet-rtr name")
 		return RouterName{Name: t.text}
 	}
-	p.errf(t, "policy/router", "invalid router "+quote(t.text))
+	p.errf(t, "policy/router", "invalid router "+describe(t))
 	return nil
 }
 
@@ -880,6 +896,29 @@ var actionOps = []struct {
 // (Method "operator+=", one argument). It returns a message saying what is
 // wrong when raw is none of these.
 func parseAction(raw string) (Action, string) {
+	a, msg := parseActionText(asciiSpaces(raw))
+	if msg == "" {
+		a.Raw = raw // as written, Unicode spaces and all
+	}
+	return a, msg
+}
+
+// asciiSpaces returns s with each other space (see otherSpaceAt) turned into an
+// ASCII one, so the text parsers that split raw text read them alike.
+func asciiSpaces(s string) string {
+	if !strings.ContainsFunc(s, isOtherSpace) {
+		return s
+	}
+	return strings.Map(func(r rune) rune {
+		if isOtherSpace(r) {
+			return ' '
+		}
+		return r
+	}, s)
+}
+
+// parseActionText parses one action from text whose spaces are all ASCII.
+func parseActionText(raw string) (Action, string) {
 	const form = "expected 'attr = value', 'attr .= value' or 'attr.method(args)'"
 	if open := strings.IndexByte(raw, '('); open >= 0 && !strings.Contains(raw[:open], "=") {
 		attr, method, dotted := strings.Cut(strings.TrimSpace(raw[:open]), ".")
@@ -1076,7 +1115,7 @@ func (p *parser) parseFilterPrimary() Filter {
 			return p.parseFilterWord()
 		}
 	}
-	p.errf(t, "policy/filter", "unexpected "+quote(t.text)+" in filter")
+	p.errf(t, "policy/filter", "unexpected "+describe(t)+" in filter")
 	if t.kind != tEOF {
 		p.advance()
 	}
@@ -1102,7 +1141,7 @@ func (p *parser) parseFilterWord() Filter {
 	if hasOp {
 		o, err := types.ParseRangeOperator(opText)
 		if err != nil {
-			p.errf(t, "policy/range-op", "invalid range operator in "+quote(t.text))
+			p.errf(t, "policy/range-op", "invalid range operator in "+describe(t))
 			return nil
 		}
 		op = o
@@ -1142,7 +1181,7 @@ func (p *parser) parseFilterWord() Filter {
 			return FilterSetTemplate{Template: tpl, Op: op}
 		}
 	}
-	p.errf(t, "policy/filter", "invalid filter term "+quote(t.text))
+	p.errf(t, "policy/filter", "invalid filter term "+describe(t))
 	return nil
 }
 
@@ -1233,9 +1272,9 @@ func (p *parser) parseCommunityEquals() Filter {
 			values = append(values, t.text)
 			wantItem = false
 		case t.kind == tWord:
-			p.errf(t, "policy/filter", "expected ',' before "+quote(t.text)+" in community list")
+			p.errf(t, "policy/filter", "expected ',' before "+describe(t)+" in community list")
 		default:
-			p.errf(t, "policy/filter", "unexpected "+quote(t.text)+" in community list")
+			p.errf(t, "policy/filter", "unexpected "+describe(t)+" in community list")
 		}
 		p.advance()
 	}
@@ -1257,12 +1296,12 @@ func (p *parser) parsePrefixList() Filter {
 			pr, err := types.ParsePrefixRange(t.text)
 			switch {
 			case !wantItem:
-				p.errf(t, "policy/prefix-list", "expected ',' before "+quote(t.text)+"; it is left out")
+				p.errf(t, "policy/prefix-list", "expected ',' before "+describe(t)+"; it is left out")
 			case err != nil:
-				p.errf(t, "policy/prefix-list", "invalid prefix "+quote(t.text))
+				p.errf(t, "policy/prefix-list", "invalid prefix "+describe(t))
 			default:
 				if hasHostBits(t.text) {
-					p.warnf(t, "policy/host-bits", quote(t.text)+" has host bits set; it is read as "+pr.String())
+					p.warnf(t, "policy/host-bits", describe(t)+" has host bits set; it is read as "+pr.String())
 				}
 				p.warnPadded(t, pr.String())
 				ranges = append(ranges, pr)
@@ -1291,7 +1330,7 @@ func (p *parser) parsePrefixList() Filter {
 		p.advance()
 		op, err := types.ParseRangeOperator(t.text[1:])
 		if err != nil {
-			p.errf(t, "policy/range-op", "invalid range operator "+quote(t.text))
+			p.errf(t, "policy/range-op", "invalid range operator "+describe(t))
 			return FilterPrefixList{Ranges: ranges}
 		}
 		composed := ranges[:0]
@@ -1318,8 +1357,72 @@ func hasHostBits(text string) bool {
 func (p *parser) warnPadded(t token, canonical string) {
 	text, _, _ := strings.Cut(t.text, "^")
 	if types.PaddedIPv4(text) {
-		p.warnf(t, "policy/leading-zeros", quote(t.text)+" has zero-padded octets; it is read as "+canonical+" (decimal)")
+		p.warnf(t, "policy/leading-zeros", describe(t)+" has zero-padded octets; it is read as "+canonical+" (decimal)")
 	}
+}
+
+// checkUnicodeSpace reports the first non-ASCII space in the value, which the
+// tokenizer reads as whitespace (see otherSpaceAt).
+func (p *parser) checkUnicodeSpace() {
+	for i := 0; i < len(p.src); i++ {
+		if size := otherSpaceAt(p.src, i); size > 0 {
+			r, _ := utf8.DecodeRuneInString(p.src[i:])
+			p.warnf(token{tWord, p.src[i : i+size], i, i + size}, "policy/unicode-space",
+				fmt.Sprintf("%U is read as a space; RPSL separates tokens with ASCII spaces, tabs and newlines", r))
+			return
+		}
+	}
+}
+
+// startsPeeringHere reports whether the current token can begin a via clause's
+// peering (an AS number, an as-set or peering-set name, an AS-path regexp or a
+// parenthesized AS expression), so that a via policy's right-hand side of
+// EXCEPT is not mistaken for a filter.
+func (p *parser) startsPeeringHere() bool {
+	if p.via == "" {
+		return false
+	}
+	t := p.cur()
+	switch t.kind {
+	case tRegex, tLParen:
+		return true
+	case tWord:
+		if _, err := types.ParseASN(t.text); err == nil {
+			return true
+		}
+		if sn, err := types.ParseSetName(t.text); err == nil {
+			return sn.Class() == types.ClassAsSet || sn.Class() == types.ClassPeeringSet
+		}
+	}
+	return false
+}
+
+// exceptHint explains a filter term where EXCEPT needs a policy: in
+// "accept ANY except FLTR-BOGONS" (common in some registries) EXCEPT joins two
+// policies (RFC 2622 §6.6), and the filter meant is "ANY AND NOT FLTR-BOGONS".
+func exceptHint(peerKw string, t token) string {
+	term := "<filter>"
+	if t.kind == tWord {
+		term = t.text
+	}
+	return "expected '" + peerKw + "' after EXCEPT: EXCEPT joins two policies; to leave " + term +
+		" out of the filter, write \"AND NOT " + term + "\""
+}
+
+// describe names a token for a diagnostic: its text, quoted, or "end of value"
+// for the end, whose text is empty. An AS-path regexp is quoted with its
+// delimiters, since its text is only the body.
+func describe(t token) string {
+	switch t.kind {
+	case tEOF:
+		return "end of value"
+	case tRegex:
+		if t.end-t.start == len(t.text)+2 {
+			return quote("<" + t.text + ">")
+		}
+		return quote("<" + t.text) // never closed
+	}
+	return quote(t.text)
 }
 
 // quote wraps a token for diagnostics.

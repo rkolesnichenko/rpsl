@@ -53,7 +53,7 @@ attribute of it.
 | Rule | Severity | Meaning |
 | --- | --- | --- |
 | `policy/empty` | Error or Warning | An empty policy value (Error); an empty `{ }` expression, which has no effect (Warning). |
-| `policy/expect-peering`, `policy/expect-filter` | Error | A factor without its `from`/`to` or `accept`/`announce` part. |
+| `policy/expect-peering`, `policy/expect-filter` | Error | A factor without its `from`/`to` or `accept`/`announce` part. A filter term after `EXCEPT` (`accept ANY EXCEPT FLTR-BOGONS`) gets a hint: `EXCEPT` joins two policies, and `AND NOT` leaves a term out of a filter. |
 | `policy/via` | Error | An `import-via:` or `export-via:` clause with no via peering before its `from`/`to`; the clause is dropped. |
 | `policy/peering`, `policy/as-expr` | Error | A malformed peering or AS expression, including `NOT`, which is not an AS-expression operator (write `EXCEPT`). |
 | `policy/router` | Warning or Error | A router expression term that is not a router: a single-label name (Warning — real policies use labels such as `PEERING`), or an invalid term, `NOT`, a dangling or missing operator (Error). |
@@ -65,6 +65,7 @@ attribute of it.
 | `policy/prefix-list` | Error or Warning | A malformed `{…}` prefix list or member, or two members without a `,` between them (Error; the second is left out); an empty item, as in `{a,,b}` (Warning). |
 | `policy/host-bits` | Warning | A prefix-list member with host bits set; it is read with them cleared. |
 | `policy/leading-zeros` | Warning | An IPv4 address or prefix in a policy value with zero-padded octets; they are read as decimal. |
+| `policy/unicode-space` | Warning | A space other than an ASCII space, tab or newline — a no-break space (U+00A0) or another Unicode space, a vertical tab or a form feed — between the tokens of a policy value; it is read as a space, as IRRd reads it. Reported once per value, at the first. |
 | `policy/range-op` | Error | An invalid range operator. |
 | `policy/as-path-regexp` | Error or Warning | A malformed or empty AS-path regexp, one whose `<` is never closed, a `>` that closes nothing, or a term other than an AS number, as-set or `PeerAS` (Error, at the offending token); an AS number written without `AS`, as in `<3333>` (Warning). |
 | `policy/inject` | Error | A malformed `inject:` condition: a test that is not `STATIC`, `HAVE-COMPONENTS` or `EXCLUDE`, a missing `{` or `)`. |

@@ -164,6 +164,10 @@ func reScan(body string, emit func(reToken) bool) error {
 	i, n := 0, len(body)
 	for i < n {
 		c := body[i]
+		if size := otherSpaceAt(body, i); size > 0 {
+			i += size // read as whitespace, like the policy tokenizer (lex.go)
+			continue
+		}
 		switch {
 		case c == ' ' || c == '\t' || c == '\r' || c == '\n':
 			i++
@@ -394,11 +398,20 @@ func (p *reParser) parseRange() (ASPathRepeat, error) {
 	return ASPathRepeat{Op: RepeatRange, Min: lo, Max: hi}, nil
 }
 
+// describe names a regexp token for an error: its text, quoted, or "end of
+// regexp" for the end, whose text is empty.
+func (t reToken) describe() string {
+	if t.kind == reEOF {
+		return "end of regexp"
+	}
+	return strconv.Quote(t.text)
+}
+
 func (p *reParser) quantBound(which string) (int, error) {
 	t := p.cur()
 	v, err := strconv.Atoi(t.text)
 	if t.kind != reWord || err != nil || v < 0 {
-		return 0, errAt(t, "invalid {m,n} %s bound %q", which, t.text)
+		return 0, errAt(t, "expected a number for the {m,n} %s bound, found %s", which, t.describe())
 	}
 	p.advance()
 	return v, nil
@@ -433,7 +446,7 @@ func (p *reParser) parseAtom() (ASPathExpr, error) {
 		p.advance()
 		return p.classifyWord(t)
 	default:
-		return nil, errAt(t, "unexpected %q in AS-path regexp", t.text)
+		return nil, errAt(t, "unexpected %s in AS-path regexp", t.describe())
 	}
 }
 

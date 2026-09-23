@@ -138,7 +138,7 @@ func (p *parser) interfaceAFI() types.AddrFamily {
 	af, err := types.ParseAddrFamily(t.text)
 	if err != nil {
 		if kw {
-			p.errf(t, "policy/interface", "invalid address family "+quote(t.text))
+			p.errf(t, "policy/interface", "invalid address family "+describe(t))
 		}
 		return types.AddrFamily{}
 	}
@@ -156,7 +156,7 @@ func (p *parser) routerAddr(rule string) netip.Addr {
 	p.advance()
 	a, err := types.ParseAddr(t.text)
 	if err != nil {
-		p.errf(t, rule, "invalid interface address "+quote(t.text))
+		p.errf(t, rule, "invalid interface address "+describe(t))
 		return netip.Addr{}
 	}
 	p.warnPadded(t, a.String())
@@ -204,7 +204,7 @@ func (p *parser) tunnel() *Tunnel {
 	p.advance()
 	remote, err := types.ParseAddr(t.text)
 	if err != nil {
-		p.errf(t, "policy/interface", "invalid tunnel endpoint "+quote(t.text))
+		p.errf(t, "policy/interface", "invalid tunnel endpoint "+describe(t))
 		return nil
 	}
 	p.warnPadded(t, remote.String())
@@ -283,7 +283,7 @@ func (p *parser) parsePeerOptions() []PeerOption {
 		if p.cur().kind == tLParen {
 			args, end, ok := p.parenArgs()
 			if !ok {
-				p.errf(t, "policy/peer", "unterminated '(' in peering option "+quote(t.text))
+				p.errf(t, "policy/peer", "unterminated '(' in peering option "+describe(t))
 				return opts
 			}
 			opt.Args = args

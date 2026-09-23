@@ -275,7 +275,7 @@ func parseRPAttributeValue(s string) (RPAttr, *parser) {
 	a.Methods = p.parseSignatures("policy/rp-attribute")
 	if len(a.Methods) == 0 && len(p.diags) == 0 {
 		// An attribute with no method declares something no action can set.
-		p.errf(t, "policy/rp-attribute", "rp-attribute "+quote(t.text)+" declares no method")
+		p.errf(t, "policy/rp-attribute", "rp-attribute "+describe(t)+" declares no method")
 	}
 	p.finish()
 	return a, p
@@ -367,7 +367,7 @@ func parseTypedefValue(s string) (Typedef, *parser) {
 	td.Name = normAttr(t.text)
 	p.advance()
 	if p.atEOF() {
-		p.errf(t, "policy/typedef", "expected a type definition after "+quote(t.text))
+		p.errf(t, "policy/typedef", "expected a type definition after "+describe(t))
 		return td, p
 	}
 	// The type language is kept as written; consume the rest of the value.
@@ -405,7 +405,7 @@ func parseProtocolValue(s string) (Protocol, *parser) {
 		kw := p.cur()
 		mandatory := kw.kw("mandatory")
 		if !mandatory && !kw.kw("optional") {
-			p.errf(kw, "policy/rp-protocol", "expected MANDATORY or OPTIONAL, found "+quote(kw.text))
+			p.errf(kw, "policy/rp-protocol", "expected MANDATORY or OPTIONAL, found "+describe(kw))
 			return pr, p
 		}
 		p.advance()

@@ -104,7 +104,7 @@ func parseAggrMtdValue(s string) (AggrMtd, *parser) {
 			}
 		}
 	default:
-		p.errf(t, "policy/aggr-mtd", "expected inbound or outbound, found "+quote(t.text))
+		p.errf(t, "policy/aggr-mtd", "expected inbound or outbound, found "+describe(t))
 		p.sync()
 	}
 	p.finish()

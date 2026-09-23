@@ -252,7 +252,7 @@ func TestFilterPathREMalformed(t *testing.T) {
 func FuzzParseASPathRegexp(f *testing.F) {
 	for _, s := range []string{
 		"^AS1+ AS2*$", ".", "AS-FOO", "AS1|AS2", "(AS1 AS2)+",
-		"AS1{2,4}", "AS1{2,}", "3333", "", "((", "{}", "|||", "AS1.10",
+		"AS1{2,4}", "AS1{2,}", "3333", "", "((", "{}", "|||", "AS1.10", "0 ", "AS1 AS2",
 		strings.Repeat("(", 2000) + "AS1" + strings.Repeat(")", 2000),
 	} {
 		f.Add(s)
@@ -262,7 +262,7 @@ func FuzzParseASPathRegexp(f *testing.F) {
 		// grammar gives meaning to.
 		re, bare, err := parseASPathRegexp(s)
 		if err == nil {
-			if rest := strings.Trim(s, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:_-.^$*+?|(){}[],~ \t\r\n"); rest != "" {
+			if rest := strings.Trim(asciiSpaces(s), "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:_-.^$*+?|(){}[],~ \t\r\n"); rest != "" {
 				t.Fatalf("ParseASPathRegexp(%q) accepted meaningless bytes %q", s, rest)
 			}
 			if d := depth(reflect.ValueOf(re)); d > maxParseDepth+8 {

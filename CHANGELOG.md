@@ -9,6 +9,30 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Unicode spaces separate policy tokens.** A no-break space (U+00A0) or any
+  other Unicode space (`unicode.IsSpace`) between the tokens of an `import:`,
+  `export:`, `default:`, their `mp-` and via forms, `filter:`, `peering:` or
+  the `inet-rtr` and aggregation sub-grammars is read as an ASCII space, as
+  IRRd reads it; before, the value was dropped with an Error. Three objects in
+  the NTTCOM, RADB and TC mirrors held one. The same goes for a vertical tab
+  and a form feed, which were read as part of a word. Zero-width characters
+  (U+200B) are not spaces and are still an Error.
+
+### Changed
+
+- **New Warning `policy/unicode-space`**, once per value, at the first such
+  space: RPSL separates tokens with ASCII spaces, tabs and newlines.
+- **Clearer policy messages.** A message about a missing token at the end of a
+  value says "end of value" (or "end of regexp") instead of quoting an empty
+  token (`""`), and an AS-path regexp is quoted with its `<` and `>`.
+- **A hint after `EXCEPT`.** A filter term where `EXCEPT` expects a policy
+  (`from AS1 accept ANY EXCEPT FLTR-BOGONS`) is still a `policy/expect-peering`
+  Error, now saying that `EXCEPT` joins two policies and suggesting
+  `AND NOT FLTR-BOGONS`. The TC mirror holds 142 such policies (and 4 more
+  with a stray comma first, `accept ANY, except BOGONS`, reported at the comma).
+
 ## [0.6.1] - 2026-09-23
 
 ### Fixed

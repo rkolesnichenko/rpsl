@@ -3,6 +3,7 @@ package policy
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -23,6 +24,10 @@ func checkParse(t *testing.T, s string, v any, diags []ast.Diagnostic, reparse f
 	for _, d := range diags {
 		if sp := d.Span; sp.StartByte < 0 || sp.EndByte > len(s) || sp.StartByte > sp.EndByte {
 			t.Fatalf("%q: diagnostic %v points outside the value", s, d)
+		}
+		// With no '"' in the value, a "" in a message can only quote an empty token.
+		if !strings.Contains(s, `"`) && strings.Contains(d.Message, `""`) {
+			t.Fatalf("%q: diagnostic %v names an empty token", s, d)
 		}
 	}
 	if d := depth(reflect.ValueOf(v)); d > maxParseDepth+8 {
@@ -47,6 +52,20 @@ func checkParse(t *testing.T, s string, v any, diags []ast.Diagnostic, reparse f
 		if r := render(got); r != want || strings.Join(diagRules(ds), " ") != strings.Join(wantRules, " ") {
 			t.Fatalf("%q parses as\n%s %v\nbut %q as\n%s %v", s, want, wantRules, variant, r, diagRules(ds))
 		}
+	}
+	// A no-break space between tokens is whitespace, as IRRd reads it: the
+	// same policy, with only a policy/unicode-space Warning added.
+	variant := nbspGaps(s)
+	got, ds := reparse(variant)
+	gotRules := diagRules(ds)
+	if len(wantRules) >= maxDiagnostics || slices.Contains(gotRules, "policy/too-many-errors") {
+		// The variant's one Warning moves where the diagnostic cap abandons the
+		// parse, and with it the AST; below the cap nothing may differ.
+		return
+	}
+	if r := render(got); r != want || strings.Join(withoutRule(gotRules, "policy/unicode-space"), " ") !=
+		strings.Join(withoutRule(wantRules, "policy/unicode-space"), " ") {
+		t.Fatalf("%q parses as\n%s %v\nbut %q as\n%s %v", s, want, wantRules, variant, r, diagRules(ds))
 	}
 }
 
@@ -102,6 +121,37 @@ func widenSpaces(s string) string {
 	}
 	b.WriteString(s[last:])
 	return b.String()
+}
+
+// nbspGaps adds a no-break space (U+00A0) to every gap between tokens, as
+// widenSpaces adds ASCII whitespace.
+func nbspGaps(s string) string {
+	toks, ok := tokenize(s)
+	if !ok {
+		return s
+	}
+	var b strings.Builder
+	last := 0
+	for _, tk := range toks {
+		if gap := s[last:tk.start]; gap != "" {
+			b.WriteString(gap + "\u00a0")
+		}
+		b.WriteString(s[tk.start:tk.end])
+		last = tk.end
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
+
+// withoutRule drops one rule from a list of diagnostic rules.
+func withoutRule(rules []string, rule string) []string {
+	out := rules[:0:0]
+	for _, r := range rules {
+		if r != rule {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // render prints v for comparing parses: Raw fields are left out, and strings

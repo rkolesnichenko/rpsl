@@ -1,6 +1,10 @@
 package policy
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
 
 // tokKind enumerates the policy token classes.
 type tokKind uint8
@@ -63,6 +67,10 @@ func scan(src string, emit func(token) bool) bool {
 	i, n := 0, len(src)
 	for i < n {
 		c := src[i]
+		if size := otherSpaceAt(src, i); size > 0 {
+			i += size // a Unicode space separates tokens as an ASCII one does
+			continue
+		}
 		switch {
 		case c == ' ' || c == '\t' || c == '\r' || c == '\n':
 			i++
@@ -132,7 +140,7 @@ func scan(src string, emit func(token) bool) bool {
 			i++
 		default:
 			j := i
-			for j < n && isWordByte(src[j]) {
+			for j < n && isWordByte(src[j]) && otherSpaceAt(src, j) == 0 {
 				j++
 			}
 			if j == i { // defensive: never stall on an unclassified byte
@@ -146,6 +154,30 @@ func scan(src string, emit func(token) bool) bool {
 		}
 	}
 	return emit(token{tEOF, "", n, n})
+}
+
+// otherSpaceAt returns the length of the space at src[i:] that is not an ASCII
+// space, tab or newline, or 0: a vertical tab or form feed, a no-break space
+// (U+00A0), an ideographic space (U+3000), … — whatever unicode.IsSpace
+// reports. RPSL separates tokens with spaces and tabs, but registries hold such
+// spaces in policies, and IRRd, splitting with Python's str.split, reads them as
+// whitespace; the parser reports the first one (policy/unicode-space).
+func otherSpaceAt(src string, i int) int {
+	if c := src[i]; c < utf8.RuneSelf {
+		if c == '\v' || c == '\f' {
+			return 1
+		}
+		return 0
+	}
+	if r, size := utf8.DecodeRuneInString(src[i:]); unicode.IsSpace(r) {
+		return size
+	}
+	return 0
+}
+
+// isOtherSpace reports whether r is a space otherSpaceAt reads.
+func isOtherSpace(r rune) bool {
+	return unicode.IsSpace(r) && r != ' ' && r != '\t' && r != '\r' && r != '\n'
 }
 
 // relOpAt returns the operator "<<=", "<=", ">>=" or ">=" at src[i:], or "".
