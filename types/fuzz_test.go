@@ -59,10 +59,18 @@ func FuzzParsePrefixRange(f *testing.F) {
 	for _, s := range []string{
 		"10.0.0.0/8", "10.0.0.1/8^+", "10.0.0.0/8^24-24", "0.0.0.0/0^0-32",
 		"192.0.2.1/32^-", "2001:db8::/32^48", "10.0.0.0/8^9-32", "::/0^+",
+		"064.006.160.000/19^+", "010.0.0.0/8",
 	} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
+		// Whatever ParsePrefix accepts, zero-padded or not, its canonical form
+		// parses back to the same prefix and is not padded.
+		if p, err := ParsePrefix(s); err == nil {
+			if again, err := ParsePrefix(p.String()); err != nil || again != p || PaddedIPv4(p.String()) {
+				t.Fatalf("ParsePrefix(%q) = %v, whose form parses back as %v, %v (padded %v)", s, p, again, err, PaddedIPv4(p.String()))
+			}
+		}
 		r, err := ParsePrefixRange(s)
 		if err != nil {
 			return

@@ -93,7 +93,7 @@ func (r PrefixRange) Op() RangeOp {
 func ParsePrefixRange(s string) (PrefixRange, error) {
 	t := strings.Trim(s, " \t")
 	pfxStr, opStr, hasOp := strings.Cut(t, "^")
-	pfx, err := netip.ParsePrefix(pfxStr)
+	pfx, err := ParsePrefix(pfxStr)
 	if err != nil {
 		return PrefixRange{}, fmt.Errorf("rpsl/types: invalid prefix range %q: %w", s, err)
 	}

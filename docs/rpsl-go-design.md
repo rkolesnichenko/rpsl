@@ -554,6 +554,7 @@ A spec-pure parser dies on real data. Budget explicitly for:
 - **Mixed-case set names and ASNs** (`as-FOO`, `As65001`) — canonicalize for comparison, preserve for output.
 - **`as-set` members that are `route-set`-shaped** and other class-confusion in messy registries — validate member class against context, emit a warning, don't crash.
 - **32-bit ASNs in dot notation** (`AS1.10`) still seen in older objects.
+- **Zero-padded IPv4 octets** (`064.006.160.000/19`, in ARIN's IRR). Go's `netip` rejects them, since C would read a leading zero as octal; RPSL addresses are dotted decimal and IRRd reads them so. `types.ParseAddr`/`ParsePrefix` accept them as decimal everywhere an RPSL value holds an address, with a Warning (`object/<class>-leading-zeros`, `policy/leading-zeros`).
 - **AS-path regexps with nested braces** `{m,n}` repetition vs. the `{...}` prefix-list braces — the lexer must disambiguate by context (inside `<...>` it's a regexp).
 
 ---

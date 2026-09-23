@@ -167,12 +167,24 @@ func (d *decoder) prefix(name, rule string) netip.Prefix {
 	if !ok || d.emptyKey(a) {
 		return netip.Prefix{}
 	}
-	p, err := netip.ParsePrefix(scalar(a))
+	p, err := types.ParsePrefix(scalar(a))
 	if err != nil {
 		d.errf(a, rule, err.Error())
 		return netip.Prefix{}
 	}
+	if types.PaddedIPv4(scalar(a)) {
+		d.warnf(a, d.leadingZerosRule(), paddedMessage(scalar(a), p.String()))
+	}
 	return p
+}
+
+// leadingZerosRule is the rule for an IPv4 value with zero-padded octets in
+// any attribute of the object being decoded.
+func (d *decoder) leadingZerosRule() string { return "object/" + d.o.Class() + "-leading-zeros" }
+
+// paddedMessage explains how a zero-padded IPv4 value was read.
+func paddedMessage(text, canonical string) string {
+	return fmt.Sprintf("%q has zero-padded octets; it is read as %s (decimal)", text, canonical)
 }
 
 // addrRange parses the first value of name as an inetnum address range
@@ -188,8 +200,11 @@ func (d *decoder) addrRange(name, rule string) (lo, hi netip.Addr) {
 		d.errf(a, rule, "expected 'lo - hi' address range")
 		return netip.Addr{}, netip.Addr{}
 	}
-	lo, err1 := netip.ParseAddr(strings.TrimSpace(l))
-	hi, err2 := netip.ParseAddr(strings.TrimSpace(h))
+	lo, err1 := types.ParseAddr(strings.TrimSpace(l))
+	hi, err2 := types.ParseAddr(strings.TrimSpace(h))
+	if err1 == nil && err2 == nil && (types.PaddedIPv4(strings.TrimSpace(l)) || types.PaddedIPv4(strings.TrimSpace(h))) {
+		d.warnf(a, d.leadingZerosRule(), paddedMessage(scalar(a), lo.String()+" - "+hi.String()))
+	}
 	switch {
 	case err1 != nil || err2 != nil:
 		d.errf(a, rule, "invalid address range "+scalar(a))
@@ -405,10 +420,13 @@ func (d *decoder) routePrefix(class string, v6 bool) netip.Prefix {
 func (d *decoder) holes(class string, route netip.Prefix) []netip.Prefix {
 	var out []netip.Prefix
 	for _, it := range d.listItems("holes") {
-		h, err := netip.ParsePrefix(it.Value)
+		h, err := types.ParsePrefix(it.Value)
 		if err != nil {
 			d.diagAt(ast.Error, it.span(), "object/"+class+"-holes", err.Error())
 			continue
+		}
+		if types.PaddedIPv4(it.Value) {
+			d.diagAt(ast.Warning, it.span(), d.leadingZerosRule(), paddedMessage(it.Value, h.String()))
 		}
 		if h != h.Masked() {
 			d.diagAt(ast.Warning, it.span(), "object/"+class+"-holes-host-bits",
@@ -472,10 +490,13 @@ func (d *decoder) auth(class string) []Auth {
 func (d *decoder) pingable(class string) []netip.Addr {
 	var out []netip.Addr
 	for _, a := range d.o.GetAll("pingable") {
-		addr, err := netip.ParseAddr(scalar(a))
+		addr, err := types.ParseAddr(scalar(a))
 		if err != nil {
 			d.errf(a, "object/"+class+"-pingable", "invalid address "+strconv.Quote(scalar(a)))
 			continue
+		}
+		if types.PaddedIPv4(scalar(a)) {
+			d.warnf(a, d.leadingZerosRule(), paddedMessage(scalar(a), addr.String()))
 		}
 		out = append(out, addr.Unmap().WithZone(""))
 	}

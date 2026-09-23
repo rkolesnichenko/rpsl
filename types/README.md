@@ -23,6 +23,7 @@ prefix-ranges pays nothing for the rest of the library.
 | `AddrFamily` / `AFI` / `SAFI` | `ParseAddrFamily("ipv4.unicast")` | RFC 4012 afi dictionary; `any` means both |
 | `NICHandle` | `ParseNICHandle("EX1-RIPE")` | case-insensitive, held upper-case |
 | `RouterID` | `ParseRouterID("rtr.example.net")`, `"192.0.2.1"` | an rtr-set member or inet-rtr: an address or a DNS name; canonical, so spellings are `==` |
+| `netip.Addr` / `netip.Prefix` | `ParseAddr("064.006.160.001")`, `ParsePrefix(…)` | `netip`'s grammar, except that zero-padded IPv4 octets are read as decimal, as RPSL writes addresses and IRRd reads them; `PaddedIPv4` reports the spelling |
 
 ## ASNs
 

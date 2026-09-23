@@ -95,13 +95,7 @@ var registries = []registry{
 // cause. They are the gaps the real data of other registries found, each to be
 // fixed in its own change; when one is, its case goes and the test holds the
 // data to it.
-func knownGap(obj *ast.Object, d *rpsl.Diagnostic) string {
-	if d == nil { // a route or route6 whose prefix did not decode
-		if a, ok := obj.GetFirst(obj.Class()); ok && zeroPadded.MatchString(a.Value) {
-			return "IPv4 octets with leading zeros (ARIN)"
-		}
-		return ""
-	}
+func knownGap(d rpsl.Diagnostic) string {
 	if d.Severity != rpsl.Error || !strings.HasPrefix(d.Rule, "object/") {
 		return ""
 	}
@@ -117,10 +111,7 @@ func knownGap(obj *ast.Object, d *rpsl.Diagnostic) string {
 	return ""
 }
 
-var (
-	zeroPadded     = regexp.MustCompile(`(^|\.)0[0-9]`)
-	nicHandleError = regexp.MustCompile(`invalid NIC handle "([^"]*)"`)
-)
+var nicHandleError = regexp.MustCompile(`invalid NIC handle "([^"]*)"`)
 
 func hasDumps(dir, pattern string) bool {
 	m, _ := filepath.Glob(filepath.Join(dir, pattern))
@@ -188,11 +179,7 @@ func checkDump(t *testing.T, reg registry, path string) {
 		switch r := typed.(type) {
 		case object.Route:
 			if !r.Prefix.IsValid() {
-				if g := knownGap(obj, nil); g != "" {
-					gaps[g]++
-				} else {
-					badRoutes = append(badRoutes, obj.Key())
-				}
+				badRoutes = append(badRoutes, obj.Key())
 			}
 		case object.Route6:
 			if !r.Prefix.IsValid() {
@@ -212,7 +199,7 @@ func checkDump(t *testing.T, reg registry, path string) {
 				artefacts++
 				continue
 			}
-			if g := knownGap(obj, &d); g != "" {
+			if g := knownGap(d); g != "" {
 				gaps[g]++
 				continue
 			}

@@ -9,6 +9,22 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **`types.ParseAddr`, `types.ParsePrefix` and `types.PaddedIPv4`**: `netip`'s
+  address grammar, except that zero-padded IPv4 octets (`064.006.160.000`) are
+  read as decimal, as RPSL writes addresses and IRRd reads them.
+
+### Changed
+
+- **Zero-padded IPv4 octets are accepted as decimal** everywhere an RPSL value
+  holds an address: route and route6 prefixes, inetnum ranges, `holes:`,
+  `pingable:`, route-set members, prefix lists, router addresses, `ifaddr:`,
+  `peer:` and prefix ranges. They were an Error and the value was dropped; they
+  are now a Warning (`object/<class>-leading-zeros`, `policy/leading-zeros`) and
+  the value is used. ARIN's IRR holds 88 routes written this way, which every
+  expansion built from its dump had been missing.
+
 ## [0.5.0] - 2026-09-23
 
 ### Added

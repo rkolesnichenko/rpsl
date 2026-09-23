@@ -154,11 +154,12 @@ func (p *parser) routerAddr(rule string) netip.Addr {
 		return netip.Addr{}
 	}
 	p.advance()
-	a, err := netip.ParseAddr(t.text)
+	a, err := types.ParseAddr(t.text)
 	if err != nil {
 		p.errf(t, rule, "invalid interface address "+quote(t.text))
 		return netip.Addr{}
 	}
+	p.warnPadded(t, a.String())
 	return a.Unmap().WithZone("")
 }
 
@@ -201,11 +202,12 @@ func (p *parser) tunnel() *Tunnel {
 		return nil
 	}
 	p.advance()
-	remote, err := netip.ParseAddr(t.text)
+	remote, err := types.ParseAddr(t.text)
 	if err != nil {
 		p.errf(t, "policy/interface", "invalid tunnel endpoint "+quote(t.text))
 		return nil
 	}
+	p.warnPadded(t, remote.String())
 	if p.cur().kind != tComma {
 		p.errf(p.cur(), "policy/interface", "expected ',' after the tunnel endpoint")
 		return &Tunnel{Remote: remote.Unmap().WithZone("")}

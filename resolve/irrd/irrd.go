@@ -202,7 +202,7 @@ func (s *Source) routes(ctx context.Context, cmd string) ([]netip.Prefix, error)
 	}
 	var out []netip.Prefix
 	for _, tok := range strings.Fields(string(payload)) {
-		p, err := netip.ParsePrefix(tok)
+		p, err := types.ParsePrefix(tok) // RPSL's address grammar, as for every registry value
 		if err != nil {
 			return nil, fmt.Errorf("irrd: %s: invalid prefix %q in the response", cmd, tok)
 		}

@@ -2,7 +2,6 @@ package object
 
 import (
 	"fmt"
-	"net/netip"
 	"strings"
 	"unicode"
 
@@ -132,6 +131,11 @@ func (d *decoder) members(name, rule string, container types.SetClass) []SetMemb
 			d.diagAt(ast.Warning, it.span(), rule+"-afi", fmt.Sprintf(
 				"IPv6 member %q belongs in mp-members: (RFC 4012 §4.2); members: is IPv4 only", it.Value))
 		}
+		if m.Kind == MemberPrefixRange {
+			if base, _, _ := strings.Cut(strings.TrimSpace(it.Value), "^"); types.PaddedIPv4(base) {
+				d.diagAt(ast.Warning, it.span(), d.leadingZerosRule(), paddedMessage(it.Value, m.Range.String()))
+			}
+		}
 		out = append(out, m)
 	}
 	return out
@@ -141,6 +145,6 @@ func (d *decoder) members(name, rule string, container types.SetClass) []SetMemb
 // "a/n^op") has bits set beyond its length, which ParsePrefixRange clears.
 func hasHostBits(text string) bool {
 	base, _, _ := strings.Cut(strings.TrimSpace(text), "^")
-	p, err := netip.ParsePrefix(base)
+	p, err := types.ParsePrefix(base)
 	return err == nil && p != p.Masked()
 }

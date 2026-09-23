@@ -3,7 +3,6 @@ package policy
 import (
 	"errors"
 	"fmt"
-	"net/netip"
 	"strings"
 
 	"github.com/rkolesnichenko/rpsl/ast"
@@ -745,7 +744,8 @@ func (p *parser) parseRouterPrim() RouterExpr {
 		return nil
 	}
 	p.advance()
-	if a, err := netip.ParseAddr(t.text); err == nil {
+	if a, err := types.ParseAddr(t.text); err == nil {
+		p.warnPadded(t, a.String())
 		return RouterAddr{Addr: a}
 	}
 	if sn, err := types.ParseSetName(t.text); err == nil {
@@ -1264,6 +1264,7 @@ func (p *parser) parsePrefixList() Filter {
 				if hasHostBits(t.text) {
 					p.warnf(t, "policy/host-bits", quote(t.text)+" has host bits set; it is read as "+pr.String())
 				}
+				p.warnPadded(t, pr.String())
 				ranges = append(ranges, pr)
 			}
 			wantItem = false
@@ -1308,8 +1309,17 @@ func (p *parser) parsePrefixList() Filter {
 // "a/n^op") has bits set beyond its length, which ParsePrefixRange clears.
 func hasHostBits(text string) bool {
 	base, _, _ := strings.Cut(text, "^")
-	pfx, err := netip.ParsePrefix(base)
+	pfx, err := types.ParsePrefix(base)
 	return err == nil && pfx != pfx.Masked()
+}
+
+// warnPadded reports an IPv4 address or prefix token written with zero-padded
+// octets, which types.ParseAddr and ParsePrefix read as decimal.
+func (p *parser) warnPadded(t token, canonical string) {
+	text, _, _ := strings.Cut(t.text, "^")
+	if types.PaddedIPv4(text) {
+		p.warnf(t, "policy/leading-zeros", quote(t.text)+" has zero-padded octets; it is read as "+canonical+" (decimal)")
+	}
 }
 
 // quote wraps a token for diagnostics.

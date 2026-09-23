@@ -36,7 +36,7 @@ func ParseRouterID(s string) (RouterID, error) {
 	if t == "" {
 		return RouterID{}, fmt.Errorf("rpsl/types: invalid router: empty")
 	}
-	if a, err := netip.ParseAddr(t); err == nil {
+	if a, err := ParseAddr(t); err == nil {
 		return RouterID{addr: a.Unmap().WithZone("")}, nil
 	}
 	if err := validRouterName(t, s); err != nil {
