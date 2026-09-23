@@ -577,7 +577,9 @@ The correctness bar is "matches the tools operators already trust," so testing i
 8. **Real-data regression** (opt-in, `RPSL_REALDATA`). Streams the RIPE split dumps (`scripts/fetch-ripe-dumps.sh`: as-set, route-set, route, route6, aut-num, filter-set, peering-set) and checks that the stream is lossless, raises no stream-level diagnostics, decodes every route and route6 to a valid prefix, and puts Errors of any one family on at most 0.1 % of objects (at least 3 tolerated); then expands the largest real as-sets and route-sets twice, in opposite input orders, and requires identical results.
 9. **Live smoke test** (opt-in, `RPSL_LIVE=1`). Queries RADB (over both the IRRd protocol and whois), RIPE whois and RIPE RDAP read-only and asserts only stable facts (AS3333 originates 193.0.0.0/21; a made-up set is not found). It caught IRRd closing the connection after one command without `!!`, and IRRd's whois parser needing every flag before `-i`. `TestRIPETemplatesAreCurrent` (in `object`, same switch) compares the RIPE template fixtures with whois.ripe.net, so a template change there fails a test here.
 
-`scripts/check.sh` runs 1–7 for every module under the race detector, with per-package coverage (plus gofmt, staticcheck, govulncheck and the leaf-isolation and engine-purity invariants); CI installs bgpq4 and runs it with a short `FUZZTIME` on Go 1.23 and the latest stable Go.
+10. **Benchmarks** of every hot path — the lexer, the stream, decoding and validation, the policy parser, the expansion engine — on inputs generated in code, and (opt-in, `RPSL_REALDATA`) on the RIPE dumps. `check.sh` runs each once so none breaks unnoticed; `scripts/bench.sh` compares two refs on one machine with `benchstat`. Nothing times them in CI, where shared runners make timing meaningless.
+
+`scripts/check.sh` runs 1–7 for every module under the race detector, and each benchmark of 10 once, with per-package coverage (plus gofmt, staticcheck, govulncheck and the leaf-isolation and engine-purity invariants); CI installs bgpq4 and runs it with a short `FUZZTIME` on Go 1.23 and the latest stable Go.
 
 ---
 

@@ -68,6 +68,30 @@ Per-target subsets you'll reach for often:
   RIPE templates the RIPE profile is built from (`object/testdata/ripe-templates`).
 - **GB-scale integration harness:** `go run ./examples/bulk-ripe --json <dump>.gz`
 
+## Performance
+
+Every module has benchmarks (`bench_test.go`) for its hot paths: the lexer, the
+stream, decoding and validation, the policy parser, and the expansion engine.
+Their inputs are generated in code, so they need no data; the two in
+`examples/bulk-ripe/bulk` measure the RIPE dumps and run only with
+`RPSL_REALDATA` set. `scripts/check.sh` runs each once, so none can break
+unnoticed, but it does not time them.
+
+To see what a change costs, compare it with the last release, or any ref, on
+your own machine:
+
+```sh
+scripts/bench.sh                  # the working tree against the latest release tag
+scripts/bench.sh main             # ... or against any ref
+BENCH=Stream COUNT=10 scripts/bench.sh
+```
+
+It runs the base ref in a temporary git worktree and compares the two with
+[`benchstat`](https://pkg.go.dev/golang.org/x/perf/cmd/benchstat) when that is
+installed. Timings are noisy: identical code can differ by several percent, so
+reproduce a change before believing it. A change to a hot path should say what
+`bench.sh` showed.
+
 ## Non-negotiables
 
 These are the invariants that make the library trustworthy. Don't relax them to

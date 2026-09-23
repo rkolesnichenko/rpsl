@@ -2,7 +2,8 @@
 # Full verification for every module — what CI runs, and what to run before a
 # commit:
 #
-#   scripts/check.sh                 # build, vet, race tests, gofmt, invariants
+#   scripts/check.sh                 # build, vet, race tests, gofmt, invariants,
+#                                    # every benchmark once
 #   FUZZTIME=15s scripts/check.sh    # ... plus every fuzz target for 15s each
 #
 # staticcheck and govulncheck run when installed (CI installs them), and the
@@ -35,6 +36,13 @@ done
 step "coverage"
 for m in $modules; do
 	(cd "$m" && go test -count=1 -cover ./... 2>&1 | grep -o 'rkolesnichenko/[^ 	]*.*coverage: [0-9.]*%') || bad "coverage $m"
+done
+
+# Every benchmark runs once, so none can break unnoticed. Timing them is
+# scripts/bench.sh's job: one run on a shared machine measures nothing.
+step "benchmarks: each runs once"
+for m in $modules; do
+	(cd "$m" && go test -run '^$' -bench . -benchtime 1x ./... >/dev/null) || bad "benchmarks $m"
 done
 
 step "leaf isolation: types and lexer depend on no sibling module, ast only on lexer"

@@ -272,6 +272,10 @@ FUZZTIME=15s scripts/check.sh  # ... plus every fuzz target (what CI runs)
   queries RADB, RIPE and RDAP read-only;
   `RPSL_LIVE=1 go test -run TestRIPETemplatesAreCurrent ./object` checks that the
   RIPE profile's template fixtures still match whois.ripe.net.
+- **Benchmarks** — every module benchmarks its hot paths on generated input;
+  `scripts/bench.sh [ref]` compares the working tree with a ref (the latest
+  release by default) on your machine, with `benchstat` when installed. With
+  `RPSL_REALDATA` set, two more measure the RIPE dumps.
 - **Expansion correctness** — every `go test` holds the engine and all three
   Sources to a brute-force model of RFC 2622 on thousands of random IRRs. With
   `bgpq4` installed, bgpq4 itself expands the same IRRs and the snapshot whose

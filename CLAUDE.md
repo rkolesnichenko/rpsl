@@ -134,6 +134,7 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   `RPSL_LIVE=1 go test -run TestRIPETemplatesAreCurrent ./object` (RIPE profile vs whois -t).
 - Releasing: RELEASING.md (tag order lexer/types → ast → root → resolve); rehearse first with
   `scripts/release-dryrun.sh` (local proxy, publishes nothing).
+- Performance: `scripts/bench.sh [ref]` compares benchmarks with a ref (default: latest tag).
 - Leaf isolation: `cd types && go list -deps ./... | grep rkolesnichenko` must show only itself.
 - Engine purity: `cd resolve && go list -deps .` must NOT include `net` (sockets live only
   in resolve/irrd, resolve/whois, resolve/rdap).
