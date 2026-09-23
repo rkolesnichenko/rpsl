@@ -9,7 +9,7 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
-## [0.2.0] - unreleased
+## [0.2.0] - 2026-09-23
 
 Closes the gaps between what v0.1.0 shipped and what the RFCs and this project's
 own design document describe. The headline is that the policy AST and the
@@ -207,5 +207,6 @@ The first release. There is no earlier version to migrate from.
   values do; a few common RP-attributes have typed helpers.
 - **`rdap` is not a `Source`.** RDAP serves registration data, not IRR sets.
 
-[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/rkolesnichenko/rpsl/releases/tag/v0.1.0
