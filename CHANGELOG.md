@@ -9,6 +9,20 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Changed
+
+- **`Irt.Auth` is `[]object.Auth`**, not `[]string`: an irt's `auth:` lines
+  decode as a mntner's do, with the same `object/irt-auth` warning for a scheme
+  this library does not know. For the text as written, use `Auth.String()`.
+
+### Fixed
+
+- The v0.2.0 migration table listed `Irt.Auth` as changing to `[]object.Auth`,
+  but only `Mntner.Auth` did; the irt change takes effect in this release. It
+  slipped past the field-drift test, which checks which field a value lands in
+  but not its type. A new test requires every attribute to decode to the same
+  type in every class that has it.
+
 ## [0.3.0] - 2026-09-23
 
 ### Added
@@ -101,7 +115,7 @@ rather than into strings:
 | `InetRtr` | `Ifaddr` | `[]string` | `[]policy.Ifaddr` |
 | | `Interface` | `[]string` | `[]policy.Interface` |
 | | `Peers`, `MpPeers` | `[]string` | `[]policy.Peer` |
-| `Mntner`, `Irt` | `Auth` | `[]string` | `[]object.Auth` |
+| `Mntner`, `Irt` | `Auth` | `[]string` | `[]object.Auth` (`Irt`: from v0.4.0) |
 | `RtrSet` | `Members`, `MpMembers` | `[]string` | `[]object.RtrSetMember` |
 | `Common` | `Changed` | `[]string` | `[]object.Changed` |
 | `Registry` | `Created`, `LastModified` | `string` | `object.Timestamp` |

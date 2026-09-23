@@ -163,14 +163,15 @@ func decodeInetRtr(d *decoder) InetRtr {
 }
 
 // Irt is an irt object: a Computer Security Incident Response Team (RIPE), with
-// contact and auth data.
+// contact data. Auth holds its authentication schemes, decoded as a mntner's are;
+// nothing here verifies one.
 type Irt struct {
 	Common
 	Registry
 	Name       string
 	Address    []string
 	Email      []string
-	Auth       []string
+	Auth       []Auth
 	Phone      []string
 	FaxNo      []string
 	Signature  []string
@@ -193,7 +194,7 @@ func decodeIrt(d *decoder) Irt {
 		Name:       d.key("irt"),
 		Address:    d.all("address"),
 		Email:      d.all("e-mail"),
-		Auth:       d.all("auth"),
+		Auth:       d.auth("irt"),
 		Phone:      d.all("phone"),
 		FaxNo:      d.all("fax-no"),
 		Signature:  d.list("signature"),

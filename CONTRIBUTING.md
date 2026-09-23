@@ -18,14 +18,14 @@ The repo is a Go workspace of six modules:
 
 | Module | What's in it |
 | --- | --- |
-| ROOT (`.`) | `rpsl` façade, `object`, `policy` |
+| ROOT (`.`) | `rpsl` façade, `object`, `policy`, `auth` |
 | `lexer/` | scanner + tokens |
 | `ast/` | generic object/attribute model + `Diagnostic`/`Severity` |
 | `types/` | leaf value types (`ASN`, `SetName`, `PrefixRange`, `RangeOperator`, `AddrFamily`, `NICHandle`; prefixes are `netip.Prefix`) |
 | `resolve/` | pure expansion engine + `Source` interface; `irrd`/`whois`/`rdap` backends; `internal/netconn` (socket deadlines, backends only) |
 | `examples/bulk-ripe/` | GB-scale integration harness and the opt-in real-data regression |
 
-Inter-module `require`s name the latest release (`v0.1.0`), and the root
+Inter-module `require`s name the latest release, and the root
 `go.work` (`use`) overrides them with the local directories, so a change in one
 module is seen by the others at once, without a release. Leave the `require`s
 alone: they are bumped only when releasing ([RELEASING.md](RELEASING.md)).
@@ -38,7 +38,7 @@ structural invariants — with:
 
 ```sh
 scripts/check.sh
-FUZZTIME=15s scripts/check.sh   # also runs all twelve fuzz targets (as CI does)
+FUZZTIME=15s scripts/check.sh   # also runs every fuzz target (as CI does)
 ```
 
 Per-target subsets you'll reach for often:
@@ -85,7 +85,9 @@ make a change pass:
 4. **Dict ↔ decoder agreement.** If `object/profiles.go` lists an attribute on a
    class, the matching `decodeXxx` must surface it on the typed struct.
    Otherwise data is silently dropped on `Decode`.
-   `TestEveryAttributeLandsInItsOwnField` enforces this.
+   `TestEveryAttributeLandsInItsOwnField` enforces this, and
+   `TestAttributeTypesAgreeAcrossClasses` requires an attribute to decode to
+   the same type in every class that has it.
 5. **Imports run strictly downward.**
    `resolve → object → policy → types → ast → lexer`. Go forbids import cycles,
    but `object` and `policy` share the root module, so keep the direction by

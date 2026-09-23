@@ -121,7 +121,7 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
 
 - **`go test ./...` only covers the ROOT module** (rpsl, object, policy, auth). Run everything
   (all six modules incl. examples/bulk-ripe under -race, gofmt, invariants) with
-  `scripts/check.sh`; `FUZZTIME=15s scripts/check.sh` also runs all twelve fuzz targets.
+  `scripts/check.sh`; `FUZZTIME=15s scripts/check.sh` also runs every fuzz target.
 - `go test -run 'TestRoundTrip|TestStreamRoundTrip' .` — the lossless guard (root module).
 - Fuzz (24 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
   FuzzFormat (ast); FuzzParseSetName, FuzzParseRangeOperator, FuzzParsePrefixRange,

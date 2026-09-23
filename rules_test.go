@@ -181,6 +181,7 @@ func TestDiagnosticRulesAreDocumented(t *testing.T) {
 		{"policy/too-many-errors", pol(parseImport, "from AS1 accept "+strings.Repeat("junk!! ", 150))},
 		{"object/route-pingable", obj("route: 192.0.2.0/24\norigin: AS1\npingable: nope\n")},
 		{"object/mntner-auth", obj("mntner: M\nadmin-c: EX1-RIPE\nupd-to: e@e.net\nauth: WEIRD-PW x\nmnt-by: M\nsource: RIPE\n")},
+		{"object/irt-auth", obj("irt: IRT-X\naddress: A\ne-mail: e@e.net\nauth: WEIRD-PW x\nsource: RIPE\n")},
 		{"object/route-created", obj("route: 192.0.2.0/24\norigin: AS1\ncreated: yesterday\n")},
 		{"object/route-last-modified", obj("route: 192.0.2.0/24\norigin: AS1\nlast-modified: never\n")},
 		{"object/route-changed", obj("route: 192.0.2.0/24\norigin: AS1\nchanged: e@e.net notadate\n")},

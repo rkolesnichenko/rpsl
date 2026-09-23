@@ -250,16 +250,20 @@ covers only the root; run everything with:
 
 ```sh
 scripts/check.sh               # every module: build, vet, test -race; gofmt; invariants
-FUZZTIME=15s scripts/check.sh  # ... plus all twelve fuzz targets (what CI runs)
+FUZZTIME=15s scripts/check.sh  # ... plus every fuzz target (what CI runs)
 ```
 
 - **Lossless round-trip** — `go test -run TestRoundTrip .` for single objects,
   `TestStreamRoundTrip` and `FuzzParseStream` for streams.
 - **Fuzz** (never panic, never drop input, and hold each parser's properties —
-  see design §11): `FuzzTokenize`, `FuzzAttributeList`, `FuzzEdit`,
-  `FuzzParseSetName`, `FuzzParseRangeOperator`, `FuzzParsePrefixRange`,
-  `FuzzParseStream`, `FuzzDecode`, `FuzzParseImport`, `FuzzParseASPathRegexp`,
-  `FuzzParseFilter`, `FuzzParsePeering`.
+  see design §11): `FuzzTokenize` (lexer); `FuzzAttributeList`, `FuzzEdit`,
+  `FuzzFormat` (ast); `FuzzParseSetName`, `FuzzParseRangeOperator`,
+  `FuzzParsePrefixRange`, `FuzzParseRouterID` (types); `FuzzParseStream`,
+  `FuzzDecode` (root); `FuzzParseImport`, `FuzzParseASPathRegexp`,
+  `FuzzParseFilter`, `FuzzParsePeering`, `FuzzParseInject`,
+  `FuzzParseComponents`, `FuzzParseAggrMtd`, `FuzzParseIfaddr`,
+  `FuzzParseInterface`, `FuzzParsePeer`, `FuzzParseRPAttribute`,
+  `FuzzParseTypedef`, `FuzzParseProtocol`, `FuzzFilterString` (policy).
 - **Real data (opt-in)** — `scripts/fetch-ripe-dumps.sh` downloads RIPE split
   dumps; `RPSL_REALDATA=$PWD/.data/ripe go test -run TestRealData ./examples/bulk-ripe/bulk`
   checks lossless streaming, error rates, and order-independent expansion of the
