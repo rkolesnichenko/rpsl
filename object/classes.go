@@ -228,6 +228,8 @@ type Route struct {
 	AggrBndry   policy.ASExpr
 	AggrMtd     policy.AggrMtd
 	ExportComps policy.Filter
+	GeoIdx      []string // geoidx: (IRRd), as written
+	RoaURI      string   // roa-uri: (IRRd), as written
 	raw         *ast.Object
 }
 
@@ -253,6 +255,8 @@ func decodeRoute(d *decoder) Route {
 		AggrBndry:   d.asExpr("route", "aggr-bndry"),
 		AggrMtd:     d.aggrMtd("route"),
 		ExportComps: d.filterAttr("route", "export-comps"),
+		GeoIdx:      d.all("geoidx"),
+		RoaURI:      d.str("roa-uri"),
 		raw:         d.o,
 	}
 }
@@ -273,6 +277,8 @@ type Route6 struct {
 	AggrBndry   policy.ASExpr
 	AggrMtd     policy.AggrMtd
 	ExportComps policy.Filter
+	GeoIdx      []string // geoidx: (IRRd), as written
+	RoaURI      string   // roa-uri: (IRRd), as written
 	raw         *ast.Object
 }
 
@@ -298,6 +304,8 @@ func decodeRoute6(d *decoder) Route6 {
 		AggrBndry:   d.asExpr("route6", "aggr-bndry"),
 		AggrMtd:     d.aggrMtd("route6"),
 		ExportComps: d.filterAttr("route6", "export-comps"),
+		GeoIdx:      d.all("geoidx"),
+		RoaURI:      d.str("roa-uri"),
 		raw:         d.o,
 	}
 }

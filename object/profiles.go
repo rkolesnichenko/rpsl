@@ -209,8 +209,102 @@ func ripeClasses() map[string]ClassSpec {
 // are flagged too.
 var RFCStrict = Profile{name: "RFC-strict", classes: rfcClasses()}
 
+// IRRd mirrors IRRd 4 — the software RADB and the IRRs it mirrors run — as it
+// validates a submission: each class is exactly IRRd's table (irrd/rpsl/
+// rpsl_objects.py, kept in testdata/irrd), with its mandatory and single
+// attributes, and no attribute outside it but last-modified:, which IRRd
+// ignores. A class IRRd does not know is dict/unknown-class, as IRRd refuses
+// it. It checks attributes only; IRRd's checks of values, such as its set-name
+// rules, are not here.
+var IRRd = Profile{name: "IRRd", classes: irrdClasses()}
+
 // RIPE mirrors the RIPE Database: each class is exactly RIPE's template —
 // required attributes, cardinality, and no attributes outside it (a misspelled
 // attribute is dict/unknown-attr). Legacy attributes RIPE no longer has, such
 // as changed:, are flagged too.
 var RIPE = Profile{name: "RIPE", classes: ripeClasses()}
+
+// irrdClasses is IRRd's table, transcribed from IRRd v4.5.3's rpsl_objects.py
+// (testdata/irrd): a field without optional=True is required, one without
+// multiple=True single. last-modified: is allowed everywhere, since IRRd skips
+// it when validating. TestIRRdProfileMatchesSource keeps the two in step.
+func irrdClasses() map[string]ClassSpec {
+	c := map[string]ClassSpec{}
+	set := func(name string, entries ...attr) {
+		c[name] = spec(false, nil, entries...)
+	}
+	set("as-block",
+		reqS("as-block"), opt("descr"), req("admin-c"), req("tech-c"), opt("remarks"), opt("notify"), req("mnt-by"),
+		opt("changed"), reqS("source"), opt("last-modified"))
+	set("as-set",
+		reqS("as-set"), opt("descr"), opt("members"), opt("mbrs-by-ref"), opt("admin-c"), opt("tech-c"),
+		opt("remarks"), opt("notify"), req("mnt-by"), opt("changed"), reqS("source"), opt("last-modified"))
+	set("aut-num",
+		reqS("aut-num"), reqS("as-name"), opt("descr"), opt("member-of"), opt("import"), opt("mp-import"),
+		opt("import-via"), opt("export"), opt("mp-export"), opt("export-via"), opt("default"), opt("mp-default"),
+		req("admin-c"), req("tech-c"), opt("remarks"), opt("notify"), opt("mnt-by"), opt("changed"), reqS("source"),
+		opt("last-modified"))
+	set("domain",
+		reqS("domain"), opt("descr"), req("admin-c"), req("tech-c"), req("zone-c"), opt("nserver"), opt("sub-dom"),
+		opt("dom-net"), optS("refer"), opt("remarks"), opt("notify"), opt("mnt-by"), opt("changed"), reqS("source"),
+		opt("last-modified"))
+	set("filter-set",
+		reqS("filter-set"), opt("descr"), reqS("filter"), optS("mp-filter"), opt("admin-c"), opt("tech-c"),
+		opt("remarks"), opt("notify"), req("mnt-by"), opt("changed"), reqS("source"), opt("last-modified"))
+	set("inet-rtr",
+		reqS("inet-rtr"), opt("descr"), opt("alias"), reqS("local-as"), opt("ifaddr"), opt("interface"), opt("peer"),
+		opt("mp-peer"), opt("member-of"), optS("rs-in"), optS("rs-out"), opt("admin-c"), opt("tech-c"),
+		opt("remarks"), opt("notify"), req("mnt-by"), opt("changed"), reqS("source"), opt("last-modified"))
+	set("inet6num",
+		reqS("inet6num"), reqS("netname"), opt("descr"), req("country"), req("admin-c"), req("tech-c"),
+		opt("rev-srv"), reqS("status"), optS("geofeed"), opt("remarks"), opt("notify"), req("mnt-by"),
+		opt("changed"), reqS("source"), opt("last-modified"))
+	set("inetnum",
+		reqS("inetnum"), reqS("netname"), opt("descr"), req("country"), req("admin-c"), req("tech-c"),
+		opt("rev-srv"), reqS("status"), optS("geofeed"), opt("remarks"), opt("notify"), req("mnt-by"),
+		opt("changed"), reqS("source"), opt("last-modified"))
+	set("irt",
+		reqS("irt"), req("address"), opt("phone"), opt("fax-no"), req("e-mail"), req("abuse-mailbox"),
+		opt("admin-c"), opt("tech-c"), opt("remarks"), opt("notify"), req("mnt-by"), opt("changed"), reqS("source"),
+		opt("last-modified"))
+	set("key-cert",
+		reqS("key-cert"), optS("method"), opt("owner"), optS("fingerpr"), req("certif"), opt("remarks"),
+		opt("admin-c"), opt("tech-c"), opt("notify"), req("mnt-by"), opt("changed"), reqS("source"),
+		opt("last-modified"))
+	set("mntner",
+		reqS("mntner"), opt("descr"), req("admin-c"), opt("tech-c"), req("upd-to"), opt("mnt-nfy"), req("auth"),
+		opt("remarks"), opt("notify"), req("mnt-by"), opt("changed"), reqS("source"), opt("last-modified"))
+	set("organisation",
+		reqS("organisation"), reqS("org-name"), req("country"), req("address"), opt("phone"), opt("fax-no"),
+		req("e-mail"), opt("admin-c"), opt("tech-c"), opt("remarks"), opt("notify"), req("mnt-by"), opt("changed"),
+		reqS("source"), opt("last-modified"))
+	set("peering-set",
+		reqS("peering-set"), opt("descr"), opt("peering"), opt("mp-peering"), opt("admin-c"), opt("tech-c"),
+		opt("remarks"), opt("notify"), req("mnt-by"), opt("changed"), reqS("source"), opt("last-modified"))
+	set("person",
+		reqS("person"), req("address"), req("phone"), opt("fax-no"), req("e-mail"), reqS("nic-hdl"), opt("remarks"),
+		opt("notify"), req("mnt-by"), opt("changed"), reqS("source"), opt("last-modified"))
+	set("role",
+		reqS("role"), opt("trouble"), req("address"), req("phone"), opt("fax-no"), req("e-mail"), opt("admin-c"),
+		opt("tech-c"), reqS("nic-hdl"), opt("remarks"), opt("notify"), req("mnt-by"), opt("changed"), reqS("source"),
+		opt("last-modified"))
+	set("route",
+		reqS("route"), opt("descr"), reqS("origin"), opt("holes"), opt("member-of"), opt("inject"),
+		optS("aggr-bndry"), optS("aggr-mtd"), optS("export-comps"), optS("components"), opt("admin-c"),
+		opt("tech-c"), opt("geoidx"), optS("roa-uri"), opt("remarks"), opt("notify"), req("mnt-by"), opt("changed"),
+		reqS("source"), opt("last-modified"))
+	set("route-set",
+		reqS("route-set"), opt("members"), opt("mp-members"), opt("mbrs-by-ref"), opt("descr"), opt("admin-c"),
+		opt("tech-c"), opt("remarks"), opt("notify"), req("mnt-by"), opt("changed"), reqS("source"),
+		opt("last-modified"))
+	set("route6",
+		reqS("route6"), opt("descr"), reqS("origin"), opt("holes"), opt("member-of"), opt("inject"),
+		optS("aggr-bndry"), optS("aggr-mtd"), optS("export-comps"), optS("components"), opt("admin-c"),
+		opt("tech-c"), opt("geoidx"), optS("roa-uri"), opt("remarks"), opt("notify"), req("mnt-by"), opt("changed"),
+		reqS("source"), opt("last-modified"))
+	set("rtr-set",
+		reqS("rtr-set"), opt("descr"), opt("members"), opt("mp-members"), opt("mbrs-by-ref"), opt("admin-c"),
+		opt("tech-c"), opt("remarks"), opt("notify"), req("mnt-by"), opt("changed"), reqS("source"),
+		opt("last-modified"))
+	return c
+}

@@ -17,14 +17,16 @@ import (
 type Object = object.Object
 
 // Profile is a class/attribute dictionary used by Validate. The built-in
-// profiles are RIPE and RFCStrict.
+// profiles are RIPE, IRRd and RFCStrict.
 type Profile = object.Profile
 
-// RIPE and RFCStrict are the built-in validation profiles (design §10): RIPE
-// mirrors IRRd/RIPE reality (extra attributes, legacy changed:), RFCStrict
-// admits only RFC 2622/2650/4012 attributes.
+// The built-in validation profiles (design §10): RIPE is the RIPE Database's
+// templates, IRRd is IRRd 4's class tables — what RADB and the IRRs it mirrors
+// accept — and RFCStrict admits only the attributes of RFC 2622, 2725, 2726
+// and 4012.
 var (
 	RIPE      = object.RIPE
+	IRRd      = object.IRRd
 	RFCStrict = object.RFCStrict
 )
 
