@@ -59,11 +59,11 @@ func TestRealData(t *testing.T) {
 // registry describes what one registry's dumps need from the test.
 type registry struct {
 	name string
-	// validate: check objects against the RIPE profile. The profiles describe
-	// RIPE's templates (and the RFCs'); other registries have templates of
-	// their own, so validating their data against RIPE's would only measure
-	// how the templates differ.
-	validate bool
+	// profile, when set, is the validation profile the registry's own software
+	// applies: RIPE's templates for RIPE, IRRd's tables for RADB and the IRRs
+	// it mirrors. Validating a registry against another's profile would only
+	// measure how the two differ.
+	profile *rpsl.Profile
 	// artefact reports a diagnostic caused by how the registry publishes its
 	// dumps rather than by the data or this library. Each is listed with its
 	// reason; everything else still counts.
@@ -89,7 +89,7 @@ type registry struct {
 }
 
 var registries = []registry{
-	{name: "ripe", validate: true, expandPrefix: "ripe", strictVia: true, artefact: func(obj *ast.Object, d rpsl.Diagnostic) bool {
+	{name: "ripe", profile: &rpsl.RIPE, expandPrefix: "ripe", strictVia: true, artefact: func(obj *ast.Object, d rpsl.Diagnostic) bool {
 		// RIPE's dumps remove the auth: lines of some mntners and irts.
 		return d.Rule == "dict/missing-required" && (obj.Class() == "mntner" || obj.Class() == "irt") &&
 			strings.Contains(d.Message, `"auth"`)
@@ -101,18 +101,18 @@ var registries = []registry{
 	}},
 	{name: "afrinic"},
 	{name: "lacnic"},
-	{name: "radb", dataProblem: legacyNames},
+	{name: "radb", profile: &rpsl.IRRd, dataProblem: legacyNames},
 	// The IRRs RADB mirrors.
-	{name: "altdb", dataProblem: legacyNames},
-	{name: "bboi", dataProblem: legacyNames},
-	{name: "bell", dataProblem: legacyNames},
-	{name: "canarie", dataProblem: legacyNames},
-	{name: "jpirr", dataProblem: legacyNames},
-	{name: "nestegg", dataProblem: legacyNames},
-	{name: "nttcom", dataProblem: legacyNames},
-	{name: "panix", dataProblem: legacyNames},
-	{name: "reach", dataProblem: legacyNames},
-	{name: "tc", dataProblem: legacyNames, limits: map[string]float64{
+	{name: "altdb", profile: &rpsl.IRRd, dataProblem: legacyNames},
+	{name: "bboi", profile: &rpsl.IRRd, dataProblem: legacyNames},
+	{name: "bell", profile: &rpsl.IRRd, dataProblem: legacyNames},
+	{name: "canarie", profile: &rpsl.IRRd, dataProblem: legacyNames},
+	{name: "jpirr", profile: &rpsl.IRRd, dataProblem: legacyNames},
+	{name: "nestegg", profile: &rpsl.IRRd, dataProblem: legacyNames},
+	{name: "nttcom", profile: &rpsl.IRRd, dataProblem: legacyNames},
+	{name: "panix", profile: &rpsl.IRRd, dataProblem: legacyNames},
+	{name: "reach", profile: &rpsl.IRRd, dataProblem: legacyNames},
+	{name: "tc", profile: &rpsl.IRRd, dataProblem: legacyNames, limits: map[string]float64{
 		// TC's aut-nums often misuse RPSL: "accept ANY except FLTR-BOGONS"
 		// (EXCEPT joins policies, not filters), "action pref 100" without
 		// its "=", a value continued into a remarks: line. Measured on
@@ -208,8 +208,8 @@ func checkDump(t *testing.T, reg registry, path string) {
 			}
 		}
 		checked := decodeDiags
-		if reg.validate {
-			checked = append(checked, rpsl.Validate(obj, rpsl.RIPE)...)
+		if reg.profile != nil {
+			checked = append(checked, rpsl.Validate(obj, *reg.profile)...)
 		}
 		families := map[string]bool{}
 		for _, d := range checked {
