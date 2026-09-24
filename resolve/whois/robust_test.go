@@ -1,10 +1,12 @@
 package whois
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"math"
 	"net"
+	"runtime"
 	"testing"
 	"time"
 
@@ -143,5 +145,25 @@ func TestWhoisSourcesAreValidated(t *testing.T) {
 	}
 	if (&Source{MaxResponse: -1}).maxResponse() != math.MaxInt64 || (&Source{}).maxResponse() != maxResponse {
 		t.Error("MaxResponse: zero is the default and negative is unlimited")
+	}
+}
+
+// Blanking the "%" lines of a response allocates nothing per line: a response
+// of 16 MiB of empty lines once allocated about 28 times its size.
+func TestScanResponseInPlace(t *testing.T) {
+	data := bytes.Repeat([]byte("\n"), 1<<20)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	_, _ = scanResponse(data)
+	runtime.ReadMemStats(&after)
+	if a := after.TotalAlloc - before.TotalAlloc; a > 64<<10 {
+		t.Errorf("scanResponse allocated %d bytes for 1 MiB of empty lines", a)
+	}
+	got, serr := scanResponse([]byte("% comment\nas-set: AS-X\n%ERROR:201: access denied\nmembers: AS1\n%% ERROR: late"))
+	if want := "\nas-set: AS-X\n\nmembers: AS1\n\n"; string(got) != want {
+		t.Errorf("scanResponse text = %q, want %q", got, want)
+	}
+	if serr == nil || serr.Code != 201 {
+		t.Errorf("scanResponse error = %v, want the first: 201", serr)
 	}
 }

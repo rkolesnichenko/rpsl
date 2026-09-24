@@ -40,7 +40,7 @@ type Source struct {
 	Addr        string                                      // "whois.ripe.net:43"
 	Sources     []string                                    // optional "-s" filter: only objects from these sources
 	Timeout     time.Duration                               // one deadline per query, dial and I/O; 0 = DefaultTimeout, < 0 = none (ctx only)
-	MaxResponse int64                                       // per-call response byte cap; 0 = 256 MiB, < 0 = none
+	MaxResponse int64                                       // per-call response byte cap; 0 = 32 MiB, < 0 = none
 	Dial        func(ctx context.Context) (net.Conn, error) // override transport in tests; nil = net.Dialer
 }
 
@@ -80,8 +80,11 @@ func (e *ServerError) Error() string {
 
 // maxResponse caps a single WHOIS response. A hostile or wedged server could
 // otherwise stream unbounded data into io.ReadAll and exhaust memory; we treat
-// hitting the cap as an error. 256 MiB dwarfs any real object set.
-const maxResponse = 256 << 20
+// hitting the cap as an error. 32 MiB is over twenty times the largest real
+// answer (the member-of claims of the most-claimed set in RIPE or RADB are
+// about 1.5 MB), and decoding holds a response's objects in several times its
+// size, so a larger cap buys nothing but a hostile server's leverage.
+const maxResponse = 32 << 20
 
 func (s *Source) maxResponse() int64 {
 	switch {
@@ -268,26 +271,33 @@ func (s *Source) dial(ctx context.Context) (net.Conn, error) {
 // they are not RPSL, and one glued to an object ("%ERROR:101: …" has colons)
 // would otherwise parse as its first attribute — and returns the first server
 // error, if any: RIPE's "%ERROR:NNN: msg" other than 101 ("no entries found"),
-// or IRRd's "%% ERROR: msg" (Code 0).
+// or IRRd's "%% ERROR: msg" (Code 0). It rewrites data in place, each "%" line
+// becoming an empty one, so a response costs no memory beyond its own.
 func scanResponse(data []byte) ([]byte, *ServerError) {
 	var serr *ServerError
-	lines := bytes.SplitAfter(data, []byte("\n"))
-	for i, l := range lines {
-		if len(l) == 0 || l[0] != '%' {
+	out := data[:0] // never longer than what has been read, so never ahead of it
+	for rest := data; len(rest) > 0; {
+		l := rest
+		if i := bytes.IndexByte(rest, '\n'); i >= 0 {
+			l = rest[:i+1]
+		}
+		rest = rest[len(l):]
+		if l[0] != '%' {
+			out = append(out, l...)
 			continue
 		}
-		if rest, ok := bytes.CutPrefix(l, []byte("%ERROR:")); ok && serr == nil {
-			codeText, msg, _ := bytes.Cut(rest, []byte(":"))
+		if msg, ok := bytes.CutPrefix(l, []byte("%ERROR:")); ok && serr == nil {
+			codeText, text, _ := bytes.Cut(msg, []byte(":"))
 			if code, err := strconv.Atoi(string(codeText)); err == nil && code != 101 {
-				serr = &ServerError{Code: code, Message: strings.TrimSpace(string(msg))}
+				serr = &ServerError{Code: code, Message: strings.TrimSpace(string(text))}
 			}
 		}
-		if rest, ok := bytes.CutPrefix(l, []byte("%% ERROR:")); ok && serr == nil {
-			serr = &ServerError{Message: strings.TrimSpace(string(rest))}
+		if msg, ok := bytes.CutPrefix(l, []byte("%% ERROR:")); ok && serr == nil {
+			serr = &ServerError{Message: strings.TrimSpace(string(msg))}
 		}
-		lines[i] = []byte("\n")
+		out = append(out, '\n')
 	}
-	return bytes.Join(lines, nil), serr
+	return out, serr
 }
 
 // validSourceName reports whether n is a plain IRR source name: letters,

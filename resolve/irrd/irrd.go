@@ -57,7 +57,7 @@ type Source struct {
 	Addr        string                                      // "whois.radb.net:43"
 	Sources     []string                                    // optional "!s" priority, e.g. {"RADB", "RIPE"}
 	Timeout     time.Duration                               // one deadline per query: slot wait, dial, I/O, retry; 0 = DefaultTimeout, < 0 = none (ctx only)
-	MaxResponse int64                                       // cap on one response payload; 0 = 256 MiB, < 0 = none
+	MaxResponse int64                                       // cap on one response payload; 0 = 32 MiB, < 0 = none
 	Dial        func(ctx context.Context) (net.Conn, error) // override transport in tests; nil = net.Dialer
 
 	KeepAlive bool // reuse persistent connections from a pool
@@ -96,10 +96,13 @@ var ErrIndirectUnsupported = errors.New("irrd: indirect rtr-set members need a w
 // defaultMaxConns is MaxConns when zero.
 const defaultMaxConns = 4
 
-// defaultMaxResponse caps a single IRRd response payload. 256 MiB dwarfs any
-// real "!i" or route payload; memory still grows only with the bytes that
-// actually arrive, whatever length a header claims.
-const defaultMaxResponse = 256 << 20
+// defaultMaxResponse caps a single IRRd response payload. 32 MiB is over twenty
+// times the largest real "!i" or route payload (RADB's RS-ALGAR lists 1.3 MB of
+// members; AS45899 originates 72,827 routes), and a decoded "!i" answer holds
+// about 100 bytes per member however short its text, so a larger cap buys
+// nothing but a hostile server's leverage. Memory grows only with the bytes
+// that actually arrive, whatever length a header claims.
+const defaultMaxResponse = 32 << 20
 
 func (s *Source) timeout() time.Duration {
 	switch {
@@ -549,12 +552,42 @@ func readStatusLine(br *bufio.Reader) (string, error) {
 	}
 }
 
-// parseMembers turns a whitespace-separated "!i" payload into typed members.
+// parseMembers turns a whitespace-separated "!i" payload into typed members,
+// in a slice sized once, each member's text a substring of the payload.
 func parseMembers(payload string, class types.SetClass) []object.SetMember {
-	var out []object.SetMember
-	for _, tok := range strings.Fields(payload) {
+	out := make([]object.SetMember, 0, countTokens(payload))
+	for rest := payload; ; {
+		var tok string
+		if tok, rest = nextToken(rest); tok == "" {
+			return out
+		}
 		m, _ := object.ParseSetMember(tok, class) // unparseable tokens stay MemberInvalid
 		out = append(out, m)
 	}
-	return out
+}
+
+// nextToken splits the first run of non-space bytes off s. The payload is
+// ASCII, as IRRd writes it; any other byte is part of a token.
+func nextToken(s string) (tok, rest string) {
+	i := 0
+	for i < len(s) && isSpace(s[i]) {
+		i++
+	}
+	j := i
+	for j < len(s) && !isSpace(s[j]) {
+		j++
+	}
+	return s[i:j], s[j:]
+}
+
+func countTokens(s string) int {
+	n := 0
+	for tok, rest := nextToken(s); tok != ""; tok, rest = nextToken(rest) {
+		n++
+	}
+	return n
+}
+
+func isSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f'
 }

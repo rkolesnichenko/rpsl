@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net"
 	"reflect"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,5 +63,33 @@ func TestGetSetRejectsZeroName(t *testing.T) {
 	}}
 	if _, err := src.GetSet(context.Background(), types.SetName{}); err == nil {
 		t.Error("GetSet(zero SetName) succeeded, want an error")
+	}
+}
+
+// A hostile "!i" answer costs memory in proportion to its size, and little
+// more: each member is one slot of a slice sized once, its text shared with the
+// payload. (strings.Fields and a growing slice held about three times that.)
+func TestParseMembersMemory(t *testing.T) {
+	for _, tok := range []string{"x ", "AS1 ", "10.0.0.0/8 "} {
+		payload := strings.Repeat(tok, 1<<18)
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		m := parseMembers(payload, types.ClassRouteSet)
+		runtime.GC()
+		runtime.ReadMemStats(&after)
+		live := int64(after.HeapAlloc) - int64(before.HeapAlloc)
+		if per := live / int64(len(m)); len(m) != 1<<18 || per > 128 {
+			t.Errorf("%q: %d members, %d bytes live each; want %d and at most 128", tok, len(m), per, 1<<18)
+		}
+		runtime.KeepAlive(m)
+	}
+	got := parseMembers(" AS1\tAS-FOO\n\r10.0.0.0/8  ", types.ClassRouteSet)
+	var raws []string
+	for _, m := range got {
+		raws = append(raws, m.Raw)
+	}
+	if strings.Join(raws, ",") != "AS1,AS-FOO,10.0.0.0/8" {
+		t.Errorf("parseMembers split into %q", raws)
 	}
 }
