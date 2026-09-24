@@ -40,7 +40,7 @@ type Source struct {
 	Addr        string                                      // "whois.ripe.net:43"
 	Sources     []string                                    // optional "-s" filter: only objects from these sources
 	Timeout     time.Duration                               // one deadline per query, dial and I/O; 0 = DefaultTimeout, < 0 = none (ctx only)
-	MaxResponse int64                                       // per-call response byte cap; 0 = 256 MiB, < 0 = none
+	MaxResponse int64                                       // per-call response byte cap; 0 = 32 MiB, < 0 = none
 	Dial        func(ctx context.Context) (net.Conn, error) // override transport in tests; nil = net.Dialer
 }
 
@@ -80,8 +80,11 @@ func (e *ServerError) Error() string {
 
 // maxResponse caps a single WHOIS response. A hostile or wedged server could
 // otherwise stream unbounded data into io.ReadAll and exhaust memory; we treat
-// hitting the cap as an error. 256 MiB dwarfs any real object set.
-const maxResponse = 256 << 20
+// hitting the cap as an error. 32 MiB is over twenty times the largest real
+// answer (the member-of claims of the most-claimed set in RIPE or RADB are
+// about 1.5 MB), and decoding holds a response's objects in several times its
+// size, so a larger cap buys nothing but a hostile server's leverage.
+const maxResponse = 32 << 20
 
 func (s *Source) maxResponse() int64 {
 	switch {
@@ -93,22 +96,23 @@ func (s *Source) maxResponse() int64 {
 	return s.MaxResponse
 }
 
-// GetSet fetches an as-set or route-set object by name. When the server
-// returns it from several sources, the one from the source listed first in
-// Sources wins; without Sources, the first the server returns.
+// GetSet fetches a set object of any class by name. When the server returns
+// it from several sources, the one from the source listed first in Sources
+// wins; without Sources, the first the server returns.
 func (s *Source) GetSet(ctx context.Context, name types.SetName) (object.NamedSet, error) {
 	if name.IsZero() {
 		return nil, errors.New("whois: empty set name")
 	}
-	objs, err := s.queryObjects(ctx, "-r -T as-set,route-set "+name.String())
+	class := name.Class().String()
+	objs, err := s.queryObjects(ctx, "-r -T "+class+" "+name.String())
 	if err != nil {
 		return nil, err
 	}
-	var best object.Set
+	var best object.NamedSet
 	bestRank := len(s.Sources)
 	for _, o := range objs {
-		set, ok := o.(object.Set)
-		if !ok || set.SetName() != name {
+		set, ok := o.(object.NamedSet)
+		if !ok || set.SetName() != name || set.Class() != class {
 			continue
 		}
 		rank := slices.IndexFunc(s.Sources, func(n string) bool { return strings.EqualFold(n, set.SetSource()) })
@@ -152,12 +156,17 @@ func (s *Source) OriginatedRoutes(ctx context.Context, as types.ASN, afi types.A
 
 // MembersByRef returns the objects whose membership claim in set is honored,
 // via the inverse "member-of" query plus resolve.ClaimAllowed (maintainer and
-// same-source check) — real indirect-membership resolution.
+// same-source check) — real indirect-membership resolution. It asks only for
+// the classes that may join a set of set's class (RFC 2622 §5.1-5.3).
 func (s *Source) MembersByRef(ctx context.Context, set object.NamedSet) ([]object.Object, error) {
 	if set == nil || set.SetName().IsZero() {
 		return nil, errors.New("whois: empty set name")
 	}
-	objs, err := s.queryObjects(ctx, "-r -T route,route6,aut-num,as-set -i member-of "+set.SetName().String())
+	classes := claimantClasses(set.SetName().Class())
+	if classes == "" {
+		return nil, nil
+	}
+	objs, err := s.queryObjects(ctx, "-r -T "+classes+" -i member-of "+set.SetName().String())
 	if err != nil {
 		return nil, err
 	}
@@ -168,6 +177,21 @@ func (s *Source) MembersByRef(ctx context.Context, set object.NamedSet) ([]objec
 		}
 	}
 	return out, nil
+}
+
+// claimantClasses lists the classes whose member-of claims a set of class c
+// honours: aut-nums join as-sets, routes route-sets and inet-rtrs rtr-sets. A
+// peering-set or filter-set has no mbrs-by-ref, and no claimants.
+func claimantClasses(c types.SetClass) string {
+	switch c {
+	case types.ClassAsSet:
+		return "aut-num"
+	case types.ClassRouteSet:
+		return "route,route6"
+	case types.ClassRtrSet:
+		return "inet-rtr"
+	}
+	return ""
 }
 
 // queryObjects runs one WHOIS query and decodes every object in the response.
@@ -247,26 +271,33 @@ func (s *Source) dial(ctx context.Context) (net.Conn, error) {
 // they are not RPSL, and one glued to an object ("%ERROR:101: …" has colons)
 // would otherwise parse as its first attribute — and returns the first server
 // error, if any: RIPE's "%ERROR:NNN: msg" other than 101 ("no entries found"),
-// or IRRd's "%% ERROR: msg" (Code 0).
+// or IRRd's "%% ERROR: msg" (Code 0). It rewrites data in place, each "%" line
+// becoming an empty one, so a response costs no memory beyond its own.
 func scanResponse(data []byte) ([]byte, *ServerError) {
 	var serr *ServerError
-	lines := bytes.SplitAfter(data, []byte("\n"))
-	for i, l := range lines {
-		if len(l) == 0 || l[0] != '%' {
+	out := data[:0] // never longer than what has been read, so never ahead of it
+	for rest := data; len(rest) > 0; {
+		l := rest
+		if i := bytes.IndexByte(rest, '\n'); i >= 0 {
+			l = rest[:i+1]
+		}
+		rest = rest[len(l):]
+		if l[0] != '%' {
+			out = append(out, l...)
 			continue
 		}
-		if rest, ok := bytes.CutPrefix(l, []byte("%ERROR:")); ok && serr == nil {
-			codeText, msg, _ := bytes.Cut(rest, []byte(":"))
+		if msg, ok := bytes.CutPrefix(l, []byte("%ERROR:")); ok && serr == nil {
+			codeText, text, _ := bytes.Cut(msg, []byte(":"))
 			if code, err := strconv.Atoi(string(codeText)); err == nil && code != 101 {
-				serr = &ServerError{Code: code, Message: strings.TrimSpace(string(msg))}
+				serr = &ServerError{Code: code, Message: strings.TrimSpace(string(text))}
 			}
 		}
-		if rest, ok := bytes.CutPrefix(l, []byte("%% ERROR:")); ok && serr == nil {
-			serr = &ServerError{Message: strings.TrimSpace(string(rest))}
+		if msg, ok := bytes.CutPrefix(l, []byte("%% ERROR:")); ok && serr == nil {
+			serr = &ServerError{Message: strings.TrimSpace(string(msg))}
 		}
-		lines[i] = []byte("\n")
+		out = append(out, '\n')
 	}
-	return bytes.Join(lines, nil), serr
+	return out, serr
 }
 
 // validSourceName reports whether n is a plain IRR source name: letters,

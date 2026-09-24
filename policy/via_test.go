@@ -66,7 +66,7 @@ func TestViaExamples(t *testing.T) {
 			continue
 		}
 		if strings.HasSuffix(attr, "-via") {
-			terms := Flatten(viaExpr(v))
+			terms := mustFlatten(t, viaExpr(v))
 			if len(terms) == 0 {
 				t.Errorf("%s: %s flattens to no terms", where, example)
 			}
@@ -168,7 +168,7 @@ func TestViaStrings(t *testing.T) {
 	if len(ds) != 0 || again.String() != imp.String() {
 		t.Fatalf("%q parses back as %q %v", imp.String(), again.String(), diagRules(ds))
 	}
-	for _, tm := range Flatten(imp.Expr) {
+	for _, tm := range mustFlatten(t, imp.Expr) {
 		if tm.Via == nil {
 			t.Errorf("term %s lost its via peering", tm)
 		}
@@ -250,7 +250,7 @@ func TestViaFlatten(t *testing.T) {
 	if len(ds) != 0 {
 		t.Fatalf("diagnostics %v", diagRules(ds))
 	}
-	terms := Flatten(imp.Expr)
+	terms := mustFlatten(t, imp.Expr)
 	if len(terms) != 1 || exprText(terms[0].Via) != "AS6777" || exprText(terms[0].Peering) != "AS1" {
 		t.Fatalf("refine terms %v, want one: via AS6777 from AS1", terms)
 	}
@@ -258,11 +258,11 @@ func TestViaFlatten(t *testing.T) {
 		t.Errorf("term renders %q", got)
 	}
 	imp, _ = ParseImportVia("AS6777 from AS-ANY accept ANY refine AS8631 from AS1 accept AS1")
-	if terms := Flatten(imp.Expr); len(terms) != 0 {
+	if terms := mustFlatten(t, imp.Expr); len(terms) != 0 {
 		t.Errorf("refine across different via peerings gave %v, want no terms", terms)
 	}
 	imp, _ = ParseImportVia("AS6777 from AS-ANY accept ANY except AS6777 from AS1 accept AS1")
-	terms = Flatten(imp.Expr)
+	terms = mustFlatten(t, imp.Expr)
 	if len(terms) != 2 {
 		t.Fatalf("except terms %v, want two", terms)
 	}

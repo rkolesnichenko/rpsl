@@ -6,6 +6,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/netip"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -566,5 +567,88 @@ func TestErrorStrings(t *testing.T) {
 	ne := &NotEnumerableError{Term: "NOT ANY", Why: "because"}
 	if !strings.Contains(ne.Error(), "NOT ANY") || !strings.Contains(ne.Error(), "because") {
 		t.Errorf("NotEnumerableError.Error() = %q", ne.Error())
+	}
+}
+
+// cancelOnceSource blocks its first GetSet until that caller's context ends,
+// and answers every later one at once.
+type cancelOnceSource struct {
+	*MemSource
+	started chan struct{}
+	once    sync.Once
+}
+
+func (s *cancelOnceSource) GetSet(ctx context.Context, n types.SetName) (object.NamedSet, error) {
+	first := false
+	s.once.Do(func() { first = true })
+	if first {
+		close(s.started)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return s.MemSource.GetSet(ctx, n)
+}
+
+// A caller that joins another's lookup is not failed by that caller's
+// cancellation: it fetches for itself.
+func TestCacheWaiterSurvivesFillerCancel(t *testing.T) {
+	src := &cancelOnceSource{MemSource: corpus(t, asSet("AS-X", "AS1")), started: make(chan struct{})}
+	c := NewCache(src, 0)
+	name := mustSet(t, "AS-X")
+
+	ctxA, cancelA := context.WithCancel(context.Background())
+	errA := make(chan error, 1)
+	go func() { _, err := c.GetSet(ctxA, name); errA <- err }()
+	<-src.started
+
+	errB := make(chan error, 1)
+	go func() { _, err := c.GetSet(context.Background(), name); errB <- err }()
+	for c.Stats().Hits == 0 { // B has joined A's lookup
+		runtime.Gosched()
+	}
+	cancelA()
+	if err := <-errA; !errors.Is(err, context.Canceled) {
+		t.Errorf("the cancelled caller got %v, want context.Canceled", err)
+	}
+	if err := <-errB; err != nil {
+		t.Errorf("the caller that joined got %v, want the set", err)
+	}
+}
+
+// The least recently used entry is the one evicted, however it was last used.
+func TestCacheEvictsLeastRecentlyUsed(t *testing.T) {
+	inner := &callCounter{MemSource: corpus(t)}
+	c := &Cache{Src: inner, MaxEntries: 2, entries: map[cacheKey]*cacheEntry{}}
+	ctx := context.Background()
+	get := func(as types.ASN) {
+		if _, err := c.OriginatedRoutes(ctx, as, types.AFIAny); err != nil {
+			t.Fatal(err)
+		}
+	}
+	get(1)
+	get(2)
+	get(1) // AS1 is now the most recent
+	get(3) // evicts AS2
+	before := inner.routes
+	get(1)
+	if inner.routes != before {
+		t.Error("AS1, used more recently than AS2, was evicted")
+	}
+	get(2)
+	if inner.routes != before+1 {
+		t.Error("AS2 was not evicted")
+	}
+}
+
+// Each lookup costs the same however many entries the cache holds.
+func BenchmarkCacheLRU(b *testing.B) {
+	c := NewCache(corpus(&testing.T{}), 0)
+	ctx := context.Background()
+	for i := 0; i < 50000; i++ {
+		_, _ = c.OriginatedRoutes(ctx, types.ASN(i), types.AFIAny)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = c.OriginatedRoutes(ctx, types.ASN(i%50000), types.AFIAny)
 	}
 }

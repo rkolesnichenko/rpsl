@@ -9,6 +9,72 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-24
+
+### Fixed
+
+- **The live backends expand every set class.** `irrd.Source` built a
+  route-set from `!i` for any class but as-set, so `ExpandRouters` and
+  `ExpandPeerings` of an existing rtr-set or peering-set returned nothing with
+  no error, and a filter-set failed with `ErrSetClass`; `whois.Source` asked
+  only for as-sets and route-sets and reported the others not found, and never
+  saw inet-rtr claims. irrd now fetches those sets with `!m`, and whois asks
+  for the set's own class and for the claimant classes that may join it.
+- **The engine checks the set a `Source` returns.** A set whose class is not
+  its name's (`route-set: AS-EVIL`) was expanded under its name's rules, so an
+  as-set could pull in prefixes no route object backs, and route claims. Such
+  a set is now missing; a set of another name than the one asked for is an
+  error.
+- **A filter-set named twice in one evaluation denoted nothing the second
+  time** (`FLTR-A AND FLTR-A` was empty). Filter-set values are memoized per
+  call, and a cycle of filter-sets is solved to the least fixpoint.
+- **`policy.Flatten` honours the afi clause of `except` and `refine`**
+  (RFC 4012 §2.5). An IPv6-scoped exception used to exclude routes from the
+  IPv4 terms too.
+- **A `Cache` waiter is not failed by another caller's cancellation**: one
+  cancelled expansion failed every concurrent one sharing the lookup.
+
+### Security
+
+- **`EvalFilter` is bounded.** `AND` compared every pair of ranges and never
+  checked its context (28 s past a 100 ms deadline, then an empty answer with
+  no error); it now tests each range only against its prefix's ancestors and
+  descendants, checking the context. Every set reference ran its own
+  expansion with a fresh `MaxVisited`, about MaxVisited² fetches in all; one
+  budget now covers the call, and each set is expanded once.
+- **`policy.Flatten` is bounded.** Each level of an `except` chain doubles the
+  filters: a 613-byte value rendered to 151 MB. Past `MaxFlattenNodes` it
+  returns `ErrFlattenTooLarge`.
+- **Backend responses cost less.** `MaxResponse` defaults to 32 MiB in `irrd`
+  and `whois` (was 256 MiB), over twenty times the largest real answer; whois
+  blanks `%` lines in place instead of allocating 28 times the response.
+- **`ast.Object.Set` is linear.** Removing many duplicates with comments
+  between them was quadratic: minutes for an object within the stream's cap.
+- **Warnings for over-long lines outside objects are bounded**: two per run,
+  not one per line, so a small `MaxObjectBytes` keeps memory bounded.
+- **The `Cache` LRU is O(1)**: a lookup scanned the whole recency list under
+  the cache's lock (4.2 s through a cache against 42 ms without, for a
+  50,000-member set).
+
+### Changed
+
+- **`policy.Flatten(e, af) ([]Term, error)`** flattens for one address family
+  and can fail; it was `Flatten(e) []Term`. `Import.Terms(af)` and
+  `Export.Terms(af)` flatten a policy and give no terms where it does not
+  apply.
+- **A cycle of filter-sets denotes the least fixpoint**, as one of route-sets
+  does, where a back-edge used to contribute nothing.
+- `Except.AppliesTo` and `Refine.AppliesTo` are documented as what they report:
+  whether the node's own afi clause admits a family.
+
+### Added
+
+- `policy.ErrFlattenTooLarge`, `policy.MaxFlattenNodes`, `Import.Terms`,
+  `Export.Terms`.
+- `irrd.ErrIndirectUnsupported`, returned by `irrd.Source.MembersByRef` for an
+  rtr-set with `mbrs-by-ref:`, whose inet-rtr claims IRRd's query protocol
+  cannot list.
+
 ## [0.8.1] - 2026-09-24
 
 ### Fixed
@@ -385,7 +451,8 @@ The first release. There is no earlier version to migrate from.
   values do; a few common RP-attributes have typed helpers.
 - **`rdap` is not a `Source`.** RDAP serves registration data, not IRR sets.
 
-[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/rkolesnichenko/rpsl/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.6.2...v0.7.0

@@ -1,6 +1,7 @@
 package resolve
 
 import (
+	"container/list"
 	"context"
 	"errors"
 	"net/netip"
@@ -44,7 +45,7 @@ type Cache struct {
 
 	mu      sync.Mutex
 	entries map[cacheKey]*cacheEntry
-	order   []cacheKey // least recently used first
+	order   list.List // of cacheKey, least recently used first
 	hits    int
 	misses  int
 }
@@ -74,6 +75,7 @@ type cacheKey struct {
 type cacheEntry struct {
 	ready chan struct{} // closed once the value is filled in
 	at    time.Time
+	elem  *list.Element // the entry's place in Cache.order
 
 	set    object.NamedSet
 	routes []netip.Prefix
@@ -138,40 +140,52 @@ func (c *Cache) MembersByRef(ctx context.Context, set object.NamedSet) ([]object
 // lookup returns the entry for key, filling it with fill on a miss. Concurrent
 // lookups of one key wait for the first rather than each calling the Source.
 func (c *Cache) lookup(ctx context.Context, key cacheKey, fill func(context.Context, *cacheEntry)) (*cacheEntry, error) {
-	c.mu.Lock()
-	if e, ok := c.entries[key]; ok && c.fresh(e) {
-		c.hits++
-		c.touch(key)
-		c.mu.Unlock()
-		select {
-		case <-e.ready:
-			return e, nil
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-	c.misses++
-	e := &cacheEntry{ready: make(chan struct{})}
-	c.entries[key] = e
-	c.touch(key)
-	c.evict()
-	c.mu.Unlock()
-
-	fill(ctx, e)
-	e.at = time.Now()
-	close(e.ready)
-
-	// A cancelled or failed lookup should not be remembered as an answer: the
-	// next caller deserves a fresh try. ErrNotFound is a real answer and stays.
-	if e.err != nil && !errors.Is(e.err, ErrNotFound) {
+	for {
 		c.mu.Lock()
-		if c.entries[key] == e {
-			delete(c.entries, key)
-			c.forget(key)
+		if e, ok := c.entries[key]; ok && c.fresh(e) {
+			c.hits++
+			c.touch(e)
+			c.mu.Unlock()
+			select {
+			case <-e.ready:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			// The caller that filled the entry was cancelled; that says
+			// nothing about this caller, which fetches for itself.
+			if isContextErr(e.err) && ctx.Err() == nil {
+				continue
+			}
+			return e, nil
 		}
+		c.misses++
+		e := &cacheEntry{ready: make(chan struct{})}
+		c.entries[key] = e
+		e.elem = c.order.PushBack(key)
+		c.evict()
 		c.mu.Unlock()
+
+		fill(ctx, e)
+		e.at = time.Now()
+		// A cancelled or failed lookup should not be remembered as an answer:
+		// the next caller deserves a fresh try. ErrNotFound is a real answer
+		// and stays. The entry goes before its waiters wake, so one that
+		// retries starts a new lookup rather than finding this one again.
+		if e.err != nil && !errors.Is(e.err, ErrNotFound) {
+			c.mu.Lock()
+			if c.entries[key] == e {
+				c.remove(key, e)
+			}
+			c.mu.Unlock()
+		}
+		close(e.ready)
+		return e, nil
 	}
-	return e, nil
+}
+
+// isContextErr reports whether err is a context's cancellation or deadline.
+func isContextErr(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 // fresh reports whether an entry is still within the TTL.
@@ -187,19 +201,19 @@ func (c *Cache) fresh(e *cacheEntry) bool {
 	}
 }
 
-// touch moves key to the most-recently-used end. Called with mu held.
-func (c *Cache) touch(key cacheKey) {
-	c.forget(key)
-	c.order = append(c.order, key)
+// touch moves e to the most-recently-used end. Called with mu held.
+func (c *Cache) touch(e *cacheEntry) {
+	if e.elem != nil {
+		c.order.MoveToBack(e.elem)
+	}
 }
 
-// forget removes key from the recency list. Called with mu held.
-func (c *Cache) forget(key cacheKey) {
-	for i, k := range c.order {
-		if k == key {
-			c.order = append(c.order[:i], c.order[i+1:]...)
-			return
-		}
+// remove drops the entry for key. Called with mu held.
+func (c *Cache) remove(key cacheKey, e *cacheEntry) {
+	delete(c.entries, key)
+	if e.elem != nil {
+		c.order.Remove(e.elem)
+		e.elem = nil
 	}
 }
 
@@ -212,10 +226,10 @@ func (c *Cache) evict() {
 	case max == 0:
 		max = DefaultCacheEntries
 	}
-	for len(c.order) > max {
-		oldest := c.order[0]
-		c.order = c.order[1:]
-		delete(c.entries, oldest)
+	for c.order.Len() > max {
+		oldest := c.order.Front()
+		key := oldest.Value.(cacheKey)
+		c.remove(key, c.entries[key])
 	}
 }
 
@@ -224,7 +238,7 @@ func (c *Cache) Purge() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries = map[cacheKey]*cacheEntry{}
-	c.order = nil
+	c.order.Init()
 }
 
 // Stats reports the hits, misses and current size.

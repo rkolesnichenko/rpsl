@@ -322,6 +322,15 @@ is `policy/via` and is dropped. `AutNum` keeps these policies apart from
 route-server policy for a direct peering; `Flatten` carries `Via` into each
 `Term` and REFINE meets two terms only where their via peerings meet too.
 
+`Flatten(e, af)` resolves EXCEPT and REFINE into the (peering, actions, filter)
+terms a policy denotes for one address family (`Import.Terms(af)` also asks
+whether the policy applies to af at all). An EXCEPT or REFINE with an afi clause
+takes effect only for the families it covers; for the others the left-hand
+policy stands as it is. Each level of an EXCEPT chain doubles the filters, so a
+value of a few hundred bytes could denote gigabytes of terms: every term
+Flatten builds is charged its filter size, and past `MaxFlattenNodes` (1<<20)
+it returns `ErrFlattenTooLarge`.
+
 An action is one of the forms above, one per `;`: `pref=10 med=20` or two method
 calls without a `;` between them are `policy/action`, not one action with an odd
 value. The Figure 25 assignments other than `=` and `.=` are the operator methods
@@ -398,7 +407,7 @@ package resolve
 type Source interface {
     // GetSet fetches a set object by name. May consult multiple IRRs;
     // ordering/trust is the Source's concern. Returns ErrNotFound cleanly.
-    GetSet(ctx context.Context, name types.SetName) (object.Set, error)
+    GetSet(ctx context.Context, name types.SetName) (object.NamedSet, error)
 
     // OriginatedRoutes returns the prefixes a given AS originates,
     // from route/route6 objects. Needed because an as-set or route-set
@@ -408,11 +417,13 @@ type Source interface {
     // MembersByRef supports the mbrs-by-ref / member-of indirect mechanism:
     // objects from the set's own source, maintained by one of its mbrs-by-ref
     // mntners, that claim member-of this set (filtered with ClaimAllowed).
-    MembersByRef(ctx context.Context, set object.Set) ([]object.Object, error)
+    MembersByRef(ctx context.Context, set object.NamedSet) ([]object.Object, error)
 }
 ```
 
-Backends to ship: an in-memory `Source` (for tests and for loading an IRRd snapshot/`.db` dump), an HTTP/RDAP+WHOIS `Source`, and a thin `Source` over a local IRRd mirror's query port. The engine never opens a socket itself.
+Backends shipped: an in-memory `Source` (for tests and for loading an IRRd snapshot/`.db` dump), a caching `Source`, a WHOIS `Source`, and a `Source` over an IRRd query port. RDAP serves registration data, not IRR sets, so `resolve/rdap` is a client, not a `Source`. The engine never opens a socket itself.
+
+The engine does not take a `Source`'s answer on trust: a set whose name is not the one asked for is an error, and one whose class is not its name's (`route-set: AS-EVIL`) is invalid data, treated as missing — expanded under its name's rules it would let an as-set pull in prefixes, or claims, its class does not allow. Every indirect claim is re-checked with `ClaimAllowed`.
 
 ### 8.2 Dual membership
 
@@ -458,7 +469,7 @@ Engine mechanics that matter:
 - **Indirect membership.** Per RFC 2622 §5.1-5.2, an as-set's indirect members are aut-nums and a route-set's are routes; each claim must pass `ClaimAllowed` (member-of + mbrs-by-ref mntner check), which the engine re-applies to whatever the `Source` returns.
 - **AFI constraint.** A v4 expansion must drop `route6`-only members and `mp-members` IPv6 entries, and vice versa. The `afi` dictionary from RFC 4012 makes this explicit; `any` means both. A *SAFI* has no role here: no RPSL set member carries one and there is no multicast route class, so `Expander.AFI` is an `AFI`, and the sub-family matters only where RFC 4012 puts it — in `policy.Import`/`Export`/`Default.AppliesTo`.
 - **The other set classes.** `ExpandRouters` walks an `rtr-set` to routers (`types.RouterID`), `ExpandPeerings` a `peering-set` to the peerings it denotes with nested references replaced, and `ExpandFilterSet`/`EvalFilter` a `filter-set`'s expression to prefix ranges. Discovery is the same breadth-first traversal for all of them; only what counts as a nested name, and which indirect claims are honored, differs by class.
-- **Filters are only partly enumerable.** `EvalFilter` evaluates `ANY`, prefix lists, route-set/as-set/filter-set references, AS numbers and AS expressions, `OR`, and `AND` (the intersection of two range sets, via `types.PrefixRange.Intersect`). `NOT`, `PeerAS`, community tests, AS-path regexps and per-peer templates have no finite prefix denotation, and return a `*NotEnumerableError` naming the term instead of a quietly smaller answer.
+- **Filters are only partly enumerable.** `EvalFilter` evaluates `ANY`, prefix lists, route-set/as-set/filter-set references, AS numbers and AS expressions, `OR`, and `AND` (the intersection of two range sets, via `types.PrefixRange.Intersect`, testing each range only against the ranges at its prefix's ancestors and descendants). `NOT`, `PeerAS`, community tests, AS-path regexps and per-peer templates have no finite prefix denotation, and return a `*NotEnumerableError` naming the term instead of a quietly smaller answer. Within one call each set is fetched and expanded once, `MaxVisited` bounds the call as a whole, and a cycle of filter-sets is solved by iteration to the least fixpoint, as a cycle of route-sets is.
 - **Concurrency is optional and invisible.** `Expander.Concurrency` fetches one breadth-first level at a time and merges the answers in the level's own order, so a parallel expansion returns exactly what a serial one does.
 - **Source precedence.** When the same set name exists in multiple IRRs, the `Source` decides which wins (`irrd.Source.Sources`, `NewMemSource(objs, "RIPE", "RADB")`). Hijack-relevant; surfaced as configuration, not buried.
 

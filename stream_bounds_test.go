@@ -262,3 +262,35 @@ func TestOverLongAttributeLineStartsAnObject(t *testing.T) {
 		t.Errorf("classes %q, diagnostics %v; want the first object skipped as too large, then c", classes, rules)
 	}
 }
+
+// TestTriviaWarningsBounded pins the diagnostics for a run of over-long lines
+// outside any object: one Warning for the first and one summary for the rest,
+// rather than one per line, which let a small cap grow memory with the input.
+func TestTriviaWarningsBounded(t *testing.T) {
+	const n = 20000
+	src := strings.Repeat("#"+strings.Repeat("x", 200)+"\n", n) + "a: 1\n"
+	var objs int
+	var diags []Diagnostic
+	for o, d := range ParseWith(strings.NewReader(src), ParseOptions{MaxObjectBytes: 100}) {
+		if len(o.Attributes()) > 0 {
+			objs++
+		}
+		diags = append(diags, d...)
+	}
+	if objs != 1 {
+		t.Fatalf("got %d objects, want 1", objs)
+	}
+	if len(diags) != 2 || countRule([][]Diagnostic{diags}, "rpsl/trivia-too-large") != 2 {
+		t.Fatalf("got %d diagnostics, want the first discarded line and one summary: %v", len(diags), firstN(diags, 3))
+	}
+	if want := fmt.Sprintf("%d more", n-1); !strings.Contains(diags[1].Message, want) {
+		t.Errorf("summary %q does not say %q", diags[1].Message, want)
+	}
+}
+
+func firstN(d []Diagnostic, n int) []Diagnostic {
+	if len(d) > n {
+		return d[:n]
+	}
+	return d
+}

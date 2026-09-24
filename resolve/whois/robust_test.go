@@ -1,10 +1,12 @@
 package whois
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"math"
 	"net"
+	"runtime"
 	"testing"
 	"time"
 
@@ -18,9 +20,9 @@ import (
 func TestWhoisServerErrorsAreReported(t *testing.T) {
 	denied := "% This is the RIPE Database query service.\n\n%ERROR:201: access denied for 192.0.2.1\n%\n% Sorry.\n"
 	fw := newFakeWhois(t, map[string]string{
-		"-r -T as-set,route-set AS-FOO":                         denied,
-		"-r -T route,route6 -i origin AS10":                     denied,
-		"-r -T route,route6,aut-num,as-set -i member-of RS-REF": denied,
+		"-r -T as-set AS-FOO":                    denied,
+		"-r -T route,route6 -i origin AS10":      denied,
+		"-r -T route,route6 -i member-of RS-REF": denied,
 	})
 	src := &Source{Addr: fw.addr()}
 	ctx := context.Background()
@@ -38,9 +40,9 @@ func TestWhoisServerErrorsAreReported(t *testing.T) {
 func TestWhoisNoEntriesIsNotFound(t *testing.T) {
 	none := "%ERROR:101: no entries found\n%\n% No entries found in source RIPE.\n"
 	fw := newFakeWhois(t, map[string]string{
-		"-r -T as-set,route-set AS-FOO":     none,
+		"-r -T as-set AS-FOO":               none,
 		"-r -T route,route6 -i origin AS10": none,
-		"-r -T as-set,route-set AS-BAR":     "%WARNING:902: useless IP flag passed\nas-set: AS-BAR\nmembers: AS1\nsource: TEST\n",
+		"-r -T as-set AS-BAR":               "%WARNING:902: useless IP flag passed\nas-set: AS-BAR\nmembers: AS1\nsource: TEST\n",
 	})
 	src := &Source{Addr: fw.addr()}
 	ctx := context.Background()
@@ -135,7 +137,7 @@ func TestWhoisSourcesAreValidated(t *testing.T) {
 		}
 	}
 	fw := newFakeWhois(t, map[string]string{
-		"-s RIPE,RADB -r -T as-set,route-set AS-FOO": "as-set: AS-FOO\nmembers: AS1\nsource: RIPE\n",
+		"-s RIPE,RADB -r -T as-set AS-FOO": "as-set: AS-FOO\nmembers: AS1\nsource: RIPE\n",
 	})
 	src := &Source{Addr: fw.addr(), Sources: []string{"ripe", "RADB"}, Timeout: 2 * time.Second}
 	if _, err := src.GetSet(context.Background(), mustSet(t, "AS-FOO")); err != nil {
@@ -143,5 +145,25 @@ func TestWhoisSourcesAreValidated(t *testing.T) {
 	}
 	if (&Source{MaxResponse: -1}).maxResponse() != math.MaxInt64 || (&Source{}).maxResponse() != maxResponse {
 		t.Error("MaxResponse: zero is the default and negative is unlimited")
+	}
+}
+
+// Blanking the "%" lines of a response allocates nothing per line: a response
+// of 16 MiB of empty lines once allocated about 28 times its size.
+func TestScanResponseInPlace(t *testing.T) {
+	data := bytes.Repeat([]byte("\n"), 1<<20)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	_, _ = scanResponse(data)
+	runtime.ReadMemStats(&after)
+	if a := after.TotalAlloc - before.TotalAlloc; a > 64<<10 {
+		t.Errorf("scanResponse allocated %d bytes for 1 MiB of empty lines", a)
+	}
+	got, serr := scanResponse([]byte("% comment\nas-set: AS-X\n%ERROR:201: access denied\nmembers: AS1\n%% ERROR: late"))
+	if want := "\nas-set: AS-X\n\nmembers: AS1\n\n"; string(got) != want {
+		t.Errorf("scanResponse text = %q, want %q", got, want)
+	}
+	if serr == nil || serr.Code != 201 {
+		t.Errorf("scanResponse error = %v, want the first: 201", serr)
 	}
 }

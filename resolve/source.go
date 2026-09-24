@@ -59,6 +59,9 @@ type SetTooLargeError struct {
 
 // Error implements error.
 func (e *SetTooLargeError) Error() string {
+	if e.Name.IsZero() { // a filter evaluated outside any filter-set
+		return fmt.Sprintf("resolve: expansion exceeds %s (%d): reached %d", e.Limit, e.Max, e.Count)
+	}
 	return fmt.Sprintf("resolve: expansion of %s exceeds %s (%d): reached %d", e.Name, e.Limit, e.Max, e.Count)
 }
 

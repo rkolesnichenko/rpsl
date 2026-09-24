@@ -75,11 +75,13 @@ any of them as a security-relevant bug.
   hostile server cannot hang a caller.
 - **`resolve/irrd`** — fresh connection per query by default; idle pool only
   with explicit opt-in (`KeepAlive`); `MaxConns` bounds concurrent connections;
-  `MaxResponse` caps a frame's payload and status lines are capped at 1 KiB,
-  so memory grows only with bytes actually received, never with the length a
-  header claims; set names are validated by
+  `MaxResponse` (default 32 MiB) caps a frame's payload and status lines are
+  capped at 1 KiB, so memory grows only with bytes actually received, never
+  with the length a header claims. A decoded `!i` answer holds about 100 bytes
+  per member, so the cap bounds that too; set names are validated by
   construction, so no query can carry an injected command.
-- **`resolve/whois`** — per-response `MaxResponse` body cap; server errors are
+- **`resolve/whois`** — per-response `MaxResponse` body cap (default 32 MiB),
+  with `%` lines blanked in place; server errors are
   surfaced (`ServerError`), so rate limiting cannot silently shrink a filter;
   injected `Dial` for testability and for isolating the socket from the engine.
 - **`resolve/rdap`** — HTTPS-only base URL, bounded response body, capped
@@ -90,6 +92,12 @@ any of them as a security-relevant bug.
 - **Indirect membership (`mbrs-by-ref`).** The mntner check is enforced; an
   unverified `member-of:` claim does not contribute to an expansion. Skipping
   this check is a hijack-relevant correctness bug.
+- **What a `Source` returns is checked.** A set of another name than the one
+  asked for is an error; one whose class is not its name's is not followed, so
+  a mis-classed object cannot widen a set.
+- **Bounded evaluation.** `EvalFilter` charges every expansion it runs to one
+  `MaxVisited` budget and checks its context throughout, AND included;
+  `policy.Flatten` refuses a policy past `MaxFlattenNodes` filter nodes.
 
 ## Scope
 

@@ -163,3 +163,31 @@ func TestAppendAfterLoneCR(t *testing.T) {
 		}
 	}
 }
+
+// TestSetLinear pins Set to linear work: removing a long run of duplicates,
+// each with a comment before it, once re-copied the carried comments for every
+// duplicate, so a 16 MB object took minutes.
+func TestSetLinear(t *testing.T) {
+	const n = 20000
+	var b strings.Builder
+	b.WriteString("a: 1\n")
+	for i := 0; i < n; i++ {
+		b.WriteString("# comment line here\ndescr: x\n")
+	}
+	o := New(lexer.Tokenize(b.String()))
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	if err := o.Set("descr", "y"); err != nil {
+		t.Fatal(err)
+	}
+	runtime.ReadMemStats(&after)
+	// The carried comments are 20 bytes a line, so the quadratic form copied
+	// about 20*n*n/2 = 4 GB; the linear one a few MB.
+	if got := after.TotalAlloc - before.TotalAlloc; got > 64<<20 {
+		t.Errorf("Set allocated %d MB for %d duplicates, want linear", got>>20, n)
+	}
+	want := "a: 1\n# comment line here\ndescr: y\n" + strings.Repeat("# comment line here\n", n-1)
+	if got := o.String(); got != want {
+		t.Errorf("Set changed the text beyond the edit:\n got %.80q…\nwant %.80q…", got, want)
+	}
+}

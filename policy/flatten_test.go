@@ -1,8 +1,11 @@
 package policy
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rkolesnichenko/rpsl/types"
 )
@@ -16,11 +19,21 @@ func termStrings(ts []Term) []string {
 	return out
 }
 
+// mustFlatten flattens e for ipv4.unicast, failing the test on an error.
+func mustFlatten(t *testing.T, e Expr) []Term {
+	t.Helper()
+	ts, err := Flatten(e, v4u)
+	if err != nil {
+		t.Fatalf("Flatten: %v", err)
+	}
+	return ts
+}
+
 func flattenImport(t *testing.T, value string) []Term {
 	t.Helper()
 	imp, ds := ParseImport(value)
 	clean(t, "ParseImport("+value+")", ds)
-	return Flatten(imp.Expr)
+	return mustFlatten(t, imp.Expr)
 }
 
 // A plain policy flattens to one term per peering clause, in document order.
@@ -103,23 +116,24 @@ func TestFlattenExceptMatchesRFCExpansion(t *testing.T) {
 // An except with nothing on the right leaves the left alone.
 func TestFlattenExceptEmpty(t *testing.T) {
 	imp, _ := ParseImport("from AS1 accept ANY")
-	got := termStrings(exceptTerms(Flatten(imp.Expr), nil))
+	var f flattener
+	got := termStrings(unweigh(f.exceptTerms(f.flatten(imp.Expr, 0), nil)))
 	if len(got) != 1 || got[0] != "AS1 | ANY" {
 		t.Errorf("exceptTerms(l, nil) = %v", got)
 	}
 }
 
 func TestFlattenNilAndDepth(t *testing.T) {
-	if got := Flatten(nil); got != nil {
-		t.Errorf("Flatten(nil) = %v", got)
+	if got, err := Flatten(nil, v4u); got != nil || err != nil {
+		t.Errorf("Flatten(nil) = %v, %v", got, err)
 	}
 	// A hand-built chain deeper than the cap stops rather than overflowing.
 	var e Expr = Factor{Filter: FilterAny{}}
 	for i := 0; i < maxFlattenDepth+10; i++ {
 		e = Refine{Left: e, Right: Factor{Filter: FilterAny{}}}
 	}
-	if got := Flatten(e); got != nil {
-		t.Errorf("Flatten of an over-deep chain returned %d terms, want none", len(got))
+	if got, err := Flatten(e, v4u); got != nil || !errors.Is(err, ErrFlattenTooLarge) {
+		t.Errorf("Flatten of an over-deep chain returned %d terms and %v, want ErrFlattenTooLarge", len(got), err)
 	}
 }
 
@@ -201,4 +215,87 @@ func mustAF(t *testing.T, s string) types.AddrFamily {
 		t.Fatal(err)
 	}
 	return af
+}
+
+func unweigh(ts []wterm) []Term {
+	out := make([]Term, len(ts))
+	for i, t := range ts {
+		out[i] = t.Term
+	}
+	return out
+}
+
+// RFC 4012 §2.5: an afi clause on EXCEPT or REFINE scopes its right-hand
+// policy. For a family it does not cover, the left-hand policy stands alone.
+func TestFlattenAFIScope(t *testing.T) {
+	cases := []struct {
+		value  string
+		v4, v6 []string
+	}{{
+		value: "afi any.unicast from AS65001 accept as-foo; except afi ipv6.unicast { from AS65002 accept AS65002:AS-FOO; }",
+		v4:    []string{"AS65001 | AS-FOO"},
+		v6:    []string{"AS65002 | AS-FOO AND AS65002:AS-FOO", "AS65001 | AS-FOO AND NOT AS65002:AS-FOO"},
+	}, {
+		value: "afi any.unicast from AS-ANY accept ANY refine afi ipv6.unicast from AS1 accept AS1",
+		v4:    []string{"AS-ANY | ANY"},
+		v6:    []string{"AS1 | ANY AND AS1"},
+	}, {
+		// An except with no afi clause of its own takes effect wherever the
+		// policy does, and the policy is not in effect for ipv4 at all.
+		value: "afi ipv6.unicast from AS1 accept ANY except from AS2 accept AS2",
+		v4:    nil,
+		v6:    []string{"AS2 | ANY AND AS2", "AS1 | ANY AND NOT AS2"},
+	}, {
+		// A nested scope narrower than the outer one.
+		value: "afi any from AS1 accept ANY except afi any.unicast { from AS2 accept AS2 except afi ipv4.unicast from AS3 accept AS3; }",
+		v4:    []string{"AS3 | ANY AND AS2 AND AS3", "AS2 | ANY AND AS2 AND NOT AS3", "AS1 | ANY AND NOT (AS2 AND AS3 OR AS2 AND NOT AS3)"},
+		v6:    []string{"AS2 | ANY AND AS2", "AS1 | ANY AND NOT AS2"},
+	}}
+	for _, c := range cases {
+		imp, ds := ParseMPImport(c.value)
+		clean(t, c.value, ds)
+		for _, fam := range []struct {
+			af   types.AddrFamily
+			want []string
+		}{{v4u, c.v4}, {v6u, c.v6}} {
+			ts, err := imp.Terms(fam.af)
+			if err != nil {
+				t.Fatalf("%s: %v", c.value, err)
+			}
+			if got := termStrings(ts); strings.Join(got, "\n") != strings.Join(fam.want, "\n") {
+				t.Errorf("%s for %s:\n got %q\nwant %q", c.value, fam.af, got, fam.want)
+			}
+		}
+	}
+}
+
+// A few hundred bytes of nested EXCEPT double the filters at every level, and
+// n factors except n factors make n*n terms: Flatten refuses both promptly.
+func TestFlattenTooLarge(t *testing.T) {
+	var list strings.Builder
+	list.WriteString("{ ")
+	for i := 0; i < 2000; i++ {
+		fmt.Fprintf(&list, "from AS%d accept AS%d; ", i+1, i+1)
+	}
+	list.WriteString("}")
+	for _, value := range []string{
+		strings.Repeat("from AS1 accept AS1 except ", 22) + "from AS1 accept AS1",
+		list.String() + " except " + list.String(),
+	} {
+		imp, ds := ParseImport(value)
+		clean(t, "ParseImport", ds)
+		start := time.Now()
+		ts, err := imp.Terms(v4u)
+		if !errors.Is(err, ErrFlattenTooLarge) || ts != nil {
+			t.Errorf("%.60s…: got %d terms, %v; want ErrFlattenTooLarge", value, len(ts), err)
+		}
+		if d := time.Since(start); d > 5*time.Second {
+			t.Errorf("%.60s…: refusing took %v", value, d)
+		}
+	}
+	// A chain within the budget still flattens.
+	imp, _ := ParseImport(strings.Repeat("from AS1 accept AS1 except ", 8) + "from AS1 accept AS1")
+	if ts, err := imp.Terms(v4u); err != nil || len(ts) == 0 {
+		t.Errorf("an 8-level chain: %d terms, %v", len(ts), err)
+	}
 }

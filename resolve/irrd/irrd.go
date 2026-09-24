@@ -3,11 +3,16 @@
 // and commands bgpq4 uses. Network access is confined to this sub-package; the
 // core resolve engine stays pure and socket-free.
 //
-// Membership note: GetSet issues the one-level "!i" query, whose result is the
-// server's already-resolved membership (it folds in indirect mbrs-by-ref
-// members). The engine must therefore not resolve indirect membership again, so
-// MembersByRef intentionally returns nothing for this backend. (MemSource, by
-// contrast, holds raw objects and resolves membership itself.)
+// Membership note: for an as-set or route-set GetSet issues the one-level "!i"
+// query, whose result is the server's already-resolved membership (it folds in
+// indirect mbrs-by-ref members). The engine must therefore not resolve indirect
+// membership again, so MembersByRef returns nothing for those. (MemSource, by
+// contrast, holds raw objects and resolves membership itself.) The other set
+// classes — rtr-set, peering-set, filter-set — "!i" does not serve, so GetSet
+// fetches them whole with "!m". The query protocol has no inverse query for
+// the inet-rtr member-of claims an rtr-set's mbrs-by-ref admits, so
+// MembersByRef returns ErrIndirectUnsupported for such a set; use the whois
+// Source for it.
 package irrd
 
 import (
@@ -26,6 +31,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rkolesnichenko/rpsl"
 	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/netconn"
@@ -51,7 +57,7 @@ type Source struct {
 	Addr        string                                      // "whois.radb.net:43"
 	Sources     []string                                    // optional "!s" priority, e.g. {"RADB", "RIPE"}
 	Timeout     time.Duration                               // one deadline per query: slot wait, dial, I/O, retry; 0 = DefaultTimeout, < 0 = none (ctx only)
-	MaxResponse int64                                       // cap on one response payload; 0 = 256 MiB, < 0 = none
+	MaxResponse int64                                       // cap on one response payload; 0 = 32 MiB, < 0 = none
 	Dial        func(ctx context.Context) (net.Conn, error) // override transport in tests; nil = net.Dialer
 
 	KeepAlive bool // reuse persistent connections from a pool
@@ -81,13 +87,22 @@ var errNotFound = errors.New("irrd: key not found")
 // ErrClosed is returned by queries on a Source after Close.
 var ErrClosed = errors.New("irrd: source closed")
 
+// ErrIndirectUnsupported is returned by MembersByRef for an rtr-set with
+// mbrs-by-ref: the IRRd query protocol cannot list the inet-rtr objects that
+// claim membership in it, and an answer without them would silently be
+// smaller. The whois Source can.
+var ErrIndirectUnsupported = errors.New("irrd: indirect rtr-set members need a whois Source")
+
 // defaultMaxConns is MaxConns when zero.
 const defaultMaxConns = 4
 
-// defaultMaxResponse caps a single IRRd response payload. 256 MiB dwarfs any
-// real "!i" or route payload; memory still grows only with the bytes that
-// actually arrive, whatever length a header claims.
-const defaultMaxResponse = 256 << 20
+// defaultMaxResponse caps a single IRRd response payload. 32 MiB is over twenty
+// times the largest real "!i" or route payload (RADB's RS-ALGAR lists 1.3 MB of
+// members; AS45899 originates 72,827 routes), and a decoded "!i" answer holds
+// about 100 bytes per member however short its text, so a larger cap buys
+// nothing but a hostile server's leverage. Memory grows only with the bytes
+// that actually arrive, whatever length a header claims.
+const defaultMaxResponse = 32 << 20
 
 func (s *Source) timeout() time.Duration {
 	switch {
@@ -136,13 +151,18 @@ func validSourceName(n string) bool {
 	return true
 }
 
-// GetSet fetches a set's one-level membership via "!i" and synthesizes a typed
-// set object. IRRd answers "!i" alike for a missing set and for one with no
-// members, so on that answer GetSet asks for the object itself ("!m"): a set
-// that exists is returned empty, and a missing one maps to resolve.ErrNotFound.
+// GetSet fetches a set. For an as-set or route-set it asks for the one-level
+// membership via "!i" and synthesizes a typed set object. IRRd answers "!i"
+// alike for a missing set and for one with no members, so on that answer
+// GetSet asks for the object itself ("!m"): a set that exists is returned
+// empty, and a missing one maps to resolve.ErrNotFound. A set of any other
+// class is fetched with "!m" and decoded.
 func (s *Source) GetSet(ctx context.Context, name types.SetName) (object.NamedSet, error) {
 	if name.IsZero() {
 		return nil, errors.New("irrd: empty set name")
+	}
+	if c := name.Class(); c != types.ClassAsSet && c != types.ClassRouteSet {
+		return s.fetchSet(ctx, name)
 	}
 	payload, err := s.do(ctx, "!i"+name.String())
 	if errors.Is(err, errNotFound) {
@@ -160,6 +180,25 @@ func (s *Source) GetSet(ctx context.Context, name types.SetName) (object.NamedSe
 		return object.AsSet{Name: name, Members: members}, nil
 	}
 	return object.RouteSet{Name: name, Members: members}, nil
+}
+
+// fetchSet fetches a set whole ("!m") and decodes it, refusing an answer that
+// is not the set asked for.
+func (s *Source) fetchSet(ctx context.Context, name types.SetName) (object.NamedSet, error) {
+	payload, err := s.do(ctx, "!m"+name.Class().String()+","+name.String())
+	if err != nil {
+		if errors.Is(err, errNotFound) {
+			return nil, resolve.ErrNotFound
+		}
+		return nil, err
+	}
+	raw, _ := rpsl.ParseObject(string(payload))
+	obj, _ := object.Decode(raw)
+	set, ok := obj.(object.NamedSet)
+	if !ok || set.SetName() != name || set.Class() != name.Class().String() {
+		return nil, fmt.Errorf("irrd: !m%s,%s answered with %s %q", name.Class(), name, raw.Class(), raw.Key())
+	}
+	return set, nil
 }
 
 // OriginatedRoutes fetches prefixes originated by as via "!g" (IPv4) and "!6"
@@ -184,9 +223,13 @@ func (s *Source) OriginatedRoutes(ctx context.Context, as types.ASN, afi types.A
 	return out, nil
 }
 
-// MembersByRef returns nothing: indirect membership is already folded into the
-// server's "!i" result (see the package note).
-func (s *Source) MembersByRef(context.Context, object.NamedSet) ([]object.Object, error) {
+// MembersByRef returns nothing for an as-set or route-set, whose indirect
+// members the server's "!i" result already holds, and ErrIndirectUnsupported
+// for an rtr-set with mbrs-by-ref (see the package note).
+func (s *Source) MembersByRef(_ context.Context, set object.NamedSet) ([]object.Object, error) {
+	if set != nil && set.SetName().Class() == types.ClassRtrSet && len(set.RefMntners()) > 0 {
+		return nil, fmt.Errorf("irrd: %s: %w", set.SetName(), ErrIndirectUnsupported)
+	}
 	return nil, nil
 }
 
@@ -509,12 +552,42 @@ func readStatusLine(br *bufio.Reader) (string, error) {
 	}
 }
 
-// parseMembers turns a whitespace-separated "!i" payload into typed members.
+// parseMembers turns a whitespace-separated "!i" payload into typed members,
+// in a slice sized once, each member's text a substring of the payload.
 func parseMembers(payload string, class types.SetClass) []object.SetMember {
-	var out []object.SetMember
-	for _, tok := range strings.Fields(payload) {
+	out := make([]object.SetMember, 0, countTokens(payload))
+	for rest := payload; ; {
+		var tok string
+		if tok, rest = nextToken(rest); tok == "" {
+			return out
+		}
 		m, _ := object.ParseSetMember(tok, class) // unparseable tokens stay MemberInvalid
 		out = append(out, m)
 	}
-	return out
+}
+
+// nextToken splits the first run of non-space bytes off s. The payload is
+// ASCII, as IRRd writes it; any other byte is part of a token.
+func nextToken(s string) (tok, rest string) {
+	i := 0
+	for i < len(s) && isSpace(s[i]) {
+		i++
+	}
+	j := i
+	for j < len(s) && !isSpace(s[j]) {
+		j++
+	}
+	return s[i:j], s[j:]
+}
+
+func countTokens(s string) int {
+	n := 0
+	for tok, rest := nextToken(s); tok != ""; tok, rest = nextToken(rest) {
+		n++
+	}
+	return n
+}
+
+func isSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f'
 }

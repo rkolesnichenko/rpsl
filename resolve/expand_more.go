@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"sort"
 
 	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/policy"
@@ -100,19 +101,14 @@ func (e *Expander) ExpandFilterSet(ctx context.Context, n types.SetName) (RangeS
 		return RangeSet{}, fmt.Errorf("resolve: ExpandFilterSet %s: %w", n, ErrSetClass)
 	}
 	ev := newFilterEval(e, ctx)
-	set, err := e.Src.GetSet(ctx, n)
-	if err == nil && set == nil {
-		err = ErrNotFound
-	}
+	fg, err := ev.filterSet(n)
 	if err != nil {
 		return RangeSet{}, fmt.Errorf("expand %s: %w", n, err)
 	}
-	fg, ok := setValue(set).(object.FilterGroup)
-	if !ok {
-		return RangeSet{}, fmt.Errorf("resolve: ExpandFilterSet %s: %w", n, ErrSetClass)
+	if fg == nil {
+		return RangeSet{}, fmt.Errorf("expand %s: %w", n, ErrNotFound)
 	}
-	ev.seen[n.String()] = true
-	got, err := ev.eval(ev.pick(fg), 0)
+	got, err := ev.run(policy.FilterSetRef{Name: n})
 	if err != nil {
 		return RangeSet{}, err
 	}
@@ -141,9 +137,15 @@ func (e *NotEnumerableError) Error() string {
 // sides denote). A term that denotes no such set — NOT, PeerAS, a community
 // test, an AS-path regexp, a per-peer set template — returns a
 // *NotEnumerableError naming it, rather than a quietly smaller answer.
+//
+// Each set is fetched and expanded once per call, and MaxVisited bounds the
+// call as a whole: the sets every expansion reached and the filter terms
+// evaluated. A cycle of filter-sets denotes the least fixpoint, as a cycle of
+// route-sets does (FLTR-A = {10.0.0.0/8} OR FLTR-A^+ is 10.0.0.0/8 and
+// 10.0.0.0/8^+).
 func (e *Expander) EvalFilter(ctx context.Context, f policy.Filter) (RangeSet, error) {
 	ev := newFilterEval(e, ctx)
-	got, err := ev.eval(f, 0)
+	got, err := ev.run(f)
 	if err != nil {
 		return RangeSet{}, err
 	}
@@ -151,21 +153,74 @@ func (e *Expander) EvalFilter(ctx context.Context, f policy.Filter) (RangeSet, e
 }
 
 // rangeSetOf is the working representation of a filter's value: the ranges it
-// denotes, deduplicated.
+// denotes, deduplicated. A value, once built, is never modified, so one may be
+// shared by memo entries and callers.
 type rangeSetOf map[types.PrefixRange]struct{}
 
-// filterEval evaluates one filter, tracking the filter-sets already entered so
-// that a cycle terminates, and the sets that were not found.
+// filterEval evaluates one filter. Filter-sets are fetched and set references
+// expanded once per call. A cycle of filter-sets is solved by iteration: each
+// pass evaluates a back-edge to a set with that set's value from the pass
+// before (approx), starting from nothing, and passes repeat until the values
+// stop growing — the least fixpoint, since every filter it evaluates is
+// monotone.
 type filterEval struct {
 	e       *Expander
 	ctx     context.Context
-	seen    map[string]bool
 	missing []types.SetName
-	visits  int
+	visits  int           // filter terms evaluated and sets reached, against MaxVisited
+	cur     types.SetName // the filter-set being evaluated, to name it in errors
+
+	sets   map[string]object.FilterGroup // filter-sets fetched; nil for one not found
+	memo   map[string]rangeSetOf         // filter-set values of this pass
+	approx map[string]rangeSetOf         // filter-set values of the pass before
+	active map[string]bool               // filter-sets on the path being evaluated
+	cyclic bool                          // this pass took a back-edge
+	ranges map[string]RangeSet           // route-set and as-set expansions
+	asns   map[string]ASNSet             // as-set expansions in AS expressions
 }
 
 func newFilterEval(e *Expander, ctx context.Context) *filterEval {
-	return &filterEval{e: e, ctx: ctx, seen: map[string]bool{}}
+	return &filterEval{
+		e: e, ctx: ctx,
+		sets:   map[string]object.FilterGroup{},
+		active: map[string]bool{},
+		ranges: map[string]RangeSet{},
+		asns:   map[string]ASNSet{},
+	}
+}
+
+// run evaluates f to its least fixpoint (see filterEval).
+func (ev *filterEval) run(f policy.Filter) (rangeSetOf, error) {
+	for {
+		ev.memo, ev.cyclic = map[string]rangeSetOf{}, false
+		got, err := ev.eval(f, 0)
+		if err != nil {
+			return nil, err
+		}
+		if !ev.cyclic || sameValues(ev.memo, ev.approx) {
+			return got, nil
+		}
+		ev.approx = ev.memo
+	}
+}
+
+// sameValues reports whether two passes gave every filter-set the same value.
+func sameValues(a, b map[string]rangeSetOf) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for n, x := range a {
+		y, ok := b[n]
+		if !ok || len(x) != len(y) {
+			return false
+		}
+		for r := range x {
+			if _, ok := y[r]; !ok {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // pick chooses a filter-set's filter: or mp-filter: by the expander's AFI. A
@@ -205,7 +260,18 @@ func (ev *filterEval) note(n types.SetName) {
 // cap enforces MaxPrefixes on a working set as it grows.
 func (ev *filterEval) cap(got rangeSetOf, n types.SetName) error {
 	if len(got) > ev.e.maxPrefixes() {
+		if n.IsZero() {
+			n = ev.cur
+		}
 		return &SetTooLargeError{Name: n, Limit: LimitPrefixes, Max: ev.e.maxPrefixes(), Count: len(got)}
+	}
+	return nil
+}
+
+// visit charges n visits against MaxVisited.
+func (ev *filterEval) visit(n int) error {
+	if ev.visits += n; ev.visits > ev.e.maxVisited() {
+		return &SetTooLargeError{Name: ev.cur, Limit: LimitVisited, Max: ev.e.maxVisited(), Count: ev.visits}
 	}
 	return nil
 }
@@ -216,10 +282,10 @@ func (ev *filterEval) eval(f policy.Filter, depth int) (rangeSetOf, error) {
 		return nil, err
 	}
 	if depth > ev.e.maxDepth() {
-		return nil, &SetTooLargeError{Limit: LimitDepth, Max: ev.e.maxDepth(), Count: depth}
+		return nil, &SetTooLargeError{Name: ev.cur, Limit: LimitDepth, Max: ev.e.maxDepth(), Count: depth}
 	}
-	if ev.visits++; ev.visits > ev.e.maxVisited() {
-		return nil, &SetTooLargeError{Limit: LimitVisited, Max: ev.e.maxVisited(), Count: ev.visits}
+	if err := ev.visit(1); err != nil {
+		return nil, err
 	}
 	switch x := f.(type) {
 	case nil:
@@ -258,8 +324,7 @@ func (ev *filterEval) eval(f policy.Filter, depth int) (rangeSetOf, error) {
 				out = got
 				continue
 			}
-			out = intersectRanges(out, got)
-			if err := ev.cap(out, types.SetName{}); err != nil {
+			if out, err = ev.intersect(out, got); err != nil {
 				return nil, err
 			}
 		}
@@ -270,7 +335,7 @@ func (ev *filterEval) eval(f policy.Filter, depth int) (rangeSetOf, error) {
 	case policy.FilterSetRef:
 		return ev.setRef(x.Name, x.Op, depth)
 	case policy.FilterASExpr:
-		as, err := ev.asns(x.AS, depth)
+		as, err := ev.asExpr(x.AS, depth)
 		if err != nil {
 			return nil, err
 		}
@@ -297,7 +362,7 @@ func (ev *filterEval) setRef(n types.SetName, op types.RangeOperator, depth int)
 	}
 	switch n.Class() {
 	case types.ClassRouteSet, types.ClassAsSet:
-		rs, err := ev.e.ExpandPrefixRanges(ev.ctx, n)
+		rs, err := ev.prefixRanges(n)
 		if err != nil {
 			if !errors.Is(err, ErrNotFound) {
 				return nil, err
@@ -314,27 +379,7 @@ func (ev *filterEval) setRef(n types.SetName, op types.RangeOperator, depth int)
 		}
 		return out, ev.cap(out, n)
 	case types.ClassFilterSet:
-		if ev.seen[n.String()] {
-			return rangeSetOf{}, nil // a cycle contributes nothing more
-		}
-		ev.seen[n.String()] = true
-		set, err := ev.e.Src.GetSet(ev.ctx, n)
-		if err == nil && set == nil {
-			err = ErrNotFound
-		}
-		if err != nil {
-			if !errors.Is(err, ErrNotFound) {
-				return nil, err
-			}
-			ev.note(n)
-			return rangeSetOf{}, nil
-		}
-		fg, ok := setValue(set).(object.FilterGroup)
-		if !ok {
-			ev.note(n)
-			return rangeSetOf{}, nil
-		}
-		got, err := ev.eval(ev.pick(fg), depth+1)
+		got, err := ev.filterSetValue(n, depth)
 		if err != nil {
 			return nil, err
 		}
@@ -353,12 +398,104 @@ func (ev *filterEval) setRef(n types.SetName, op types.RangeOperator, depth int)
 	}
 }
 
-// asns resolves an AS expression to the AS numbers it denotes. AND, OR and
+// filterSetValue is what filter-set n denotes in this pass: the previous
+// pass's value on a back-edge, this pass's value once computed, and otherwise
+// the value of its filter.
+func (ev *filterEval) filterSetValue(n types.SetName, depth int) (rangeSetOf, error) {
+	key := n.String()
+	if ev.active[key] {
+		ev.cyclic = true
+		if v := ev.approx[key]; v != nil {
+			return v, nil
+		}
+		return rangeSetOf{}, nil
+	}
+	if v, ok := ev.memo[key]; ok {
+		return v, nil
+	}
+	fg, err := ev.filterSet(n)
+	if err != nil {
+		return nil, err
+	}
+	if fg == nil {
+		ev.note(n)
+		return rangeSetOf{}, nil
+	}
+	outer := ev.cur
+	ev.active[key], ev.cur = true, n
+	got, err := ev.eval(ev.pick(fg), depth+1)
+	delete(ev.active, key)
+	ev.cur = outer
+	if err != nil {
+		return nil, err
+	}
+	ev.memo[key] = got
+	return got, nil
+}
+
+// filterSet fetches a filter-set once per call: nil, with no error, when the
+// Source does not have it or has something else under its name.
+func (ev *filterEval) filterSet(n types.SetName) (object.FilterGroup, error) {
+	if fg, ok := ev.sets[n.String()]; ok {
+		return fg, nil
+	}
+	if err := ev.visit(1); err != nil {
+		return nil, err
+	}
+	set, err := ev.e.Src.GetSet(ev.ctx, n)
+	if err == nil {
+		set, err = checkSet(n, set)
+	}
+	var fg object.FilterGroup
+	switch {
+	case err == nil:
+		fg, _ = set.(object.FilterGroup)
+	case !errors.Is(err, ErrNotFound):
+		return nil, err
+	}
+	ev.sets[n.String()] = fg
+	return fg, nil
+}
+
+// prefixRanges expands a route-set or as-set once per call, charging the sets
+// its expansion reached against MaxVisited.
+func (ev *filterEval) prefixRanges(n types.SetName) (RangeSet, error) {
+	if rs, ok := ev.ranges[n.String()]; ok {
+		return rs, nil
+	}
+	rs, reached, err := ev.e.expandRanges(ev.ctx, n, ev.e.maxPrefixes())
+	if err != nil {
+		return RangeSet{}, err
+	}
+	if err := ev.visit(reached); err != nil {
+		return RangeSet{}, err
+	}
+	ev.ranges[n.String()] = rs
+	return rs, nil
+}
+
+// asSet expands an as-set once per call, charging it as prefixRanges does.
+func (ev *filterEval) asSet(n types.SetName) (ASNSet, error) {
+	if s, ok := ev.asns[n.String()]; ok {
+		return s, nil
+	}
+	s, reached, err := ev.e.expandAS(ev.ctx, n)
+	if err != nil {
+		return ASNSet{}, err
+	}
+	if err := ev.visit(reached); err != nil {
+		return ASNSet{}, err
+	}
+	ev.asns[n.String()] = s
+	return s, nil
+}
+
+// asExpr resolves an AS expression to the AS numbers it denotes. AND, OR and
 // EXCEPT are the intersection, union and difference of the two sides, which is
 // what RFC 2622 §5.6 means by them.
-func (ev *filterEval) asns(e policy.ASExpr, depth int) (map[types.ASN]bool, error) {
+func (ev *filterEval) asExpr(e policy.ASExpr, depth int) (map[types.ASN]bool, error) {
 	if depth > ev.e.maxDepth() {
-		return nil, &SetTooLargeError{Limit: LimitDepth, Max: ev.e.maxDepth(), Count: depth}
+		return nil, &SetTooLargeError{Name: ev.cur, Limit: LimitDepth, Max: ev.e.maxDepth(), Count: depth}
 	}
 	switch x := e.(type) {
 	case nil:
@@ -369,7 +506,7 @@ func (ev *filterEval) asns(e policy.ASExpr, depth int) (map[types.ASN]bool, erro
 		if isAnySet(x.Name) {
 			return nil, &AnySetError{Name: x.Name}
 		}
-		set, err := ev.e.ExpandAS(ev.ctx, x.Name)
+		set, err := ev.asSet(x.Name)
 		if err != nil {
 			if !errors.Is(err, ErrNotFound) {
 				return nil, err
@@ -386,11 +523,11 @@ func (ev *filterEval) asns(e policy.ASExpr, depth int) (map[types.ASN]bool, erro
 		}
 		return out, nil
 	case policy.ASExprBinary:
-		l, err := ev.asns(x.L, depth+1)
+		l, err := ev.asExpr(x.L, depth+1)
 		if err != nil {
 			return nil, err
 		}
-		r, err := ev.asns(x.R, depth+1)
+		r, err := ev.asExpr(x.R, depth+1)
 		if err != nil {
 			return nil, err
 		}
@@ -424,10 +561,16 @@ func (ev *filterEval) asns(e policy.ASExpr, depth int) (map[types.ASN]bool, erro
 }
 
 // routesOf returns the routes the given ASes originate, as exact ranges with
-// the term's operator composed in.
+// the term's operator composed in. The ASes are asked in numeric order, so the
+// error a failing Source returns does not depend on map iteration.
 func (ev *filterEval) routesOf(as map[types.ASN]bool, op types.RangeOperator) (rangeSetOf, error) {
-	out := rangeSetOf{}
+	order := make([]types.ASN, 0, len(as))
 	for a := range as {
+		order = append(order, a)
+	}
+	sort.Slice(order, func(i, j int) bool { return order[i] < order[j] })
+	out := rangeSetOf{}
+	for _, a := range order {
 		routes, err := ev.e.Src.OriginatedRoutes(ev.ctx, a, ev.e.AFI)
 		if err != nil {
 			return nil, err
@@ -482,17 +625,83 @@ func (ev *filterEval) putOp(out rangeSetOf, r types.PrefixRange, op types.RangeO
 	ev.put(out, r)
 }
 
-// intersectRanges returns the ranges denoting exactly what both sets denote.
-func intersectRanges(a, b rangeSetOf) rangeSetOf {
+// intersect returns the ranges denoting exactly what both sets denote. Two
+// ranges meet only if one's prefix contains the other's, so each range of a is
+// tested against b's ranges at its own prefix's ancestors, looked up by
+// prefix, and at its descendants, found by binary search in b sorted by
+// address — not against all of b. The context is checked, and MaxPrefixes
+// enforced, as the result grows.
+func (ev *filterEval) intersect(a, b rangeSetOf) (rangeSetOf, error) {
+	byPrefix := make(map[netip.Prefix][]types.PrefixRange, len(b))
+	for y := range b {
+		byPrefix[y.Prefix()] = append(byPrefix[y.Prefix()], y)
+	}
+	prefixes := make([]netip.Prefix, 0, len(byPrefix))
+	for p := range byPrefix {
+		prefixes = append(prefixes, p)
+	}
+	sort.Slice(prefixes, func(i, j int) bool { return prefixLess(prefixes[i], prefixes[j]) })
+
 	out := rangeSetOf{}
-	for x := range a {
-		for y := range b {
+	tests := 0
+	meet := func(x types.PrefixRange, ys []types.PrefixRange) error {
+		for _, y := range ys {
+			if tests++; tests%ctxCheckEvery == 0 {
+				if err := ev.ctx.Err(); err != nil {
+					return err
+				}
+			}
 			if c, ok := x.Intersect(y); ok {
 				out[c] = struct{}{}
 			}
 		}
+		return ev.cap(out, types.SetName{})
 	}
-	return out
+	for x := range a {
+		p := x.Prefix()
+		for bits := p.Bits(); bits >= 0; bits-- { // ancestors, and p itself
+			if err := meet(x, byPrefix[netip.PrefixFrom(p.Addr(), bits).Masked()]); err != nil {
+				return nil, err
+			}
+		}
+		last := lastAddr(p)
+		i := sort.Search(len(prefixes), func(i int) bool { return !prefixLess(prefixes[i], p) })
+		for ; i < len(prefixes) && prefixes[i].Addr().Compare(last) <= 0; i++ {
+			if q := prefixes[i]; q.Bits() > p.Bits() { // a strict descendant
+				if err := meet(x, byPrefix[q]); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	if err := ev.ctx.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// prefixLess orders prefixes by address (IPv4 before IPv6), then length.
+func prefixLess(a, b netip.Prefix) bool {
+	if c := a.Addr().Compare(b.Addr()); c != 0 {
+		return c < 0
+	}
+	return a.Bits() < b.Bits()
+}
+
+// lastAddr is the highest address in p.
+func lastAddr(p netip.Prefix) netip.Addr {
+	a := p.Masked().Addr().As16()
+	off := 0
+	if p.Addr().Is4() {
+		off = 12
+	}
+	for i := off*8 + p.Bits(); i < 128; i++ {
+		a[i/8] |= 0x80 >> (i % 8)
+	}
+	if p.Addr().Is4() {
+		return netip.AddrFrom4([4]byte(a[12:]))
+	}
+	return netip.AddrFrom16(a)
 }
 
 // filterText renders a filter term for a diagnostic.

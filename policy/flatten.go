@@ -1,6 +1,12 @@
 package policy
 
-import "strings"
+import (
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/rkolesnichenko/rpsl/types"
+)
 
 // Flattening EXCEPT and REFINE (RFC 2622 §6.5, §6.6) into the plain
 // (peering, actions, filter) triples a policy really denotes. Parsing keeps the
@@ -39,11 +45,57 @@ func (t Term) String() string {
 	return b.String()
 }
 
-// Flatten resolves EXCEPT and REFINE and returns the policy's terms in
-// specification order — the order the RFC 2622 §6.1 specification-order rule
-// reads them in. An expression the parser could not build returns no terms.
-func Flatten(e Expr) []Term {
-	return flatten(e, 0)
+// ErrFlattenTooLarge is returned by Flatten when the terms it would build
+// exceed MaxFlattenNodes filter nodes, or the expression is nested deeper than
+// the parser allows. Each level of an EXCEPT chain doubles the size of the
+// filters, so a value of a few hundred bytes could otherwise denote gigabytes.
+var ErrFlattenTooLarge = errors.New("policy: flattened policy too large")
+
+// MaxFlattenNodes caps the work of one Flatten: the filter nodes of every term
+// it builds, counting a filter shared by several terms once per term, since
+// every consumer walking the terms pays for it that often.
+const MaxFlattenNodes = 1 << 20
+
+// Flatten resolves EXCEPT and REFINE for address family af and returns the
+// policy's terms in specification order — the order the RFC 2622 §6.1
+// specification-order rule reads them in.
+//
+// An EXCEPT or REFINE with an afi clause of its own (RFC 4012 §2.5) takes
+// effect only for the families that clause covers; for any other family the
+// left-hand policy stands as it is. One without an afi clause takes effect for
+// every family. Whether the policy as a whole is in effect for af is the
+// enclosing value's question: Import.Terms and Export.Terms ask it.
+//
+// A policy that flattens to more than MaxFlattenNodes filter nodes returns an
+// error wrapping ErrFlattenTooLarge rather than exhausting memory.
+func Flatten(e Expr, af types.AddrFamily) ([]Term, error) {
+	f := flattener{af: af}
+	ts := f.flatten(e, 0)
+	if f.err != nil || len(ts) == 0 {
+		return nil, f.err
+	}
+	out := make([]Term, len(ts))
+	for i, t := range ts {
+		out[i] = t.Term
+	}
+	return out, nil
+}
+
+// Terms flattens the import for address family af: nil when the import is not
+// in effect for af (AppliesTo), and otherwise Flatten of its expression.
+func (i Import) Terms(af types.AddrFamily) ([]Term, error) {
+	if !i.AppliesTo(af) {
+		return nil, nil
+	}
+	return Flatten(i.Expr, af)
+}
+
+// Terms flattens the export for address family af, as Import.Terms does.
+func (e Export) Terms(af types.AddrFamily) ([]Term, error) {
+	if !e.AppliesTo(af) {
+		return nil, nil
+	}
+	return Flatten(e.Expr, af)
 }
 
 // maxFlattenDepth bounds the recursion, which follows the parsed nesting. The
@@ -51,37 +103,120 @@ func Flatten(e Expr) []Term {
 // that a hand-built AST cannot overflow the stack either.
 const maxFlattenDepth = maxParseDepth
 
-func flatten(e Expr, depth int) []Term {
-	if e == nil || depth > maxFlattenDepth {
+// flattener carries one Flatten's family and its budget.
+type flattener struct {
+	af    types.AddrFamily
+	spent int // filter nodes of every term built so far
+	err   error
+}
+
+// wterm is a term with the size of its filter, which is known when the term is
+// built and would cost exponential time to measure afterwards.
+type wterm struct {
+	Term
+	w int
+}
+
+// charge accounts for a new term of w filter nodes, and reports whether the
+// budget still holds.
+func (f *flattener) charge(w int) bool {
+	if f.err != nil {
+		return false
+	}
+	if f.spent += w + 1; f.spent > MaxFlattenNodes {
+		f.err = fmt.Errorf("%w: more than %d filter nodes", ErrFlattenTooLarge, MaxFlattenNodes)
+		return false
+	}
+	return true
+}
+
+// covers reports whether an EXCEPT or REFINE scoped to afis takes effect for
+// the family being flattened; with no afi clause it always does.
+func (f *flattener) covers(afis []types.AddrFamily) bool {
+	if len(afis) == 0 {
+		return true
+	}
+	for _, a := range afis {
+		if a.Covers(f.af) {
+			return true
+		}
+	}
+	return false
+}
+
+func (f *flattener) flatten(e Expr, depth int) []wterm {
+	if e == nil || f.err != nil {
+		return nil
+	}
+	if depth > maxFlattenDepth {
+		f.err = fmt.Errorf("%w: nested deeper than %d", ErrFlattenTooLarge, maxFlattenDepth)
 		return nil
 	}
 	switch x := e.(type) {
 	case Factor:
-		out := make([]Term, 0, len(x.Peers))
+		w := filterSize(x.Filter, 0)
+		out := make([]wterm, 0, len(x.Peers))
 		for _, p := range x.Peers {
-			out = append(out, Term{Via: p.Via, Peering: p.Peering, Actions: p.Actions, Filter: x.Filter})
+			if !f.charge(w) {
+				return nil
+			}
+			out = append(out, wterm{Term{Via: p.Via, Peering: p.Peering, Actions: p.Actions, Filter: x.Filter}, w})
 		}
 		return out
 	case ExprList:
-		var out []Term
+		var out []wterm
 		for _, sub := range x.Exprs {
-			out = append(out, flatten(sub, depth+1)...)
+			out = append(out, f.flatten(sub, depth+1)...)
 		}
 		return out
 	case Refine:
-		return refineTerms(flatten(x.Left, depth+1), flatten(x.Right, depth+1))
+		left := f.flatten(x.Left, depth+1)
+		if !f.covers(x.AFIs) {
+			return left
+		}
+		return f.refineTerms(left, f.flatten(x.Right, depth+1))
 	case Except:
-		return exceptTerms(flatten(x.Left, depth+1), flatten(x.Right, depth+1))
+		left := f.flatten(x.Left, depth+1)
+		if !f.covers(x.AFIs) {
+			return left
+		}
+		return f.exceptTerms(left, f.flatten(x.Right, depth+1))
 	}
 	return nil
+}
+
+// filterSize counts the nodes of a parsed filter, whose depth the parser caps.
+func filterSize(fl Filter, depth int) int {
+	if depth > maxFlattenDepth {
+		return 1
+	}
+	switch x := fl.(type) {
+	case nil:
+		return 0
+	case FilterAnd:
+		n := 1
+		for _, t := range x.Terms {
+			n += filterSize(t, depth+1)
+		}
+		return n
+	case FilterOr:
+		n := 1
+		for _, t := range x.Terms {
+			n += filterSize(t, depth+1)
+		}
+		return n
+	case FilterNot:
+		return 1 + filterSize(x.Inner, depth+1)
+	}
+	return 1
 }
 
 // refineTerms is the cartesian refinement of RFC 2622 §6.5: one term per pair
 // of left and right terms whose peerings — and via peerings, in a via policy —
 // intersect, carrying the more specific of each, both actions in order, and
 // the conjunction of both filters.
-func refineTerms(left, right []Term) []Term {
-	var out []Term
+func (f *flattener) refineTerms(left, right []wterm) []wterm {
+	var out []wterm
 	for _, l := range left {
 		for _, r := range right {
 			pe, ok := intersectPeerings(l.Peering, r.Peering)
@@ -92,12 +227,16 @@ func refineTerms(left, right []Term) []Term {
 			if !ok {
 				continue
 			}
-			out = append(out, Term{
+			w := l.w + r.w + 1
+			if !f.charge(w) {
+				return nil
+			}
+			out = append(out, wterm{Term{
 				Via:     via,
 				Peering: pe,
 				Actions: concatActions(l.Actions, r.Actions),
 				Filter:  andFilters(l.Filter, r.Filter),
-			})
+			}, w})
 		}
 	}
 	return out
@@ -107,34 +246,43 @@ func refineTerms(left, right []Term) []Term {
 // the left for what it covers, so it keeps its own peering and actions and
 // takes the conjunction of both filters; the left-hand terms keep what the
 // right did not take.
-func exceptTerms(left, right []Term) []Term {
+func (f *flattener) exceptTerms(left, right []wterm) []wterm {
 	if len(right) == 0 {
 		return left
 	}
-	out := make([]Term, 0, len(right)*len(left)+len(left))
+	out := make([]wterm, 0, len(right)*len(left)+len(left))
 	for _, l := range left {
 		for _, r := range right {
-			out = append(out, Term{
+			w := l.w + r.w + 1
+			if !f.charge(w) {
+				return nil
+			}
+			out = append(out, wterm{Term{
 				Via:     r.Via,
 				Peering: r.Peering,
 				Actions: r.Actions,
 				Filter:  andFilters(l.Filter, r.Filter),
-			})
+			}, w})
 		}
 	}
 	covered := make([]Filter, 0, len(right))
+	restW := 2 // the NOT and the OR
 	for _, r := range right {
 		if r.Filter != nil {
 			covered = append(covered, r.Filter)
+			restW += r.w
 		}
 	}
 	rest := orFilters(covered)
 	for _, l := range left {
-		f := l.Filter
+		fl, w := l.Filter, l.w
 		if rest != nil {
-			f = andFilters(f, FilterNot{Inner: rest})
+			fl, w = andFilters(fl, FilterNot{Inner: rest}), w+restW+1
 		}
-		out = append(out, Term{Via: l.Via, Peering: l.Peering, Actions: l.Actions, Filter: f})
+		if !f.charge(w) {
+			return nil
+		}
+		out = append(out, wterm{Term{Via: l.Via, Peering: l.Peering, Actions: l.Actions, Filter: fl}, w})
 	}
 	return out
 }

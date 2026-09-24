@@ -209,16 +209,20 @@ func (o *Object) Set(name string, values ...string) error {
 		}
 	}
 	var kept []Attribute
-	var carry string
+	var carry strings.Builder // the leads of removed attributes, built once: += would re-copy them per removal
+	take := func() string {
+		s := carry.String()
+		carry.Reset()
+		return s
+	}
 	found := false
 	for _, a := range o.attrs {
 		if a.Name != name {
-			a.lead = carry + a.lead
-			carry = ""
+			a.lead = take() + a.lead
 			kept = append(kept, a)
 			continue
 		}
-		carry += a.lead
+		carry.WriteString(a.lead)
 		if found {
 			continue
 		}
@@ -226,12 +230,12 @@ func (o *Object) Set(name string, values ...string) error {
 		prefix, term := a.namePrefix(), lineTerm(a.Raw)
 		for _, v := range values {
 			na := newAttr(name, v, prefix, term)
-			na.lead, carry = carry, ""
+			na.lead = take()
 			kept = append(kept, na)
 		}
 	}
 	o.attrs = kept
-	o.trail = carry + o.trail
+	o.trail = take() + o.trail
 	if !found {
 		for _, v := range values {
 			o.appendAttr(newAttr(name, v, name+": ", o.lineEnding()))
