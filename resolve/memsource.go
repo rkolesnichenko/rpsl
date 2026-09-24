@@ -37,7 +37,7 @@ func NewMemSource(objs []object.Object, sourcePrecedence ...string) *MemSource {
 	}
 	rank := func(source string) int {
 		for i, src := range sourcePrecedence {
-			if strings.EqualFold(strings.TrimSpace(source), src) {
+			if equalFoldASCII(strings.TrimSpace(source), src) {
 				return i
 			}
 		}
@@ -54,13 +54,14 @@ func NewMemSource(objs []object.Object, sourcePrecedence ...string) *MemSource {
 				s.sets[key], setRank[key] = set, r
 			}
 		}
+		// A route whose origin did not decode is no AS's, not AS0's.
 		switch t := o.(type) {
 		case object.Route:
-			if t.Prefix.IsValid() {
+			if t.Prefix.IsValid() && (t.Origin != 0 || asnDecodes(t, "origin")) {
 				s.routes[t.Origin] = append(s.routes[t.Origin], t.Prefix)
 			}
 		case object.Route6:
-			if t.Prefix.IsValid() {
+			if t.Prefix.IsValid() && (t.Origin != 0 || asnDecodes(t, "origin")) {
 				s.routes[t.Origin] = append(s.routes[t.Origin], t.Prefix)
 			}
 		}

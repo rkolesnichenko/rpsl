@@ -24,6 +24,9 @@ func TestForbiddenAddresses(t *testing.T) {
 		"::a00:1",             // IPv4-compatible, carrying 10.0.0.1
 		"2002:a00:1::1",       // 6to4, carrying 10.0.0.1
 		"2001:0:4136:e378::1", // Teredo
+		"::ffff:0:7f00:1",     // IPv4-translated (SIIT), carrying 127.0.0.1
+		"::ffff:0:a00:1",      // IPv4-translated, carrying 10.0.0.1
+		"100::1",              // discard-only
 	} {
 		if !isForbiddenAddr(netip.MustParseAddr(a)) {
 			t.Errorf("%s is not forbidden", a)

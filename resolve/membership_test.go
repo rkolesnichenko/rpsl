@@ -2,11 +2,13 @@ package resolve
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 	"reflect"
 	"testing"
 
 	"github.com/rkolesnichenko/rpsl/object"
+	"github.com/rkolesnichenko/rpsl/types"
 )
 
 // The standard RPSL list form (RFC 2622 §2) — comma-separated members,
@@ -185,5 +187,48 @@ func TestClaimsRequireSameSource(t *testing.T) {
 		if err != nil || !reflect.DeepEqual(asnList(asns), want) {
 			t.Errorf("ExpandAS(%s) = %v, %v; want %v", set, asnList(asns), err, want)
 		}
+	}
+}
+
+// Maintainer and source names compare with ASCII case folding only: Unicode
+// folding would let "MAINT-KX" (a Kelvin sign) pass for "MAINT-KX", in the
+// one check that stands between a claim and a set.
+func TestClaimAllowedASCIIFold(t *testing.T) {
+	set := decode(t, "route-set: RS-VICTIM\nmbrs-by-ref: MAINT-KX\nsource: KSRC\n").(object.NamedSet)
+	for _, c := range []struct {
+		mnt, src string
+		want     bool
+	}{
+		{"MAINT-KX", "KSRC", true},
+		{"maint-kx", "ksrc", true}, // ASCII case still folds
+		{"MAINT-KX", "KSRC", false},
+		{"MAINT-KX", "KSRC", false},
+	} {
+		claim := decode(t, "route: 192.0.2.0/24\norigin: AS1\nmember-of: RS-VICTIM\nmnt-by: "+c.mnt+"\nsource: "+c.src+"\n")
+		if got := ClaimAllowed(claim, set); got != c.want {
+			t.Errorf("mnt-by %q, source %q: ClaimAllowed = %v, want %v", c.mnt, c.src, got, c.want)
+		}
+	}
+}
+
+// An aut-num whose key does not decode is no AS at all: it must not claim
+// membership as AS0, nor a route whose origin does not decode be AS0's. A real
+// AS0 is still AS0.
+func TestUndecodableKeysDoNotClaim(t *testing.T) {
+	src := corpus(t,
+		"as-set: AS-TOP\nmembers: AS1\nmbrs-by-ref: ANY\nsource: TEST\n",
+		"aut-num: ASXYZ\nas-name: BAD\nmember-of: AS-TOP\nsource: TEST\n",
+		"route: 192.0.2.0/24\norigin: AS1\nsource: TEST\n",
+		"route: 198.51.100.0/24\norigin: ASBAD\nsource: TEST\n",
+		"route: 203.0.113.0/24\norigin: AS0\nsource: OTHER\n",
+	)
+	e := &Expander{Src: src}
+	got, err := e.ExpandAS(context.Background(), mustSet(t, "AS-TOP"))
+	if err != nil || fmt.Sprint(asnList(got)) != "[1]" {
+		t.Errorf("ExpandAS(AS-TOP) = %v, %v; want [1]", asnList(got), err)
+	}
+	routes, err := src.OriginatedRoutes(context.Background(), 0, types.AFIAny)
+	if err != nil || fmt.Sprint(routes) != "[203.0.113.0/24]" {
+		t.Errorf("OriginatedRoutes(AS0) = %v, %v; want only the route whose origin is AS0", routes, err)
 	}
 }

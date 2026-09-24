@@ -215,7 +215,14 @@ func (s *Source) queryObjects(ctx context.Context, q string) ([]object.Object, e
 		return nil, serr
 	}
 	var out []object.Object
-	for raw := range rpsl.Parse(bytes.NewReader(text)) {
+	for raw, diags := range rpsl.Parse(bytes.NewReader(text)) {
+		// An object over the stream's size cap comes back empty; it exists,
+		// and reading it as absent would shrink an expansion silently.
+		for _, d := range diags {
+			if d.Rule == "rpsl/object-too-large" {
+				return nil, fmt.Errorf("whois: %s: an object in the response is too large: %s", q, d.Message)
+			}
+		}
 		// Decode diagnostics are intentionally dropped: a server object we can't
 		// fully decode yields a zero/partial object that simply fails the callers'
 		// type switches, which is the desired graceful degradation here. The
