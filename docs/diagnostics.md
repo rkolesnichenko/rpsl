@@ -36,6 +36,7 @@ attribute of it.
 | `object/inet6num-prefix` | Error | An inet6num key that is not an IPv6 prefix. |
 | `object/<class>-members`, `-mp-members` | Warning | A nested set of a class the container may not list (an `RS-` set in an as-set). |
 | `object/<class>-members-host-bits`, `-mp-members-host-bits` | Warning | A prefix member with host bits set; it is read with them cleared. |
+| `object/<class>-members-no-length`, `-mp-members-no-length` | Warning | A prefix member written as an address without a length (`206.197.238.0`); it is read as the host prefix, /32 or /128, as IRRd reads it. |
 | `object/route-set-members-afi` | Warning | An IPv6 prefix in a route-set's `members:`, which RFC 4012 §4.2 keeps IPv4-only (IPv6 belongs in `mp-members:`). |
 | `object/<class>-member-of-class` | Warning | A `member-of:` naming a set of a class the object cannot join: an aut-num joins as-sets, a route or route6 route-sets, an inet-rtr rtr-sets. |
 | `object/list-empty-item` | Warning | An empty item in a comma-separated list (`AS1,,AS2`). |

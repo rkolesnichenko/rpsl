@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/netip"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -162,11 +163,13 @@ func items(o *ast.Object, name string) []string {
 }
 
 // Members answers "!i<set>" as IRRd does: the set's members: and mp-members:
-// items as written, and — when the set has mbrs-by-ref — the key of every
-// aut-num (for an as-set) or route/route6 (for a route-set) of the set's own
-// source that names the set in member-of and is maintained by one of the
-// mbrs-by-ref maintainers (or any, for ANY). The set is taken from the first
-// selected source that has it. ok is false when there is no such set.
+// items as written (but a route-set's address without a length with its host
+// length, as IRRd stores it: rr.arin.net answers "206.197.238.0/32" for
+// rs-HCHBNET's "206.197.238.0"), and — when the set has mbrs-by-ref — the key
+// of every aut-num (for an as-set) or route/route6 (for a route-set) of the
+// set's own source that names the set in member-of and is maintained by one of
+// the mbrs-by-ref maintainers (or any, for ANY). The set is taken from the
+// first selected source that has it. ok is false when there is no such set.
 func (db *DB) Members(sel []string, name string) (members []string, ok bool) {
 	class := "as-set"
 	if n, err := types.ParseSetName(name); err == nil && n.Class() == types.ClassRouteSet {
@@ -176,7 +179,12 @@ func (db *DB) Members(sel []string, name string) (members []string, ok bool) {
 	if !ok {
 		return nil, false
 	}
-	members = append(items(set.obj, "members"), items(set.obj, "mp-members")...)
+	for _, it := range append(items(set.obj, "members"), items(set.obj, "mp-members")...) {
+		if class == "route-set" {
+			it = withLength(it)
+		}
+		members = append(members, it)
+	}
 	refs := items(set.obj, "mbrs-by-ref")
 	if len(refs) == 0 {
 		return members, true
@@ -205,6 +213,22 @@ func (db *DB) Members(sel []string, name string) (members []string, ok bool) {
 		}
 	}
 	return members, true
+}
+
+// withLength returns item with the host length added when its prefix is an
+// address without one ("192.0.2.1^+" is "192.0.2.1/32^+"), and unchanged
+// otherwise.
+func withLength(item string) string {
+	base, op, hasOp := strings.Cut(item, "^")
+	addr, err := types.ParseAddr(base)
+	if err != nil || strings.Contains(base, "/") {
+		return item
+	}
+	base += "/" + strconv.Itoa(addr.BitLen())
+	if hasOp {
+		base += "^" + op
+	}
+	return base
 }
 
 // Recursive answers "!i<set>,1" as IRRd does: the set's members, resolved

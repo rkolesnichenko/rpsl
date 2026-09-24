@@ -2,6 +2,7 @@ package object
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -51,7 +52,9 @@ type SetMember struct {
 // set of class container. Range operators and prefix-ranges are accepted only
 // for types.ClassRouteSet. On failure it returns a MemberInvalid member (never a
 // MemberAS) carrying Raw, plus an error. A nested set of a different class is
-// not an error here; the decoder flags it separately.
+// not an error here; the decoder flags it separately. A prefix member written
+// as an address without a length ("192.0.2.1", "2001:db8::1^+") is the host
+// prefix, /32 or /128, as IRRd reads it.
 func ParseSetMember(item string, container types.SetClass) (SetMember, error) {
 	m := SetMember{Raw: item}
 	s := strings.TrimSpace(item)
@@ -87,7 +90,7 @@ func ParseSetMember(item string, container types.SetClass) (SetMember, error) {
 			return m, nil
 		}
 	}
-	if pr, err := types.ParsePrefixRange(s); err == nil {
+	if pr, err := types.ParsePrefixRange(withLength(s)); err == nil {
 		if !routeSet {
 			return m, fmt.Errorf("prefix-range member %q not valid in %s", item, container)
 		}
@@ -95,6 +98,33 @@ func ParseSetMember(item string, container types.SetClass) (SetMember, error) {
 		return m, nil
 	}
 	return m, fmt.Errorf("invalid %s member %q", container, item)
+}
+
+// withLength returns a member text whose prefix is an address without a
+// length with the host length added ("192.0.2.1^+" becomes "192.0.2.1/32^+"),
+// and any other text unchanged. The address keeps its spelling, so
+// ParsePrefixRange reads zero-padded octets as it reads them elsewhere.
+func withLength(text string) string {
+	base, op, hasOp := strings.Cut(text, "^")
+	if !noLength(base) {
+		return text
+	}
+	addr, _ := types.ParseAddr(base)
+	base += "/" + strconv.Itoa(addr.BitLen())
+	if hasOp {
+		base += "^" + op
+	}
+	return base
+}
+
+// noLength reports whether a member's prefix text is an address without a
+// length, which ParseSetMember reads as the host prefix.
+func noLength(base string) bool {
+	if strings.Contains(base, "/") {
+		return false
+	}
+	_, err := types.ParseAddr(base)
+	return err == nil
 }
 
 // nestable reports whether a set of class member may be listed in a set of
@@ -138,6 +168,10 @@ func (d *decoder) members(name, rule string, container types.SetClass) []SetMemb
 			}
 			if types.AbbreviatedIPv4(base) {
 				d.diagAt(ast.Warning, it.span(), d.abbreviatedRule(), abbreviatedMessage(it.Value, m.Range.String()))
+			}
+			if noLength(base) {
+				d.diagAt(ast.Warning, it.span(), rule+"-no-length", fmt.Sprintf(
+					"member %q has no prefix length; it is read as %s, as IRRd reads it", it.Value, m.Range))
 			}
 		}
 		out = append(out, m)

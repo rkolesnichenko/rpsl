@@ -32,6 +32,12 @@ func TestParseSetMember(t *testing.T) {
 		{"RS-FOO^+", types.ClassRouteSet, MemberSet, 0, "RS-FOO", "", op("+")},
 		{"AS-FOO^-", types.ClassRouteSet, MemberSet, 0, "AS-FOO", "", op("-")},
 		{"10.0.0.0/8^16-24", types.ClassRouteSet, MemberPrefixRange, 0, "", "10.0.0.0/8^16-24", types.RangeOperator{}},
+		// An address without a length is the host prefix, as IRRd reads it.
+		{"192.0.2.1", types.ClassRouteSet, MemberPrefixRange, 0, "", "192.0.2.1/32", types.RangeOperator{}},
+		{"2001:DB8::1", types.ClassRouteSet, MemberPrefixRange, 0, "", "2001:db8::1/128", types.RangeOperator{}},
+		{"192.0.2.1^+", types.ClassRouteSet, MemberPrefixRange, 0, "", "192.0.2.1/32", types.RangeOperator{}},
+		{"192.0.2.1^32", types.ClassRouteSet, MemberPrefixRange, 0, "", "192.0.2.1/32", types.RangeOperator{}},
+		{"010.0.0.1", types.ClassRouteSet, MemberPrefixRange, 0, "", "10.0.0.1/32", types.RangeOperator{}},
 	}
 	for _, c := range cases {
 		m, err := ParseSetMember(c.item, c.container)
@@ -63,6 +69,11 @@ func TestParseSetMemberRejects(t *testing.T) {
 		{"RS-FOO^+24", types.ClassRouteSet}, // signed operator
 		{"RS-FOO^+^+", types.ClassRouteSet}, // doubled operator
 		{"", types.ClassAsSet},
+		{"192.0.2.1", types.ClassAsSet},       // a host prefix is still a prefix
+		{"192.0.2.0^24", types.ClassRouteSet}, // shorter than the /32 it applies to
+		{"10.1", types.ClassRouteSet},         // abbreviated: inet_aton and IPy read it differently
+		{"192.0.2", types.ClassRouteSet},
+		{"fe80::1%eth0", types.ClassRouteSet}, // a zone is not part of a prefix
 	} {
 		m, err := ParseSetMember(c.item, c.container)
 		if err == nil || m.Kind != MemberInvalid || m.Raw != c.item {

@@ -9,6 +9,21 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Route-set members written without a prefix length are read as IRRd
+  reads them.** A member that is a whole address — `206.197.238.0`,
+  `2001:db8::32^+` — is the host prefix, /32 or /128: IRRd stores it so and
+  answers `!i` with the length, and bgpq4 reads it so too. This library
+  rejected it, so five members of three ARIN and RADB route-sets were dropped
+  from expansions. `object.ParseSetMember` now accepts it, with a Warning. A
+  short address (`10.1`) is still an error, and so is an address without a
+  length anywhere else, a policy prefix list included.
+
+### Added
+
+- **New Warning `object/<class>-members-no-length`** (and `-mp-members-no-length`).
+
 ## [0.8.0] - 2026-09-24
 
 ### Fixed

@@ -24,6 +24,10 @@ passing unnoticed.
   prefix length (23)"); the engine leaves the member out with an Error
   (`TestBgpq4RejectsRangeBelowPrefixLength`). Only the RIPE Database accepts it.
 - **Host bits** (`192.0.2.1/24`): both read the network, `192.0.2.0/24`.
+- **A member without a length** (`192.0.2.1`, in ARIN's `rs-HCHBNET`): all
+  three read the host prefix. IRRd stores it as `192.0.2.1/32` (so does
+  `irrtest`), and bgpq4 reads a bare address as a /32 or /128 itself; the random
+  IRRs write some host-prefix members so.
 - **Indirect members**: IRRd folds `mbrs-by-ref` members into `!i`; the engine
   resolves them itself with the same rules (maintainer and same source), and the
   two agree on every random IRR.

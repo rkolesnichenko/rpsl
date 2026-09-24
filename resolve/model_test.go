@@ -208,7 +208,11 @@ func randomModel(r *rand.Rand, compat bool) model {
 			case c < 8:
 				p := pfx()
 				o := literal(p)
-				mm = mMember{kind: "pfx", pfx: p, op: o, text: p.String() + o}
+				text := p.String()
+				if p.IsSingleIP() && r.IntN(2) == 0 { // "192.0.2.1": the host prefix, as IRRd reads it
+					text = p.Addr().String()
+				}
+				mm = mMember{kind: "pfx", pfx: p, op: o, text: text + o}
 			case c < 12:
 				a, o := asn(), op()
 				mm = mMember{kind: "as", as: a, op: o, text: spell(a.String()) + o}
