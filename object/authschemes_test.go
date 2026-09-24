@@ -41,3 +41,21 @@ func TestAuthSchemes(t *testing.T) {
 		t.Errorf("diagnostics %v", ds)
 	}
 }
+
+// A tab separates an auth: scheme from its credential and a changed: address
+// from its date, as a space does: RPSL values may use either, and real
+// changed: lines do (two in the RADB dumps).
+func TestAuthAndChangedTabSeparator(t *testing.T) {
+	a, err := ParseAuth("CRYPT-PW\tabcdef")
+	if err != nil || a.Method != AuthCrypt || a.Value != "abcdef" {
+		t.Errorf("ParseAuth(CRYPT-PW<TAB>abcdef) = %+v, %v", a, err)
+	}
+	a, err = ParseAuth("MD5-PW \t $1$abc$xyz")
+	if err != nil || a.Method != AuthMD5 || a.Value != "$1$abc$xyz" {
+		t.Errorf("ParseAuth(MD5-PW, spaces and a tab) = %+v, %v", a, err)
+	}
+	c, err := ParseChanged("ddemore@clearcable.ca\t20180821")
+	if err != nil || c.Email != "ddemore@clearcable.ca" || c.Date.Format("20060102") != "20180821" {
+		t.Errorf("ParseChanged(<TAB>) = %+v, %v", c, err)
+	}
+}

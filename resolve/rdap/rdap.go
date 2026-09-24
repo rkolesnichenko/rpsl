@@ -311,9 +311,10 @@ func guardDial(_, address string, _ syscall.RawConn) error {
 
 // forbiddenPrefixes are special-purpose ranges beyond what netip classifies:
 // "this network", CGNAT, IETF protocol assignments, benchmarking, reserved
-// (incl. broadcast), deprecated site-local IPv6, and the IPv6 forms that carry
-// or tunnel to an IPv4 address — NAT64, IPv4-compatible, 6to4 and Teredo — so
-// none can reach an internal IPv4 host.
+// (incl. broadcast), deprecated site-local IPv6, discard-only IPv6, and the
+// IPv6 forms that carry or tunnel to an IPv4 address — NAT64, IPv4-compatible,
+// IPv4-translated (SIIT), 6to4 and Teredo — so none can reach an internal IPv4
+// host.
 var forbiddenPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("0.0.0.0/8"),
 	netip.MustParsePrefix("100.64.0.0/10"),
@@ -322,6 +323,8 @@ var forbiddenPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("240.0.0.0/4"),
 	netip.MustParsePrefix("fec0::/10"),
 	netip.MustParsePrefix("::/96"),
+	netip.MustParsePrefix("::ffff:0:0:0/96"),
+	netip.MustParsePrefix("100::/64"),
 	netip.MustParsePrefix("64:ff9b::/96"),
 	netip.MustParsePrefix("64:ff9b:1::/48"),
 	netip.MustParsePrefix("2001::/32"),

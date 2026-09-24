@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"net"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -165,5 +167,22 @@ func TestScanResponseInPlace(t *testing.T) {
 	}
 	if serr == nil || serr.Code != 201 {
 		t.Errorf("scanResponse error = %v, want the first: 201", serr)
+	}
+}
+
+// An object over the stream's size cap is an error, not a missing set: it
+// exists, and treating it as absent would shrink an expansion silently.
+func TestOversizedObjectIsAnError(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("as-set: AS-HUGE\n")
+	for i := 0; i < 300000; i++ {
+		fmt.Fprintf(&b, "members: AS%d\n", i+1)
+	}
+	b.WriteString("source: TEST\n")
+	fw := newFakeWhois(t, map[string]string{"-r -T as-set AS-HUGE": b.String()})
+	src := &Source{Addr: fw.addr(), Timeout: 10 * time.Second}
+	_, err := src.GetSet(context.Background(), mustSet(t, "AS-HUGE"))
+	if err == nil || errors.Is(err, resolve.ErrNotFound) {
+		t.Errorf("GetSet of an object over the size cap: %v, want an error other than ErrNotFound", err)
 	}
 }

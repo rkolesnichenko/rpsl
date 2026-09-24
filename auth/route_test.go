@@ -9,9 +9,10 @@ import (
 )
 
 // RouteAuthority follows RFC 2725 §4's order: mnt-routes:, then mnt-lower:,
-// then mnt-by:.
+// then mnt-by:, for a prefix below the object (see TestRouteAuthorityMntLower
+// for the object's own prefix).
 func TestRouteAuthorityOrder(t *testing.T) {
-	prefix := mustPrefix(t, "192.0.2.0/24")
+	prefix := mustPrefix(t, "192.0.2.0/25")
 	for _, c := range []struct {
 		name string
 		src  string
@@ -101,7 +102,7 @@ source:         RIPE
 
 func routeReq(t *testing.T, mntBy []string, origin, space object.Object) RouteRequest {
 	t.Helper()
-	return RouteRequest{Prefix: mustPrefix(t, "192.0.2.0/24"), MntBy: mntBy, Origin: origin, Space: space}
+	return RouteRequest{Prefix: mustPrefix(t, "192.0.2.0/24"), OriginAS: 64500, MntBy: mntBy, Origin: origin, Space: space}
 }
 
 // All three permissions of RFC 2725 §4 must be held.
@@ -188,7 +189,7 @@ func TestRouteCreationMissingContext(t *testing.T) {
 func TestRouteRequestBuilders(t *testing.T) {
 	r := decode(t, "route: 192.0.2.0/24\norigin: AS64500\nmnt-by: MNT-OWN\nsource: RIPE\n").(object.Route)
 	req := RouteRequestFor(r, nil, nil)
-	if req.Prefix.String() != "192.0.2.0/24" || len(req.MntBy) != 1 || req.MntBy[0] != "MNT-OWN" {
+	if req.Prefix.String() != "192.0.2.0/24" || req.OriginAS != 64500 || len(req.MntBy) != 1 || req.MntBy[0] != "MNT-OWN" {
 		t.Errorf("RouteRequestFor = %+v", req)
 	}
 	r6 := decode(t, "route6: 2001:db8::/32\norigin: AS64500\nmnt-by: MNT-OWN\nsource: RIPE\n").(object.Route6)

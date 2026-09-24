@@ -160,7 +160,7 @@ func (p *parser) routerAddr(rule string) netip.Addr {
 		return netip.Addr{}
 	}
 	p.warnPadded(t, a.String())
-	return a.Unmap().WithZone("")
+	return p.plainAddr(t, rule, a)
 }
 
 // masklen reads the "masklen <n>" clause and checks n against addr's family.

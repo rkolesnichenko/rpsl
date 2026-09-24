@@ -66,7 +66,7 @@ func TestPolicyGrammar(t *testing.T) {
 			"F[AS1 : {10.0.0.0/8^+, 11.0.0.0/8^+}]"},
 		{"op-compose-range", ParseImport, "from AS1 accept {128.9.0.0/16^20-24}^26-28", "F[AS1 : {128.9.0.0/16^26-28}]"},
 		{"op-compose-minus", ParseImport, "from AS1 accept {128.9.0.0/16^+}^-", "F[AS1 : {128.9.0.0/16^-}]"},
-		{"op-compose-delete", ParseImport, "from AS1 accept {10.0.0.0/8^24}^16", "F[AS1 : {}]"},
+		// {10.0.0.0/8^24}^16, which deletes the range, is in TestPrefixListOpEmptyWarns.
 
 		// PeerAS inside set names (decision 1).
 		{"tpl-filter", ParseImport, "from AS8821:AS-CUSTOMERS accept AS8821:AS-CUSTOMERS:PeerAS",

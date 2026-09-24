@@ -157,7 +157,8 @@ func CheckMntners(ctx context.Context, reg Registry, names []string, cred Creden
 
 // ReferralChain walks referral-by from name towards the maintainer that
 // authorised it, stopping at one that refers to itself — the root of the chain
-// (RFC 2725 §9). maxDepth bounds the walk; zero means 32.
+// (RFC 2725 §9). maxDepth bounds the maintainers walked, root included; zero
+// means 32.
 //
 // It returns the chain, starting with name's own maintainer. A cycle that does
 // not close on itself returns ErrReferralCycle along with the chain walked so
@@ -179,9 +180,6 @@ func ReferralChain(ctx context.Context, reg Registry, name string, maxDepth int)
 			return chain, err
 		}
 		chain = append(chain, m)
-		if len(chain) >= maxDepth {
-			return chain, fmt.Errorf("%w after %d maintainers", ErrReferralTooDeep, len(chain))
-		}
 		next := ""
 		for _, r := range m.ReferralBy {
 			if r = strings.TrimSpace(r); r != "" {
@@ -194,6 +192,9 @@ func ReferralChain(ctx context.Context, reg Registry, name string, maxDepth int)
 		}
 		if strings.EqualFold(next, m.Handle) {
 			return chain, nil // self-referential: the root of the chain
+		}
+		if len(chain) >= maxDepth { // another maintainer follows, one past the bound
+			return chain, fmt.Errorf("%w after %d maintainers", ErrReferralTooDeep, len(chain))
 		}
 		at = next
 	}

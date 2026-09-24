@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/rkolesnichenko/rpsl/object"
@@ -104,13 +105,43 @@ func MntIrtChange(ctx context.Context, reg IrtRegistry, before, after object.Obj
 	return CheckIrts(ctx, reg, added, cred, v)
 }
 
-// mntIrt reads the mnt-irt: references of the classes that carry them.
+// mntIrt reads the mnt-irt: references of an object. The classes that carry
+// them are read from their typed fields, as values or pointers; any other
+// object is read from its text, so a shape this switch does not know cannot
+// hide a reference and pass an update unchecked.
 func mntIrt(o object.Object) []string {
 	switch t := o.(type) {
+	case nil:
+		return nil
 	case object.Inetnum:
 		return t.MntIrt
+	case *object.Inetnum:
+		if t != nil {
+			return t.MntIrt
+		}
+		return nil
 	case object.Inet6num:
 		return t.MntIrt
+	case *object.Inet6num:
+		if t != nil {
+			return t.MntIrt
+		}
+		return nil
 	}
-	return nil
+	if v := reflect.ValueOf(o); v.Kind() == reflect.Pointer && v.IsNil() {
+		return nil // a typed nil: no object, so no references
+	}
+	raw := o.Raw()
+	if raw == nil {
+		return nil
+	}
+	var out []string
+	for _, a := range raw.GetAll("mnt-irt") {
+		for _, it := range a.List() {
+			if it.Value != "" {
+				out = append(out, it.Value)
+			}
+		}
+	}
+	return out
 }

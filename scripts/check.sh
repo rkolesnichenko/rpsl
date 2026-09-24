@@ -35,7 +35,10 @@ done
 # counters are atomic and slow the hot loops of the tests about fourfold.
 step "coverage"
 for m in $modules; do
-	(cd "$m" && go test -count=1 -cover ./... 2>&1 | grep -o 'rkolesnichenko/[^ 	]*.*coverage: [0-9.]*%') || bad "coverage $m"
+	# The output is captured first: grep's status in a pipeline would hide a
+	# failing run whose output still reports coverage.
+	out=$(cd "$m" && go test -count=1 -cover ./... 2>&1) || { printf '%s\n' "$out"; bad "coverage $m"; continue; }
+	printf '%s\n' "$out" | grep -o 'rkolesnichenko/[^ 	]*.*coverage: [0-9.]*%'
 done
 
 # Every benchmark runs once, so none can break unnoticed. Timing them is
@@ -100,7 +103,8 @@ if [ -n "${FUZZTIME:-}" ]; then
 		". ./policy FuzzParseFilter" ". ./policy FuzzParsePeering" ". ./policy FuzzFilterString" \
 		". ./policy FuzzParseInject" ". ./policy FuzzParseComponents" ". ./policy FuzzParseAggrMtd" \
 		". ./policy FuzzParseIfaddr" ". ./policy FuzzParseInterface" ". ./policy FuzzParsePeer" \
-		". ./policy FuzzParseRPAttribute" ". ./policy FuzzParseTypedef" ". ./policy FuzzParseProtocol"; do
+		". ./policy FuzzParseRPAttribute" ". ./policy FuzzParseTypedef" ". ./policy FuzzParseProtocol" \
+		"resolve ./irrd FuzzReadFrame" "resolve ./irrd FuzzParseMembers" "resolve ./whois FuzzScanResponse"; do
 		set -- $t
 		step "fuzz $3 ($FUZZTIME)"
 		fuzz "$1" "$2" "$3" || bad "fuzz $3"

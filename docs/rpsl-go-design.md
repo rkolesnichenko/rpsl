@@ -198,7 +198,7 @@ type Common struct {
     Remarks []string
     Notify  []string
     MntBy   []string
-    Changed []string
+    Changed []Changed // address and date, as parsed; Raw keeps the line
     Source  string
 }
 
@@ -209,8 +209,9 @@ type Registry struct {
     Org           []string
     SponsoringOrg string
     AbuseC        types.NICHandle
-    MntLower, MntRoutes, MntDomains, MntIrt, MntRef []string
-    Created, LastModified string
+    MntLower, MntDomains, MntIrt, MntRef []string
+    MntRoutes             []policy.MntRoutes // a maintainer and the space it may authorise
+    Created, LastModified Timestamp          // RFC 3339, as RIPE sets them
 }
 
 type AutNum struct {
@@ -581,7 +582,7 @@ The correctness bar is "matches the tools operators already trust," so testing i
 2. **Policy tests from the RFCs.** Table tests for the grammar's forms, and every routing-policy example in RFC 2622, 2650 and 4012 kept verbatim in `policy/testdata/rfc-examples.txt`: each must parse clean, except the one the parser rejects on purpose (RFC 2622's `NOT` in a peering).
 3. **A model of the engine.** Random IRRs — as-sets and route-sets in two sources, range operators on every kind of member, indirect members honored and rejected, cycles, missing and invalid members, `AS-ANY` — are expanded by the engine and by a brute-force oracle that evaluates RFC 2622 straight from the generator's model, never from parsed text. They must agree on AS numbers, prefixes of each family, `Missing()`, and on `MaxDepth`/`MaxPrefixes` holding exactly at the true depth and size. The same IRRs are served by `resolve/internal/irrtest`, an in-process server that answers the IRRd and whois protocols as IRRd does, so `irrd.Source`, `whois.Source` and `MemSource` are held to the same oracle.
 4. **Differential expansion vs. `bgpq4`.** A real `bgpq4` binary queries `irrtest` serving the same objects the engine expands (bgpq4 recurses through as-sets itself with `-L`; route-sets it asks the server to resolve with `!i…,1`, which `irrtest` implements as IRRd does). Random IRRs must expand identically, AS numbers and both families' prefixes; the golden expansions of the snapshot in `resolve/testdata` are bgpq4's own output, re-checked whenever bgpq4 is installed (CI installs it). Where the two knowingly differ — bgpq4 drops the single-length `^n` form (a bgpq4 bug), neither IRRd nor bgpq4 applies range operators on set and AS members, bgpq4 follows route-sets listed in as-sets — the difference is pinned in `resolve/testdata/bgpq4/divergences.md` and a test, so a change on either side fails. An opt-in run (`RPSL_REALDATA`) does the same for the largest and a random sample of real RIPE sets. An older opt-in diff against bgpq4 on a live IRR runs when `RPSL_BGPQ4_SERVER`/`RPSL_BGPQ4_SET` are set.
-5. **Fuzzing** (`go test -fuzz`) of every parser that takes untrusted text — lexer, attribute lists, set names, range operators, prefix ranges, the stream, decoding, editing, and the policy parser (import, filter, peering, AS-path regexp) — for properties, not only for panics:
+5. **Fuzzing** (`go test -fuzz`) of every parser that takes untrusted text — lexer, attribute lists, set names, range operators, prefix ranges, the stream, decoding, editing, the policy parser (import, filter, peering, AS-path regexp), and what the network backends read from a server (the IRRd frame reader and member list, the whois response scanner) — for properties, not only for panics:
    - every token's span and segments point at its bytes, and its kind follows the line rules the stream shares;
    - the stream is lossless, splits objects where the lexer sees them end, yields each object exactly as `ParseObject` reads its text (positions shifted), resumes after a break, and under caps drops only whole, diagnosed objects;
    - `Append`/`Set` produce text that parses back to exactly the edit, other attributes' bytes untouched;

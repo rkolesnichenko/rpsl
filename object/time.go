@@ -64,7 +64,7 @@ func ParseChanged(s string) (Changed, error) {
 	if raw == "" {
 		return c, fmt.Errorf("rpsl/object: empty changed line")
 	}
-	email, rest, _ := strings.Cut(raw, " ")
+	email, rest := cutSpace(raw)
 	c.Email = email
 	date := strings.TrimSpace(rest)
 	if date == "" {

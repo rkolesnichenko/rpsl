@@ -3,6 +3,7 @@ package policy
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"strings"
 	"unicode/utf8"
 
@@ -762,7 +763,7 @@ func (p *parser) parseRouterPrim() RouterExpr {
 	p.advance()
 	if a, err := types.ParseAddr(t.text); err == nil {
 		p.warnPadded(t, a.String())
-		return RouterAddr{Addr: a}
+		return RouterAddr{Addr: p.plainAddr(t, "policy/router", a)}
 	}
 	if sn, err := types.ParseSetName(t.text); err == nil {
 		if sn.Class() == types.ClassRtrSet {
@@ -772,6 +773,10 @@ func (p *parser) parseRouterPrim() RouterExpr {
 		return nil
 	}
 	switch labels := dnsLabels(t.text); {
+	case labels > 0 && numericLastLabel(t.text):
+		p.errf(t, "policy/router", "invalid router address "+describe(t)+
+			": a name's last label is never all digits, so it is not an inet-rtr name")
+		return nil
 	case labels > 1:
 		return RouterName{Name: t.text}
 	case labels == 1:
@@ -780,6 +785,39 @@ func (p *parser) parseRouterPrim() RouterExpr {
 	}
 	p.errf(t, "policy/router", "invalid router "+describe(t))
 	return nil
+}
+
+// numericLastLabel reports whether the last label of a DNS name is all digits,
+// which no top-level domain is (RFC 3696 §2): "256.0.0.1" and "10.1.1" are
+// mistyped addresses, not names.
+func numericLastLabel(s string) bool {
+	s = strings.TrimSuffix(s, ".")
+	last := s[strings.LastIndexByte(s, '.')+1:]
+	if last == "" {
+		return false
+	}
+	for i := 0; i < len(last); i++ {
+		if last[i] < '0' || last[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// plainAddr returns a as a registry means it: without an IPv6 zone, which
+// names an interface of the host reading it and means nothing in a registry,
+// and an IPv4-mapped address as the IPv4 address it carries. Each change is
+// warned under rule.
+func (p *parser) plainAddr(t token, rule string, a netip.Addr) netip.Addr {
+	if z := a.Zone(); z != "" {
+		a = a.WithZone("")
+		p.warnf(t, rule, describe(t)+" carries the zone %"+z+", which means nothing in a registry; it is read as "+a.String())
+	}
+	if a.Is4In6() {
+		a = a.Unmap()
+		p.warnf(t, rule, describe(t)+" is an IPv4-mapped address; it is read as "+a.String())
+	}
+	return a
 }
 
 // dnsLabels returns the number of labels in s if it is a DNS name (letters,
@@ -1334,6 +1372,7 @@ func (p *parser) parsePrefixList() Filter {
 			p.errf(t, "policy/range-op", "invalid range operator "+describe(t))
 			return FilterPrefixList{Ranges: ranges}
 		}
+		had := len(ranges)
 		composed := ranges[:0]
 		for _, r := range ranges {
 			if c, ok := op.Apply(r); ok {
@@ -1341,6 +1380,10 @@ func (p *parser) parsePrefixList() Filter {
 			}
 		}
 		ranges = composed
+		if had > 0 && len(ranges) == 0 {
+			p.warnf(t, "policy/range-op-empty", "the range operator "+describe(t)+
+				" keeps none of the prefix list's ranges, so the filter matches nothing")
+		}
 	}
 	return FilterPrefixList{Ranges: ranges}
 }
