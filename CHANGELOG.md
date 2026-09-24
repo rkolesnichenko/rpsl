@@ -9,6 +9,8 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-24
+
 ### Fixed
 
 - **A line break separates list items, as in IRRd.** IRRd joins the lines of
@@ -347,7 +349,8 @@ The first release. There is no earlier version to migrate from.
   values do; a few common RP-attributes have typed helpers.
 - **`rdap` is not a `Source`.** RDAP serves registration data, not IRR sets.
 
-[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/rkolesnichenko/rpsl/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/rkolesnichenko/rpsl/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.5.0...v0.6.0
