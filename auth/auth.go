@@ -9,14 +9,26 @@
 // exactly as resolve.Source injects I/O: supply a Verifier and the model uses
 // it, supply none and the model answers the questions that do not need it.
 //
-// In scope: parsing and matching auth: schemes, the hierarchical authorisation
-// of RFC 2725 §4 — which is what stops one maintainer registering a route in
-// another's address space — the referral-by chains of RFC 2725 §9, and the
-// RIPE Database's rule that adding an mnt-irt: reference needs the consent of
-// the irt it names (MntIrtChange).
+// In scope: parsing and matching auth: schemes, and deciding whether a
+// credential may create, modify or delete an object. Two registries decide
+// that differently, so each has its Rules, whose Authorise applies every check
+// an update needs, looking parents up in an injected Database:
 //
-// Out of scope: the update-transaction protocol of RFC 2725 §7, and any
-// cryptographic verification.
+//   - RIPE: the object's maintainers (the stored version's for a change), and
+//     on creation its parent's — the covering address space, the as-block, the
+//     object a hierarchical set name ("AS1:AS-FOO") names — plus the consent of
+//     irts and mnt-ref: holders that new references name.
+//   - IRRd: the maintainers of the submitted and the stored versions, and on
+//     creation those (mnt-by: only) of a route's address space or a set's
+//     aut-num.
+//
+// RouteCreation is RFC 2725 §9.9's route check, which also asks the origin
+// AS — a check neither registry makes. The referral-by chains of RFC 2725 §9
+// are ReferralChain.
+//
+// Out of scope: the update-transaction protocol of RFC 2725 §7, the override
+// and RIPE NCC paths of a registry's own staff, IRRd's configurable settings
+// (IRRd follows its defaults), and any cryptographic verification.
 package auth
 
 import (
@@ -146,6 +158,8 @@ func CheckMntners(ctx context.Context, reg Registry, names []string, cred Creden
 			d.OK = true
 			d.Reasons = append(d.Reasons, fmt.Sprintf("%s: credential accepted", name))
 			return d, nil
+		case len(m.Auth) == 0:
+			d.Reasons = append(d.Reasons, fmt.Sprintf("%s: has no auth: lines, so accepts no credential", name))
 		case unsupported:
 			d.Reasons = append(d.Reasons, fmt.Sprintf("%s: no verifier for its auth scheme", name))
 		default:

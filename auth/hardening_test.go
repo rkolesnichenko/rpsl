@@ -131,3 +131,13 @@ func TestReferralChainDepth(t *testing.T) {
 		t.Errorf("a chain of two with maxDepth 1: %v, want ErrReferralTooDeep", err)
 	}
 }
+
+// A maintainer with no auth: lines accepts nothing, and says so rather than
+// reporting a rejected credential.
+func TestMntnerWithoutAuthLines(t *testing.T) {
+	reg := newRegistry(t, "mntner: MNT-BARE\nupd-to: e@e.net\nmnt-by: MNT-BARE\nsource: RIPE\n")
+	d, err := CheckMntners(context.Background(), reg, []string{"MNT-BARE"}, goodCred(), verifier())
+	if err != nil || d.OK || !strings.Contains(d.String(), "has no auth: lines") {
+		t.Errorf("CheckMntners of a maintainer without auth: lines = %s, %v", d, err)
+	}
+}
