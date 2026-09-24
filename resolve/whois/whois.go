@@ -93,22 +93,23 @@ func (s *Source) maxResponse() int64 {
 	return s.MaxResponse
 }
 
-// GetSet fetches an as-set or route-set object by name. When the server
-// returns it from several sources, the one from the source listed first in
-// Sources wins; without Sources, the first the server returns.
+// GetSet fetches a set object of any class by name. When the server returns
+// it from several sources, the one from the source listed first in Sources
+// wins; without Sources, the first the server returns.
 func (s *Source) GetSet(ctx context.Context, name types.SetName) (object.NamedSet, error) {
 	if name.IsZero() {
 		return nil, errors.New("whois: empty set name")
 	}
-	objs, err := s.queryObjects(ctx, "-r -T as-set,route-set "+name.String())
+	class := name.Class().String()
+	objs, err := s.queryObjects(ctx, "-r -T "+class+" "+name.String())
 	if err != nil {
 		return nil, err
 	}
-	var best object.Set
+	var best object.NamedSet
 	bestRank := len(s.Sources)
 	for _, o := range objs {
-		set, ok := o.(object.Set)
-		if !ok || set.SetName() != name {
+		set, ok := o.(object.NamedSet)
+		if !ok || set.SetName() != name || set.Class() != class {
 			continue
 		}
 		rank := slices.IndexFunc(s.Sources, func(n string) bool { return strings.EqualFold(n, set.SetSource()) })
@@ -152,12 +153,17 @@ func (s *Source) OriginatedRoutes(ctx context.Context, as types.ASN, afi types.A
 
 // MembersByRef returns the objects whose membership claim in set is honored,
 // via the inverse "member-of" query plus resolve.ClaimAllowed (maintainer and
-// same-source check) — real indirect-membership resolution.
+// same-source check) — real indirect-membership resolution. It asks only for
+// the classes that may join a set of set's class (RFC 2622 §5.1-5.3).
 func (s *Source) MembersByRef(ctx context.Context, set object.NamedSet) ([]object.Object, error) {
 	if set == nil || set.SetName().IsZero() {
 		return nil, errors.New("whois: empty set name")
 	}
-	objs, err := s.queryObjects(ctx, "-r -T route,route6,aut-num,as-set -i member-of "+set.SetName().String())
+	classes := claimantClasses(set.SetName().Class())
+	if classes == "" {
+		return nil, nil
+	}
+	objs, err := s.queryObjects(ctx, "-r -T "+classes+" -i member-of "+set.SetName().String())
 	if err != nil {
 		return nil, err
 	}
@@ -168,6 +174,21 @@ func (s *Source) MembersByRef(ctx context.Context, set object.NamedSet) ([]objec
 		}
 	}
 	return out, nil
+}
+
+// claimantClasses lists the classes whose member-of claims a set of class c
+// honours: aut-nums join as-sets, routes route-sets and inet-rtrs rtr-sets. A
+// peering-set or filter-set has no mbrs-by-ref, and no claimants.
+func claimantClasses(c types.SetClass) string {
+	switch c {
+	case types.ClassAsSet:
+		return "aut-num"
+	case types.ClassRouteSet:
+		return "route,route6"
+	case types.ClassRtrSet:
+		return "inet-rtr"
+	}
+	return ""
 }
 
 // queryObjects runs one WHOIS query and decodes every object in the response.

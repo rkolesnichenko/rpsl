@@ -18,9 +18,9 @@ import (
 func TestWhoisServerErrorsAreReported(t *testing.T) {
 	denied := "% This is the RIPE Database query service.\n\n%ERROR:201: access denied for 192.0.2.1\n%\n% Sorry.\n"
 	fw := newFakeWhois(t, map[string]string{
-		"-r -T as-set,route-set AS-FOO":                         denied,
-		"-r -T route,route6 -i origin AS10":                     denied,
-		"-r -T route,route6,aut-num,as-set -i member-of RS-REF": denied,
+		"-r -T as-set AS-FOO":                    denied,
+		"-r -T route,route6 -i origin AS10":      denied,
+		"-r -T route,route6 -i member-of RS-REF": denied,
 	})
 	src := &Source{Addr: fw.addr()}
 	ctx := context.Background()
@@ -38,9 +38,9 @@ func TestWhoisServerErrorsAreReported(t *testing.T) {
 func TestWhoisNoEntriesIsNotFound(t *testing.T) {
 	none := "%ERROR:101: no entries found\n%\n% No entries found in source RIPE.\n"
 	fw := newFakeWhois(t, map[string]string{
-		"-r -T as-set,route-set AS-FOO":     none,
+		"-r -T as-set AS-FOO":               none,
 		"-r -T route,route6 -i origin AS10": none,
-		"-r -T as-set,route-set AS-BAR":     "%WARNING:902: useless IP flag passed\nas-set: AS-BAR\nmembers: AS1\nsource: TEST\n",
+		"-r -T as-set AS-BAR":               "%WARNING:902: useless IP flag passed\nas-set: AS-BAR\nmembers: AS1\nsource: TEST\n",
 	})
 	src := &Source{Addr: fw.addr()}
 	ctx := context.Background()
@@ -135,7 +135,7 @@ func TestWhoisSourcesAreValidated(t *testing.T) {
 		}
 	}
 	fw := newFakeWhois(t, map[string]string{
-		"-s RIPE,RADB -r -T as-set,route-set AS-FOO": "as-set: AS-FOO\nmembers: AS1\nsource: RIPE\n",
+		"-s RIPE,RADB -r -T as-set AS-FOO": "as-set: AS-FOO\nmembers: AS1\nsource: RIPE\n",
 	})
 	src := &Source{Addr: fw.addr(), Sources: []string{"ripe", "RADB"}, Timeout: 2 * time.Second}
 	if _, err := src.GetSet(context.Background(), mustSet(t, "AS-FOO")); err != nil {

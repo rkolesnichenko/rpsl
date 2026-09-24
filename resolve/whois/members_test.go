@@ -17,8 +17,8 @@ import (
 // expanded to [AS0].
 func TestEngineExpandsCommaMembersOverWhois(t *testing.T) {
 	fw := newFakeWhois(t, map[string]string{
-		"-r -T as-set,route-set AS-FOO": "as-set: AS-FOO\nmembers: AS1, AS2\nmembers: AS-BAR\nsource: TEST\n",
-		"-r -T as-set,route-set AS-BAR": "as-set: AS-BAR\nmembers: AS3,\n  AS4\nsource: TEST\n",
+		"-r -T as-set AS-FOO": "as-set: AS-FOO\nmembers: AS1, AS2\nmembers: AS-BAR\nsource: TEST\n",
+		"-r -T as-set AS-BAR": "as-set: AS-BAR\nmembers: AS3,\n  AS4\nsource: TEST\n",
 	})
 	e := &resolve.Expander{Src: &Source{Addr: fw.addr(), Timeout: 2 * time.Second}}
 	got, err := e.ExpandAS(context.Background(), mustSet(t, "AS-FOO"))
@@ -33,7 +33,7 @@ func TestWhoisMembersByRefListValues(t *testing.T) {
 	resp := "route: 198.51.100.0/24\norigin: AS10\nmember-of: RS-OTHER, RS-REF\nmnt-by: MAINT-X, MAINT-GOOD\nsource: TEST\n\n" +
 		"route: 203.0.113.0/24\norigin: AS20\nmember-of: RS-REF\nmnt-by: MAINT-EVIL, MAINT-WORSE\nsource: TEST\n"
 	fw := newFakeWhois(t, map[string]string{
-		"-r -T route,route6,aut-num,as-set -i member-of RS-REF": resp,
+		"-r -T route,route6 -i member-of RS-REF": resp,
 	})
 	src := &Source{Addr: fw.addr(), Timeout: 2 * time.Second}
 	got, err := src.MembersByRef(context.Background(), refSet(t, "RS-REF", "TEST", "MAINT-A", "MAINT-GOOD"))

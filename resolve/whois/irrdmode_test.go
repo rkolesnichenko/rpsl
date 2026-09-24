@@ -132,9 +132,9 @@ func TestWhoisOverIRRdQueryParser(t *testing.T) {
 func TestWhoisIRRdErrorIsReported(t *testing.T) {
 	const failed = "%% ERROR: One or more selected sources are unavailable.\n"
 	fw := newFakeWhois(t, map[string]string{
-		"-s BOGUS -r -T as-set,route-set AS-FOO":                         failed,
-		"-s BOGUS -r -T route,route6 -i origin AS10":                     failed,
-		"-s BOGUS -r -T route,route6,aut-num,as-set -i member-of RS-REF": failed,
+		"-s BOGUS -r -T as-set AS-FOO":                    failed,
+		"-s BOGUS -r -T route,route6 -i origin AS10":      failed,
+		"-s BOGUS -r -T route,route6 -i member-of RS-REF": failed,
 	})
 	src := &Source{Addr: fw.addr(), Sources: []string{"BOGUS"}, Timeout: 2 * time.Second}
 	ctx := context.Background()
