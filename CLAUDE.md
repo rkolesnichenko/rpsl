@@ -116,7 +116,8 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
 
 - Do NOT evaluate AS-path regexps (`<...>`) against live BGP paths — parse them to an AST and stop.
   That's a separate `bgp` consumer's job. Conflating them is how RPSL tools rot.
-- Class/attribute dictionary is data-driven: ship a RIPE profile and an RFC-strict profile.
+- Class/attribute dictionary is data-driven: ship a RIPE profile (RIPE's templates), an IRRd
+  profile (IRRd 4's class tables, what RADB and its mirrors run) and an RFC-strict profile.
   Real data deviates from the RFC; target IRRd/RIPE reality, validate against the chosen profile.
 
 ## Commands
@@ -135,7 +136,8 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
 - Opt-in: `RPSL_REALDATA=$PWD/.data go test -run TestRealData ./examples/bulk-ripe/bulk`
   (RIPE, APNIC, ARIN, AFRINIC, LACNIC, RADB and RADB's ten mirrors, via scripts/fetch-irr-dumps.sh);
   `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve`;
-  `RPSL_LIVE=1 go test -run TestRIPETemplatesAreCurrent ./object` (RIPE profile vs whois -t).
+  `RPSL_LIVE=1 go test -run 'TestRIPETemplatesAreCurrent|TestIRRdSourceIsCurrent' ./object`
+  (RIPE profile vs whois -t; IRRd profile's fixture vs IRRd's latest release).
 - Releasing: RELEASING.md (tag order lexer/types → ast → root → resolve); rehearse first with
   `scripts/release-dryrun.sh` (local proxy, publishes nothing).
 - Performance: `scripts/bench.sh [ref]` compares benchmarks with a ref (default: latest tag).

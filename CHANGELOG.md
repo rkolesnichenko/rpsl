@@ -9,6 +9,31 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-24
+
+### Added
+
+- **`object.IRRd` (`rpsl.IRRd`), a validation profile for IRRd-run
+  registries**: IRRd 4's class tables, which RADB and the IRRs it mirrors
+  apply to what they accept, read from IRRd's `rpsl_objects.py`. It differs
+  from `RIPE` where the registries do — `mnt-by:` optional on aut-num and
+  domain, `changed:` still allowed, `rev-srv:`, `geoidx:` and `roa-uri:`
+  defined, `last-modified:` ignored, `filter:` required on a filter-set.
+  Against it RADB's 1.38 million objects raise 22 Errors (routes without
+  `mnt-by:`). The source is kept in `object/testdata/irrd` at IRRd v4.5.3 and
+  checked against the profile, and, with `RPSL_LIVE=1`, against IRRd's latest
+  release.
+- **Typed fields for the attributes IRRd defines and RIPE does not**:
+  `Domain.SubDom`, `DomNet` and `Refer`; `InetRtr.RsIn` and `RsOut`;
+  `Inetnum.RevSrv` and `Inet6num.RevSrv`; `Route` and `Route6` `GeoIdx` and
+  `RoaURI`; `Irt.AbuseMailbox`.
+- `bulk-ripe -validate irrd`.
+
+### Changed
+
+- The opt-in real-data test validates RADB and its ten mirrors against the
+  IRRd profile, as it validates RIPE's dumps against RIPE's.
+
 ## [0.10.0] - 2026-09-24
 
 ### Added
@@ -550,7 +575,8 @@ The first release. There is no earlier version to migrate from.
   values do; a few common RP-attributes have typed helpers.
 - **`rdap` is not a `Source`.** RDAP serves registration data, not IRR sets.
 
-[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/rkolesnichenko/rpsl/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.8.1...v0.9.0
