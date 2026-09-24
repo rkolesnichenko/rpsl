@@ -154,10 +154,15 @@ func formatAttr(a Attribute, opts FormatOptions) string {
 		return name + ":" + cr + rest
 	}
 	// Align is 1-based and counts the name plus its colon, so the separator is
-	// Align-1 minus those len(name)+1 characters.
-	sep := " "
-	if n := opts.Align - len(name) - 2; opts.Align > 0 && n > 1 {
-		sep = strings.Repeat(" ", n)
+	// Align-1 minus those len(name)+1 characters. With no Align, the separator
+	// stays as written.
+	after := first[colon+1:]
+	sep := after[:len(after)-len(strings.TrimLeft(after, " \t"))]
+	if opts.Align > 0 {
+		sep = " "
+		if n := opts.Align - len(name) - 2; n > 1 {
+			sep = strings.Repeat(" ", n)
+		}
 	}
 	return name + ":" + sep + value + cr + rest
 }

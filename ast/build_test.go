@@ -158,3 +158,15 @@ func attrPairs(o *Object) []string {
 	}
 	return out
 }
+
+// With Align zero, Format leaves the separator as written, as its doc says;
+// only the name's case and the line's trailing blanks change.
+func TestFormatAlignZeroKeepsSeparator(t *testing.T) {
+	o := New(lexer.Tokenize("Descr:\t\tfoo  \nRemarks:   bar\n"))
+	if got, want := o.Format(FormatOptions{LowerNames: true}), "descr:\t\tfoo\nremarks:   bar\n"; got != want {
+		t.Errorf("Format(LowerNames) = %q, want %q", got, want)
+	}
+	if got, want := o.Format(FormatOptions{Align: 17}), "Descr:          foo\nRemarks:        bar\n"; got != want {
+		t.Errorf("Format(Align 17) = %q, want %q", got, want)
+	}
+}
