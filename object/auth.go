@@ -3,6 +3,7 @@ package object
 import (
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // AuthMethod is the scheme an auth: line names (RFC 2622 §3.1, RFC 2725 §5,
@@ -73,7 +74,7 @@ func ParseAuth(s string) (Auth, error) {
 	if raw == "" {
 		return a, fmt.Errorf("rpsl/object: empty auth line")
 	}
-	word, rest, _ := strings.Cut(raw, " ")
+	word, rest := cutSpace(raw)
 	cred := strings.TrimSpace(rest)
 	switch up := strings.ToUpper(word); {
 	case up == "NONE":
@@ -104,4 +105,14 @@ func ParseAuth(s string) (Auth, error) {
 		return a, fmt.Errorf("rpsl/object: auth scheme %s has no credential", a.Method)
 	}
 	return a, nil
+}
+
+// cutSpace splits s at its first run of whitespace — a tab separates the words
+// of a value as a space does — returning the word before it and the rest.
+func cutSpace(s string) (word, rest string) {
+	i := strings.IndexFunc(s, unicode.IsSpace)
+	if i < 0 {
+		return s, ""
+	}
+	return s[:i], strings.TrimLeftFunc(s[i:], unicode.IsSpace)
 }
