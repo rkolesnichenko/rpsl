@@ -52,6 +52,24 @@ Deliberately out of scope: evaluating AS-path regexps against live BGP paths
 `auth:` credentials (the `auth` package injects a `Verifier` instead), and the
 RFC 2725 §7 update-transaction protocol.
 
+### Known limitations
+
+- **Filters are only partly enumerable.** `EvalFilter` returns a
+  `NotEnumerableError` for `NOT`, `PeerAS`, community tests, AS-path regexps
+  and per-peer templates, which have no finite answer in prefixes.
+- **The IRRd backend cannot list an rtr-set's indirect members**: IRRd's query
+  protocol has no inverse query for inet-rtr `member-of:` claims, so
+  `irrd.Source` returns `ErrIndirectUnsupported` for an rtr-set with
+  `mbrs-by-ref:`. `whois.Source` can.
+- **bgpq4 disagrees in a few places**, pinned by tests and listed in
+  `resolve/testdata/bgpq4/divergences.md`.
+- **`auth` covers route creation and `mnt-irt:` consent.** Creating other
+  classes, and modifying or deleting objects, are left to the caller.
+- **`RFCStrict` leaves out RFC 2725's `reclaim:`, `no-reclaim:` and
+  `auth-override:`**, which no registry implements (none among the 13.3
+  million objects of the sixteen dumps the real-data test reads), and flags them
+  `dict/unknown-attr`.
+
 ## Install
 
 Each leaf is its own module, so a minimal consumer pulls in only what it needs:
@@ -264,7 +282,9 @@ FUZZTIME=15s scripts/check.sh  # ... plus every fuzz target (what CI runs)
   `FuzzParseFilter`, `FuzzParsePeering`, `FuzzParseInject`,
   `FuzzParseComponents`, `FuzzParseAggrMtd`, `FuzzParseIfaddr`,
   `FuzzParseInterface`, `FuzzParsePeer`, `FuzzParseRPAttribute`,
-  `FuzzParseTypedef`, `FuzzParseProtocol`, `FuzzFilterString` (policy).
+  `FuzzParseTypedef`, `FuzzParseProtocol`, `FuzzFilterString` (policy);
+  `FuzzReadFrame`, `FuzzParseMembers` (resolve/irrd); `FuzzScanResponse`
+  (resolve/whois).
 - **Real data (opt-in)** — `scripts/fetch-irr-dumps.sh` downloads the public
   dumps of RIPE, APNIC, ARIN, AFRINIC, LACNIC, RADB and the ten IRRs RADB
   mirrors (about 13.3 million objects); `RPSL_REALDATA=$PWD/.data go test -run TestRealData ./examples/bulk-ripe/bulk`

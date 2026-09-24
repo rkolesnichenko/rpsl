@@ -125,12 +125,13 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   (all six modules incl. examples/bulk-ripe under -race, gofmt, invariants) with
   `scripts/check.sh`; `FUZZTIME=15s scripts/check.sh` also runs every fuzz target.
 - `go test -run 'TestRoundTrip|TestStreamRoundTrip' .` — the lossless guard (root module).
-- Fuzz (24 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
+- Fuzz (27 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
   FuzzFormat (ast); FuzzParseSetName, FuzzParseRangeOperator, FuzzParsePrefixRange,
   FuzzParseRouterID (types); FuzzParseStream, FuzzDecode (root); FuzzParseImport,
   FuzzParseASPathRegexp, FuzzParseFilter, FuzzParsePeering, FuzzParseInject,
   FuzzParseComponents, FuzzParseAggrMtd, FuzzParseIfaddr, FuzzParseInterface, FuzzParsePeer,
-  FuzzParseRPAttribute, FuzzParseTypedef, FuzzParseProtocol, FuzzFilterString (policy).
+  FuzzParseRPAttribute, FuzzParseTypedef, FuzzParseProtocol, FuzzFilterString (policy);
+  FuzzReadFrame, FuzzParseMembers (resolve/irrd); FuzzScanResponse (resolve/whois).
 - Opt-in: `RPSL_REALDATA=$PWD/.data go test -run TestRealData ./examples/bulk-ripe/bulk`
   (RIPE, APNIC, ARIN, AFRINIC, LACNIC, RADB and RADB's ten mirrors, via scripts/fetch-irr-dumps.sh);
   `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve`;
