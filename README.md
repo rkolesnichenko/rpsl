@@ -38,7 +38,8 @@ Every layer ships. Until v1.0.0, a minor version may change the API; the
 RFC 4012 (RPSLng) is supported: `mp-import`/`mp-export`/`mp-default`, the `afi`
 dictionary and `afi`-scoped policies (`Import`/`Export`/`Default`/`Except`/
 `Refine` expose `AppliesTo`), `except`/`refine` — which `policy.Flatten`
-resolves into the terms a policy denotes — `route6`, `mp-members`, and the
+(or `Import.Terms`) resolves, for one address family, into the terms a policy
+denotes — `route6`, `mp-members`, and the
 `interface:` and `mp-peer:` forms. RIPE's `import-via:` and `export-via:`
 (draft-ietf-grow-rpsl-via) parse into the same AST, with the peering routes pass
 through on each clause's `Via`. The expansion engine applies an

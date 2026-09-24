@@ -22,7 +22,7 @@ attribute of it.
 | `lexer/too-many-errors` | Error | More than 100 of the above in one object; the rest are counted here. |
 | `rpsl/multiple-objects` | Warning | `ParseObject` text holding more than one object. |
 | `rpsl/object-too-large` | Error | An object over `MaxObjectBytes` or `MaxObjectLines`, skipped to the next blank line (yielded as an empty object). |
-| `rpsl/trivia-too-large` | Warning | Blank/comment lines before an object over a cap, or an over-long line outside any object, discarded. |
+| `rpsl/trivia-too-large` | Warning | Blank/comment lines before an object over a cap, or an over-long line outside any object, discarded. A run of over-long lines gets two: one for the first line, and one counting the rest. |
 | `rpsl/read-error` | Error | The reader failed; the stream ends here. |
 
 ## `object/` — typed decoding (`rpsl.Decode`)

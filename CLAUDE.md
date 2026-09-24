@@ -96,9 +96,11 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
 - **AFI constraint**: v4 expansion drops route6/IPv6 mp-members and vice versa; `any` means both.
   A *SAFI* cannot constrain set expansion (no set member carries one, and there is no multicast
   route class), so `Expander.AFI` stays an `AFI`; SAFI applies only in `policy.*.AppliesTo`.
-- **Every set class expands**: as-set and route-set to ASNs/prefixes, rtr-set to routers,
-  peering-set to peerings, filter-set through `EvalFilter`. `Source.GetSet` returns
-  `object.NamedSet`; `nestedNames` + `nestable` decide what each class may nest.
+- **Every set class expands**, from memory and over both live backends: as-set and route-set
+  to ASNs/prefixes, rtr-set to routers, peering-set to peerings, filter-set through `EvalFilter`.
+  `Source.GetSet` returns `object.NamedSet`; `nestedNames` + `nestable` decide what each class
+  may nest. `checkSet` refuses a set of another name and treats one whose class is not its
+  name's (`route-set: AS-EVIL`) as missing; never expand an object under its name's rules alone.
 - **Filters are only partly enumerable**: `EvalFilter` handles ANY, prefix lists, set and AS
   references, OR and AND (range intersection) and returns `*NotEnumerableError` for NOT,
   PeerAS, community tests and AS-path regexps. Never answer one of those with an empty set.
