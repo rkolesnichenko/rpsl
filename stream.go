@@ -144,6 +144,8 @@ type streamer struct {
 	inObj     bool
 	dropping  bool         // skipping an oversized object up to the next blank line
 	carry     []Diagnostic // diagnostics for the object that follows
+	discards  int          // over-long lines discarded since carry was last taken
+	lastDrop  pos          // where the last of them began
 }
 
 // run yields queued chunks, then reads and yields until the input is exhausted
@@ -234,12 +236,36 @@ func (s *streamer) discardLine(at pos) {
 		s.leadParts = append(s.leadParts, part{string(s.lead), s.leadStart})
 		s.lead = s.lead[:0]
 	}
+	// Only the first line of a run gets its own Warning; takeCarry sums up the
+	// rest, so a run of any length costs two diagnostics.
+	s.lastDrop = at
+	if s.discards++; s.discards > 1 {
+		return
+	}
 	s.carry = append(s.carry, Diagnostic{
 		Severity: Warning,
 		Message:  fmt.Sprintf("a line longer than MaxObjectBytes (%d) outside any object was discarded", s.limit),
 		Span:     at.span(),
 		Rule:     "rpsl/trivia-too-large",
 	})
+}
+
+// takeCarry returns the diagnostics for the object that follows, with a
+// summary of the over-long lines discardLine did not report one by one, and
+// resets them.
+func (s *streamer) takeCarry() []Diagnostic {
+	d := s.carry
+	if s.discards > 1 {
+		d = append(d, Diagnostic{
+			Severity: Warning,
+			Message: fmt.Sprintf("%d more lines longer than MaxObjectBytes (%d) outside any object were discarded",
+				s.discards-1, s.limit),
+			Span: s.lastDrop.span(),
+			Rule: "rpsl/trivia-too-large",
+		})
+	}
+	s.carry, s.discards = nil, 0
+	return d
 }
 
 // addLead buffers a trivia line for the next object, discarding the whole run
@@ -280,9 +306,9 @@ func (s *streamer) takeLead() []part {
 
 // takeCurrent packages the buffered trivia and object as a chunk and resets.
 func (s *streamer) takeCurrent() *chunk {
-	c := &chunk{parts: append(s.takeLead(), part{string(s.obj), s.objStart}), diags: s.carry}
+	c := &chunk{parts: append(s.takeLead(), part{string(s.obj), s.objStart}), diags: s.takeCarry()}
 	s.obj, s.objLines = s.obj[:0], 0
-	s.leadOver, s.inObj, s.carry = false, false, nil
+	s.leadOver, s.inObj = false, false
 	return c
 }
 
@@ -306,7 +332,7 @@ func (s *streamer) emitEmpty(diags []Diagnostic) {
 // oversize reports the object starting at at as too large and skips it.
 func (s *streamer) oversize(at pos) {
 	s.emitPending()
-	diags := append(s.carry, Diagnostic{
+	diags := append(s.takeCarry(), Diagnostic{
 		Severity: Error,
 		Message: fmt.Sprintf("object exceeds MaxObjectBytes (%d) or MaxObjectLines (%d); skipped to the next blank line",
 			s.limit, s.maxLines),
@@ -315,7 +341,7 @@ func (s *streamer) oversize(at pos) {
 	})
 	s.takeLead()
 	s.obj, s.objLines = s.obj[:0], 0
-	s.leadOver, s.inObj, s.carry = false, false, nil
+	s.leadOver, s.inObj = false, false
 	s.dropping = true
 	s.emitEmpty(diags)
 }
@@ -342,10 +368,10 @@ func (s *streamer) finish(err error) {
 		s.emitPending()
 	case s.pending != nil: // trailing trivia belongs to the last object
 		s.pending.parts = append(s.pending.parts, s.takeLead()...)
-		s.pending.diags = append(s.pending.diags, s.carry...)
+		s.pending.diags = append(s.pending.diags, s.takeCarry()...)
 		s.emitPending()
 	case len(s.lead) > 0 || len(s.leadParts) > 0 || len(s.carry) > 0: // no attributes anywhere
-		s.emit(&chunk{parts: s.takeLead(), diags: s.carry})
+		s.emit(&chunk{parts: s.takeLead(), diags: s.takeCarry()})
 	}
 	if readErr != nil {
 		s.emitEmpty(readErr)
