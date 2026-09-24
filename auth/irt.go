@@ -58,6 +58,8 @@ func CheckIrts(ctx context.Context, reg IrtRegistry, names []string, cred Creden
 			d.OK = true
 			d.Reasons = append(d.Reasons, fmt.Sprintf("%s: credential accepted", name))
 			return d, nil
+		case len(irt.Auth) == 0:
+			d.Reasons = append(d.Reasons, fmt.Sprintf("%s: has no auth: lines, so accepts no credential", name))
 		case unsupported:
 			d.Reasons = append(d.Reasons, fmt.Sprintf("%s: no verifier for its auth scheme", name))
 		default:
