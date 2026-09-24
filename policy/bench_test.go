@@ -94,8 +94,9 @@ func BenchmarkFlatten(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if len(Flatten(imp.Expr)) == 0 {
-			b.Fatal("no terms")
+		ts, err := Flatten(imp.Expr, v4u)
+		if err != nil || len(ts) == 0 {
+			b.Fatal("no terms", err)
 		}
 	}
 }
