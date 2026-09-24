@@ -11,13 +11,18 @@ jobs:
   check:
     name: check (go ${{ matrix.go }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         go: ["1.23.x", "stable"] # the go.mod floor and the latest release
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      # Actions are pinned by commit, which a moved tag cannot change;
+      # Dependabot keeps the pins current.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ matrix.go }}
           # setup-go keys its cache on go.sum by default; the modules have

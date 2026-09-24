@@ -25,7 +25,10 @@ apnic_classes="as-block as-set aut-num domain filter-set inet-rtr inet6num inetn
 	mntner organisation peering-set role route-set route route6 rtr-set"
 
 # fetch downloads the URL $2 to the file $1, only when newer: five tries over
-# FTP, three over HTTPS.
+# FTP, three over HTTPS. RADB and the mirrors it carries are FTP-only and
+# publish no checksums, so their dumps are fetched unauthenticated; they feed
+# only the opt-in real-data tests, where a tampered dump can fail a run but
+# not change the library.
 fetch() {
 	tries="1 2 3"
 	case $2 in ftp://*) tries="1 2 3 4 5" ;; esac
