@@ -132,8 +132,12 @@ func (d *decoder) members(name, rule string, container types.SetClass) []SetMemb
 				"IPv6 member %q belongs in mp-members: (RFC 4012 §4.2); members: is IPv4 only", it.Value))
 		}
 		if m.Kind == MemberPrefixRange {
-			if base, _, _ := strings.Cut(strings.TrimSpace(it.Value), "^"); types.PaddedIPv4(base) {
+			base, _, _ := strings.Cut(strings.TrimSpace(it.Value), "^")
+			if types.PaddedIPv4(base) {
 				d.diagAt(ast.Warning, it.span(), d.leadingZerosRule(), paddedMessage(it.Value, m.Range.String()))
+			}
+			if types.AbbreviatedIPv4(base) {
+				d.diagAt(ast.Warning, it.span(), d.abbreviatedRule(), abbreviatedMessage(it.Value, m.Range.String()))
 			}
 		}
 		out = append(out, m)

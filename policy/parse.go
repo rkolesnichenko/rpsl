@@ -1304,6 +1304,7 @@ func (p *parser) parsePrefixList() Filter {
 					p.warnf(t, "policy/host-bits", describe(t)+" has host bits set; it is read as "+pr.String())
 				}
 				p.warnPadded(t, pr.String())
+				p.warnAbbreviated(t, pr.String())
 				ranges = append(ranges, pr)
 			}
 			wantItem = false
@@ -1358,6 +1359,15 @@ func (p *parser) warnPadded(t token, canonical string) {
 	text, _, _ := strings.Cut(t.text, "^")
 	if types.PaddedIPv4(text) {
 		p.warnf(t, "policy/leading-zeros", describe(t)+" has zero-padded octets; it is read as "+canonical+" (decimal)")
+	}
+}
+
+// warnAbbreviated reports an IPv4 prefix token written with fewer than four
+// octets, which types.ParsePrefix reads with the missing ones zero.
+func (p *parser) warnAbbreviated(t token, canonical string) {
+	text, _, _ := strings.Cut(t.text, "^")
+	if types.AbbreviatedIPv4(text) {
+		p.warnf(t, "policy/abbreviated-prefix", describe(t)+" is abbreviated; it is read as "+canonical)
 	}
 }
 

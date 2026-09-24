@@ -45,6 +45,7 @@ attribute of it.
 | `object/<class>-host-bits` | Warning | A route, route6 or inet6num prefix with host bits set. |
 | `object/<class>-holes-host-bits` | Warning | A `holes:` prefix with host bits set; it is read with them cleared. |
 | `object/<class>-leading-zeros` | Warning | An IPv4 address or prefix with zero-padded octets (`064.006.160.000/19`), in any attribute; the octets are read as decimal, as RPSL writes addresses and IRRd reads them. |
+| `object/<class>-abbreviated-prefix` | Warning | An IPv4 prefix written with fewer than four octets (`143.208.148/22`), in any attribute; the missing octets are read as zero, as IRRd reads them. |
 | `object/<class>-holes-outside` | Warning | A `holes:` prefix outside the route. |
 | `object/<class>-auth` | Warning | An `auth:` line naming a scheme this library does not know, or carrying no credential; it is kept whole and nothing is dropped. |
 | `object/<class>-changed`, `object/<class>-created`, `object/<class>-last-modified` | Warning | A `created:`/`last-modified:` that is not RFC 3339, or a `changed:` date that is not `YYYYMMDD`; the text is kept as written. |
@@ -66,6 +67,7 @@ attribute of it.
 | `policy/prefix-list` | Error or Warning | A malformed `{…}` prefix list or member, or two members without a `,` between them (Error; the second is left out); an empty item, as in `{a,,b}` (Warning). |
 | `policy/host-bits` | Warning | A prefix-list member with host bits set; it is read with them cleared. |
 | `policy/leading-zeros` | Warning | An IPv4 address or prefix in a policy value with zero-padded octets; they are read as decimal. |
+| `policy/abbreviated-prefix` | Warning | An IPv4 prefix in a policy value written with fewer than four octets (`10/8`); the missing octets are read as zero. |
 | `policy/unicode-space` | Warning | A space other than an ASCII space, tab or newline — a no-break space (U+00A0) or another Unicode space, a vertical tab or a form feed — between the tokens of a policy value; it is read as a space, as IRRd reads it. Reported once per value, at the first. |
 | `policy/range-op` | Error | An invalid range operator. |
 | `policy/as-path-regexp` | Error or Warning | A malformed or empty AS-path regexp, one whose `<` is never closed, a `>` that closes nothing, or a term other than an AS number, as-set or `PeerAS` (Error, at the offending token); an AS number written without `AS`, as in `<3333>` (Warning). |

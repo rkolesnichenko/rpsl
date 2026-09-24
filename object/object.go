@@ -185,6 +185,9 @@ func (d *decoder) prefix(name, rule string) netip.Prefix {
 	if types.PaddedIPv4(scalar(a)) {
 		d.warnf(a, d.leadingZerosRule(), paddedMessage(scalar(a), p.String()))
 	}
+	if types.AbbreviatedIPv4(scalar(a)) {
+		d.warnf(a, d.abbreviatedRule(), abbreviatedMessage(scalar(a), p.String()))
+	}
 	return p
 }
 
@@ -195,6 +198,15 @@ func (d *decoder) leadingZerosRule() string { return "object/" + d.o.Class() + "
 // paddedMessage explains how a zero-padded IPv4 value was read.
 func paddedMessage(text, canonical string) string {
 	return fmt.Sprintf("%q has zero-padded octets; it is read as %s (decimal)", text, canonical)
+}
+
+// abbreviatedRule is the rule for an IPv4 prefix written with fewer than four
+// octets in any attribute of the object being decoded.
+func (d *decoder) abbreviatedRule() string { return "object/" + d.o.Class() + "-abbreviated-prefix" }
+
+// abbreviatedMessage explains how an abbreviated IPv4 prefix was read.
+func abbreviatedMessage(text, canonical string) string {
+	return fmt.Sprintf("%q is abbreviated; it is read as %s", text, canonical)
 }
 
 // addrRange parses the first value of name as an inetnum address range
@@ -437,6 +449,9 @@ func (d *decoder) holes(class string, route netip.Prefix) []netip.Prefix {
 		}
 		if types.PaddedIPv4(it.Value) {
 			d.diagAt(ast.Warning, it.span(), d.leadingZerosRule(), paddedMessage(it.Value, h.String()))
+		}
+		if types.AbbreviatedIPv4(it.Value) {
+			d.diagAt(ast.Warning, it.span(), d.abbreviatedRule(), abbreviatedMessage(it.Value, h.String()))
 		}
 		if h != h.Masked() {
 			d.diagAt(ast.Warning, it.span(), "object/"+class+"-holes-host-bits",

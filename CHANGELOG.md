@@ -9,6 +9,23 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Abbreviated IPv4 prefixes are read as IRRd reads them.** A prefix written
+  with fewer than four octets — `191.243.44/22`, `10/8` — has the missing
+  octets zero: IRRd parses route-set members and route keys with Python's
+  IPy, which reads them so, and bgpq4 gets them from IRRd. This library
+  rejected them, so six RADB route-set members were dropped from expansions.
+  `types.ParsePrefix` now accepts them, with a Warning wherever a registry
+  value holds one. A short address without a length is still an error.
+
+### Added
+
+- **`types.AbbreviatedIPv4`**, which reports the spelling, as `PaddedIPv4`
+  does for zero-padded octets.
+- **New Warnings `object/<class>-abbreviated-prefix` and
+  `policy/abbreviated-prefix`.**
+
 ## [0.7.0] - 2026-09-24
 
 ### Fixed

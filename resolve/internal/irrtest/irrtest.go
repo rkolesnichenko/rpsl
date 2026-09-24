@@ -284,7 +284,7 @@ func (db *DB) Routes(sel []string, as types.ASN, v6 bool) []netip.Prefix {
 		if e.class != class || len(sel) > 0 && !contains(sel, e.source) {
 			continue
 		}
-		p, err := netip.ParsePrefix(e.key)
+		p, err := types.ParsePrefix(e.key) // as IRRd reads route keys: padded or abbreviated IPv4 too
 		if err != nil || seen[p.Masked()] {
 			continue
 		}

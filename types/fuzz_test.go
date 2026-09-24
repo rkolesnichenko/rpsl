@@ -59,16 +59,27 @@ func FuzzParsePrefixRange(f *testing.F) {
 	for _, s := range []string{
 		"10.0.0.0/8", "10.0.0.1/8^+", "10.0.0.0/8^24-24", "0.0.0.0/0^0-32",
 		"192.0.2.1/32^-", "2001:db8::/32^48", "10.0.0.0/8^9-32", "::/0^+",
-		"064.006.160.000/19^+", "010.0.0.0/8",
+		"064.006.160.000/19^+", "010.0.0.0/8", "143.208.148/22^+", "10/8", "010.1/16",
 	} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
-		// Whatever ParsePrefix accepts, zero-padded or not, its canonical form
-		// parses back to the same prefix and is not padded.
+		// Whatever ParsePrefix accepts, zero-padded, abbreviated or not, its
+		// canonical form parses back to the same prefix and is neither.
 		if p, err := ParsePrefix(s); err == nil {
-			if again, err := ParsePrefix(p.String()); err != nil || again != p || PaddedIPv4(p.String()) {
+			if again, err := ParsePrefix(p.String()); err != nil || again != p || PaddedIPv4(p.String()) || AbbreviatedIPv4(p.String()) {
 				t.Fatalf("ParsePrefix(%q) = %v, whose form parses back as %v, %v (padded %v)", s, p, again, err, PaddedIPv4(p.String()))
+			}
+		}
+		// An abbreviated prefix reads as its spelling with the missing octets
+		// zero, success or failure alike.
+		if AbbreviatedIPv4(s) {
+			addr, bits, _ := strings.Cut(s, "/")
+			full := addr + strings.Repeat(".0", 3-strings.Count(addr, ".")) + "/" + bits
+			p, err := ParsePrefix(s)
+			q, errFull := ParsePrefix(full)
+			if (err == nil) != (errFull == nil) || p != q {
+				t.Fatalf("ParsePrefix(%q) = %v, %v; its zero-filled %q = %v, %v", s, p, err, full, q, errFull)
 			}
 		}
 		r, err := ParsePrefixRange(s)

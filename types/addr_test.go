@@ -72,3 +72,59 @@ func TestPaddedOctetsInRangesAndRouters(t *testing.T) {
 		t.Errorf("ParseRouterID = %v, %v; want the address 10.0.0.1", id, err)
 	}
 }
+
+// An IPv4 prefix may be written with fewer than four octets, the missing ones
+// zero, as IRRd reads route-set members (Python's IPy): "143.208.148/22" is
+// 143.208.148.0/22. Only prefixes: a short bare address stays an error.
+func TestAbbreviatedIPv4Prefix(t *testing.T) {
+	for _, c := range []struct {
+		in           string
+		want         string // "" for an error
+		abbr, padded bool
+	}{
+		{"143.208.148/22", "143.208.148.0/22", true, false},
+		{"143.208/16", "143.208.0.0/16", true, false},
+		{"10/8", "10.0.0.0/8", true, false},
+		{"0/0", "0.0.0.0/0", true, false},
+		{"010.1/16", "10.1.0.0/16", true, true},
+		{"143.208.148/20", "143.208.148.0/20", true, false}, // host bits: kept, the caller warns
+		{"143.208.148.0/22", "143.208.148.0/22", false, false},
+		{"256/8", "", false, false},
+		{"3232235777/32", "", false, false}, // IPy's integer form is not RPSL
+		{"143.208.148./22", "", false, false},
+		{"143..148/22", "", false, false},
+		{"1.2.3.4.5/32", "", false, false},
+		{"143.208.148/33", "", true, false},
+		{"143.208.148/", "", false, false},
+		{"/8", "", false, false},
+		{"2001:db8/32", "", false, false},
+	} {
+		p, err := ParsePrefix(c.in)
+		switch {
+		case c.want == "" && err == nil:
+			t.Errorf("ParsePrefix(%q) = %v, want an error", c.in, p)
+		case c.want != "" && (err != nil || p.String() != c.want):
+			t.Errorf("ParsePrefix(%q) = %v, %v; want %s", c.in, p, err, c.want)
+		}
+		if got := AbbreviatedIPv4(c.in); got != c.abbr {
+			t.Errorf("AbbreviatedIPv4(%q) = %v, want %v", c.in, got, c.abbr)
+		}
+		if got := PaddedIPv4(c.in); got != c.padded {
+			t.Errorf("PaddedIPv4(%q) = %v, want %v", c.in, got, c.padded)
+		}
+	}
+	// A short bare address is ambiguous (inet_aton reads "10.1" as 10.0.0.1,
+	// IPy as 10.1.0.0), so ParseAddr does not guess.
+	for _, s := range []string{"143.208.148", "10.1", "10"} {
+		if a, err := ParseAddr(s); err == nil {
+			t.Errorf("ParseAddr(%q) = %v, want an error", s, a)
+		}
+		if AbbreviatedIPv4(s) {
+			t.Errorf("AbbreviatedIPv4(%q) = true for an address", s)
+		}
+	}
+	r, err := ParsePrefixRange("143.208.148/22^+")
+	if err != nil || r.String() != "143.208.148.0/22^+" {
+		t.Errorf("ParsePrefixRange(143.208.148/22^+) = %v, %v", r, err)
+	}
+}
