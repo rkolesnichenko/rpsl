@@ -9,6 +9,68 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Security
+
+- **`auth.MntIrtChange` failed open.** It read `mnt-irt:` only from
+  `Inetnum`/`Inet6num` values, so pointers to them, or an object known only by
+  its text, added no reference and the update passed without the irt's
+  consent. Pointers are read, and any other object from its text.
+- **`auth.RouteCreation` took permission from any aut-num and any address
+  space.** An attacker's own AS and inetnum authorised a route for someone
+  else's prefix. `RouteRequest` now carries `OriginAS` (`RouteRequestFor`
+  fills it): the origin must be that AS's aut-num, and the space must cover
+  the route. A request without `OriginAS` is refused.
+- **`resolve.ClaimAllowed` folded names with Unicode case rules**, so a
+  maintainer or source spelled with a Kelvin sign matched one spelled with
+  `K`. Names fold ASCII letters only.
+- **The RDAP guard also refuses** IPv4-translated addresses
+  (`::ffff:0:0:0/96`) and the discard-only `100::/64`.
+
+### Fixed
+
+- **`auth.RouteAuthority` used `mnt-lower:` for the object's own prefix and
+  for an aut-num.** `mnt-lower:` guards what lies below its object (RFC 2725
+  §4): it applies only to address space strictly less specific than the route,
+  and an aut-num's authority is `mnt-routes:`, then `mnt-by:`.
+- `auth.ReferralChain` refused a chain of exactly `maxDepth` maintainers.
+- **A tab separates an `auth:` scheme or a `changed:` date**, as a space does.
+- **Streaming:** a `\r` ending a 64 KiB read of an over-long line was taken
+  for the line's end, which could split an object the lexer reads as one. A
+  finished object is yielded as soon as the next begins, not when the next
+  ends too. Ranging over the iterator from inside its own loop panics, rather
+  than silently ending the outer loop.
+- **`ast.Object.Format` with `Align: 0` keeps the separator as written**, as
+  documented.
+- **An aut-num whose key does not decode no longer claims membership as
+  AS0**, nor is a route whose origin does not decode indexed as AS0's.
+- **whois reported an object over the stream's size cap as not found.** It
+  is an error.
+- **Router expressions:** a term whose last label is all digits
+  (`256.0.0.1`, `10.1.1`) is a mistyped address and an Error, not an inet-rtr
+  name. In TC's aut-nums, 987 values such as `from AS-X 100 accept …` (a
+  preference written where a router goes) move from Warning to Error, and no
+  longer restrict the peering to a router named `100`.
+- **An `inject:` condition's OR or AND chain is flat**: 1,000 terms used to
+  exceed the nesting cap and lose the condition.
+- **IPv6 zones and IPv4-mapped addresses** in `ifaddr:`, `interface:` and
+  router addresses are read as before — without the zone, as the IPv4
+  address — with a Warning; a router address no longer keeps its zone.
+
+### Added
+
+- `auth.RouteRequest.OriginAS`.
+- **New Warning `policy/range-op-empty`**: an operator after a prefix list
+  that keeps none of its ranges (`{1.0.0.0/8}^64`).
+- Fuzz targets for the network backends: `FuzzReadFrame`, `FuzzParseMembers`
+  (resolve/irrd) and `FuzzScanResponse` (resolve/whois).
+- A current "Known limitations" section in the README.
+
+### Changed
+
+- CI pins its actions by commit, checks out without persisting credentials,
+  and times out after 30 minutes. `check.sh` no longer hides a failing
+  coverage run.
+
 ## [0.9.0] - 2026-09-24
 
 ### Fixed
