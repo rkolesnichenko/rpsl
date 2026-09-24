@@ -98,12 +98,18 @@ func (e *Expander) afiAllows(p netip.Prefix) bool {
 // wrapping ErrNotFound; missing nested sets expand to nothing and are listed by
 // ASNSet.Missing. AFI only filters prefixes; ExpandAS is family-agnostic.
 func (e *Expander) ExpandAS(ctx context.Context, n types.SetName) (ASNSet, error) {
+	out, _, err := e.expandAS(ctx, n)
+	return out, err
+}
+
+// expandAS is ExpandAS, also returning how many sets discovery reached.
+func (e *Expander) expandAS(ctx context.Context, n types.SetName) (ASNSet, int, error) {
 	if n.Class() != types.ClassAsSet {
-		return ASNSet{}, fmt.Errorf("resolve: ExpandAS %s: %w", n, ErrSetClass)
+		return ASNSet{}, 0, fmt.Errorf("resolve: ExpandAS %s: %w", n, ErrSetClass)
 	}
 	g, err := e.discover(ctx, n)
 	if err != nil {
-		return ASNSet{}, err
+		return ASNSet{}, 0, err
 	}
 	out := newASSet()
 	for _, nd := range g.nodes {
@@ -119,7 +125,7 @@ func (e *Expander) ExpandAS(ctx context.Context, n types.SetName) (ASNSet, error
 		}
 	}
 	out.missing = g.missing
-	return *out, nil
+	return *out, g.size(), nil
 }
 
 // ExpandPrefixRanges returns the prefix ranges denoted by a route-set or as-set,
@@ -132,27 +138,29 @@ func (e *Expander) ExpandAS(ctx context.Context, n types.SetName) (ASNSet, error
 // (RS-A = X ∪ RS-B^+, RS-B = RS-A gives X ∪ X^+). The AFI constraint applies
 // throughout. A set of another class returns an error wrapping ErrSetClass.
 func (e *Expander) ExpandPrefixRanges(ctx context.Context, n types.SetName) (RangeSet, error) {
-	return e.expandRanges(ctx, n, e.maxPrefixes())
+	out, _, err := e.expandRanges(ctx, n, e.maxPrefixes())
+	return out, err
 }
 
-// expandRanges is ExpandPrefixRanges with a cap of maxRanges ranges.
-func (e *Expander) expandRanges(ctx context.Context, n types.SetName, maxRanges int) (RangeSet, error) {
+// expandRanges is ExpandPrefixRanges with a cap of maxRanges ranges, also
+// returning how many sets discovery reached.
+func (e *Expander) expandRanges(ctx context.Context, n types.SetName, maxRanges int) (RangeSet, int, error) {
 	if c := n.Class(); c != types.ClassAsSet && c != types.ClassRouteSet {
-		return RangeSet{}, fmt.Errorf("resolve: expand prefixes of %s: %w", n, ErrSetClass)
+		return RangeSet{}, 0, fmt.Errorf("resolve: expand prefixes of %s: %w", n, ErrSetClass)
 	}
 	g, err := e.discover(ctx, n)
 	if err != nil {
-		return RangeSet{}, err
+		return RangeSet{}, 0, err
 	}
 	if err := e.fetchRoutes(ctx, g); err != nil {
-		return RangeSet{}, err
+		return RangeSet{}, 0, err
 	}
 	v := &evaluator{e: e, ctx: ctx, g: g, out: newRangeSet(), done: map[evalState]bool{}, max: maxRanges}
 	if err := v.walk(n, opStack{}); err != nil {
-		return RangeSet{}, err
+		return RangeSet{}, 0, err
 	}
 	v.out.missing = g.missing
-	return *v.out, nil
+	return *v.out, g.size(), nil
 }
 
 // ExpandPrefixes returns the concrete prefixes denoted by a route-set or as-set:
@@ -165,7 +173,7 @@ func (e *Expander) ExpandPrefixes(ctx context.Context, n types.SetName) (PrefixS
 	// Ranges are not capped here: overlapping ones ("/31" and "/31^+") are
 	// several ranges but no more prefixes, and only distinct prefixes count.
 	// The walk that finds them is bounded by MaxVisited.
-	ranges, err := e.expandRanges(ctx, n, math.MaxInt)
+	ranges, _, err := e.expandRanges(ctx, n, math.MaxInt)
 	if err != nil {
 		return PrefixSet{}, err
 	}
@@ -198,6 +206,9 @@ type setGraph struct {
 	missing []types.SetName              // nested sets that were not found
 	routes  map[types.ASN][]netip.Prefix // originated routes (prefix expansions only)
 }
+
+// size is how many sets discovery reached: those fetched and those missing.
+func (g *setGraph) size() int { return len(g.nodes) + len(g.missing) }
 
 type setNode struct {
 	set    object.NamedSet
@@ -295,13 +306,12 @@ func (e *Expander) fetchLevel(ctx context.Context, names []types.SetName) ([]fet
 // re-checked here with ClaimAllowed, so a lenient Source cannot widen a set.
 func (e *Expander) fetchOne(ctx context.Context, name types.SetName) fetchResult {
 	set, err := e.Src.GetSet(ctx, name)
-	if err == nil && set == nil {
-		err = ErrNotFound // a Source that returns neither a set nor an error
+	if err == nil {
+		set, err = checkSet(name, set)
 	}
 	if err != nil {
 		return fetchResult{err: err}
 	}
-	set = setValue(set)
 	var claims []object.Object
 	if len(set.RefMntners()) > 0 {
 		objs, err := e.Src.MembersByRef(ctx, set)
@@ -315,6 +325,26 @@ func (e *Expander) fetchOne(ctx context.Context, name types.SetName) fetchResult
 		}
 	}
 	return fetchResult{set: set, claims: claims}
+}
+
+// checkSet returns set, as a value, if it is the set name asks for. A set
+// whose class is not the one its name denotes ("route-set: AS-EVIL") is invalid
+// data, and is treated as not found: expanded under its name's rules it would
+// let an as-set pull in prefixes, or claims, that its class does not allow. A
+// set of another name is a fault of the Source, which has answered a different
+// question.
+func checkSet(name types.SetName, set object.NamedSet) (object.NamedSet, error) {
+	if set == nil {
+		return nil, ErrNotFound // a Source that returns neither a set nor an error
+	}
+	set = setValue(set)
+	if got := set.SetName(); got != name {
+		return nil, fmt.Errorf("resolve: asked for %s, the Source returned %s", name, got)
+	}
+	if set.Class() != name.Class().String() {
+		return nil, fmt.Errorf("resolve: %s is a %s: %w", name, set.Class(), ErrNotFound)
+	}
+	return set, nil
 }
 
 // setValue is value for a set: a pointer to a set class becomes the value, so
@@ -422,17 +452,19 @@ func isAnySet(n types.SetName) bool {
 // claimClassOK applies RFC 2622 §5.1-5.5: an as-set's indirect members are
 // aut-nums, a route-set's are routes, an rtr-set's are inet-rtrs. A
 // peering-set and a filter-set have no mbrs-by-ref, so they accept no claims.
+// The rule is keyed on the set's name, whose class checkSet has already
+// matched against the object's.
 func claimClassOK(set object.NamedSet, o object.Object) bool {
-	switch set.(type) {
-	case object.AsSet:
+	switch set.SetName().Class() {
+	case types.ClassAsSet:
 		_, ok := o.(object.AutNum)
 		return ok
-	case object.RouteSet:
+	case types.ClassRouteSet:
 		switch o.(type) {
 		case object.Route, object.Route6:
 			return true
 		}
-	case object.RtrSet:
+	case types.ClassRtrSet:
 		_, ok := o.(object.InetRtr)
 		return ok
 	}

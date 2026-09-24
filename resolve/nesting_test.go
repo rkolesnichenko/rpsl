@@ -5,6 +5,9 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+
+	"github.com/rkolesnichenko/rpsl/object"
+	"github.com/rkolesnichenko/rpsl/types"
 )
 
 // RFC 2622 §5.1: an as-set lists ASNs and as-sets. A route-set listed in one is
@@ -54,5 +57,50 @@ func TestExpansionsCheckTheSetClass(t *testing.T) {
 		if got, err := e.ExpandPrefixes(ctx, mustSet(t, name)); !errors.Is(err, ErrSetClass) {
 			t.Errorf("ExpandPrefixes(%s) = %v, %v; want ErrSetClass", name, got, err)
 		}
+	}
+}
+
+// A set whose class is not the one its name denotes ("route-set: AS-EVIL") is
+// invalid data. Expanded under its name's rules it would let an as-set pull in
+// prefixes no route object backs, and take route claims into an "as-set"; it
+// is not followed, and is listed as missing.
+func TestClassConfusedSetNotFollowed(t *testing.T) {
+	src := corpus(t,
+		asSet("AS-TOP", "AS1, AS-EVIL"),
+		"route-set: AS-EVIL\nmembers: 1.2.3.0/24, 9.9.0.0/16^+\nmbrs-by-ref: ANY\nsource: TEST\n",
+		"route: 10.0.0.0/8\norigin: AS1\nsource: TEST\n",
+		"route: 203.0.113.0/24\norigin: AS2\nmember-of: AS-EVIL\nsource: TEST\n",
+	)
+	e := &Expander{Src: src}
+	got, err := e.ExpandPrefixRanges(context.Background(), mustSet(t, "AS-TOP"))
+	if want := []string{"10.0.0.0/8"}; err != nil || !reflect.DeepEqual(rangeList(got), want) {
+		t.Errorf("ExpandPrefixRanges(AS-TOP) = %v, %v; want %v", rangeList(got), err, want)
+	}
+	if want := []string{"AS-EVIL"}; !reflect.DeepEqual(canonList(got.Missing()), want) {
+		t.Errorf("Missing = %v, want %v", canonList(got.Missing()), want)
+	}
+	// At the top it is not found at all.
+	if _, err := e.ExpandAS(context.Background(), mustSet(t, "AS-EVIL")); !errors.Is(err, ErrNotFound) {
+		t.Errorf("ExpandAS(AS-EVIL) error = %v, want ErrNotFound", err)
+	}
+}
+
+// renamingSource answers every GetSet with the set it holds under another name.
+type renamingSource struct {
+	*MemSource
+	to types.SetName
+}
+
+func (r renamingSource) GetSet(ctx context.Context, _ types.SetName) (object.NamedSet, error) {
+	return r.MemSource.GetSet(ctx, r.to)
+}
+
+// A Source that answers with a set of another name has confused its
+// responses: that is an error, not a missing set or, worse, a substitute.
+func TestSourceReturningWrongNameIsError(t *testing.T) {
+	src := renamingSource{corpus(t, asSet("AS-OTHER", "AS666")), mustSet(t, "AS-OTHER")}
+	_, err := (&Expander{Src: src}).ExpandAS(context.Background(), mustSet(t, "AS-WANTED"))
+	if err == nil || errors.Is(err, ErrNotFound) {
+		t.Errorf("ExpandAS(AS-WANTED) error = %v, want a Source fault", err)
 	}
 }
