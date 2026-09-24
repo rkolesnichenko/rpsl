@@ -85,11 +85,18 @@ func Parse(r io.Reader) iter.Seq2[*ast.Object, []Diagnostic] {
 //
 // The iterator reads r once: ranging over it again after a break continues
 // with the next object, like a bufio.Scanner, and once r is exhausted further
-// ranges yield nothing. It must not be ranged over concurrently.
+// ranges yield nothing. It must not be ranged over concurrently, nor again
+// from inside its own loop: that panics, since the two loops would share one
+// reader and each end the other.
 func ParseWith(r io.Reader, opts ParseOptions) iter.Seq2[*ast.Object, []Diagnostic] {
 	limit := opts.maxObjectBytes()
 	s := &streamer{lr: newLineReader(r, limit), limit: limit, maxLines: opts.maxObjectLines()}
 	return func(yield func(*ast.Object, []Diagnostic) bool) {
+		if s.ranging {
+			panic("rpsl: ParseWith iterator ranged over while it is already running")
+		}
+		s.ranging = true
+		defer func() { s.ranging = false }()
 		s.yield, s.stopped = yield, false
 		s.run()
 	}
@@ -144,6 +151,7 @@ type streamer struct {
 	inObj     bool
 	dropping  bool         // skipping an oversized object up to the next blank line
 	carry     []Diagnostic // diagnostics for the object that follows
+	ranging   bool         // a range over the iterator is in progress
 	discards  int          // over-long lines discarded since carry was last taken
 	lastDrop  pos          // where the last of them began
 }
@@ -217,6 +225,9 @@ func (s *streamer) line(li lineInfo) {
 	case li.tooLong:
 		s.discardLine(li.at) // an over-long comment or malformed line: drop only it
 	case lexer.StartsAttribute(text(li.text)):
+		// Nothing after this line can join the finished object any more, so it
+		// goes now rather than when this object ends.
+		s.emitPending()
 		s.inObj, s.objStart, s.objLines = true, li.at, 1
 		s.obj = append(s.obj[:0], li.text...)
 	default:
@@ -408,12 +419,23 @@ func (r *lineReader) next() (lineInfo, error) {
 	li := lineInfo{at: r.pos}
 	r.buf = r.buf[:0]
 	n, blank := 0, true
+	heldCR := false // a '\r' ended the previous chunk: a terminator only if "\n" or EOF follows
 	var attr attrScan
 	for {
 		frag, e := r.br.ReadSlice('\n')
 		attr.scan(frag, n == 0)
 		n += len(frag)
-		blank = blank && lexer.IsBlankLine(text(frag))
+		final := e != bufio.ErrBufferFull
+		if heldCR && !(final && (len(frag) == 0 || len(frag) == 1 && frag[0] == '\n')) {
+			blank = false // the held '\r' was inside the line, where it is not blank
+		}
+		body := frag
+		if final {
+			body = text(frag)
+		} else if heldCR = len(frag) > 0 && frag[len(frag)-1] == '\r'; heldCR {
+			body = frag[:len(frag)-1]
+		}
+		blank = blank && lexer.IsBlankLine(body)
 		if !li.tooLong {
 			if r.limit >= 0 && int64(len(r.buf)+len(frag)) > r.limit {
 				li.tooLong = true

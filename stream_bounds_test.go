@@ -2,6 +2,7 @@ package rpsl
 
 import (
 	"fmt"
+	"io"
 	"reflect"
 	"runtime"
 	"strings"
@@ -293,4 +294,91 @@ func firstN(d []Diagnostic, n int) []Diagnostic {
 		return d[:n]
 	}
 	return d
+}
+
+// streamSummary renders what a stream yields: each kept object's class and the
+// rules of every diagnostic, in order.
+func streamSummary(src string, opts ParseOptions) string {
+	var out []string
+	for o, ds := range ParseWith(strings.NewReader(src), opts) {
+		if c := o.Class(); c != "" {
+			out = append(out, c)
+		}
+		for _, d := range ds {
+			out = append(out, d.Rule)
+		}
+	}
+	return strings.Join(out, " ")
+}
+
+// A carriage return at the end of a 64 KiB read of an over-long line is part
+// of the line, not its end: the line is not blank, so it does not end the
+// object, and the stream reads it as the lexer does — as it reads the same
+// line with the carriage return anywhere else.
+func TestLongLineCRAtChunkBoundary(t *testing.T) {
+	const chunk = 64 << 10
+	opts := ParseOptions{MaxObjectBytes: 1000}
+	for _, c := range []struct{ name, tail string }{
+		{"a lone CR", "\r" + strings.Repeat(" ", 10) + "\n"},
+		{"CR CR LF", "\r\r\n"},
+	} {
+		boundary := "a: 1\n" + strings.Repeat(" ", chunk-1) + c.tail + "b: 2\n"
+		control := "a: 1\n" + strings.Repeat(" ", 100) + c.tail + strings.Repeat(" ", chunk-101) + "b: 2\n"
+		got, want := streamSummary(boundary, opts), streamSummary(control, opts)
+		if got != want {
+			t.Errorf("%s at the chunk boundary: %q; elsewhere: %q", c.name, got, want)
+		}
+	}
+	// A CRLF split across the boundary still ends a blank line.
+	src := "a: 1\n" + strings.Repeat(" ", chunk-1) + "\r\nb: 2\n"
+	if got, want := streamSummary(src, opts), "a b rpsl/trivia-too-large"; got != want {
+		t.Errorf("a blank line ending CR|LF across the boundary: %q, want the objects apart: %q", got, want)
+	}
+}
+
+// A finished object is yielded as soon as the next object begins: nothing
+// after that can join it, so a consumer on a live connection need not wait for
+// the next object to end too.
+func TestObjectYieldedAtNextAttribute(t *testing.T) {
+	pr, pw := io.Pipe()
+	gotA := make(chan struct{})
+	go func() {
+		_, _ = pw.Write([]byte("a: 1\n\nb: 2\n"))
+		select {
+		case <-gotA:
+		case <-time.After(5 * time.Second):
+		}
+		_, _ = pw.Write([]byte("\n"))
+		pw.Close()
+	}()
+	start := time.Now()
+	var classes []string
+	for o := range Parse(pr) {
+		classes = append(classes, o.Class())
+		if o.Class() == "a" {
+			if d := time.Since(start); d > 2*time.Second {
+				t.Errorf("object a was yielded after %v, once the writer gave up waiting", d)
+			}
+			close(gotA)
+		}
+	}
+	if strings.Join(classes, " ") != "a b" {
+		t.Errorf("objects %v, want a b", classes)
+	}
+}
+
+// Ranging over the iterator from inside its own loop is a programming error;
+// it used to end the outer loop early without a word.
+func TestNestedRangePanics(t *testing.T) {
+	seq := Parse(strings.NewReader("a: 1\n\nb: 2\n\nc: 3\n"))
+	defer func() {
+		if r := recover(); r == nil || !strings.Contains(fmt.Sprint(r), "already") {
+			t.Errorf("a nested range recovered %v, want a panic saying the iterator is already running", r)
+		}
+	}()
+	for range seq {
+		for range seq {
+			break
+		}
+	}
 }
