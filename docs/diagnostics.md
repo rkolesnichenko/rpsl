@@ -59,7 +59,7 @@ attribute of it.
 | `policy/expect-peering`, `policy/expect-filter` | Error | A factor without its `from`/`to` or `accept`/`announce` part. A filter term after `EXCEPT` (`accept ANY EXCEPT FLTR-BOGONS`) gets a hint: `EXCEPT` joins two policies, and `AND NOT` leaves a term out of a filter. |
 | `policy/via` | Error | An `import-via:` or `export-via:` clause with no via peering before its `from`/`to`; the clause is dropped. |
 | `policy/peering`, `policy/as-expr` | Error | A malformed peering or AS expression, including `NOT`, which is not an AS-expression operator (write `EXCEPT`). |
-| `policy/router` | Warning or Error | A router expression term that is not a router: a single-label name (Warning — real policies use labels such as `PEERING`), or an invalid term, `NOT`, a dangling or missing operator (Error). |
+| `policy/router` | Warning or Error | A router expression term that is not a router: a single-label name (Warning — real policies use labels such as `PEERING`), an address with an IPv6 zone or IPv4-mapped (Warning — read without the zone, as the IPv4 address), or an invalid term, a name whose last label is all digits (`256.0.0.1`, `10.1.1`: a mistyped address), `NOT`, a dangling or missing operator (Error). |
 | `policy/protocol` | Error | `protocol` or `into` without a protocol name. |
 | `policy/action` | Error | An action that is not `attr = value`, `attr .= value` or `attr.method(args)` (the other RFC 2622 Figure 25 assignments, such as `+=`, are read as operator methods): two actions without `;`, a comparison such as `pref == 10`, a bare word, or a missing value. It is left out. |
 | `policy/filter` | Error | An unexpected token or invalid term in a filter, or a malformed `community == {…}`. |
@@ -71,11 +71,12 @@ attribute of it.
 | `policy/abbreviated-prefix` | Warning | An IPv4 prefix in a policy value written with fewer than four octets (`10/8`); the missing octets are read as zero. |
 | `policy/unicode-space` | Warning | A space other than an ASCII space, tab or newline — a no-break space (U+00A0) or another Unicode space, a vertical tab or a form feed — between the tokens of a policy value; it is read as a space, as IRRd reads it. Reported once per value, at the first. |
 | `policy/range-op` | Error | An invalid range operator. |
+| `policy/range-op-empty` | Warning | A range operator after a prefix list that keeps none of its ranges (`{1.0.0.0/8}^64`), so the filter matches nothing. |
 | `policy/as-path-regexp` | Error or Warning | A malformed or empty AS-path regexp, one whose `<` is never closed, a `>` that closes nothing, or a term other than an AS number, as-set or `PeerAS` (Error, at the offending token); an AS number written without `AS`, as in `<3333>` (Warning). |
 | `policy/inject` | Error | A malformed `inject:` condition: a test that is not `STATIC`, `HAVE-COMPONENTS` or `EXCLUDE`, a missing `{` or `)`. |
 | `policy/aggr-mtd` | Error | An `aggr-mtd:` that is neither `inbound` nor `outbound`. |
-| `policy/ifaddr` | Error | A malformed `ifaddr:`: a bad address, a missing or over-long `masklen`. |
-| `policy/interface` | Error | A malformed RFC 4012 `interface:`: a bad address family, or a `tunnel` without its `,<encapsulation>`. |
+| `policy/ifaddr` | Warning or Error | A malformed `ifaddr:`: a bad address, a missing or over-long `masklen` (Error); an address with an IPv6 zone or IPv4-mapped, read without the zone or as the IPv4 address (Warning). |
+| `policy/interface` | Warning or Error | A malformed RFC 4012 `interface:`: a bad address family, or a `tunnel` without its `,<encapsulation>` (Error); an address with an IPv6 zone or IPv4-mapped (Warning). |
 | `policy/peer` | Error or Warning | A malformed `peer:`/`mp-peer:` — a missing protocol, an unterminated `(` in an option (Error); an empty item in the option list (Warning). |
 | `policy/mnt-routes` | Error | A malformed `mnt-routes:`: no maintainer name, or a scope that is neither `ANY` nor a prefix list. |
 | `policy/typedef` | Error | A dictionary `typedef:` with no type definition after its name. |

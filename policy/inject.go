@@ -98,34 +98,38 @@ func (p *parser) parseInjectCond() InjectCond {
 	return p.parseInjectOr()
 }
 
+// An OR or AND chain is one flat node however long it is, as in a filter, so
+// it costs one level of nesting, not one per operator.
 func (p *parser) parseInjectOr() InjectCond {
-	terms := []InjectCond{p.parseInjectAnd()}
+	first := p.parseInjectAnd()
+	if !p.cur().kw("or") {
+		return first
+	}
+	if !p.enter() {
+		return nil
+	}
+	defer p.leave()
+	terms := []InjectCond{first}
 	for p.cur().kw("or") {
-		if !p.enter() {
-			return nil
-		}
-		defer p.leave()
 		p.advance()
 		terms = append(terms, p.parseInjectAnd())
-	}
-	if len(terms) == 1 {
-		return terms[0]
 	}
 	return InjectOr{Terms: terms}
 }
 
 func (p *parser) parseInjectAnd() InjectCond {
-	terms := []InjectCond{p.parseInjectNot()}
+	first := p.parseInjectNot()
+	if !p.cur().kw("and") {
+		return first
+	}
+	if !p.enter() {
+		return nil
+	}
+	defer p.leave()
+	terms := []InjectCond{first}
 	for p.cur().kw("and") {
-		if !p.enter() {
-			return nil
-		}
-		defer p.leave()
 		p.advance()
 		terms = append(terms, p.parseInjectNot())
-	}
-	if len(terms) == 1 {
-		return terms[0]
 	}
 	return InjectAnd{Terms: terms}
 }
