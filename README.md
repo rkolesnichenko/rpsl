@@ -33,7 +33,7 @@ Every layer ships. Until v1.0.0, a minor version may change the API; the
 | `policy` | RFC 2622 §6 routing-policy parser → sealed-interface AST, and the §8.1/§9 attribute sub-grammars | shipped |
 | `resolve` | Pure expansion engine for as-set, route-set, rtr-set, peering-set and filter-set, + in-memory, dump and caching `Source`s | shipped |
 | `resolve/{irrd,whois,rdap}` | Live IRRd / WHOIS / RDAP backends | shipped |
-| `auth` | RFC 2725 authorisation and RIPE's `mnt-irt:` consent, with cryptography injected | shipped |
+| `auth` | Who may create, modify or delete an object, under the RIPE Database's and IRRd's rules (`auth.RIPE`, `auth.IRRd`), with lookups and cryptography injected | shipped |
 
 RFC 4012 (RPSLng) is supported: `mp-import`/`mp-export`/`mp-default`, the `afi`
 dictionary and `afi`-scoped policies (`Import`/`Export`/`Default`/`Except`/
@@ -63,8 +63,10 @@ RFC 2725 §7 update-transaction protocol.
   `mbrs-by-ref:`. `whois.Source` can.
 - **bgpq4 disagrees in a few places**, pinned by tests and listed in
   `resolve/testdata/bgpq4/divergences.md`.
-- **`auth` covers route creation and `mnt-irt:` consent.** Creating other
-  classes, and modifying or deleting objects, are left to the caller.
+- **`auth` models each registry's defaults.** IRRd's settings (such as
+  turning off parent checks for routes) and the paths a registry keeps for its
+  own staff (overrides, RIPE NCC's maintainers) are out of scope, as is the
+  RFC 2725 §7 update-transaction protocol.
 - **`RFCStrict` leaves out RFC 2725's `reclaim:`, `no-reclaim:` and
   `auth-override:`**, which no registry implements (none among the 13.3
   million objects of the sixteen dumps the real-data test reads), and flags them

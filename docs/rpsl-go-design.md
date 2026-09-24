@@ -490,6 +490,27 @@ where `<len>` is the byte length of the payload **including** the payload's trai
 
 ---
 
+### 8.6 Authorisation (`auth`)
+
+Who may change an object is the other half of what keeps an IRR honest: a set
+expands only to what its members' maintainers registered, and a registry
+accepts a route only from someone the address space delegated to. RFC 2725
+gives the model, and the registries depart from it. The RIPE Database asks,
+on creation, the parent of every hierarchical object — the covering address
+space (`mnt-routes:`, then `mnt-lower:` for strictly less specific space, then
+`mnt-by:`), the as-block of an aut-num, the object a set's hierarchical name
+names — and the consent of any irt or `mnt-ref:` holder a new reference names,
+but not the origin AS of a route. IRRd asks only the `mnt-by:` of a route's
+address space and of a set's aut-num, and both versions' maintainers on a
+change. Each is a `Rules` value — `auth.RIPE`, `auth.IRRd` — whose `Authorise`
+takes an update and a credential and returns a `Decision` with its reasons.
+
+The lookups Authorise needs are injected as a `Database` — the object stored
+under a key, the objects covering an address range, the as-blocks holding an
+AS — as `resolve.Source` injects the engine's, with `MemDatabase` for tests
+and dumps; the cryptography is injected as a `Verifier`. `RouteCreation` stays
+as RFC 2725 §9.9's route check, the one that also asks the origin AS.
+
 ## 9. Top-level façade
 
 ```go

@@ -9,6 +9,39 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **`auth` decides whole updates, under the RIPE Database's or IRRd's rules.**
+  `auth.RIPE` and `auth.IRRd` are `Rules`; `Authorise` takes an `Update`
+  (`Create`, `Modify` or `Delete` of an object) and a credential, applies every
+  check that registry makes, and returns a `Decision` naming each.
+  - RIPE, as its whois server implements it: the object's maintainers (the
+    stored version's for a change), and on creation the parent's — the less
+    specific inetnum or inet6num, the as-block of an aut-num, the covering route
+    or address space of a route (`mnt-routes:`, `mnt-lower:`, `mnt-by:`), the
+    address space of a reverse domain (`mnt-domains:` first), the object a
+    hierarchical set name names — plus irt and `mnt-ref:` consent for new
+    references. A domain may also be deleted by its address space's
+    `mnt-domains:`.
+  - IRRd, with its default settings: the submitted and stored versions'
+    maintainers, and on creation the `mnt-by:` of a route's address space (or
+    less specific route) and of the aut-num a set's name begins with. New
+    maintainers are refused: they are an administrator's to create.
+- **`auth.Database`**, the lookups Authorise needs — the stored version of an
+  object, an object by class and key, the objects covering an address range,
+  the as-blocks holding an AS — and **`auth.MemDatabase`** over decoded
+  objects, for tests and dumps.
+- **`object.Domain.ReverseRange`**, the addresses a reverse zone covers
+  (`in-addr.arpa`, RIPE's `0-127.2.0.192.in-addr.arpa` range form, `ip6.arpa`).
+- An opt-in real-data check: a sample of the RIPE Database's routes, authorised
+  for creation against their surroundings, all find their parent.
+
+### Changed
+
+- `auth.CheckMntners` and `CheckIrts` say that a maintainer or irt with no
+  `auth:` lines accepts no credential, rather than that the credential was
+  rejected.
+
 ## [0.9.1] - 2026-09-24
 
 ### Security
