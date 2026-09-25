@@ -9,6 +9,14 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Changed
+
+- **`types.ParseRouterID` refuses a name whose last label is all digits**
+  (`1.2.3`, `256.0.0.1`, `1.2.3.4.5`): no top-level domain is (RFC 3696 §2), so
+  such a router is a mistyped address, as the policy parser already reads it.
+  An rtr-set member so written is now an Error (`object/rtr-set-members`),
+  naming the cause. No registry's data has one.
+
 ## [0.14.0] - 2026-09-25
 
 ### Added
