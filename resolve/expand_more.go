@@ -177,6 +177,7 @@ type filterEval struct {
 	cyclic bool                          // this pass took a back-edge
 	ranges map[string]RangeSet           // route-set and as-set expansions
 	asns   map[string]ASNSet             // as-set expansions in AS expressions
+	ex     excluded                      // what the expansion leaves out
 }
 
 func newFilterEval(e *Expander, ctx context.Context) *filterEval {
@@ -186,8 +187,16 @@ func newFilterEval(e *Expander, ctx context.Context) *filterEval {
 		active: map[string]bool{},
 		ranges: map[string]RangeSet{},
 		asns:   map[string]ASNSet{},
+		ex:     e.excluded(),
 	}
 }
+
+// skipSet reports whether a set reference is excluded: only one met inside a
+// filter-set is, since the terms of the filter passed in are the caller's.
+func (ev *filterEval) skipSet(n types.SetName) bool { return !ev.cur.IsZero() && ev.ex.set(n) }
+
+// skipAS is skipSet for an AS number.
+func (ev *filterEval) skipAS(a types.ASN) bool { return !ev.cur.IsZero() && ev.ex.as(a) }
 
 // run evaluates f to its least fixpoint (see filterEval).
 func (ev *filterEval) run(f policy.Filter) (rangeSetOf, error) {
@@ -357,6 +366,9 @@ func (ev *filterEval) eval(f policy.Filter, depth int) (rangeSetOf, error) {
 // setRef evaluates a reference to a route-set, as-set or filter-set, composing
 // the term's range operator into what it denotes.
 func (ev *filterEval) setRef(n types.SetName, op types.RangeOperator, depth int) (rangeSetOf, error) {
+	if ev.skipSet(n) {
+		return rangeSetOf{}, nil
+	}
 	if isAnySet(n) {
 		return nil, &AnySetError{Name: n}
 	}
@@ -501,8 +513,14 @@ func (ev *filterEval) asExpr(e policy.ASExpr, depth int) (map[types.ASN]bool, er
 	case nil:
 		return map[types.ASN]bool{}, nil
 	case policy.ASNum:
+		if ev.skipAS(x.AS) {
+			return map[types.ASN]bool{}, nil
+		}
 		return map[types.ASN]bool{x.AS: true}, nil
 	case policy.ASSetRef:
+		if ev.skipSet(x.Name) {
+			return map[types.ASN]bool{}, nil
+		}
 		if isAnySet(x.Name) {
 			return nil, &AnySetError{Name: x.Name}
 		}

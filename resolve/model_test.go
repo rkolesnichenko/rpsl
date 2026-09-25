@@ -322,6 +322,45 @@ func (m model) texts(r *rand.Rand) []string {
 type oracle struct {
 	m    model
 	sets map[string]*mSet // the definition in use: RIPE outranks RADB
+	ex   resolve.Exclusion
+	exS  map[string]bool    // ex.Sets, canonical
+	exA  map[types.ASN]bool // ex.ASNs
+}
+
+// excluding returns the oracle for expansions that leave out ex: an excluded
+// set is never included by another, an excluded AS contributes nothing.
+func (o *oracle) excluding(ex resolve.Exclusion) *oracle {
+	c := *o
+	c.ex, c.exS, c.exA = ex, map[string]bool{}, map[types.ASN]bool{}
+	for _, n := range ex.Sets {
+		c.exS[n.String()] = true
+	}
+	for _, a := range ex.ASNs {
+		c.exA[a] = true
+	}
+	return &c
+}
+
+// randomExclusion draws some of the model's set names, one that is not
+// defined, and some of its AS numbers.
+func randomExclusion(r *rand.Rand, m model) resolve.Exclusion {
+	var ex resolve.Exclusion
+	for _, s := range m.sets {
+		if r.IntN(4) == 0 {
+			n, _ := types.ParseSetName(s.name)
+			ex.Sets = append(ex.Sets, n)
+		}
+	}
+	if r.IntN(2) == 0 {
+		n, _ := types.ParseSetName("AS-EXCLUDED-GONE")
+		ex.Sets = append(ex.Sets, n)
+	}
+	for a := firstAS; a < firstAS+4; a++ {
+		if r.IntN(4) == 0 {
+			ex.ASNs = append(ex.ASNs, types.ASN(a))
+		}
+	}
+	return ex
 }
 
 func newOracle(m model) *oracle {
@@ -376,7 +415,7 @@ func (o *oracle) reach(top string) (dist map[string]int, anySet bool) {
 			continue
 		}
 		for _, mm := range s.members {
-			if _, seen := dist[mm.set]; mm.kind != "set" || seen || !nested(s.class, setClass(mm.set)) {
+			if _, seen := dist[mm.set]; mm.kind != "set" || seen || !nested(s.class, setClass(mm.set)) || o.exS[mm.set] {
 				continue
 			}
 			dist[mm.set] = dist[name] + 1
@@ -410,12 +449,12 @@ func (o *oracle) asns(top string) []types.ASN {
 			continue
 		}
 		for _, mm := range s.members {
-			if mm.kind == "as" {
+			if mm.kind == "as" && !o.exA[mm.as] {
 				seen[mm.as] = true
 			}
 		}
 		for _, c := range o.m.objs {
-			if honored(s, c) {
+			if honored(s, c) && !o.exA[c.as] {
 				seen[c.as] = true
 			}
 		}
@@ -503,9 +542,11 @@ func (o *oracle) prefixes(top string, afi types.AFI) []netip.Prefix {
 				case "pfx":
 					add(mm.op, []netip.Prefix{mm.pfx})
 				case "as":
-					add(mm.op, o.routes(mm.as))
+					if !o.exA[mm.as] {
+						add(mm.op, o.routes(mm.as))
+					}
 				case "set":
-					if nested(s.class, setClass(mm.set)) {
+					if nested(s.class, setClass(mm.set)) && !o.exS[mm.set] {
 						for p := range val[mm.set] {
 							add(mm.op, []netip.Prefix{p})
 						}
@@ -517,7 +558,9 @@ func (o *oracle) prefixes(top string, afi types.AFI) []netip.Prefix {
 					continue
 				}
 				if c.class == "aut-num" {
-					add("", o.routes(c.as))
+					if !o.exA[c.as] {
+						add("", o.routes(c.as))
+					}
 				} else {
 					add("", []netip.Prefix{c.pfx})
 				}
@@ -589,7 +632,7 @@ func checkModel(t *testing.T, label string, o *oracle, texts []string, src resol
 		_, anySet := o.reach(top)
 		wantMissing := o.missing(top)
 		if o.sets[top].class == types.ClassAsSet {
-			got, err := (&resolve.Expander{Src: src}).ExpandAS(ctx, n)
+			got, err := (&resolve.Expander{Exclude: o.ex, Src: src}).ExpandAS(ctx, n)
 			var anyErr *resolve.AnySetError
 			switch {
 			case anySet:
@@ -604,7 +647,7 @@ func checkModel(t *testing.T, label string, o *oracle, texts []string, src resol
 		}
 		for _, afi := range []types.AFI{types.AFIv4, types.AFIv6, types.AFIAny} {
 			want := o.prefixes(top, afi)
-			got, err := (&resolve.Expander{Src: src, AFI: afi}).ExpandPrefixes(ctx, n)
+			got, err := (&resolve.Expander{Exclude: o.ex, Src: src, AFI: afi}).ExpandPrefixes(ctx, n)
 			var anyErr *resolve.AnySetError
 			switch {
 			case anySet:
@@ -621,10 +664,10 @@ func checkModel(t *testing.T, label string, o *oracle, texts []string, src resol
 			if !limits || len(want) < 2 {
 				continue
 			}
-			if _, err := (&resolve.Expander{Src: src, AFI: afi, MaxPrefixes: len(want)}).ExpandPrefixes(ctx, n); err != nil {
+			if _, err := (&resolve.Expander{Exclude: o.ex, Src: src, AFI: afi, MaxPrefixes: len(want)}).ExpandPrefixes(ctx, n); err != nil {
 				fail("ExpandPrefixes(%s, %v) with MaxPrefixes = its size %d: %v", top, afi, len(want), err)
 			}
-			_, err = (&resolve.Expander{Src: src, AFI: afi, MaxPrefixes: len(want) - 1}).ExpandPrefixes(ctx, n)
+			_, err = (&resolve.Expander{Exclude: o.ex, Src: src, AFI: afi, MaxPrefixes: len(want) - 1}).ExpandPrefixes(ctx, n)
 			if tl := (*resolve.SetTooLargeError)(nil); !errors.As(err, &tl) || tl.Limit != resolve.LimitPrefixes {
 				fail("ExpandPrefixes(%s, %v) with MaxPrefixes %d under its size: err %v", top, afi, len(want)-1, err)
 			}
@@ -640,10 +683,10 @@ func checkModel(t *testing.T, label string, o *oracle, texts []string, src resol
 		if depth < 2 {
 			continue
 		}
-		if _, err := (&resolve.Expander{Src: src, MaxDepth: depth}).ExpandPrefixes(ctx, n); err != nil {
+		if _, err := (&resolve.Expander{Exclude: o.ex, Src: src, MaxDepth: depth}).ExpandPrefixes(ctx, n); err != nil {
 			fail("ExpandPrefixes(%s) with MaxDepth = its depth %d: %v", top, depth, err)
 		}
-		_, err := (&resolve.Expander{Src: src, MaxDepth: depth - 1}).ExpandPrefixes(ctx, n)
+		_, err := (&resolve.Expander{Exclude: o.ex, Src: src, MaxDepth: depth - 1}).ExpandPrefixes(ctx, n)
 		if tl := (*resolve.SetTooLargeError)(nil); !errors.As(err, &tl) || tl.Limit != resolve.LimitDepth {
 			fail("ExpandPrefixes(%s) with MaxDepth %d under its depth: err %v", top, depth-1, err)
 		}
@@ -659,6 +702,8 @@ func TestModelMemSource(t *testing.T) {
 		texts := m.texts(r)
 		src := resolve.NewMemSource(decodeAll(t, texts), "RIPE", "RADB")
 		checkModel(t, fmt.Sprintf("seed %d", seed), newOracle(m), texts, src, true)
+		ex := randomExclusion(r, m)
+		checkModel(t, fmt.Sprintf("seed %d excluding %v", seed, ex), newOracle(m).excluding(ex), texts, src, true)
 	}
 }
 
@@ -679,5 +724,11 @@ func TestModelBackends(t *testing.T) {
 		pl.Close()
 		wh := &whois.Source{Addr: db.Whois(t), Sources: []string{"RIPE", "RADB"}, Timeout: 5 * time.Second}
 		checkModel(t, fmt.Sprintf("whois seed %d", seed), o, texts, wh, false)
+		if seed%5 == 0 {
+			ex := randomExclusion(r, m)
+			checkModel(t, fmt.Sprintf("irrd seed %d excluding %v", seed, ex), o.excluding(ex), texts,
+				&irrd.Source{Addr: db.IRRd(t), Sources: []string{"RIPE", "RADB"}, Timeout: 5 * time.Second}, false)
+			checkModel(t, fmt.Sprintf("whois seed %d excluding %v", seed, ex), o.excluding(ex), texts, wh, false)
+		}
 	}
 }

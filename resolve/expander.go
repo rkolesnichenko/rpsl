@@ -48,6 +48,48 @@ type Expander struct {
 	// latency without changing the result: the graph is built from the level's
 	// answers in name order either way.
 	Concurrency int
+	// Exclude is what every expansion leaves out; see Exclusion.
+	Exclude Exclusion
+}
+
+// Exclusion is what an expansion leaves out, as bgpq4's EXCEPT does: a set
+// named here is never followed, fetched or reported missing, and an AS number
+// named here adds nothing — not to an AS list and not its routes. It applies
+// wherever an expansion meets a member (nested sets, AS members, indirect
+// aut-num members, and the set and AS references inside a filter-set), but
+// never to the set an Expand call names, which is expanded as asked; nor, in
+// EvalFilter, to the terms of the filter passed in. A set excluded and also
+// reachable another way stays out.
+type Exclusion struct {
+	Sets []types.SetName
+	ASNs []types.ASN
+}
+
+// excluded is an Exclusion as sets, for lookups.
+type excluded struct {
+	sets map[string]bool
+	asns map[types.ASN]bool
+}
+
+func (x excluded) set(n types.SetName) bool { return x.sets[n.String()] }
+func (x excluded) as(a types.ASN) bool      { return x.asns[a] }
+
+// excluded returns the expander's Exclusion as sets, built once per call.
+func (e *Expander) excluded() excluded {
+	var x excluded
+	if len(e.Exclude.Sets) > 0 {
+		x.sets = make(map[string]bool, len(e.Exclude.Sets))
+		for _, n := range e.Exclude.Sets {
+			x.sets[n.String()] = true
+		}
+	}
+	if len(e.Exclude.ASNs) > 0 {
+		x.asns = make(map[types.ASN]bool, len(e.Exclude.ASNs))
+		for _, a := range e.Exclude.ASNs {
+			x.asns[a] = true
+		}
+	}
+	return x
 }
 
 // limit applies the rule every cap follows: zero means def, negative unlimited.
@@ -114,12 +156,12 @@ func (e *Expander) expandAS(ctx context.Context, n types.SetName) (ASNSet, int, 
 	out := newASSet()
 	for _, nd := range g.nodes {
 		for _, m := range members(nd.set) {
-			if m.Kind == object.MemberAS {
+			if m.Kind == object.MemberAS && !g.ex.as(m.AS) {
 				out.add(m.AS)
 			}
 		}
 		for _, o := range nd.claims {
-			if an, ok := o.(object.AutNum); ok {
+			if an, ok := o.(object.AutNum); ok && !g.ex.as(an.AS) {
 				out.add(an.AS)
 			}
 		}
@@ -205,6 +247,7 @@ type setGraph struct {
 	nodes   map[string]*setNode          // canonical name -> fetched set
 	missing []types.SetName              // nested sets that were not found
 	routes  map[types.ASN][]netip.Prefix // originated routes (prefix expansions only)
+	ex      excluded                     // what the expansion leaves out
 }
 
 // size is how many sets discovery reached: those fetched and those missing.
@@ -219,7 +262,7 @@ type setNode struct {
 // fetched once and first reached at its shortest distance. It follows only the
 // nested sets RFC 2622 allows (see nestable), so from an as-set only as-sets.
 func (e *Expander) discover(ctx context.Context, top types.SetName) (*setGraph, error) {
-	g := &setGraph{top: top, nodes: map[string]*setNode{}}
+	g := &setGraph{top: top, nodes: map[string]*setNode{}, ex: e.excluded()}
 	seen := map[string]bool{top.String(): true}
 	for level, depth := []types.SetName{top}, 0; len(level) > 0; depth++ {
 		if err := ctx.Err(); err != nil {
@@ -249,7 +292,7 @@ func (e *Expander) discover(ctx context.Context, top types.SetName) (*setGraph, 
 			}
 			g.nodes[n.String()] = &setNode{set: res.set, claims: res.claims}
 			for _, name := range nestedNames(res.set) {
-				if seen[name.String()] {
+				if seen[name.String()] || g.ex.set(name) {
 					continue
 				}
 				if depth+1 > e.maxDepth() {
@@ -472,7 +515,8 @@ func claimClassOK(set object.NamedSet, o object.Object) bool {
 }
 
 // fetchRoutes fetches, once per AS, the routes originated by every AS that is a
-// member or an indirect aut-num member of a discovered set.
+// member or an indirect aut-num member of a discovered set. An excluded AS is
+// not fetched, so evaluation finds no routes for it.
 func (e *Expander) fetchRoutes(ctx context.Context, g *setGraph) error {
 	g.routes = map[types.ASN][]netip.Prefix{}
 	// Collect the distinct ASes first, in a deterministic order, so the fetches
@@ -487,12 +531,12 @@ func (e *Expander) fetchRoutes(ctx context.Context, g *setGraph) error {
 	}
 	for _, nd := range g.ordered() {
 		for _, m := range members(nd.set) {
-			if m.Kind == object.MemberAS {
+			if m.Kind == object.MemberAS && !g.ex.as(m.AS) {
 				add(m.AS)
 			}
 		}
 		for _, o := range nd.claims {
-			if an, ok := o.(object.AutNum); ok {
+			if an, ok := o.(object.AutNum); ok && !g.ex.as(an.AS) {
 				add(an.AS)
 			}
 		}
@@ -572,6 +616,9 @@ func (v *evaluator) walk(name types.SetName, ops opStack) error {
 		case object.MemberSet:
 			if !nestable(name.Class(), m.Set.Class()) {
 				continue // e.g. a route-set listed in an as-set, even if reachable elsewhere
+			}
+			if v.g.ex.set(m.Set) {
+				continue // excluded, even the top set listing itself
 			}
 			if _, ok := v.g.nodes[m.Set.String()]; !ok {
 				continue // missing (reported)
