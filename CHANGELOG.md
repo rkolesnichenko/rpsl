@@ -9,6 +9,21 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-25
+
+### Added
+
+- **`irrd.Source.ASSetPrefixes`**: an as-set expanded by the server itself,
+  with IRRd 4's `!a` query — one query where the engine's expansion makes one
+  per AS. The answer is the server's, under its rules, so it is not part of
+  `resolve.Source`. A missing as-set is `ErrNotFound`, a route-set
+  `ErrSetClass`, and a server without `!a` the new **`irrd.ErrQueryRefused`**.
+- **`rpslq -a`** expands as-sets that way, as plain bgpq4 does. The largest
+  sets then take seconds, as with bgpq4 (AS-HURRICANE over RADB: 8.4 s against
+  bgpq4's 7.7 s, identical output), where the engine's own expansion takes
+  about 20 s: RADB answers a client about 1,200 queries a second, however they
+  are sent. The default stays on the engine's own checks.
+
 ## [0.12.0] - 2026-09-25
 
 ### Added
@@ -594,7 +609,8 @@ The first release. There is no earlier version to migrate from.
   values do; a few common RP-attributes have typed helpers.
 - **`rdap` is not a `Source`.** RDAP serves registration data, not IRR sets.
 
-[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.9.1...v0.10.0

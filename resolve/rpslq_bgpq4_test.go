@@ -61,6 +61,48 @@ func TestRpslqMatchesBgpq4(t *testing.T) {
 	}
 }
 
+// rpslq -a writes what plain bgpq4 writes: without -L, bgpq4 asks the server
+// to expand an as-set ("!a"), and so does rpslq -a, so the two agree on the
+// server's answer — its recursion, special AS numbers kept — byte for byte.
+func TestRpslqServerSideMatchesBgpq4(t *testing.T) {
+	needBgpq4(t)
+	for seed := uint64(0); seed < 20; seed++ {
+		r := rand.New(rand.NewPCG(seed, 13))
+		m := randomModel(r, true)
+		db := irrtest.New(m.texts(r)...).WithSources("RIPE", "RADB")
+		addr := db.IRRd(t)
+		var tops []string
+		for name := range newOracle(m).sets {
+			tops = append(tops, name)
+		}
+		sort.Strings(tops)
+		for _, top := range tops {
+			for _, format := range rpslqFormats {
+				for _, fam := range []string{"-4", "-6"} {
+					args := append(append([]string{fam}, format...), top)
+					base := []string{"-h", addr, "-S", modelSources}
+					want := runBgpq4Text(t, append(append([]string(nil), base...), args...))
+					var got, errs bytes.Buffer
+					if code := rpslq.Run(context.Background(), append(append(append([]string(nil), base...), "-a"), args...), &got, &errs); code != 0 {
+						t.Fatalf("seed %d: rpslq -a %v: exit %d: %s", seed, args, code, errs.String())
+					}
+					if got.String() != want {
+						t.Fatalf("seed %d: rpslq -a %v differs from bgpq4:\nrpslq:\n%s\nbgpq4:\n%s", seed, args, got.String(), want)
+					}
+				}
+			}
+		}
+		// bgpq4 took the "!a" path for the as-sets, as rpslq -a did.
+		used := false
+		for _, cmd := range db.Commands() {
+			used = used || strings.HasPrefix(cmd, "!a4") || strings.HasPrefix(cmd, "!a6")
+		}
+		if !used {
+			t.Fatalf("seed %d: no \"!a\" query was sent", seed)
+		}
+	}
+}
+
 // runBgpq4Text runs bgpq4 and returns what it writes to stdout.
 func runBgpq4Text(t *testing.T, args []string) string {
 	t.Helper()

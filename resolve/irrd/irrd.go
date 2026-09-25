@@ -97,6 +97,10 @@ var errNotFound = errors.New("irrd: key not found")
 // connection is still in step.
 var errQuery = errors.New("irrd: query error")
 
+// ErrQueryRefused is returned when the server refuses a query outright ('F'),
+// as a server without IRRd 4's "!a" does for ASSetPrefixes.
+var ErrQueryRefused = errQuery
+
 // ErrClosed is returned by queries on a Source after Close.
 var ErrClosed = errors.New("irrd: source closed")
 
@@ -256,6 +260,12 @@ func (s *Source) routes(ctx context.Context, cmd string) ([]netip.Prefix, error)
 		}
 		return nil, err
 	}
+	return parsePrefixes(cmd, payload)
+}
+
+// parsePrefixes reads a whitespace-separated prefix list. A token that is not
+// a prefix is an error: dropping it would shrink the result silently.
+func parsePrefixes(cmd string, payload []byte) ([]netip.Prefix, error) {
 	var out []netip.Prefix
 	for _, tok := range strings.Fields(string(payload)) {
 		p, err := types.ParsePrefix(tok) // RPSL's address grammar, as for every registry value
@@ -265,6 +275,40 @@ func (s *Source) routes(ctx context.Context, cmd string) ([]netip.Prefix, error)
 		out = append(out, p)
 	}
 	return out, nil
+}
+
+// ASSetPrefixes asks the server to expand an as-set itself, with IRRd 4's
+// "!a" query: the set resolved recursively to AS numbers, then the distinct
+// prefixes those ASes originate, of afi (both families for AFIAny or
+// AFIUnspecified). It is what bgpq4 asks for, and one query where the
+// engine's own expansion makes one per AS.
+//
+// The answer is the server's, under the server's rules — its recursion, its
+// mbrs-by-ref handling, no MaxDepth — and the engine cannot re-check it, so
+// it is not part of resolve.Source; use it where the server's answer is what
+// is wanted. A name that is not an as-set is an error wrapping
+// resolve.ErrSetClass, a missing as-set resolve.ErrNotFound, and a server
+// without "!a" (before IRRd 4) ErrQueryRefused.
+func (s *Source) ASSetPrefixes(ctx context.Context, name types.SetName, afi types.AFI) ([]netip.Prefix, error) {
+	if name.Class() != types.ClassAsSet {
+		return nil, fmt.Errorf("irrd: ASSetPrefixes %s: %w", name, resolve.ErrSetClass)
+	}
+	cmd := "!a"
+	switch afi {
+	case types.AFIv4:
+		cmd = "!a4"
+	case types.AFIv6:
+		cmd = "!a6"
+	}
+	cmd += name.String()
+	payload, err := s.do(ctx, cmd)
+	if err != nil {
+		if errors.Is(err, errNotFound) {
+			return nil, resolve.ErrNotFound
+		}
+		return nil, err
+	}
+	return parsePrefixes(cmd, payload)
 }
 
 // do runs one query, waiting for a connection slot (MaxConns) first.

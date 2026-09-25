@@ -4,8 +4,8 @@
 // from the objects' attributes, not through the resolve package — so tests can
 // hold the backends, and bgpq4, against an independent server.
 //
-// "!i<set>,1" resolves recursively as IRRd does (see Recursive); "!a" is
-// refused, so a client falls back to building prefix lists itself.
+// "!i<set>,1" resolves recursively as IRRd does (see Recursive), and "!a"
+// expands an as-set to its routes' prefixes as IRRd 4 does (see ASetPrefixes).
 package irrtest
 
 import (
@@ -294,6 +294,51 @@ func (db *DB) Recursive(sel []string, name string) (members []string, ok bool) {
 	return members, true
 }
 
+// ASetPrefixes answers "!a<set>" as IRRd 4 does: the as-set resolved
+// recursively to AS numbers ("!i<set>,1"), then the distinct prefixes those
+// ASes originate, of family 4 or 6, or both for 0. ok is false when name is
+// not an as-set of the selected sources — a route-set included, as IRRd looks
+// the name up only among as-sets.
+func (db *DB) ASetPrefixes(sel []string, name string, fam int) (prefixes []string, ok bool) {
+	n, err := types.ParseSetName(name)
+	if err != nil || n.Class() != types.ClassAsSet {
+		return nil, false
+	}
+	members, ok := db.Recursive(sel, name)
+	if !ok {
+		return nil, false
+	}
+	seen := map[netip.Prefix]bool{}
+	var out []netip.Prefix
+	for _, m := range members {
+		as, err := types.ParseASN(m)
+		if err != nil {
+			continue
+		}
+		for _, v6 := range []bool{false, true} {
+			if fam == 4 && v6 || fam == 6 && !v6 {
+				continue
+			}
+			for _, p := range db.Routes(sel, as, v6) {
+				if !seen[p] {
+					seen[p] = true
+					out = append(out, p)
+				}
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if c := out[i].Addr().Compare(out[j].Addr()); c != 0 {
+			return c < 0
+		}
+		return out[i].Bits() < out[j].Bits()
+	})
+	for _, p := range out {
+		prefixes = append(prefixes, p.String())
+	}
+	return prefixes, true
+}
+
 // Routes answers "!g"/"!6": the distinct prefixes of the route (v4) or route6
 // (v6) objects of the selected sources originated by as.
 func (db *DB) Routes(sel []string, as types.ASN, v6 bool) []netip.Prefix {
@@ -386,6 +431,27 @@ func (db *DB) irrdConn(c net.Conn) {
 				fmt.Fprint(c, "D\n") // IRRd answers an empty set like a missing one
 			} else {
 				frame(c, strings.Join(members, " "))
+			}
+		case strings.HasPrefix(cmd, "!a"):
+			name, fam := cmd[2:], 0
+			switch {
+			case strings.HasPrefix(name, "4"):
+				name, fam = name[1:], 4
+			case strings.HasPrefix(name, "6"):
+				name, fam = name[1:], 6
+			}
+			if name == "" {
+				fmt.Fprint(c, "F Missing required set name for A query\n") // IRRd's words; bgpq4 probes with them
+				break
+			}
+			prefixes, ok := db.ASetPrefixes(sel, name, fam)
+			switch {
+			case !ok:
+				fmt.Fprint(c, "D\n")
+			case len(prefixes) == 0:
+				fmt.Fprint(c, "C\n")
+			default:
+				frame(c, strings.Join(prefixes, " "))
 			}
 		case strings.HasPrefix(cmd, "!g"), strings.HasPrefix(cmd, "!6"):
 			as, err := types.ParseASN(cmd[2:])

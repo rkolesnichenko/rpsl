@@ -490,6 +490,8 @@ where `<len>` is the byte length of the payload **including** the payload's trai
 
 Framing is also what makes pipelining safe. With `irrd.Source.Pipeline` set, concurrent queries share a persistent connection: each writes its command under the connection's lock, in the order it is queued, and one reader hands the answers out in that order — IRRd answers commands in the order it reads them. Only a transport or framing error breaks the stream (the queries waiting on it are retried once on a fresh connection); a `D` or `F` answer belongs to its query alone, and a caller that gives up only stops waiting, its answer still read. This is how bgpq4 queries an IRRd, and what makes a set of tens of thousands of members a matter of seconds rather than of a round trip per query. `rpslq` (`resolve/cmd/rpslq`) is the engine behind a bgpq4-compatible command line; `TestRpslqMatchesBgpq4` holds its output to bgpq4's byte for byte.
 
+A registry caps how fast it answers any one client — RADB at about 1,200 queries a second, however they are sent — so an as-set of 25,000 ASes costs the engine's expansion some twenty seconds of route queries. IRRd 4's `!a` expands an as-set on the server in one query, and `irrd.Source.ASSetPrefixes` sends it; its answer is the server's, under the server's rules, which is why it is not part of `resolve.Source` and why `rpslq` uses it only when asked (`-a`).
+
 ---
 
 ### 8.6 Authorisation (`auth`)
