@@ -137,7 +137,7 @@ Imports run strictly downward — `resolve → object → policy → types → a
 
 | Package | Import path | Role | Depends on |
 | --- | --- | --- | --- |
-| `rpsl` | `github.com/rkolesnichenko/rpsl` | Façade: `ParseObject`, `Parse` (streaming), `Decode`, `Validate` (profiles `RIPE`, `IRRd`, `RFCStrict`) | `object`, `ast`, `lexer` |
+| `rpsl` | `github.com/rkolesnichenko/rpsl` | Façade: `ParseObject`, `Parse` (streaming), `Decode`, `Validate` (profiles `RIPE`, `IRRd`, `ARIN`, `RFCStrict`) | `object`, `ast`, `lexer` |
 | `object` | `…/rpsl/object` | Typed classes (`AutNum`, `Route`, `AsSet`, …) + `Decode` | `policy`, `types`, `ast` |
 | `policy` | `…/rpsl/policy` | Routing-policy AST + `ParseImport`/`ParseExport`/`ParseDefault` (and `ParseMP*`, `ParseImportVia`/`ParseExportVia`) | `types`, `ast`, `lexer` |
 | `types` | `…/rpsl/types` | Leaf value types: `ASN`, `SetName`, `PrefixRange`, `AddrFamily`, `NICHandle` | — |

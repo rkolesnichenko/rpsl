@@ -25,8 +25,11 @@ type RouterID struct {
 
 // ParseRouterID parses an IP address or a DNS name. Surrounding spaces and tabs
 // are trimmed, as is one trailing dot. A name is a dot-separated sequence of
-// labels of letters, digits and interior hyphens; a single-label name is
-// accepted here and left for the policy layer to warn about.
+// labels of letters, digits and interior hyphens whose last label is not all
+// digits — no top-level domain is (RFC 3696 §2), so "1.2.3" or "256.0.0.1" is a
+// mistyped address, not a name, as the policy parser also reads it. A
+// single-label name is accepted here and left for the policy layer to warn
+// about.
 //
 // The address form is tried first, after the trailing dot is removed, so a
 // spelling like "192.0.2.1." is the address and not a name that would parse
@@ -54,7 +57,11 @@ func validRouterName(name, orig string) error {
 	case len(name) > MaxRouterNameLen:
 		return fmt.Errorf("rpsl/types: invalid router %q: longer than %d characters", orig, MaxRouterNameLen)
 	}
-	for _, label := range strings.Split(name, ".") {
+	labels := strings.Split(name, ".")
+	if last := labels[len(labels)-1]; last != "" && strings.Trim(last, "0123456789") == "" {
+		return fmt.Errorf("rpsl/types: invalid router %q: not an address, and a name's last label is never all digits", orig)
+	}
+	for _, label := range labels {
 		switch {
 		case label == "":
 			return fmt.Errorf("rpsl/types: invalid router %q: empty label", orig)

@@ -21,7 +21,15 @@ func TestParseRouterID(t *testing.T) {
 		{"rtr.example.net.", "rtr.example.net", false},
 		{"0.0.0.0.", "0.0.0.0", true}, // a trailing dot on an address is still an address
 		{"192.0.2.1.", "192.0.2.1", true},
-		{"1.2.3.4.5", "1.2.3.4.5", false}, // not an address, so a name
+		// Not addresses, and no name ends in an all-digit label (RFC 3696 §2).
+		{"1.2.3", "", false},
+		{"256.0.0.1", "", false},
+		{"1.2.3.4.5", "", false},
+		{"10.1.1.", "", false},
+		{"rtr.1", "", false},
+		{"123", "", false},
+		{"a1.b2", "a1.b2", false},
+		{"rtr.example.1net", "rtr.example.1net", false},
 		{"amsix-rtr1.example.com", "amsix-rtr1.example.com", false},
 		{"rtr1", "rtr1", false}, // single label: policy warns, types accepts
 		{"", "", false},
@@ -159,6 +167,11 @@ func FuzzParseRouterID(f *testing.F) {
 		}
 		if r.IsZero() {
 			t.Fatalf("ParseRouterID(%q) accepted but is the zero value", s)
+		}
+		if name := r.Name(); name != "" {
+			if last := name[strings.LastIndexByte(name, '.')+1:]; strings.Trim(last, "0123456789") == "" {
+				t.Fatalf("ParseRouterID(%q) accepted the name %q, whose last label is all digits", s, name)
+			}
 		}
 		// Exactly one of the two representations is present.
 		if _, isAddr := r.Addr(); isAddr == (r.Name() != "") {

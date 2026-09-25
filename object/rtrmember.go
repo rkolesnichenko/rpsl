@@ -60,7 +60,7 @@ func ParseRtrSetMember(item string) (RtrSetMember, error) {
 	}
 	r, err := types.ParseRouterID(raw)
 	if err != nil {
-		return m, fmt.Errorf("rpsl/object: invalid rtr-set member %q", raw)
+		return m, fmt.Errorf("rpsl/object: invalid rtr-set member: %w", err)
 	}
 	m.Kind, m.Router = RtrMemberRouter, r
 	return m, nil

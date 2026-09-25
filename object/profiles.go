@@ -218,6 +218,35 @@ var RFCStrict = Profile{name: "RFC-strict", classes: rfcClasses()}
 // rules, are not here.
 var IRRd = Profile{name: "IRRd", classes: irrdClasses()}
 
+// ARIN mirrors ARIN's IRR as it serves its objects: ARIN's five classes
+// (route, route6, aut-num, as-set, route-set), each IRRd 4's table, plus the
+// created: and last-modified: ARIN generates, at most one each. Any other class
+// is dict/unknown-class. ARIN documents its templates only in prose and its
+// validator is closed, so the tables are IRRd's, derived from it in code. Its
+// legacy objects, migrated in 2020, keep changed: and notify:, and its legacy
+// routes have no admin-c: or tech-c:; IRRd's tables allow both, as ARIN serves
+// them.
+var ARIN = Profile{name: "ARIN", classes: arinClasses()}
+
+// arinClasses is IRRd's table for the classes ARIN's IRR holds, with ARIN's
+// generated attributes.
+func arinClasses() map[string]ClassSpec {
+	irrd := irrdClasses()
+	c := map[string]ClassSpec{}
+	for _, class := range []string{"route", "route6", "aut-num", "as-set", "route-set"} {
+		s := irrd[class]
+		attrs := make(map[string]AttrSpec, len(s.Attrs)+1)
+		for name, a := range s.Attrs {
+			attrs[name] = a
+		}
+		attrs["created"] = AttrSpec{Single: true}
+		attrs["last-modified"] = AttrSpec{Single: true}
+		s.Attrs = attrs
+		c[class] = s
+	}
+	return c
+}
+
 // RIPE mirrors the RIPE Database: each class is exactly RIPE's template —
 // required attributes, cardinality, and no attributes outside it (a misspelled
 // attribute is dict/unknown-attr). Legacy attributes RIPE no longer has, such

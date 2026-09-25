@@ -9,6 +9,26 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **`rpsl.ARIN` (`object.ARIN`)**, a validation profile for ARIN's IRR: its
+  five classes (route, route6, aut-num, as-set, route-set), each IRRd 4's
+  table, plus the `created:` and `last-modified:` ARIN generates, at most one
+  each; any other class is `dict/unknown-class`. It is derived from the IRRd
+  profile in code, since ARIN documents its templates only in prose. Under the
+  IRRd profile, 187,209 of ARIN's 212,104 objects raised a diagnostic, nearly
+  all for `created:`; under ARIN's, 54 legacy aut-nums without `admin-c:` and
+  `tech-c:` do. The real-data test now validates ARIN's dump with it, and
+  `bulk-ripe -validate arin` selects it.
+
+### Changed
+
+- **`types.ParseRouterID` refuses a name whose last label is all digits**
+  (`1.2.3`, `256.0.0.1`, `1.2.3.4.5`): no top-level domain is (RFC 3696 §2), so
+  such a router is a mistyped address, as the policy parser already reads it.
+  An rtr-set member so written is now an Error (`object/rtr-set-members`),
+  naming the cause. No registry's data has one.
+
 ## [0.14.0] - 2026-09-25
 
 ### Added

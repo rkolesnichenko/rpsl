@@ -162,7 +162,7 @@ func fields(v reflect.Value) (text map[string]string, own map[string]bool) {
 func TestEveryAttributeLandsInItsOwnField(t *testing.T) {
 	for class := range registry {
 		attrs := map[string]bool{}
-		for _, p := range []Profile{RIPE, RFCStrict, IRRd} {
+		for _, p := range []Profile{RIPE, RFCStrict, IRRd, ARIN} {
 			if spec, ok := p.Class(class); ok {
 				for a := range spec.Attrs {
 					attrs[a] = true

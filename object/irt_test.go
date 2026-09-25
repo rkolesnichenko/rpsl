@@ -69,7 +69,7 @@ func TestAttributeTypesAgreeAcrossClasses(t *testing.T) {
 	for class, key := range classKey {
 		obj, _ := Decode(parse(class + ": " + key[0] + "\n"))
 		typ := reflect.TypeOf(obj)
-		for _, p := range []Profile{RIPE, RFCStrict, IRRd} {
+		for _, p := range []Profile{RIPE, RFCStrict, IRRd, ARIN} {
 			spec, ok := p.Class(class)
 			if !ok {
 				continue

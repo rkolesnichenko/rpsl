@@ -287,7 +287,7 @@ func TestParseRtrSetMember(t *testing.T) {
 		}
 	}
 	// A set of the wrong class is an error, not a silently followed member.
-	for _, in := range []string{"", "AS-FOO", "RS-FOO", "not a router!"} {
+	for _, in := range []string{"", "AS-FOO", "RS-FOO", "not a router!", "1.2.3", "256.0.0.1"} {
 		m, err := ParseRtrSetMember(in)
 		if err == nil {
 			t.Errorf("ParseRtrSetMember(%q) = %+v, want an error", in, m)
