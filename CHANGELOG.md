@@ -43,6 +43,10 @@ same version (see [RELEASING.md](RELEASING.md)).
   `--timeout`, and `-a` (the server's `!a` expansion) is `--server-expand`,
   since `-a AS` is bgpq4's option for OpenBGPD's `deny from AS`. The former
   spellings are refused with a pointer to the new ones.
+- rpslq holds up to 8,388,608 prefixes in a list (was 1,048,576), counting
+  prefixes rather than the tree's nodes: AS-HURRICANE alone now holds 1.16
+  million IPv4 prefixes, which bgpq4 lists (and rpslq does, identically, in
+  about 6 s and 580 MB).
 
 ## [0.13.0] - 2026-09-25
 

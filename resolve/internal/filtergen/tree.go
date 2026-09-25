@@ -15,11 +15,11 @@ import (
 // minimal aggregation, because a list meant to replace bgpq4's has to hold the
 // same entries in the same order.
 type Tree struct {
-	v6       bool
-	maxLen   int // longest prefix inserted (-m)
-	maxNodes int
-	nodes    int
-	head     *node
+	v6          bool
+	maxLen      int // longest prefix inserted (-m)
+	maxPrefixes int
+	prefixes    int // entries inserted; the glue nodes between them are fewer
+	head        *node
 }
 
 // node is sx_radix_node: a prefix, its two subtrees (l: next bit 0, r: 1), a
@@ -51,13 +51,14 @@ func (e Entry) Range() types.PrefixRange {
 	return r
 }
 
-// ErrTooManyPrefixes reports a tree that would outgrow its node budget.
+// ErrTooManyPrefixes reports a tree that would hold more prefixes than allowed.
 var ErrTooManyPrefixes = errors.New("filtergen: too many prefixes")
 
 // NewTree returns an empty tree of one family that inserts no prefix longer
-// than maxLen (0 means the family's full length) and refuses to grow past
-// maxNodes nodes.
-func NewTree(v6 bool, maxLen, maxNodes int) *Tree {
+// than maxLen (0 means the family's full length) and refuses to hold more
+// than maxPrefixes prefixes. A tree has fewer glue nodes than prefixes, so its
+// size is bounded by twice that.
+func NewTree(v6 bool, maxLen, maxPrefixes int) *Tree {
 	full := 32
 	if v6 {
 		full = 128
@@ -65,7 +66,7 @@ func NewTree(v6 bool, maxLen, maxNodes int) *Tree {
 	if maxLen <= 0 || maxLen > full {
 		maxLen = full
 	}
-	return &Tree{v6: v6, maxLen: maxLen, maxNodes: maxNodes}
+	return &Tree{v6: v6, maxLen: maxLen, maxPrefixes: maxPrefixes}
 }
 
 func (t *Tree) full() int {
@@ -107,11 +108,20 @@ func (t *Tree) insertSpecifics(p netip.Prefix, lo, hi int) error {
 	return t.insertSpecifics(netip.PrefixFrom(setBit(p.Addr(), p.Bits()+1), p.Bits()+1), lo, hi)
 }
 
-func (t *Tree) newNode(p netip.Prefix) (*node, error) {
-	if t.nodes >= t.maxNodes {
-		return nil, fmt.Errorf("%w: more than %d", ErrTooManyPrefixes, t.maxNodes)
+// charge counts one more prefix in the tree.
+func (t *Tree) charge() error {
+	if t.prefixes >= t.maxPrefixes {
+		return fmt.Errorf("%w: more than %d", ErrTooManyPrefixes, t.maxPrefixes)
 	}
-	t.nodes++
+	t.prefixes++
+	return nil
+}
+
+// newNode returns a node for prefix p, charged as a prefix.
+func (t *Tree) newNode(p netip.Prefix) (*node, error) {
+	if err := t.charge(); err != nil {
+		return nil, err
+	}
 	return &node{prefix: p}, nil
 }
 
@@ -132,10 +142,7 @@ func (t *Tree) insert(p netip.Prefix) error {
 			if err != nil {
 				return err
 			}
-			rn, err := t.newNode(netip.PrefixFrom(p.Addr(), eb).Masked())
-			if err != nil {
-				return err
-			}
+			rn := &node{prefix: netip.PrefixFrom(p.Addr(), eb).Masked()}
 			if bitSet(p.Addr(), eb+1) {
 				rn.l, rn.r = chead, ret
 			} else {
@@ -180,6 +187,11 @@ func (t *Tree) insert(p netip.Prefix) error {
 			return nil
 		default:
 			// The same prefix: a glue node becomes an entry.
+			if chead.glue {
+				if err := t.charge(); err != nil {
+					return err
+				}
+			}
 			chead.glue = false
 			return nil
 		}
@@ -250,9 +262,8 @@ func foreach(n *node, f func(*node)) {
 	foreach(n.r, f)
 }
 
-// son returns a new aggregate son of n with the given lengths. Sons are not
-// charged against the node budget: there is at most one per level of a chain,
-// and a chain is at most two long.
+// sonOf returns a new aggregate son of n with the given lengths. Sons are not
+// charged as prefixes: a node has a chain of at most two.
 func sonOf(n *node, lo, hi int) *node {
 	return &node{prefix: n.prefix, aggregate: true, lo: lo, hi: hi}
 }

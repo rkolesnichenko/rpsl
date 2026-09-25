@@ -492,8 +492,10 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 }
 
 // maxPrefixes caps the prefixes a list may hold: bgpq4 lists every prefix a
-// range holds, and a /8^+ holds 33 million.
-const maxPrefixes = 1 << 20
+// range holds, and a /8^+ holds 33 million. The largest real sets hold over a
+// million (AS-HURRICANE, 1.16 million IPv4 prefixes in 2026), so the cap is
+// eight times that, the tree then at most about 1.5 GB.
+const maxPrefixes = 1 << 23
 
 // rangeEntries turns RPSL ranges into entries as they are (--ranges), with
 // -m applied as bgpq4 applies it to a range: a longer prefix is dropped and a

@@ -185,10 +185,22 @@ func TestTreeAddRangesAndLimits(t *testing.T) {
 	if got := len(tr.Entries()); got != 7 {
 		t.Errorf("%d entries, want 7: %v", got, tr.Entries())
 	}
-	small := NewTree(false, 0, 100)
-	r, _ := types.ParsePrefixRange("10.0.0.0/8^+")
-	if err := small.Add(r); err == nil {
-		t.Error("a /8^+ fits in 100 nodes")
+	// The cap counts prefixes, not the glue between them: exactly 100
+	// prefixes fit in 100, however much glue they need, and 101 do not.
+	for _, c := range []struct {
+		n  int
+		ok bool
+	}{{100, true}, {101, false}} {
+		small := NewTree(false, 0, 100)
+		var err error
+		for i := 0; i < c.n && err == nil; i++ {
+			p := netip.PrefixFrom(netip.AddrFrom4([4]byte{10, byte(i), 0, 0}), 24)
+			r, _ := types.NewPrefixRange(p, 24, 24)
+			err = small.Add(r)
+		}
+		if (err == nil) != c.ok {
+			t.Errorf("%d prefixes in a tree of 100: %v", c.n, err)
+		}
 	}
 }
 
