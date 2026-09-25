@@ -59,7 +59,7 @@ func (t *tracer) logf(since time.Time, format string, args ...any) {
 func (t *tracer) summary() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	fmt.Fprintf(t.w, "rpslq: debug: %d queries in %s\n", t.n, time.Since(t.start).Round(time.Millisecond))
+	fmt.Fprintf(t.w, "rpslq: debug: %s in %s\n", plural(t.n, "query", "queries"), time.Since(t.start).Round(time.Millisecond))
 }
 
 // traceSource is a Source whose every call is traced; label names the
