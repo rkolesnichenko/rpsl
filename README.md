@@ -91,7 +91,7 @@ Imports run strictly downward — `resolve → object → policy → types → a
 
 | Package | Import path | Role | Depends on |
 | --- | --- | --- | --- |
-| `rpsl` | `github.com/rkolesnichenko/rpsl` | Façade: `ParseObject`, `Parse` (streaming), `Decode`, `Validate` | `object`, `ast`, `lexer` |
+| `rpsl` | `github.com/rkolesnichenko/rpsl` | Façade: `ParseObject`, `Parse` (streaming), `Decode`, `Validate` (profiles `RIPE`, `IRRd`, `RFCStrict`) | `object`, `ast`, `lexer` |
 | `object` | `…/rpsl/object` | Typed classes (`AutNum`, `Route`, `AsSet`, …) + `Decode` | `policy`, `types`, `ast` |
 | `policy` | `…/rpsl/policy` | Routing-policy AST + `ParseImport`/`ParseExport`/`ParseDefault` (and `ParseMP*`, `ParseImportVia`/`ParseExportVia`) | `types`, `ast`, `lexer` |
 | `types` | `…/rpsl/types` | Leaf value types: `ASN`, `SetName`, `PrefixRange`, `AddrFamily`, `NICHandle` | — |
@@ -294,8 +294,9 @@ FUZZTIME=15s scripts/check.sh  # ... plus every fuzz target (what CI runs)
   largest real sets.
 - **Live backends (opt-in)** — `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve`
   queries RADB, RIPE and RDAP read-only;
-  `RPSL_LIVE=1 go test -run TestRIPETemplatesAreCurrent ./object` checks that the
-  RIPE profile's template fixtures still match whois.ripe.net.
+  `RPSL_LIVE=1 go test -run 'TestRIPETemplatesAreCurrent|TestIRRdSourceIsCurrent' ./object`
+  checks that the RIPE profile's template fixtures still match whois.ripe.net,
+  and the IRRd profile's source still matches IRRd's latest release.
 - **Benchmarks** — every module benchmarks its hot paths on generated input;
   `scripts/bench.sh [ref]` compares the working tree with a ref (the latest
   release by default) on your machine, with `benchstat` when installed. With

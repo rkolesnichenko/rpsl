@@ -46,7 +46,7 @@ var fieldNames = map[string]string{
 	"e-mail": "Email", "import": "Imports", "mp-import": "Imports", "export": "Exports", "mp-export": "Exports",
 	"default": "Defaults", "mp-default": "Defaults", "peer": "Peers", "mp-peer": "MpPeers",
 	"peering": "Peerings", "mp-peering": "MpPeerings", "local-as": "LocalAS",
-	"rp-attribute": "RPAttribute",
+	"rp-attribute": "RPAttribute", "roa-uri": "RoaURI", "geoidx": "GeoIdx",
 }
 
 // unprofiledFields are read although no profile lists their attribute.
@@ -162,7 +162,7 @@ func fields(v reflect.Value) (text map[string]string, own map[string]bool) {
 func TestEveryAttributeLandsInItsOwnField(t *testing.T) {
 	for class := range registry {
 		attrs := map[string]bool{}
-		for _, p := range []Profile{RIPE, RFCStrict} {
+		for _, p := range []Profile{RIPE, RFCStrict, IRRd} {
 			if spec, ok := p.Class(class); ok {
 				for a := range spec.Attrs {
 					attrs[a] = true

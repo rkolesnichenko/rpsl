@@ -25,6 +25,7 @@ type Inetnum struct {
 	// AssignmentSize is the prefix length of the assignments an
 	// AGGREGATED-BY-LIR range is made of (RIPE), as written.
 	AssignmentSize string
+	RevSrv         []string // rev-srv: (IRRd): reverse-DNS servers, as written
 	raw            *ast.Object
 }
 
@@ -49,6 +50,7 @@ func decodeInetnum(d *decoder) Inetnum {
 		Prefixlen:      d.str("prefixlen"),
 		Language:       d.all("language"),
 		AssignmentSize: d.str("assignment-size"),
+		RevSrv:         d.all("rev-srv"),
 		raw:            d.o,
 	}
 }
@@ -70,6 +72,7 @@ type Inet6num struct {
 	// AssignmentSize is the prefix length of the assignments an
 	// AGGREGATED-BY-LIR range is made of (RIPE), as written.
 	AssignmentSize string
+	RevSrv         []string // rev-srv: (IRRd): reverse-DNS servers, as written
 	raw            *ast.Object
 }
 
@@ -92,6 +95,7 @@ func decodeInet6num(d *decoder) Inet6num {
 		Prefixlen:      d.str("prefixlen"),
 		Language:       d.all("language"),
 		AssignmentSize: d.str("assignment-size"),
+		RevSrv:         d.all("rev-srv"),
 		raw:            d.o,
 	}
 }
@@ -145,6 +149,8 @@ type InetRtr struct {
 	Peers     []policy.Peer
 	MpPeers   []policy.Peer // RFC 4012 mp-peer: values
 	MemberOf  []types.SetName
+	RsIn      string // rs-in: (IRRd), as written
+	RsOut     string // rs-out: (IRRd), as written
 	raw       *ast.Object
 }
 
@@ -166,6 +172,8 @@ func decodeInetRtr(d *decoder) InetRtr {
 		Peers:     d.peers("peer"),
 		MpPeers:   d.peers("mp-peer"),
 		MemberOf:  d.memberOf("inet-rtr", types.ClassRtrSet),
+		RsIn:      d.str("rs-in"),
+		RsOut:     d.str("rs-out"),
 		raw:       d.o,
 	}
 }
@@ -186,7 +194,9 @@ type Irt struct {
 	Encryption []string
 	Contact    []string
 	IrtNfy     []string
-	raw        *ast.Object
+	// AbuseMailbox is IRRd's abuse-mailbox:; RIPE keeps it on role objects.
+	AbuseMailbox string
+	raw          *ast.Object
 }
 
 // Class returns "irt".
@@ -197,19 +207,20 @@ func (i Irt) Raw() *ast.Object { return i.raw }
 
 func decodeIrt(d *decoder) Irt {
 	return Irt{
-		Common:     d.common("irt"),
-		Registry:   d.registry("irt"),
-		Name:       d.key("irt"),
-		Address:    d.all("address"),
-		Email:      d.all("e-mail"),
-		Auth:       d.auth("irt"),
-		Phone:      d.all("phone"),
-		FaxNo:      d.all("fax-no"),
-		Signature:  d.list("signature"),
-		Encryption: d.list("encryption"),
-		Contact:    d.all("contact"),
-		IrtNfy:     d.all("irt-nfy"),
-		raw:        d.o,
+		Common:       d.common("irt"),
+		Registry:     d.registry("irt"),
+		Name:         d.key("irt"),
+		Address:      d.all("address"),
+		Email:        d.all("e-mail"),
+		Auth:         d.auth("irt"),
+		Phone:        d.all("phone"),
+		FaxNo:        d.all("fax-no"),
+		Signature:    d.list("signature"),
+		Encryption:   d.list("encryption"),
+		Contact:      d.all("contact"),
+		IrtNfy:       d.all("irt-nfy"),
+		AbuseMailbox: d.str("abuse-mailbox"),
+		raw:          d.o,
 	}
 }
 
@@ -222,6 +233,9 @@ type Domain struct {
 	Nserver []string
 	ZoneC   []types.NICHandle
 	DsRdata []string // ds-rdata: DS records, raw (RFC 4034 presentation form)
+	SubDom  []string // sub-dom: (IRRd, from RIPE-181), as written
+	DomNet  []string // dom-net: (IRRd, from RIPE-181), as written
+	Refer   string   // refer: (IRRd, from RIPE-181), as written
 	raw     *ast.Object
 }
 
@@ -239,6 +253,9 @@ func decodeDomain(d *decoder) Domain {
 		Nserver:  d.all("nserver"),
 		ZoneC:    d.nicHandles("zone-c", "object/domain-zone-c"),
 		DsRdata:  d.all("ds-rdata"),
+		SubDom:   d.all("sub-dom"),
+		DomNet:   d.all("dom-net"),
+		Refer:    d.str("refer"),
 		raw:      d.o,
 	}
 }

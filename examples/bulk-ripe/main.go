@@ -57,7 +57,7 @@ func run() int {
 	)
 
 	fs := flag.NewFlagSet("bulk-ripe", flag.ContinueOnError)
-	fs.StringVar(&validateFlag, "validate", "ripe", "validation profile: ripe|rfc-strict|off")
+	fs.StringVar(&validateFlag, "validate", "ripe", "validation profile: ripe|irrd|rfc-strict|off")
 	fs.BoolVar(&jsonOut, "json", false, "emit the report as JSON instead of plaintext")
 	fs.BoolVar(&expand, "expand", false, "after streaming, smoke-test resolve.Expander against retained sets")
 	fs.Var(&expandSets, "expand-set", "explicit set name to expand (repeatable; overrides sampling)")

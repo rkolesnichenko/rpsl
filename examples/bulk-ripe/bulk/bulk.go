@@ -52,6 +52,7 @@ const (
 	ValidateOff ValidateMode = iota
 	ValidateRIPE
 	ValidateRFCStrict
+	ValidateIRRd
 )
 
 func (m ValidateMode) String() string {
@@ -62,6 +63,8 @@ func (m ValidateMode) String() string {
 		return "ripe"
 	case ValidateRFCStrict:
 		return "rfc-strict"
+	case ValidateIRRd:
+		return "irrd"
 	}
 	return "unknown"
 }
@@ -75,8 +78,10 @@ func ParseValidateMode(s string) (ValidateMode, error) {
 		return ValidateRIPE, nil
 	case "rfc-strict", "rfc":
 		return ValidateRFCStrict, nil
+	case "irrd":
+		return ValidateIRRd, nil
 	}
-	return ValidateOff, fmt.Errorf("unknown validate mode %q (want off|ripe|rfc-strict)", s)
+	return ValidateOff, fmt.Errorf("unknown validate mode %q (want off|ripe|irrd|rfc-strict)", s)
 }
 
 // Options configures Run. Zero defaults are applied by applyDefaults at the top
@@ -213,8 +218,11 @@ func Run(ctx context.Context, r io.Reader, opts Options) (*Report, error) {
 	)
 
 	validateProfile := rpsl.RIPE
-	if opts.Validate == ValidateRFCStrict {
+	switch opts.Validate {
+	case ValidateRFCStrict:
 		validateProfile = rpsl.RFCStrict
+	case ValidateIRRd:
+		validateProfile = rpsl.IRRd
 	}
 
 	var iterErr error
