@@ -102,7 +102,14 @@ Flags are bgpq4's where they mean the same (`-h -S -4 -6 -t -j -b -J -l -m -L
 -p`), and the output is bgpq4's, byte for byte — a test holds the two to it on
 random IRRs, and live against RADB they agree on sets as large as
 AS-HURRICANE (688,423 lines). Queries to IRRd are pipelined on one connection,
-as bgpq4's are. `-ranges` writes RPSL ranges (`le`/`ge`) rather than every
+as bgpq4's are.
+
+`-a` lets the server expand as-sets itself, with IRRd 4's `!a`, as plain bgpq4
+does: one query where the engine makes one per AS, so the largest sets take
+seconds rather than tens of seconds (AS-HURRICANE: about 8 s, as bgpq4). The
+answer is then the server's, under its rules — its recursion, no `-L`, special
+AS numbers kept — which the engine cannot check. So `rpslq -a` writes what plain
+`bgpq4` writes, and `rpslq` without it what `bgpq4 -L n` writes. `-ranges` writes RPSL ranges (`le`/`ge`) rather than every
 prefix they hold, and `-P` RPSL's own notation. Where the engine and bgpq4
 knowingly part — range operators on set and AS members, the single-length `^n`
 form, route-sets listed in as-sets — rpslq follows the engine
