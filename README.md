@@ -125,10 +125,12 @@ instead.
 Where the two knowingly part, rpslq follows the engine: range operators on set
 and AS members, the single-length `^n` form, route-sets listed in as-sets,
 `EXCEPT` inside route-sets (bgpq4 applies it to as-sets only), sets nested
-deeper than `-L` (an error, not a shorter list), and `-m 32`
-(bgpq4 then drops a range's more-specifics). See
-`resolve/testdata/bgpq4/divergences.md`. bgpq4's `SOURCE::OBJECT` form is not
-supported; use `-S`.
+deeper than `-L` (an error, not a shorter list), `-m 32`
+(bgpq4 then drops a range's more-specifics), and a few corners of bgpq4's
+`SOURCE::OBJECT` form, which rpslq supports as bgpq4 means it: the object is
+looked up in that registry, what it reaches in the default sources. See
+`resolve/testdata/bgpq4/divergences.md`. `-d` traces every question rpslq asks
+of its source, and the answer, to stderr.
 
 ## Module map
 

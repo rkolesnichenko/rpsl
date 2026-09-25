@@ -209,7 +209,10 @@ func TestRpslqFeatures(t *testing.T) {
 	}{
 		{"a prefix of the other family", []string{"-6", "192.0.2.0/24"}, 1, "not an IPv6 prefix"},
 		{"a prefix longer than -m", []string{"-m", "23", "192.0.2.0/24"}, 1, "at most /23"},
-		{"SOURCE::", []string{"RIPE::AS-TOP"}, 2, "SOURCE::OBJECT"},
+		{"SOURCE:: on a prefix", []string{"TEST::192.0.2.0/24"}, 2, "SOURCE:: names a set"},
+		{"SOURCE:: in EXCEPT", []string{"AS-TOP", "EXCEPT", "TEST::AS-INNER"}, 2, "takes no SOURCE::"},
+		{"SOURCE:: with --server-expand", []string{"--server-expand", "TEST::AS-TOP"}, 2, "not what SOURCE:: means"},
+		{"not a registry", []string{"R!P::AS-TOP"}, 2, "not a registry"},
 		{"EXCEPT a prefix", []string{"AS-TOP", "EXCEPT", "192.0.2.0/24"}, 2, "EXCEPT takes"},
 		{"-t over a prefix", []string{"-tj", "192.0.2.0/24"}, 2, "takes as-sets"},
 		{"a former single-dash option", []string{"-whois", "AS-TOP"}, 2, "--whois"},
@@ -218,5 +221,89 @@ func TestRpslqFeatures(t *testing.T) {
 		if code != c.code || !strings.Contains(errs, c.msg) {
 			t.Errorf("%s: exit %d, stderr %q; want %d with %q", c.name, code, errs, c.code, c.msg)
 		}
+	}
+}
+
+// Two registries hold AS-DUP; RIPE's lists AS-NEST, which only RADB has.
+var twoRegistries = []string{
+	"as-set: AS-DUP\nmembers: AS1, AS-NEST\nmbrs-by-ref: ANY\nsource: RIPE\n",
+	"as-set: AS-DUP\nmembers: AS9\nsource: RADB\n",
+	"as-set: AS-NEST\nmembers: AS2\nsource: RADB\n",
+	"route: 192.0.2.0/24\norigin: AS1\nsource: RIPE\n",
+	"route: 198.51.100.0/24\norigin: AS1\nsource: RADB\n",
+	"route: 203.0.113.0/24\norigin: AS2\nsource: RADB\n",
+}
+
+// SOURCE::SET looks the set up in that registry and what it reaches in the
+// default sources, as bgpq4 does, over every backend; SOURCE::AS takes the
+// AS's routes from that registry alone.
+func TestRpslqSourcePrefix(t *testing.T) {
+	db := irrtest.New(twoRegistries...).WithSources("RIPE", "RADB")
+	dir := t.TempDir()
+	dump := filepath.Join(dir, "irr.db")
+	if err := os.WriteFile(dump, []byte(strings.Join(twoRegistries, "\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	backends := map[string][]string{
+		"irrd":  {"-h", db.IRRd(t)},
+		"whois": {"--whois", "-h", db.Whois(t)},
+		"dump":  {"--dump", dump},
+	}
+	for name, be := range backends {
+		for _, c := range []struct {
+			args []string
+			want string
+		}{
+			{[]string{"-S", "RADB", "-tj", "AS-DUP"}, "{\"NN\": [\n  9\n]}\n"},
+			{[]string{"-S", "RADB", "-tj", "RIPE::AS-DUP"}, "{\"NN\": [\n  1,2\n]}\n"},
+			{[]string{"-S", "RADB", "-P", "ripe::AS-DUP"}, "198.51.100.0/24\n203.0.113.0/24\n"},
+			{[]string{"-S", "RADB", "-P", "RIPE::AS1"}, "192.0.2.0/24\n"},
+			{[]string{"-S", "RADB", "-P", "AS1"}, "198.51.100.0/24\n"},
+		} {
+			code, out, errs := rpslq(t, append(append([]string(nil), be...), c.args...)...)
+			if code != 0 || out != c.want {
+				t.Errorf("%s %v: exit %d, stderr %q\n got %q\nwant %q", name, c.args, code, errs, out, c.want)
+			}
+		}
+	}
+}
+
+// -d traces the questions asked of the source to stderr and leaves the list
+// as it is.
+func TestRpslqDebug(t *testing.T) {
+	// Over a dump, the engine asks for indirect members itself; IRRd's "!i"
+	// answers with them folded in.
+	dump := filepath.Join(t.TempDir(), "irr.db")
+	if err := os.WriteFile(dump, []byte(strings.Join(twoRegistries, "\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--dump", dump, "-S", "RADB", "-P", "RIPE::AS-DUP", "AS-GONE-X", "RIPE::AS1"}
+	_, plain, _ := rpslq(t, args...)
+	code, out, errs := rpslq(t, append([]string{"-d"}, args...)...)
+	if code != 1 || out != plain {
+		// AS-GONE-X is missing: both runs fail alike, with the same output.
+		t.Errorf("-d: exit %d, stdout %q; without -d %q", code, out, plain)
+	}
+	for _, want := range []string{
+		"rpslq: debug: GetSet AS-DUP [RIPE]: as-set, 2 members (1 nested set) in ",
+		"rpslq: debug: MembersByRef AS-DUP [RIPE]: 0 claimants in ",
+		"rpslq: debug: GetSet AS-NEST: as-set, 1 member (0 nested sets) in ",
+		"rpslq: debug: GetSet AS-GONE-X: ",
+		" queries in ",
+	} {
+		if !strings.Contains(errs, want) {
+			t.Errorf("-d trace lacks %q:\n%s", want, errs)
+		}
+	}
+	addr := irrtest.New(twoRegistries...).WithSources("RIPE", "RADB").IRRd(t)
+	code, out, errs = rpslq(t, "-d", "-h", addr, "-S", "RADB", "-P", "RIPE::AS1", "AS2")
+	if code != 0 || out != "192.0.2.0/24\n203.0.113.0/24\n" ||
+		!strings.Contains(errs, "debug: OriginatedRoutes AS1 ipv4 [RIPE]: 1 prefix in ") ||
+		!strings.Contains(errs, "debug: OriginatedRoutes AS2 ipv4: 1 prefix in ") {
+		t.Errorf("-d routes: exit %d, %q\n%s", code, out, errs)
+	}
+	code, _, errs = rpslq(t, "-d", "--server-expand", "-h", addr, "-S", "RADB", "-P", "AS-DUP")
+	if code != 0 || !strings.Contains(errs, "debug: ASSetPrefixes AS-DUP ipv4: 0 prefixes in ") {
+		t.Errorf("-d --server-expand: exit %d\n%s", code, errs)
 	}
 }

@@ -2,6 +2,7 @@ package resolve
 
 import (
 	"io"
+	"strings"
 
 	"github.com/rkolesnichenko/rpsl"
 	"github.com/rkolesnichenko/rpsl/ast"
@@ -85,6 +86,32 @@ func (l *DumpLoader) Read(r io.Reader) error {
 // from again afterwards; a later Source includes the new objects too.
 func (l *DumpLoader) Source() *MemSource {
 	return NewMemSource(l.objs, l.Sources...)
+}
+
+// SourceOf builds a MemSource over the objects read so far whose source: is
+// one of sources (compared without regard to case), in the precedence given:
+// the dumps as if those registries alone had been loaded. It is how a caller
+// looks a set up in one registry — bgpq4's RIPE::AS-FOO — without reading the
+// dumps again. An object without a source: is left out.
+func (l *DumpLoader) SourceOf(sources ...string) *MemSource {
+	var objs []object.Object
+	for _, o := range l.objs {
+		raw := o.Raw()
+		if raw == nil {
+			continue
+		}
+		a, ok := raw.GetFirst("source")
+		if !ok {
+			continue
+		}
+		for _, s := range sources {
+			if equalFoldASCII(strings.TrimSpace(a.Value), strings.TrimSpace(s)) {
+				objs = append(objs, o)
+				break
+			}
+		}
+	}
+	return NewMemSource(objs, sources...)
 }
 
 // LoadDump reads one dump into a MemSource. It is DumpLoader for the common

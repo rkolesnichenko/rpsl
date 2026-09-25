@@ -480,6 +480,38 @@ func TestLoadDumps(t *testing.T) {
 	}
 }
 
+// SourceOf views the loaded dumps as one registry's alone: its copy of a set
+// wins even where another registry outranks it, a set only elsewhere is not
+// found, and so are the other registries' routes and indirect members.
+func TestDumpLoaderSourceOf(t *testing.T) {
+	l := &DumpLoader{Sources: []string{"RADB", "RIPE"}}
+	for _, text := range []string{
+		"as-set: AS-DUP\nmembers: AS1\nmbrs-by-ref: ANY\nsource: RIPE\n",
+		"as-set: AS-DUP\nmembers: AS2\nsource: RADB\n",
+		"as-set: AS-ONLY-RADB\nmembers: AS3\nsource: RADB\n",
+		"aut-num: AS7\nas-name: X\nmember-of: AS-DUP\nmnt-by: M\nsource: ripe\n",
+		"route: 192.0.2.0/24\norigin: AS1\nsource: RADB\n",
+	} {
+		if err := l.Read(strings.NewReader(text)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := context.Background()
+	all, ripe := l.Source(), l.SourceOf("ripe")
+	if got, _ := (&Expander{Src: all}).ExpandAS(ctx, mustSet(t, "AS-DUP")); got.String() != "[AS2]" {
+		t.Errorf("all dumps: %v, want RADB's AS-DUP", got)
+	}
+	if got, _ := (&Expander{Src: ripe}).ExpandAS(ctx, mustSet(t, "AS-DUP")); got.String() != "[AS1 AS7]" {
+		t.Errorf("RIPE's alone: %v, want RIPE's AS-DUP and its indirect member", got)
+	}
+	if _, err := ripe.GetSet(ctx, mustSet(t, "AS-ONLY-RADB")); !errors.Is(err, ErrNotFound) {
+		t.Errorf("a RADB set in RIPE's view: %v", err)
+	}
+	if ps, _ := ripe.OriginatedRoutes(ctx, 1, types.AFIAny); len(ps) != 0 {
+		t.Errorf("RADB's route in RIPE's view: %v", ps)
+	}
+}
+
 // A cache serves indirect members too, which is the third of the Source's
 // three methods and the one an mbrs-by-ref set leans on hardest.
 func TestCacheMembersByRef(t *testing.T) {

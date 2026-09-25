@@ -45,6 +45,8 @@ for the as-sets, route-sets, AS numbers and prefixes given, expanding them with
 the rpsl engine. The options are bgpq4's, read as bgpq4 reads them (-6Ab,
 -lNAME), and so is the output, line for line. After EXCEPT come as-sets,
 route-sets and AS numbers every expansion leaves out, route-sets included.
+An object written SOURCE::OBJECT (RIPE::AS-FOO) is looked up in that registry
+alone, and what it reaches in the default sources (-S), as bgpq4 does.
 
 Vendors (Cisco IOS by default):
   -X Cisco IOS XR   -j JSON        -J Junos           -K MikroTik v6  -K7 v7
@@ -92,7 +94,8 @@ Source (IRRd by default):
 Other:
   --ranges        write RPSL ranges as they are rather than every prefix
   --timeout d     give up after d (default 5m)
-  -d              accepted for bgpq4's sake; no effect
+  -d              trace each question asked of the source, and its answer,
+                  to stderr
   -3              accepted for bgpq4's sake (32-bit AS numbers are assumed)
   -v              print the version
 `
@@ -114,6 +117,7 @@ type config struct {
 	serverSide        bool
 	special           bool
 	validate          bool
+	debug             bool
 	depth             int
 	conc              int
 	pipeline          bool
@@ -188,7 +192,9 @@ func parse(args []string) (*config, bool, error) {
 				return nil, false, usagef("-7 can only be used after -K")
 			}
 			c.o.Vendor = filtergen.MikroTik7
-		case "3", "d":
+		case "d":
+			c.debug = true
+		case "3":
 		case "4":
 			if c.o.V6 {
 				return nil, false, usagef("-4 and -6 are mutually exclusive")
@@ -416,12 +422,19 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	src, closeSrc, err := source(c.host, c.sources, c.whois, c.dumps, c.conc)
+	be, err := source(c.host, c.sources, c.whois, c.dumps, c.conc)
 	if err != nil {
 		fmt.Fprintln(stderr, "rpslq:", err)
 		return exitFail
 	}
-	defer closeSrc()
+	defer be.close()
+	var trace *tracer
+	src := be.src
+	if c.debug {
+		trace = newTracer(stderr)
+		defer trace.summary()
+		src = &traceSource{src: src, t: trace}
+	}
 	if c.whois && c.conc > maxWhoisConns {
 		c.conc = maxWhoisConns // whois opens a connection per query
 	}
@@ -430,9 +443,12 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		afi = types.AFIv6
 	}
 	var aset func(context.Context, types.SetName, types.AFI) ([]netip.Prefix, error)
-	if ir, ok := src.(*irrd.Source); ok && c.serverSide {
+	if ir, ok := be.src.(*irrd.Source); ok && c.serverSide {
 		ir.MaxResponse = 256 << 20 // IRRd warns "!a" answers reach 10-20 MB
 		aset = ir.ASSetPrefixes
+		if trace != nil {
+			aset = trace.traceASet(aset)
+		}
 	}
 	exclude, err := parseExcept(c.except)
 	if err != nil {
@@ -449,6 +465,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		conc:    c.conc,
 		stderr:  stderr,
 		levels:  c.depth,
+		be:      be,
+		trace:   trace,
 	}
 	switch c.o.Kind {
 	case filtergen.ASSet, filtergen.ASPath, filtergen.OriginASPath, filtergen.ASList:
@@ -538,6 +556,9 @@ func parseExcept(args []string) (resolve.Exclusion, error) {
 			ex.ASNs = append(ex.ASNs, as)
 			continue
 		}
+		if strings.Contains(a, "::") {
+			return ex, usagef("EXCEPT leaves a set out wherever it is met, so it takes no SOURCE::, as in %q", a)
+		}
 		n, err := types.ParseSetName(a)
 		if err != nil || (n.Class() != types.ClassAsSet && n.Class() != types.ClassRouteSet) {
 			return ex, usagef("EXCEPT takes as-sets, route-sets and AS numbers, not %q", a)
@@ -562,8 +583,16 @@ func version() string {
 	return "(devel)"
 }
 
-// source builds the Source the flags describe, and a function that releases it.
-func source(host, sources string, useWhois bool, files []string, conns int) (resolve.Source, func(), error) {
+// backend is the source the flags describe: the default one, and the same
+// backend restricted to one registry, for bgpq4's SOURCE::OBJECT.
+type backend struct {
+	src      resolve.Source
+	restrict func(registry string) resolve.Source
+	close    func()
+}
+
+// source builds the backend the flags describe.
+func source(host, sources string, useWhois bool, files []string, conns int) (*backend, error) {
 	var prio []string
 	for _, s := range strings.Split(sources, ",") {
 		if s = strings.TrimSpace(s); s != "" {
@@ -571,43 +600,66 @@ func source(host, sources string, useWhois bool, files []string, conns int) (res
 		}
 	}
 	if len(files) > 0 {
-		var rs []io.Reader
 		var closers []io.Closer
 		closeAll := func() {
 			for _, c := range closers {
 				c.Close()
 			}
 		}
+		defer closeAll()
+		l := &resolve.DumpLoader{Sources: prio}
 		for _, name := range files {
 			f, err := os.Open(name)
 			if err != nil {
-				closeAll()
-				return nil, nil, err
+				return nil, err
 			}
 			closers = append(closers, f)
 			r, err := maybeGzip(f)
 			if err != nil {
-				closeAll()
-				return nil, nil, fmt.Errorf("%s: %w", name, err)
+				return nil, fmt.Errorf("%s: %w", name, err)
 			}
-			rs = append(rs, r)
+			if err := l.Read(r); err != nil {
+				return nil, fmt.Errorf("%s: %w", name, err)
+			}
 		}
-		defer closeAll()
-		src, err := resolve.LoadDumps(rs, prio...)
-		if err != nil {
-			return nil, nil, err
+		// -S chooses the registries, as it does for a server ("!s"): only
+		// those, in that order; without it, every registry in the dumps.
+		all := l.Source()
+		if len(prio) > 0 {
+			all = l.SourceOf(prio...)
 		}
-		return src, func() {}, nil
+		return &backend{
+			src:      all,
+			restrict: func(reg string) resolve.Source { return l.SourceOf(reg) },
+			close:    func() {},
+		}, nil
 	}
 	if _, _, err := net.SplitHostPort(host); err != nil {
 		host = net.JoinHostPort(host, "43")
 	}
 	if useWhois {
-		return &whois.Source{Addr: host, Sources: prio}, func() {}, nil
+		return &backend{
+			src:      &whois.Source{Addr: host, Sources: prio},
+			restrict: func(reg string) resolve.Source { return &whois.Source{Addr: host, Sources: []string{reg}} },
+			close:    func() {},
+		}, nil
 	}
-	// One connection, its queries pipelined, as bgpq4 queries an IRRd.
-	s := &irrd.Source{Addr: host, Sources: prio, Pipeline: conns, MaxConns: 1}
-	return s, func() { s.Close() }, nil
+	// One connection, its queries pipelined, as bgpq4 queries an IRRd; a
+	// registry-restricted source is a connection of its own.
+	all := []*irrd.Source{{Addr: host, Sources: prio, Pipeline: conns, MaxConns: 1}}
+	return &backend{
+		src: all[0],
+		restrict: func(reg string) resolve.Source {
+			s := &irrd.Source{Addr: host, Sources: []string{reg}, Pipeline: conns, MaxConns: 1}
+			all = append(all, s)
+			return s
+		},
+		close: func() {
+			for _, s := range all {
+				s.Close()
+			}
+		},
+	}, nil
 }
 
 // maxWhoisConns caps the connections rpslq opens over whois, which has no
@@ -632,6 +684,9 @@ type query struct {
 	special bool // keep special-purpose AS numbers
 	maxLen  int  // -m: 0, or the longest prefix a list holds
 	levels  int  // -L, as bgpq4 counts: the top set and levels-1 below it
+	be      *backend
+	trace   *tracer                   // -d, or nil
+	own     map[string]resolve.Source // registry -> the backend restricted to it
 	conc    int
 	stderr  io.Writer
 }
@@ -645,7 +700,8 @@ func specialAS(a types.ASN) bool {
 // object is one command-line object: an AS number, a set name, or a prefix
 // or prefix range, which bgpq4 takes as it is.
 type object struct {
-	text  string
+	text     string
+	registry string // SOURCE:: — the registry the object is looked up in, or ""
 	as    types.ASN
 	set   types.SetName
 	pfx   types.PrefixRange
@@ -655,28 +711,77 @@ type object struct {
 
 func parseObjects(args []string) ([]object, error) {
 	var out []object
-	for _, a := range args {
-		if strings.Contains(a, "::") && !strings.ContainsAny(a, "/^") {
-			return nil, fmt.Errorf("%s: bgpq4's SOURCE::OBJECT form is not supported; use -S", a)
-		}
-		if as, err := types.ParseASN(a); err == nil {
-			out = append(out, object{text: a, as: as, isAS: true})
+	for _, text := range args {
+		if r, ok := parsePrefix(text); ok { // before SOURCE::, which "2001::/16" also looks like
+			out = append(out, object{text: text, pfx: r, isPfx: true})
 			continue
 		}
-		if r, ok := parsePrefix(a); ok {
-			out = append(out, object{text: a, pfx: r, isPfx: true})
+		a, registry := text, ""
+		if reg, name, ok := strings.Cut(text, "::"); ok {
+			if !validRegistry(reg) {
+				return nil, fmt.Errorf("%q: %q is not a registry's name", text, reg)
+			}
+			a, registry = name, strings.ToUpper(reg)
+		}
+		if as, err := types.ParseASN(a); err == nil {
+			out = append(out, object{text: text, registry: registry, as: as, isAS: true})
 			continue
 		}
 		n, err := types.ParseSetName(a)
 		if err != nil {
-			return nil, fmt.Errorf("%q is not an AS number, a set name or a prefix", a)
+			if _, ok := parsePrefix(a); ok && registry != "" {
+				return nil, fmt.Errorf("%s: SOURCE:: names a set or an AS number, and a prefix is not looked up", text)
+			}
+			return nil, fmt.Errorf("%q is not an AS number, a set name or a prefix", text)
 		}
 		if c := n.Class(); c != types.ClassAsSet && c != types.ClassRouteSet {
 			return nil, fmt.Errorf("%s is a %s; rpslq expands as-sets, route-sets and AS numbers", n, c)
 		}
-		out = append(out, object{text: a, set: n})
+		out = append(out, object{text: text, registry: registry, set: n})
 	}
 	return out, nil
+}
+
+// validRegistry reports whether s can name an IRR source, as IRRd's "!s"
+// takes one: letters, digits, hyphens and underscores.
+func validRegistry(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+// restricted is the backend restricted to one registry, built once and, with
+// -d, traced.
+func (q *query) restricted(registry string) resolve.Source {
+	if s, ok := q.own[registry]; ok {
+		return s
+	}
+	s := q.be.restrict(registry)
+	if q.trace != nil {
+		s = &traceSource{src: s, label: " [" + registry + "]", t: q.trace}
+	}
+	if q.own == nil {
+		q.own = map[string]resolve.Source{}
+	}
+	q.own[registry] = s
+	return s
+}
+
+// expander is the expander for one object: the query's own, or for
+// SOURCE::SET one that looks that set up in its registry.
+func (q *query) expander(o object) *resolve.Expander {
+	if o.registry == "" {
+		return q.e
+	}
+	e := *q.e
+	e.Src = &topSource{Source: q.e.Src, top: o.set, own: q.restricted(o.registry)}
+	return &e
 }
 
 // parsePrefix reads a prefix or prefix range object; an address alone is
@@ -732,7 +837,7 @@ func (q *query) asns(ctx context.Context, args []string) ([]types.ASN, int) {
 			fmt.Fprintf(q.stderr, "rpslq: an AS list or as-path filter takes as-sets and AS numbers, not %s\n", o.text)
 			return nil, exitUsage
 		}
-		got, err := q.e.ExpandAS(ctx, o.set)
+		got, err := q.expander(o).ExpandAS(ctx, o.set)
 		if err != nil {
 			return nil, q.fail(o.text, err)
 		}
@@ -762,6 +867,7 @@ func (q *query) prefixes(ctx context.Context, args []string) ([]types.PrefixRang
 	}
 	out := map[types.PrefixRange]bool{}
 	asns := map[types.ASN]bool{}
+	own := map[string][]types.ASN{} // SOURCE::AS: the ASes whose routes come from one registry
 	for _, o := range objs {
 		switch {
 		case o.isPfx:
@@ -772,8 +878,15 @@ func (q *query) prefixes(ctx context.Context, args []string) ([]types.PrefixRang
 				return nil, exitFail
 			}
 			out[o.pfx] = true
+		case o.isAS && o.registry != "":
+			if q.special || !specialAS(o.as) {
+				own[o.registry] = append(own[o.registry], o.as)
+			}
 		case o.isAS:
 			asns[o.as] = true
+		case o.set.Class() == types.ClassAsSet && q.aset != nil && o.registry != "":
+			fmt.Fprintf(q.stderr, "rpslq: %s: --server-expand has the server expand the whole set within one registry, which is not what SOURCE:: means; drop one of them\n", o.text)
+			return nil, exitUsage
 		case o.set.Class() == types.ClassAsSet && q.aset != nil:
 			// The server's expansion, taken as it is: its recursion, and its
 			// routes of every member, special-purpose ones included.
@@ -791,7 +904,7 @@ func (q *query) prefixes(ctx context.Context, args []string) ([]types.PrefixRang
 				}
 			}
 		case o.set.Class() == types.ClassAsSet:
-			got, err := q.e.ExpandAS(ctx, o.set)
+			got, err := q.expander(o).ExpandAS(ctx, o.set)
 			if err != nil {
 				return nil, q.fail(o.text, err)
 			}
@@ -800,7 +913,7 @@ func (q *query) prefixes(ctx context.Context, args []string) ([]types.PrefixRang
 				asns[a] = true
 			}
 		default:
-			got, err := q.e.ExpandPrefixRanges(ctx, o.set)
+			got, err := q.expander(o).ExpandPrefixRanges(ctx, o.set)
 			if err != nil {
 				return nil, q.fail(o.text, err)
 			}
@@ -817,9 +930,21 @@ func (q *query) prefixes(ctx context.Context, args []string) ([]types.PrefixRang
 		}
 	}
 	sort.Slice(order, func(i, j int) bool { return order[i] < order[j] })
-	routes, err := q.routes(ctx, order)
+	routes, err := q.routes(ctx, q.e.Src, order)
 	if err != nil {
 		return nil, q.fail("routes", err)
+	}
+	registries := make([]string, 0, len(own))
+	for reg := range own {
+		registries = append(registries, reg)
+	}
+	sort.Strings(registries)
+	for _, reg := range registries {
+		more, err := q.routes(ctx, q.restricted(reg), own[reg])
+		if err != nil {
+			return nil, q.fail("routes", err)
+		}
+		routes = append(routes, more...)
 	}
 	for _, p := range routes {
 		if r, ok := types.NewPrefixRange(p, p.Bits(), p.Bits()); ok {
@@ -835,8 +960,8 @@ func (q *query) prefixes(ctx context.Context, args []string) ([]types.PrefixRang
 	return list, exitOK
 }
 
-// routes fetches the routes the ASes originate, up to conc at a time.
-func (q *query) routes(ctx context.Context, asns []types.ASN) ([]netip.Prefix, error) {
+// routes fetches the routes the ASes originate from src, up to conc at a time.
+func (q *query) routes(ctx context.Context, src resolve.Source, asns []types.ASN) ([]netip.Prefix, error) {
 	n := q.conc
 	if n < 1 {
 		n = 1
@@ -851,7 +976,7 @@ func (q *query) routes(ctx context.Context, asns []types.ASN) ([]netip.Prefix, e
 		go func(i int, a types.ASN) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			results[i], errs[i] = q.src.OriginatedRoutes(ctx, a, q.afi)
+			results[i], errs[i] = src.OriginatedRoutes(ctx, a, q.afi)
 		}(i, a)
 	}
 	wg.Wait()
