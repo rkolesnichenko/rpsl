@@ -120,7 +120,9 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
 - Do NOT evaluate AS-path regexps (`<...>`) against live BGP paths — parse them to an AST and stop.
   That's a separate `bgp` consumer's job. Conflating them is how RPSL tools rot.
 - Class/attribute dictionary is data-driven: ship a RIPE profile (RIPE's templates), an IRRd
-  profile (IRRd 4's class tables, what RADB and its mirrors run) and an RFC-strict profile.
+  profile (IRRd 4's class tables, what RADB and its mirrors run), an ARIN profile (IRRd's
+  tables for ARIN's five classes plus its generated created:, derived in code) and an
+  RFC-strict profile.
   Real data deviates from the RFC; target IRRd/RIPE reality, validate against the chosen profile.
 
 ## Commands

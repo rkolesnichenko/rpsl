@@ -61,7 +61,7 @@ type registry struct {
 	name string
 	// profile, when set, is the validation profile the registry's own software
 	// applies: RIPE's templates for RIPE, IRRd's tables for RADB and the IRRs
-	// it mirrors. Validating a registry against another's profile would only
+	// it mirrors, ARIN's for ARIN. Validating a registry against another's profile would only
 	// measure how the two differ.
 	profile *rpsl.Profile
 	// artefact reports a diagnostic caused by how the registry publishes its
@@ -95,7 +95,7 @@ var registries = []registry{
 			strings.Contains(d.Message, `"auth"`)
 	}},
 	{name: "apnic", expandPrefix: "apnic"},
-	{name: "arin", artefact: func(obj *ast.Object, d rpsl.Diagnostic) bool {
+	{name: "arin", profile: &rpsl.ARIN, artefact: func(obj *ast.Object, d rpsl.Diagnostic) bool {
 		// ARIN's dump ends with a line reading EOF.
 		return d.Rule == "lexer/malformed-line" && strings.HasSuffix(strings.TrimRight(obj.String(), "\r\n"), "\nEOF")
 	}},
