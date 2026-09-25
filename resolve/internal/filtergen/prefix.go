@@ -481,7 +481,9 @@ func dotted(v uint32) string {
 // ntp is a prefix printed as bgpq4 prints it, with inet_ntop.
 type ntp netip.Prefix
 
-func (p ntp) String() string { return fmt.Sprintf("%s/%d", ntop(netip.Prefix(p).Addr()), netip.Prefix(p).Bits()) }
+func (p ntp) String() string {
+	return fmt.Sprintf("%s/%d", ntop(netip.Prefix(p).Addr()), netip.Prefix(p).Bits())
+}
 
 // ntop writes an address as inet_ntop does (glibc's and the BSDs' alike).
 // That is netip's form, but for an IPv4-compatible IPv6 address — the first
