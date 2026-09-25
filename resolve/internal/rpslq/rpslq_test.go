@@ -1,9 +1,12 @@
 package rpslq
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -121,5 +124,52 @@ func TestRpslqRefuses(t *testing.T) {
 		if code != c.code || !strings.Contains(errs, c.msg) {
 			t.Errorf("%s: exit %d, stderr %q; want %d with %q", c.name, code, errs, c.code, c.msg)
 		}
+	}
+}
+
+// -a lets the server expand an as-set: its answer is taken as it is, special
+// AS numbers' routes included, as plain bgpq4 takes it.
+func TestRpslqServerSide(t *testing.T) {
+	addr := irrtest.New(corpus...).WithSources("TEST").IRRd(t)
+	code, out, errs := rpslq(t, "-h", addr, "-S", "TEST", "-a", "-P", "AS-TOP")
+	if want := "100.64.0.0/24\n198.51.100.0/24\n203.0.113.0/24\n203.0.113.128/25\n"; code != 0 || out != want {
+		t.Errorf("-a: exit %d %q\n got %q\nwant %q", code, errs, out, want)
+	}
+	for _, args := range [][]string{{"-whois", "-a", "AS-TOP"}, {"-dump", "x.db", "-a", "AS-TOP"}} {
+		if code, _, errs := rpslq(t, args...); code != 2 || !strings.Contains(errs, "needs IRRd") {
+			t.Errorf("%v: exit %d %q, want a usage error", args, code, errs)
+		}
+	}
+	// A server without "!a" is named as the cause.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				sc := bufio.NewScanner(c)
+				for sc.Scan() {
+					switch line := sc.Text(); {
+					case line == "!!":
+					case strings.HasPrefix(line, "!a"):
+						fmt.Fprint(c, "F Unrecognized command\n")
+					case line == "!q":
+						return
+					default:
+						fmt.Fprint(c, "C\n")
+					}
+				}
+			}()
+		}
+	}()
+	if code, _, errs := rpslq(t, "-h", ln.Addr().String(), "-a", "AS-TOP"); code != 1 || !strings.Contains(errs, "drop -a") {
+		t.Errorf("a server without !a: exit %d %q", code, errs)
 	}
 }

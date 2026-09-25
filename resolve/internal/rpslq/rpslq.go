@@ -55,6 +55,10 @@ What:
   -p              keep special-purpose AS numbers (bgpq4 drops 23456,
                   64496-65551 and 4200000000 and above unless -p)
   -ranges         write RPSL ranges (le/ge) rather than every prefix they hold
+  -a              let the IRRd server expand as-sets (IRRd 4's !a), as plain
+                  bgpq4 does: one query rather than one per AS, but the
+                  server's rules rather than the engine's (its recursion, no
+                  -L, special AS numbers kept)
 
 Format (Cisco IOS by default):
   -j JSON  -b BIRD  -J Junos  -P plain (RPSL notation, one per line)
@@ -90,6 +94,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	maxLen := fs.Int("m", 0, "")
 	special := fs.Bool("p", false, "")
 	asRanges := fs.Bool("ranges", false, "")
+	serverSide := fs.Bool("a", false, "")
 	jsonOut := fs.Bool("j", false, "")
 	birdOut := fs.Bool("b", false, "")
 	junosOut := fs.Bool("J", false, "")
@@ -129,6 +134,10 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if *conc < 1 {
 		*conc = 1
 	}
+	if *serverSide && (*useWhois || len(files) > 0) {
+		fmt.Fprintln(stderr, "rpslq: -a asks an IRRd server to expand as-sets, so it needs IRRd, not -whois or -dump")
+		return exitUsage
+	}
 	src, closeSrc, err := source(*host, *sources, *useWhois, files, *conc)
 	if err != nil {
 		fmt.Fprintln(stderr, "rpslq:", err)
@@ -143,7 +152,13 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if *v6 {
 		afi = types.AFIv6
 	}
+	var aset func(context.Context, types.SetName, types.AFI) ([]netip.Prefix, error)
+	if ir, ok := src.(*irrd.Source); ok && *serverSide {
+		ir.MaxResponse = 256 << 20 // IRRd warns "!a" answers reach 10-20 MB
+		aset = ir.ASSetPrefixes
+	}
 	q := query{
+		aset:    aset,
 		e:       &resolve.Expander{Src: src, AFI: afi, MaxDepth: *depth, Concurrency: *conc},
 		src:     src,
 		afi:     afi,
@@ -249,6 +264,7 @@ func maybeGzip(r io.Reader) (io.Reader, error) {
 
 // query expands the objects a command line names.
 type query struct {
+	aset    func(context.Context, types.SetName, types.AFI) ([]netip.Prefix, error) // -a: the server's expansion
 	e       *resolve.Expander
 	src     resolve.Source
 	afi     types.AFI
@@ -359,6 +375,22 @@ func (q *query) prefixes(ctx context.Context, args []string) ([]types.PrefixRang
 		switch {
 		case o.isAS:
 			asns[o.as] = true
+		case o.set.Class() == types.ClassAsSet && q.aset != nil:
+			// The server's expansion, taken as it is: its recursion, and its
+			// routes of every member, special-purpose ones included.
+			got, err := q.aset(ctx, o.set, q.afi)
+			if err != nil {
+				if errors.Is(err, irrd.ErrQueryRefused) {
+					return nil, q.fail(o.text, fmt.Errorf("%w (the server has no \"!a\"; drop -a)", err))
+				}
+				return nil, q.fail(o.text, err)
+			}
+			for _, p := range got {
+				p = p.Masked()
+				if r, ok := types.NewPrefixRange(p, p.Bits(), p.Bits()); ok {
+					out[r] = true
+				}
+			}
 		case o.set.Class() == types.ClassAsSet:
 			got, err := q.e.ExpandAS(ctx, o.set)
 			if err != nil {
