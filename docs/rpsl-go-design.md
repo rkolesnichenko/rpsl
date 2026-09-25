@@ -488,6 +488,8 @@ A<len>\n<payload>C\n
 
 where `<len>` is the byte length of the payload **including** the payload's trailing newline. After `ReadFull(payload)` the next `ReadString('\n')` consumes the `C\n` status line directly — there is no separator newline to skip. Getting this off-by-one wrong silently desynchronizes the reader against pipelined queries; see `resolve/irrd/readframe_test.go` for the canonical wire-shape test. This belongs in the design (rather than as a backend implementation detail) because every future IRRd-style backend has to match it.
 
+Framing is also what makes pipelining safe. With `irrd.Source.Pipeline` set, concurrent queries share a persistent connection: each writes its command under the connection's lock, in the order it is queued, and one reader hands the answers out in that order — IRRd answers commands in the order it reads them. Only a transport or framing error breaks the stream (the queries waiting on it are retried once on a fresh connection); a `D` or `F` answer belongs to its query alone, and a caller that gives up only stops waiting, its answer still read. This is how bgpq4 queries an IRRd, and what makes a set of tens of thousands of members a matter of seconds rather than of a round trip per query. `rpslq` (`resolve/cmd/rpslq`) is the engine behind a bgpq4-compatible command line; `TestRpslqMatchesBgpq4` holds its output to bgpq4's byte for byte.
+
 ---
 
 ### 8.6 Authorisation (`auth`)
