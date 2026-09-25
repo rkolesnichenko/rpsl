@@ -41,6 +41,7 @@ and below. `TestRpslqKnownDivergences` pins each case.
 | Case | Example | rpslq | bgpq4 | Why |
 | --- | --- | --- | --- | --- |
 | `except-in-route-set` | `RS-TOP EXCEPT RS-BAD AS-BAD` | RS-BAD and AS-BAD left out | both kept | bgpq4's stoplist applies only while it recurses through as-sets; route-sets it has the server expand (`!i…,1`). The engine leaves an excluded set out wherever it meets it. |
+| `depth-limit` | `-L 2` over AS-TOP → AS-MID → AS-LOW | fails: the sets nest deeper than `-L 2` allows | AS-LOW left out, silently | Both count the named set as the first level. The engine never truncates a result silently (design §8.3), so rpslq refuses where bgpq4 drops; for the same reason it refuses `-L 1`, with which bgpq4 leaves every nested set out. `TestRpslqDepthLimit` pins it. |
 | `max-length-full` | `-m 32 10.0.0.0/30^+` | every prefix of the range | `10.0.0.0/30` alone | bgpq4 stores `-m` only when it is shorter than an address, and otherwise reads a range's upper bound as 0 — the same slip as `single-length-range`. `-m 32` should change nothing. |
 
 rpslq also refuses some command lines bgpq4 accepts and makes nothing of: an

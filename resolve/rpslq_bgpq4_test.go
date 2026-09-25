@@ -321,3 +321,45 @@ func TestRpslqKnownDivergences(t *testing.T) {
 		}
 	}
 }
+
+// -L counts levels as bgpq4 does — the named set is the first — and where
+// the sets nest deeper, bgpq4 leaves the deeper ones out and rpslq fails
+// ("depth-limit" in divergences.md).
+func TestRpslqDepthLimit(t *testing.T) {
+	needBgpq4(t)
+	addr := irrtest.New(
+		"as-set: AS-TOP\nmembers: AS1, AS-MID\nsource: RIPE\n",
+		"as-set: AS-MID\nmembers: AS2, AS-LOW\nsource: RIPE\n",
+		"as-set: AS-LOW\nmembers: AS3\nsource: RIPE\n",
+	).WithSources("RIPE").IRRd(t)
+	base := []string{"-h", addr, "-S", "RIPE", "-t", "-j"}
+	// Deep enough: the two agree.
+	compareRpslq(t, "-L 3", append(append([]string(nil), base...), "-L", "3", "AS-TOP"))
+	// One level short: bgpq4 leaves AS-LOW out; rpslq refuses.
+	args := append(append([]string(nil), base...), "-L", "2", "AS-TOP")
+	if got := strings.Join(strings.Fields(runBgpq4Text(t, args)), " "); got != `{"NN": [ 1,2 ]}` {
+		t.Errorf("bgpq4 -L 2: %q, pinned AS1 and AS2 only", got)
+	}
+	var out, errs bytes.Buffer
+	if code := rpslq.Run(context.Background(), args, &out, &errs); code != 1 || !strings.Contains(errs.String(), "deeper than -L 2") {
+		t.Errorf("rpslq -L 2: exit %d, %q %q; want a failure naming -L 2", code, out.String(), errs.String())
+	}
+}
+
+// Addresses are written as bgpq4 writes them, with inet_ntop: an
+// IPv4-compatible IPv6 address in dotted form, ties between runs of zeros
+// broken to the left, a single zero word not compressed — in every vendor,
+// and in -F's netmasks.
+func TestRpslqAddressesMatchBgpq4(t *testing.T) {
+	needBgpq4(t)
+	addr := irrtest.New().IRRd(t)
+	prefixes := []string{"::1.2.3.0/120", "::ffff:1.2.3.0/120", "::/96", "::102/128", "::1/128",
+		"1:0:0:2:0:0:3:4/128", "1:0:2:3:4:5:6:7/128", "2001:db8::/32"}
+	vendors := append(append([][]string(nil), bgpq4Vendors...), []string{"-F", `%n %m %i\n`})
+	for _, v := range vendors {
+		for _, shape := range [][]string{nil, {"-A"}} {
+			args := append(append(append([]string{"-h", addr, "-6"}, v...), shape...), prefixes...)
+			compareRpslq(t, "addresses", args)
+		}
+	}
+}

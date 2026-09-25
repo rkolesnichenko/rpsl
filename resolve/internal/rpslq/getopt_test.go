@@ -75,6 +75,7 @@ func TestParseRules(t *testing.T) {
 		"-m 33 AS1":                       "longer than an address",
 		"-m 0 AS1":                        "at least 1",
 		"-L 0 AS1":                        "at least 1",
+		"-L 1 AS1":                        "-L 2 allows one level",
 		"-m x AS1":                        "wants a number",
 		"-a AS-TOP":                       "--server-expand",
 		"-f AS-X AS1":                     "wants an AS number",

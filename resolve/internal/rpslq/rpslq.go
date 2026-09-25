@@ -74,7 +74,9 @@ Shape:
   -p              keep special-purpose AS numbers (23456, 64496-65551,
                   4200000000 and above)
   -w              as-path lists: only AS numbers that have routes
-  -L depth        nesting depth (default 32)
+  -L depth        levels of sets, the top one counted, as bgpq4 counts them
+                  (default 33); where sets nest deeper, bgpq4 leaves the
+                  deeper ones out and rpslq fails rather than do so
 
 Source (IRRd by default):
   -h host[:port]  IRRd server (default rr.ntt.net:43)
@@ -247,8 +249,15 @@ func parse(args []string) (*config, bool, error) {
 		case "l":
 			c.o.Name = op.arg
 		case "L":
-			if c.depth, err = number("L", op.arg); err == nil && c.depth < 1 {
+			switch c.depth, err = number("L", op.arg); {
+			case err != nil:
+			case c.depth < 1:
 				err = usagef("-L wants a depth of at least 1")
+			case c.depth == 1:
+				// bgpq4 -L 1 expands the named sets alone, leaving every
+				// nested set out without a word; the engine drops nothing
+				// silently.
+				err = usagef("-L 1 leaves every nested set out, which rpslq does not do silently; -L 2 allows one level of nesting")
 			}
 		case "m", "R", "r":
 			var n int
@@ -402,6 +411,9 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "rpslq:", err)
 		return exitUsage
 	}
+	if c.depth == 0 {
+		c.depth = 1 + 32 // the engine's default MaxDepth, as bgpq4 counts it
+	}
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	src, closeSrc, err := source(c.host, c.sources, c.whois, c.dumps, c.conc)
@@ -429,13 +441,14 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	q := query{
 		aset:    aset,
-		e:       &resolve.Expander{Src: src, AFI: afi, MaxDepth: c.depth, Concurrency: c.conc, Exclude: exclude},
+		e:       &resolve.Expander{Src: src, AFI: afi, MaxDepth: c.depth - 1, Concurrency: c.conc, Exclude: exclude},
 		src:     src,
 		afi:     afi,
 		special: c.special,
 		maxLen:  c.maxLen,
 		conc:    c.conc,
 		stderr:  stderr,
+		levels:  c.depth,
 	}
 	switch c.o.Kind {
 	case filtergen.ASSet, filtergen.ASPath, filtergen.OriginASPath, filtergen.ASList:
@@ -618,6 +631,7 @@ type query struct {
 	afi     types.AFI
 	special bool // keep special-purpose AS numbers
 	maxLen  int  // -m: 0, or the longest prefix a list holds
+	levels  int  // -L, as bgpq4 counts: the top set and levels-1 below it
 	conc    int
 	stderr  io.Writer
 }
@@ -680,6 +694,11 @@ func parsePrefix(s string) (types.PrefixRange, bool) {
 
 // fail reports an expansion error and returns its exit code.
 func (q *query) fail(what string, err error) int {
+	var tooDeep *resolve.SetTooLargeError
+	if errors.As(err, &tooDeep) && tooDeep.Limit == resolve.LimitDepth {
+		fmt.Fprintf(q.stderr, "rpslq: %s: sets nest deeper than -L %d allows; bgpq4 would leave the deeper ones out, rpslq does not (raise -L)\n", what, q.levels)
+		return exitFail
+	}
 	fmt.Fprintf(q.stderr, "rpslq: %s: %v\n", what, err)
 	var anySet *resolve.AnySetError
 	if errors.As(err, &anySet) {

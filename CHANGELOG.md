@@ -34,6 +34,13 @@ same version (see [RELEASING.md](RELEASING.md)).
   (or `-m 128`) means no limit, where bgpq4 then drops a range's
   more-specifics: both pinned in `resolve/testdata/bgpq4/divergences.md`.
 
+### Fixed
+
+- rpslq writes an IPv4-compatible IPv6 address (`::1.2.3.0/120`) as bgpq4
+  does, dotted, in every vendor format; it wrote `::102:300/120`.
+- A prefix range wholly longer than `-m` (`::/0^65-128` under `-6 -m 64`) no
+  longer walks every more-specific before adding nothing — 2^64 steps there.
+
 ### Changed
 
 - **rpslq reads its command line as bgpq4 does**, with getopt: bundled
@@ -43,6 +50,11 @@ same version (see [RELEASING.md](RELEASING.md)).
   `--timeout`, and `-a` (the server's `!a` expansion) is `--server-expand`,
   since `-a AS` is bgpq4's option for OpenBGPD's `deny from AS`. The former
   spellings are refused with a pointer to the new ones.
+- **rpslq's `-L` counts levels as bgpq4 does**, the named set being the first:
+  `-L n` allows n-1 levels of nesting (it allowed n). Where sets nest deeper,
+  bgpq4 leaves the deeper ones out and rpslq fails, naming `-L`; `-L 1`, with
+  which bgpq4 drops every nested set, is refused. Without `-L`, the engine's
+  default of 32 levels of nesting stands.
 - rpslq holds up to 8,388,608 prefixes in a list (was 1,048,576), counting
   prefixes rather than the tree's nodes: AS-HURRICANE alone now holds 1.16
   million IPv4 prefixes, which bgpq4 lists (and rpslq does, identically, in

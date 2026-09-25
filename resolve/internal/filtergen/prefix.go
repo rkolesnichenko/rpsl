@@ -99,11 +99,11 @@ func prefixList(b *strings.Builder, o Options, es []Entry) error {
 			}
 			switch {
 			case !e.Aggregate:
-				fmt.Fprintf(b, "%s prefix-list %s%s permit %s\n", ip, name, seqno, e.Prefix)
+				fmt.Fprintf(b, "%s prefix-list %s%s permit %s\n", ip, name, seqno, ntp(e.Prefix))
 			case e.longer():
-				fmt.Fprintf(b, "%s prefix-list %s%s permit %s ge %d le %d\n", ip, name, seqno, e.Prefix, e.Lo, e.Hi)
+				fmt.Fprintf(b, "%s prefix-list %s%s permit %s ge %d le %d\n", ip, name, seqno, ntp(e.Prefix), e.Lo, e.Hi)
 			default:
-				fmt.Fprintf(b, "%s prefix-list %s%s permit %s le %d\n", ip, name, seqno, e.Prefix, e.Hi)
+				fmt.Fprintf(b, "%s prefix-list %s%s permit %s le %d\n", ip, name, seqno, ntp(e.Prefix), e.Hi)
 			}
 		}
 	case CiscoXR:
@@ -115,11 +115,11 @@ func prefixList(b *strings.Builder, o Options, es []Entry) error {
 			}
 			switch {
 			case !e.Aggregate:
-				fmt.Fprintf(b, "%s%s", sep, e.Prefix)
+				fmt.Fprintf(b, "%s%s", sep, ntp(e.Prefix))
 			case e.longer():
-				fmt.Fprintf(b, "%s%s ge %d le %d", sep, e.Prefix, e.Lo, e.Hi)
+				fmt.Fprintf(b, "%s%s ge %d le %d", sep, ntp(e.Prefix), e.Lo, e.Hi)
 			default:
-				fmt.Fprintf(b, "%s%s le %d", sep, e.Prefix, e.Hi)
+				fmt.Fprintf(b, "%s%s le %d", sep, ntp(e.Prefix), e.Hi)
 			}
 		}
 		b.WriteString("\nend-set\n")
@@ -152,10 +152,10 @@ func prefixList(b *strings.Builder, o Options, es []Entry) error {
 				comma = ","
 			}
 			if !e.Aggregate {
-				fmt.Fprintf(b, "%s\n    %s", comma, e.Prefix)
+				fmt.Fprintf(b, "%s\n    %s", comma, ntp(e.Prefix))
 			} else {
 				lo, hi := e.bounds()
-				fmt.Fprintf(b, "%s\n    %s{%d,%d}", comma, e.Prefix, lo, hi)
+				fmt.Fprintf(b, "%s\n    %s{%d,%d}", comma, ntp(e.Prefix), lo, hi)
 			}
 		}
 		b.WriteString("\n];\n")
@@ -165,7 +165,7 @@ func prefixList(b *strings.Builder, o Options, es []Entry) error {
 			if e.Aggregate {
 				return unsupported("a Junos prefix-list holds exact prefixes, and %s is a range", e.Range())
 			}
-			fmt.Fprintf(b, "    %s;\n", e.Prefix)
+			fmt.Fprintf(b, "    %s;\n", ntp(e.Prefix))
 		}
 		b.WriteString(" }\n}\n")
 	case OpenBGPD:
@@ -203,11 +203,11 @@ func prefixList(b *strings.Builder, o Options, es []Entry) error {
 		for _, e := range es {
 			switch {
 			case !e.Aggregate:
-				fmt.Fprintf(b, "   seq %d permit %s\n", seq, e.Prefix)
+				fmt.Fprintf(b, "   seq %d permit %s\n", seq, ntp(e.Prefix))
 			case e.longer():
-				fmt.Fprintf(b, "   seq %d permit %s ge %d le %d\n", seq, e.Prefix, e.Lo, e.Hi)
+				fmt.Fprintf(b, "   seq %d permit %s ge %d le %d\n", seq, ntp(e.Prefix), e.Lo, e.Hi)
 			default:
-				fmt.Fprintf(b, "   seq %d permit %s le %d\n", seq, e.Prefix, e.Hi)
+				fmt.Fprintf(b, "   seq %d permit %s le %d\n", seq, ntp(e.Prefix), e.Hi)
 			}
 			seq++
 		}
@@ -215,10 +215,10 @@ func prefixList(b *strings.Builder, o Options, es []Entry) error {
 		fmt.Fprintf(b, "configure router policy-options\nbegin\nno prefix-list \"%s\"\nprefix-list \"%s\"\n", name, name)
 		for _, e := range es {
 			if !e.Aggregate {
-				fmt.Fprintf(b, "    prefix %s exact\n", e.Prefix)
+				fmt.Fprintf(b, "    prefix %s exact\n", ntp(e.Prefix))
 			} else {
 				lo, hi := e.bounds()
-				fmt.Fprintf(b, "    prefix %s prefix-length-range %d-%d\n", e.Prefix, lo, hi)
+				fmt.Fprintf(b, "    prefix %s prefix-length-range %d-%d\n", ntp(e.Prefix), lo, hi)
 			}
 		}
 		b.WriteString("exit\ncommit\n")
@@ -227,11 +227,11 @@ func prefixList(b *strings.Builder, o Options, es []Entry) error {
 		for _, e := range es {
 			switch {
 			case !e.Aggregate:
-				fmt.Fprintf(b, "    prefix %s type exact {\n    }\n", e.Prefix)
+				fmt.Fprintf(b, "    prefix %s type exact {\n    }\n", ntp(e.Prefix))
 			case e.longer():
-				fmt.Fprintf(b, "    prefix %s type range {\n        start-length %d\n        end-length %d\n    }\n", e.Prefix, e.Lo, e.Hi)
+				fmt.Fprintf(b, "    prefix %s type range {\n        start-length %d\n        end-length %d\n    }\n", ntp(e.Prefix), e.Lo, e.Hi)
 			default:
-				fmt.Fprintf(b, "    prefix %s type through {\n        through-length %d\n    }\n", e.Prefix, e.Hi)
+				fmt.Fprintf(b, "    prefix %s type through {\n        through-length %d\n    }\n", ntp(e.Prefix), e.Hi)
 			}
 		}
 		b.WriteString("}\n")
@@ -239,10 +239,10 @@ func prefixList(b *strings.Builder, o Options, es []Entry) error {
 		fmt.Fprintf(b, "/routing-policy\ndelete prefix-set \"%s\"\nprefix-set \"%s\" {\n", name, name)
 		for _, e := range es {
 			if !e.Aggregate {
-				fmt.Fprintf(b, "    prefix %s mask-length-range exact { }\n", e.Prefix)
+				fmt.Fprintf(b, "    prefix %s mask-length-range exact { }\n", ntp(e.Prefix))
 			} else {
 				lo, hi := e.bounds()
-				fmt.Fprintf(b, "    prefix %s mask-length-range %d..%d { }\n", e.Prefix, lo, hi)
+				fmt.Fprintf(b, "    prefix %s mask-length-range %d..%d { }\n", ntp(e.Prefix), lo, hi)
 			}
 		}
 		b.WriteString("}\n")
@@ -257,13 +257,13 @@ func prefixList(b *strings.Builder, o Options, es []Entry) error {
 		for _, e := range es {
 			switch {
 			case o.Vendor == MikroTik6 && e.Aggregate:
-				fmt.Fprintf(b, "/routing filter add action=accept chain=\"%s-%s\" prefix=%s prefix-length=%d-%d\n", name, fam, e.Prefix, e.Lo, e.Hi)
+				fmt.Fprintf(b, "/routing filter add action=accept chain=\"%s-%s\" prefix=%s prefix-length=%d-%d\n", name, fam, ntp(e.Prefix), e.Lo, e.Hi)
 			case o.Vendor == MikroTik6:
-				fmt.Fprintf(b, "/routing filter add action=accept chain=\"%s-%s\" prefix=%s\n", name, fam, e.Prefix)
+				fmt.Fprintf(b, "/routing filter add action=accept chain=\"%s-%s\" prefix=%s\n", name, fam, ntp(e.Prefix))
 			case e.Aggregate:
-				fmt.Fprintf(b, "/routing filter rule add chain=\"%s-%s\" rule=\"if (dst in %s && dst-len in %d-%d) {accept}\"\n", name, fam, e.Prefix, e.Lo, e.Hi)
+				fmt.Fprintf(b, "/routing filter rule add chain=\"%s-%s\" rule=\"if (dst in %s && dst-len in %d-%d) {accept}\"\n", name, fam, ntp(e.Prefix), e.Lo, e.Hi)
 			default:
-				fmt.Fprintf(b, "/routing filter rule add chain=\"%s-%s\" rule=\"if (dst==%s) {accept}\"\n", name, fam, e.Prefix)
+				fmt.Fprintf(b, "/routing filter rule add chain=\"%s-%s\" rule=\"if (dst==%s) {accept}\"\n", name, fam, ntp(e.Prefix))
 			}
 		}
 	case Huawei:
@@ -375,7 +375,7 @@ func routeFilter(b *strings.Builder, o Options, es []Entry) {
 			fmt.Fprintf(b, "# generated ip-prefix-list %s is empty\n", name)
 		}
 		for _, e := range es {
-			fmt.Fprintf(b, "    prefix %s\n", e.Prefix)
+			fmt.Fprintf(b, "    prefix %s\n", ntp(e.Prefix))
 		}
 		b.WriteString("exit\n")
 	case NokiaMD:
@@ -385,7 +385,7 @@ func routeFilter(b *strings.Builder, o Options, es []Entry) {
 			fmt.Fprintf(b, "# generated %s-prefix-list %s is empty\n", ip, name)
 		}
 		for _, e := range es {
-			fmt.Fprintf(b, "    prefix %s { }\n", e.Prefix)
+			fmt.Fprintf(b, "    prefix %s { }\n", ntp(e.Prefix))
 		}
 		b.WriteString("}\n")
 	case NokiaSRL:
@@ -398,7 +398,7 @@ func routeFilter(b *strings.Builder, o Options, es []Entry) {
 			fmt.Fprintf(b, "# generated ipv%c-filter '%s' is empty\n", fam, name)
 		}
 		for i, e := range es {
-			fmt.Fprintf(b, " entry %d {\n  action { accept { } }\n  match { source-ip { prefix %s } } }\n", 10+10*i, e.Prefix)
+			fmt.Fprintf(b, " entry %d {\n  action { accept { } }\n  match { source-ip { prefix %s } } }\n", 10+10*i, ntp(e.Prefix))
 		}
 		b.WriteString("}\n")
 	}
@@ -413,23 +413,23 @@ func junosFilter(b *strings.Builder, e Entry, prefixed bool) {
 	}
 	switch {
 	case !e.Aggregate:
-		fmt.Fprintf(b, "    %s%s exact;\n", rf, e.Prefix)
+		fmt.Fprintf(b, "    %s%s exact;\n", rf, ntp(e.Prefix))
 	case e.longer():
-		fmt.Fprintf(b, "    %s%s prefix-length-range /%d-/%d;\n", rf, e.Prefix, e.Lo, e.Hi)
+		fmt.Fprintf(b, "    %s%s prefix-length-range /%d-/%d;\n", rf, ntp(e.Prefix), e.Lo, e.Hi)
 	default:
-		fmt.Fprintf(b, "    %s%s upto /%d;\n", rf, e.Prefix, e.Hi)
+		fmt.Fprintf(b, "    %s%s upto /%d;\n", rf, ntp(e.Prefix), e.Hi)
 	}
 }
 
 func openbgpdPrefix(b *strings.Builder, e Entry) {
 	switch {
 	case !e.Aggregate:
-		fmt.Fprintf(b, "\n\t%s", e.Prefix)
+		fmt.Fprintf(b, "\n\t%s", ntp(e.Prefix))
 	case e.Lo == e.Hi:
-		fmt.Fprintf(b, "\n\t%s prefixlen = %d", e.Prefix, e.Hi)
+		fmt.Fprintf(b, "\n\t%s prefixlen = %d", ntp(e.Prefix), e.Hi)
 	default:
 		lo, hi := e.bounds()
-		fmt.Fprintf(b, "\n\t%s prefixlen %d - %d", e.Prefix, lo, hi)
+		fmt.Fprintf(b, "\n\t%s prefixlen %d - %d", ntp(e.Prefix), lo, hi)
 	}
 }
 
@@ -478,12 +478,37 @@ func dotted(v uint32) string {
 	return netip.AddrFrom4([4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)}).String()
 }
 
+// ntp is a prefix printed as bgpq4 prints it, with inet_ntop.
+type ntp netip.Prefix
+
+func (p ntp) String() string { return fmt.Sprintf("%s/%d", ntop(netip.Prefix(p).Addr()), netip.Prefix(p).Bits()) }
+
+// ntop writes an address as inet_ntop does (glibc's and the BSDs' alike).
+// That is netip's form, but for an IPv4-compatible IPv6 address — the first
+// 96 bits zero, the next 16 not — which inet_ntop writes with the last 32
+// bits dotted: ::1.2.3.4, where netip writes ::102:304.
+func ntop(a netip.Addr) string {
+	if !a.Is6() || a.Is4In6() {
+		return a.String()
+	}
+	b := a.As16()
+	for _, x := range b[:12] {
+		if x != 0 {
+			return a.String()
+		}
+	}
+	if b[12] == 0 && b[13] == 0 {
+		return a.String() // ::, ::1, ::102: a run of seven zero words
+	}
+	return "::" + netip.AddrFrom4([4]byte(b[12:16])).String()
+}
+
 // spaced writes a prefix as Huawei takes it: "192.0.2.0 24".
-func spaced(p netip.Prefix) string { return fmt.Sprintf("%s %d", p.Addr(), p.Bits()) }
+func spaced(p netip.Prefix) string { return fmt.Sprintf("%s %d", ntop(p.Addr()), p.Bits()) }
 
 // jsonPrefix writes a prefix as bgpq4's JSON does, its slash escaped.
 func jsonPrefix(p netip.Prefix) string {
-	return fmt.Sprintf("%s\\/%d", p.Addr(), p.Bits())
+	return fmt.Sprintf("%s\\/%d", ntop(p.Addr()), p.Bits())
 }
 
 // userFormat expands one entry into bgpq4's -F template
@@ -512,7 +537,7 @@ func userFormat(b *strings.Builder, format, name string, p netip.Prefix, lo, hi 
 		}
 		switch format[i] {
 		case 'r', 'n':
-			b.WriteString(p.Addr().String())
+			b.WriteString(ntop(p.Addr()))
 		case 'l':
 			fmt.Fprintf(b, "%d", p.Bits())
 		case 'a':
@@ -524,9 +549,9 @@ func userFormat(b *strings.Builder, format, name string, p netip.Prefix, lo, hi 
 		case 'N':
 			b.WriteString(name)
 		case 'm':
-			b.WriteString(mask(p, false).String())
+			b.WriteString(ntop(mask(p, false)))
 		case 'i':
-			b.WriteString(mask(p, true).String())
+			b.WriteString(ntop(mask(p, true)))
 		}
 	}
 }

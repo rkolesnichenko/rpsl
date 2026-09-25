@@ -185,6 +185,13 @@ func TestTreeAddRangesAndLimits(t *testing.T) {
 	if got := len(tr.Entries()); got != 7 {
 		t.Errorf("%d entries, want 7: %v", got, tr.Entries())
 	}
+	// A window wholly past the maximum length adds nothing, and at once:
+	// walking toward it first would take 2^64 steps here.
+	v6 := NewTree(true, 64, 1<<20)
+	r6, _ := types.ParsePrefixRange("::/0^65-128")
+	if err := v6.Add(r6); err != nil || !v6.Empty() {
+		t.Errorf("::/0^65-128 under -m 64: %v, empty %v", err, v6.Empty())
+	}
 	// The cap counts prefixes, not the glue between them: exactly 100
 	// prefixes fit in 100, however much glue they need, and 101 do not.
 	for _, c := range []struct {

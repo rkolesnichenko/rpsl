@@ -84,10 +84,14 @@ func (t *Tree) Empty() bool { return t.head == nil }
 // the other family, or whose prefix is longer than the maximum, adds nothing.
 func (t *Tree) Add(r types.PrefixRange) error {
 	p := r.Prefix()
-	if p.Addr().Is6() != t.v6 || p.Bits() > t.maxLen {
+	lo, hi := int(r.Lo()), min(int(r.Hi()), t.maxLen)
+	if p.Addr().Is6() != t.v6 || p.Bits() > t.maxLen || lo > hi {
+		// Nothing to insert. bgpq4 would still walk every more-specific
+		// down to the maximum length first — 2^64 of them for ::/0^65-128
+		// under -m 64 — and insert none.
 		return nil
 	}
-	return t.insertSpecifics(p, int(r.Lo()), min(int(r.Hi()), t.maxLen))
+	return t.insertSpecifics(p, lo, hi)
 }
 
 // insertSpecifics is sx_radix_tree_insert_specifics: p if it is at least lo

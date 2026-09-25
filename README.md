@@ -118,11 +118,14 @@ expand as-sets with IRRd 4's `!a`, as plain bgpq4 does: one query where the
 engine makes one per AS, so the largest sets take seconds rather than tens of
 seconds, but the answer is the server's, under its rules, which the engine
 cannot check. So `rpslq --server-expand` writes what plain `bgpq4` writes, and
-`rpslq` without it what `bgpq4 -L n` writes.
+`rpslq` without it what `bgpq4 -L n` writes — except that where the sets nest
+deeper than `-L` allows, bgpq4 leaves the deeper ones out and rpslq fails
+instead.
 
 Where the two knowingly part, rpslq follows the engine: range operators on set
 and AS members, the single-length `^n` form, route-sets listed in as-sets,
-`EXCEPT` inside route-sets (bgpq4 applies it to as-sets only), and `-m 32`
+`EXCEPT` inside route-sets (bgpq4 applies it to as-sets only), sets nested
+deeper than `-L` (an error, not a shorter list), and `-m 32`
 (bgpq4 then drops a range's more-specifics). See
 `resolve/testdata/bgpq4/divergences.md`. bgpq4's `SOURCE::OBJECT` form is not
 supported; use `-S`.
