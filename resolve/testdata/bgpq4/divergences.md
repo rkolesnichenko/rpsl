@@ -31,3 +31,20 @@ passing unnoticed.
 - **Indirect members**: IRRd folds `mbrs-by-ref` members into `!i`; the engine
   resolves them itself with the same rules (maintainer and same source), and the
   two agree on every random IRR.
+
+## rpslq
+
+`rpslq` writes bgpq4's text for bgpq4's command line (`TestRpslqMatchesBgpq4`,
+`TestRpslqVendorsMatchBgpq4`, `TestRpslqExceptMatchesBgpq4`), except as above
+and below. `TestRpslqKnownDivergences` pins each case.
+
+| Case | Example | rpslq | bgpq4 | Why |
+| --- | --- | --- | --- | --- |
+| `except-in-route-set` | `RS-TOP EXCEPT RS-BAD AS-BAD` | RS-BAD and AS-BAD left out | both kept | bgpq4's stoplist applies only while it recurses through as-sets; route-sets it has the server expand (`!i…,1`). The engine leaves an excluded set out wherever it meets it. |
+| `max-length-full` | `-m 32 10.0.0.0/30^+` | every prefix of the range | `10.0.0.0/30` alone | bgpq4 stores `-m` only when it is shorter than an address, and otherwise reads a range's upper bound as 0 — the same slip as `single-length-range`. `-m 32` should change nothing. |
+
+rpslq also refuses some command lines bgpq4 accepts and makes nothing of: an
+AS list or as-path filter over a route-set or a prefix (bgpq4 ignores them), a
+`-F` template with an unknown directive or a lone `%` or `\` at its end (bgpq4
+prints part of each line, or reads past the template), and bgpq4's
+`SOURCE::OBJECT` form, which needs a per-object source the engine does not have.

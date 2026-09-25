@@ -9,6 +9,41 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **`resolve.Expander.Exclude`** (`resolve.Exclusion`): sets and AS numbers
+  an expansion leaves out, as bgpq4's `EXCEPT` does. An excluded set is never
+  followed, fetched or reported missing, and an excluded AS contributes
+  nothing, wherever an expansion meets them — nested sets, AS members,
+  indirect aut-num members, references inside filter-sets. The set an Expand
+  call names is expanded as asked. Held to the model oracle over every
+  backend.
+- **rpslq at bgpq4's feature level.** Every vendor bgpq4 writes: Cisco IOS XR
+  (`-X`), Arista EOS (`-e`), OpenBGPD (`-B`), Nokia SR OS classic and MD-CLI
+  (`-N`, `-n`) and SR Linux (`-n2`), MikroTik v6 and v7 (`-K`, `-K7`),
+  Huawei and Huawei XPL (`-U`, `-u`), user formats (`-F`). Every kind of
+  list: route-filters, extended access-lists and prefix-sets (`-E`), Junos
+  route-filter-lists (`-z`), input and output as-path lists (`-f`, `-G`),
+  Junos as-lists (`-H`), OpenBGPD as-sets (`-B -t`). And aggregation (`-A`),
+  more-specifics (`-R`, `-r`), sequence numbers (`-s`), `-w`, `-W`, `-M`,
+  `-a`, `-T`, `-v`, `$IRRD_SOURCES`, prefixes as objects, and `EXCEPT`. The
+  aggregation is bgpq4's own radix tree, ported node for node, so aggregated
+  lists match too. Tests hold every vendor, kind and shape to the bgpq4
+  binary, and rpslq refuses exactly what bgpq4 refuses.
+- `EXCEPT` also applies inside route-sets, where bgpq4 ignores it, and `-m 32`
+  (or `-m 128`) means no limit, where bgpq4 then drops a range's
+  more-specifics: both pinned in `resolve/testdata/bgpq4/divergences.md`.
+
+### Changed
+
+- **rpslq reads its command line as bgpq4 does**, with getopt: bundled
+  options (`-6Ab`), attached arguments (`-lNAME`), options after the objects.
+  Its own options, which bgpq4 lacks, are long now: `-whois`, `-dump`,
+  `-ranges` and `-timeout` are `--whois`, `--dump`, `--ranges` and
+  `--timeout`, and `-a` (the server's `!a` expansion) is `--server-expand`,
+  since `-a AS` is bgpq4's option for OpenBGPD's `deny from AS`. The former
+  spellings are refused with a pointer to the new ones.
+
 ## [0.13.0] - 2026-09-25
 
 ### Added
