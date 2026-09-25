@@ -104,6 +104,9 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
 - **Filters are only partly enumerable**: `EvalFilter` handles ANY, prefix lists, set and AS
   references, OR and AND (range intersection) and returns `*NotEnumerableError` for NOT,
   PeerAS, community tests and AS-path regexps. Never answer one of those with an empty set.
+- **`Expander.Exclude`** (bgpq4's EXCEPT): an excluded set is skipped in discovery (never
+  fetched or Missing), an excluded AS is never fetched for routes; the named top set is always
+  expanded. Checked against the model oracle over every backend.
 - **`Expander.Concurrency` must not change a result.** Discovery fetches a whole breadth-first
   level at once and merges in the level's own order; `TestConcurrencyDoesNotChangeResults`
   compares serial and parallel over 200 random graphs.
@@ -126,20 +129,26 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   (all six modules incl. examples/bulk-ripe under -race, gofmt, invariants) with
   `scripts/check.sh`; `FUZZTIME=15s scripts/check.sh` also runs every fuzz target.
 - `go test -run 'TestRoundTrip|TestStreamRoundTrip' .` — the lossless guard (root module).
-- Fuzz (27 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
+- Fuzz (28 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
   FuzzFormat (ast); FuzzParseSetName, FuzzParseRangeOperator, FuzzParsePrefixRange,
   FuzzParseRouterID (types); FuzzParseStream, FuzzDecode (root); FuzzParseImport,
   FuzzParseASPathRegexp, FuzzParseFilter, FuzzParsePeering, FuzzParseInject,
   FuzzParseComponents, FuzzParseAggrMtd, FuzzParseIfaddr, FuzzParseInterface, FuzzParsePeer,
   FuzzParseRPAttribute, FuzzParseTypedef, FuzzParseProtocol, FuzzFilterString (policy);
-  FuzzReadFrame, FuzzParseMembers (resolve/irrd); FuzzScanResponse (resolve/whois).
+  FuzzReadFrame, FuzzParseMembers (resolve/irrd); FuzzScanResponse (resolve/whois);
+  FuzzAggregate (resolve/internal/filtergen).
 - Opt-in: `RPSL_REALDATA=$PWD/.data go test -run TestRealData ./examples/bulk-ripe/bulk`
   (RIPE, APNIC, ARIN, AFRINIC, LACNIC, RADB and RADB's ten mirrors, via scripts/fetch-irr-dumps.sh);
   `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve`;
   `RPSL_LIVE=1 go test -run 'TestRIPETemplatesAreCurrent|TestIRRdSourceIsCurrent' ./object`
   (RIPE profile vs whois -t; IRRd profile's fixture vs IRRd's latest release).
 - `rpslq` (resolve/cmd/rpslq; logic in resolve/internal/rpslq, formats in resolve/internal/filtergen)
-  is bgpq4 on this engine; `TestRpslqMatchesBgpq4` holds its output to bgpq4's byte for byte.
+  is bgpq4 on this engine: bgpq4's getopt command line, every vendor/kind/shape, and -A as a
+  node-for-node port of bgpq4's radix tree (filtergen/tree.go) — don't "improve" its
+  aggregation or printers, they must stay bgpq4's. `TestRpslqMatchesBgpq4`,
+  `TestRpslqVendorsMatchBgpq4`, `TestRpslqExceptMatchesBgpq4` and `TestTreeMatchesBgpq4` hold it to
+  the bgpq4 binary byte for byte (and its refusals to bgpq4's); deliberate differences are
+  pinned in resolve/testdata/bgpq4/divergences.md. rpslq-only options are `--long`.
   Its IRRd queries use `irrd.Source.Pipeline` (one connection, many queries in flight).
 - Releasing: RELEASING.md (tag order lexer/types → ast → root → resolve); rehearse first with
   `scripts/release-dryrun.sh` (local proxy, publishes nothing).

@@ -3,6 +3,7 @@ package resolve
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand/v2"
 	"net/netip"
@@ -29,12 +30,17 @@ func TestConcurrencyDoesNotChangeResults(t *testing.T) {
 		g := randomGraph(r, 6)
 		src := g.corpus(t, r)
 		top := mustSet(t, "AS-S0")
-		serial, err := (&Expander{Src: src}).ExpandAS(context.Background(), top)
+		// Every other seed leaves a random set out, so exclusion is covered too.
+		var ex Exclusion
+		if seed%2 == 1 {
+			ex.Sets = []types.SetName{mustSet(t, fmt.Sprintf("AS-S%d", 1+r.IntN(5)))}
+		}
+		serial, err := (&Expander{Src: src, Exclude: ex}).ExpandAS(context.Background(), top)
 		if err != nil {
 			t.Fatalf("seed %d: %v", seed, err)
 		}
 		for _, n := range []int{2, 8, 64} {
-			got, err := (&Expander{Src: src, Concurrency: n}).ExpandAS(context.Background(), top)
+			got, err := (&Expander{Src: src, Concurrency: n, Exclude: ex}).ExpandAS(context.Background(), top)
 			if err != nil {
 				t.Fatalf("seed %d, concurrency %d: %v", seed, n, err)
 			}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net/netip"
+	"os"
 	"os/exec"
 	"slices"
 	"sort"
@@ -37,6 +38,27 @@ func needBgpq4(t *testing.T) {
 	if _, err := exec.LookPath("bgpq4"); err != nil {
 		t.Skip("bgpq4 is not installed")
 	}
+}
+
+// bgpq4Version is the bgpq4 whose output rpslq's printers are ports of.
+const bgpq4Version = "1.16"
+
+// needBgpq4Output is needBgpq4 for the tests that compare rpslq's text with
+// bgpq4's, which differs between bgpq4 versions (1.12 indents Arista lists
+// otherwise, 1.13 fixed IOS XR's commas). Another version skips the test,
+// except in CI, which builds the right one and must not skip quietly.
+func needBgpq4Output(t *testing.T) {
+	t.Helper()
+	needBgpq4(t)
+	out, _ := exec.Command("bgpq4", "-v").Output()
+	if strings.Contains(string(out), "version: "+bgpq4Version+"\n") {
+		return
+	}
+	msg := fmt.Sprintf("rpslq's output follows bgpq4 %s, and this is %q", bgpq4Version, strings.TrimSpace(string(out)))
+	if os.Getenv("CI") != "" {
+		t.Fatal(msg)
+	}
+	t.Skip(msg)
 }
 
 // runBgpq4 runs bgpq4 against addr with the given source priority and returns

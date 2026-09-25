@@ -86,34 +86,49 @@ Go 1.23+ is required (the streaming parser returns an `iter.Seq2`).
 
 ## rpslq: bgpq4's job on this engine
 
-`rpslq` writes router prefix lists and AS lists from IRR data, as bgpq4 does,
-with this library's expansion engine: its mbrs-by-ref checks, range
-operators and limits, over IRRd, whois or an offline dump.
+`rpslq` writes router filters from IRR data, as bgpq4 does, with this
+library's expansion engine: its mbrs-by-ref checks, range operators and
+limits, over IRRd, whois or an offline dump.
 
 ```sh
 go install github.com/rkolesnichenko/rpsl/resolve/cmd/rpslq@latest
-rpslq -h whois.radb.net -S RADB,RIPE -b AS-EXAMPLE      # BIRD
-rpslq -h whois.radb.net -S RADB,RIPE -6 -j AS-EXAMPLE   # JSON, IPv6
-rpslq -h whois.radb.net -t -j AS-EXAMPLE                # AS numbers
-rpslq -dump ripe.db.route.gz -dump ripe.db.as-set.gz -ranges -P AS-EXAMPLE
+rpslq -h whois.radb.net -S RADB,RIPE -6Ab AS-EXAMPLE    # BIRD, IPv6, aggregated
+rpslq -h whois.radb.net -JEA -l POLICY/TERM AS-EXAMPLE  # Junos route-filter
+rpslq -h whois.radb.net -f 65000 AS-EXAMPLE             # Cisco as-path list
+rpslq -h whois.radb.net AS-EXAMPLE EXCEPT AS-BAD AS666  # leaving some out
+rpslq --dump ripe.db.route.gz --dump ripe.db.as-set.gz --ranges -P AS-EXAMPLE
 ```
 
-Flags are bgpq4's where they mean the same (`-h -S -4 -6 -t -j -b -J -l -m -L
--p`), and the output is bgpq4's, byte for byte — a test holds the two to it on
-random IRRs, and live against RADB they agree on sets as large as
-AS-HURRICANE (688,423 lines). Queries to IRRd are pipelined on one connection,
-as bgpq4's are.
+The command line is bgpq4's, read as bgpq4 reads it (`-6Ab`, `-lNAME`), and
+so is the output, byte for byte, for every vendor — Cisco IOS and IOS XR,
+Junos, Arista, OpenBGPD, BIRD, JSON, Nokia SR OS (classic and MD-CLI) and SR
+Linux, MikroTik v6 and v7, Huawei and XPL, `-F` formats — and every kind of
+list: prefix lists, route-filters and access-lists (`-E`), route-filter-lists
+(`-z`), as-path lists (`-f`, `-G`), as-lists (`-H`) and AS sets (`-t`), with
+aggregation (`-A`, bgpq4's own algorithm), more-specifics (`-R`, `-r`) and
+the rest. Tests run the bgpq4 binary against the same server over the full
+matrix and random IRRs, and live against RADB the two agree on sets as large
+as AS-HURRICANE. What bgpq4 refuses, rpslq refuses. Queries to IRRd are
+pipelined on one connection, as bgpq4's are.
 
-`-a` lets the server expand as-sets itself, with IRRd 4's `!a`, as plain bgpq4
-does: one query where the engine makes one per AS, so the largest sets take
-seconds rather than tens of seconds (AS-HURRICANE: about 8 s, as bgpq4). The
-answer is then the server's, under its rules — its recursion, no `-L`, special
-AS numbers kept — which the engine cannot check. So `rpslq -a` writes what plain
-`bgpq4` writes, and `rpslq` without it what `bgpq4 -L n` writes. `-ranges` writes RPSL ranges (`le`/`ge`) rather than every
-prefix they hold, and `-P` RPSL's own notation. Where the engine and bgpq4
-knowingly part — range operators on set and AS members, the single-length `^n`
-form, route-sets listed in as-sets — rpslq follows the engine
-(`resolve/testdata/bgpq4/divergences.md`).
+rpslq's own options are long: `--whois` and `--dump` choose the source,
+`--ranges` writes RPSL ranges as they are rather than every prefix they hold
+(`-P` writes RPSL's own notation), and `--server-expand` lets the server
+expand as-sets with IRRd 4's `!a`, as plain bgpq4 does: one query where the
+engine makes one per AS, so the largest sets take seconds rather than tens of
+seconds, but the answer is the server's, under its rules, which the engine
+cannot check. So `rpslq --server-expand` writes what plain `bgpq4` writes, and
+`rpslq` without it what `bgpq4 -L n` writes — except that where the sets nest
+deeper than `-L` allows, bgpq4 leaves the deeper ones out and rpslq fails
+instead.
+
+Where the two knowingly part, rpslq follows the engine: range operators on set
+and AS members, the single-length `^n` form, route-sets listed in as-sets,
+`EXCEPT` inside route-sets (bgpq4 applies it to as-sets only), sets nested
+deeper than `-L` (an error, not a shorter list), and `-m 32`
+(bgpq4 then drops a range's more-specifics). See
+`resolve/testdata/bgpq4/divergences.md`. bgpq4's `SOURCE::OBJECT` form is not
+supported; use `-S`.
 
 ## Module map
 
