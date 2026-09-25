@@ -9,7 +9,7 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
-## [0.11.0] - 2026-09-24
+## [0.11.0] - 2026-09-25
 
 ### Added
 
