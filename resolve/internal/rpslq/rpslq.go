@@ -702,11 +702,11 @@ func specialAS(a types.ASN) bool {
 type object struct {
 	text     string
 	registry string // SOURCE:: — the registry the object is looked up in, or ""
-	as    types.ASN
-	set   types.SetName
-	pfx   types.PrefixRange
-	isAS  bool
-	isPfx bool
+	as       types.ASN
+	set      types.SetName
+	pfx      types.PrefixRange
+	isAS     bool
+	isPfx    bool
 }
 
 func parseObjects(args []string) ([]object, error) {
