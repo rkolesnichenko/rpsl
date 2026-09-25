@@ -9,6 +9,25 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-25
+
+### Added
+
+- **`rpslq`, a bgpq4-style filter generator** on the expansion engine:
+  `go install github.com/rkolesnichenko/rpsl/resolve/cmd/rpslq@latest`. It
+  writes prefix lists (Cisco IOS, JSON, BIRD, Junos, plain) and AS lists
+  (JSON, BIRD, plain) for as-sets, route-sets and AS numbers, over IRRd,
+  whois or offline dumps. Flags follow bgpq4's, and its output is bgpq4's
+  byte for byte — held to it by a test on random IRRs, and matching it live
+  on RADB for AS-HURRICANE. `-ranges` writes RPSL ranges instead of every
+  prefix they hold.
+- **`irrd.Source.Pipeline`**: pipelined queries, as bgpq4 sends them. Up to
+  `Pipeline` queries share one persistent connection, their commands written
+  back to back and their answers read in order; a connection that fails is
+  replaced and its waiting queries retried once. Expanding AS-HURRICANE's
+  routes over RADB went from failing after seven minutes (sixteen
+  connections, reset by the server) to 22 seconds on one connection.
+
 ## [0.11.0] - 2026-09-25
 
 ### Added
@@ -575,7 +594,8 @@ The first release. There is no earlier version to migrate from.
   values do; a few common RP-attributes have typed helpers.
 - **`rdap` is not a `Source`.** RDAP serves registration data, not IRR sets.
 
-[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/rkolesnichenko/rpsl/compare/v0.9.0...v0.9.1

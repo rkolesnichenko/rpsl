@@ -674,6 +674,9 @@ func TestModelBackends(t *testing.T) {
 		ir := &irrd.Source{Addr: db.IRRd(t), Sources: []string{"RIPE", "RADB"}, KeepAlive: true, Timeout: 5 * time.Second}
 		checkModel(t, fmt.Sprintf("irrd seed %d", seed), o, texts, ir, false)
 		ir.Close()
+		pl := &irrd.Source{Addr: db.IRRd(t), Sources: []string{"RIPE", "RADB"}, Pipeline: 8, MaxConns: 2, Timeout: 5 * time.Second}
+		checkModel(t, fmt.Sprintf("pipelined irrd seed %d", seed), o, texts, pl, false)
+		pl.Close()
 		wh := &whois.Source{Addr: db.Whois(t), Sources: []string{"RIPE", "RADB"}, Timeout: 5 * time.Second}
 		checkModel(t, fmt.Sprintf("whois seed %d", seed), o, texts, wh, false)
 	}

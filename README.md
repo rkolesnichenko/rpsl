@@ -84,6 +84,30 @@ go get github.com/rkolesnichenko/rpsl/resolve  # the expansion engine
 
 Go 1.23+ is required (the streaming parser returns an `iter.Seq2`).
 
+## rpslq: bgpq4's job on this engine
+
+`rpslq` writes router prefix lists and AS lists from IRR data, as bgpq4 does,
+with this library's expansion engine: its mbrs-by-ref checks, range
+operators and limits, over IRRd, whois or an offline dump.
+
+```sh
+go install github.com/rkolesnichenko/rpsl/resolve/cmd/rpslq@latest
+rpslq -h whois.radb.net -S RADB,RIPE -b AS-EXAMPLE      # BIRD
+rpslq -h whois.radb.net -S RADB,RIPE -6 -j AS-EXAMPLE   # JSON, IPv6
+rpslq -h whois.radb.net -t -j AS-EXAMPLE                # AS numbers
+rpslq -dump ripe.db.route.gz -dump ripe.db.as-set.gz -ranges -P AS-EXAMPLE
+```
+
+Flags are bgpq4's where they mean the same (`-h -S -4 -6 -t -j -b -J -l -m -L
+-p`), and the output is bgpq4's, byte for byte — a test holds the two to it on
+random IRRs, and live against RADB they agree on sets as large as
+AS-HURRICANE (688,423 lines). Queries to IRRd are pipelined on one connection,
+as bgpq4's are. `-ranges` writes RPSL ranges (`le`/`ge`) rather than every
+prefix they hold, and `-P` RPSL's own notation. Where the engine and bgpq4
+knowingly part — range operators on set and AS members, the single-length `^n`
+form, route-sets listed in as-sets — rpslq follows the engine
+(`resolve/testdata/bgpq4/divergences.md`).
+
 ## Module map
 
 Imports run strictly downward — `resolve → object → policy → types → ast → lexer`
