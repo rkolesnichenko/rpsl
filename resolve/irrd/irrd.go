@@ -63,8 +63,17 @@ type Source struct {
 	KeepAlive bool // reuse persistent connections from a pool
 	MaxConns  int  // max concurrent connections, and pooled ones with KeepAlive; 0 = 4, < 0 = none
 
+	// Pipeline, when positive, pipelines queries as bgpq4 does: up to Pipeline
+	// of them share one persistent connection at once, their commands written
+	// back to back and their answers read in order. A large expansion then
+	// costs a few connections rather than a round trip per query. MaxConns
+	// bounds the connections, so up to MaxConns×Pipeline queries run at once;
+	// KeepAlive is implied. Zero sends one query at a time per connection.
+	Pipeline int
+
 	mu     sync.Mutex
 	idle   []*pconn
+	pipes  []*pipe       // pipelined connections (Pipeline > 0)
 	slots  chan struct{} // semaphore of MaxConns, created on first use
 	closed bool
 }
@@ -83,6 +92,10 @@ type pconn struct {
 
 // errNotFound is the internal sentinel for a 'D' (key not found) response.
 var errNotFound = errors.New("irrd: key not found")
+
+// errQuery wraps an 'F' response: the server refused the query itself, and the
+// connection is still in step.
+var errQuery = errors.New("irrd: query error")
 
 // ErrClosed is returned by queries on a Source after Close.
 var ErrClosed = errors.New("irrd: source closed")
@@ -267,6 +280,9 @@ func (s *Source) do(ctx context.Context, cmd string) ([]byte, error) {
 	}
 	ctx, cancel := netconn.WithTimeout(ctx, s.timeout())
 	defer cancel()
+	if s.Pipeline > 0 {
+		return s.doPipelined(ctx, cmd)
+	}
 	if err := s.acquireSlot(ctx); err != nil {
 		return nil, err
 	}
@@ -458,9 +474,12 @@ func (s *Source) releaseSlot() {
 // pool. It may be called more than once, and on a Source that never pooled.
 func (s *Source) Close() error {
 	s.mu.Lock()
-	conns := s.idle
-	s.idle, s.closed = nil, true
+	conns, pipes := s.idle, s.pipes
+	s.idle, s.pipes, s.closed = nil, nil, true
 	s.mu.Unlock()
+	for _, p := range pipes {
+		p.shut(ErrClosed)
+	}
 	for _, pc := range conns {
 		_, _ = io.WriteString(pc.conn, "!q\n")
 		_ = pc.conn.Close()
@@ -518,7 +537,7 @@ func readFrame(br *bufio.Reader, max int64) ([]byte, error) {
 	case 'D':
 		return nil, errNotFound
 	case 'F':
-		return nil, fmt.Errorf("irrd: query error: %s", strings.TrimSpace(header[1:]))
+		return nil, fmt.Errorf("%w: %s", errQuery, strings.TrimSpace(header[1:]))
 	default:
 		return nil, fmt.Errorf("irrd: unexpected response %q", header)
 	}
