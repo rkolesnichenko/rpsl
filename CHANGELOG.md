@@ -9,6 +9,27 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **`resolve.DumpLoader.SourceOf`**: a `MemSource` over the loaded dumps'
+  objects from some registries only, in the precedence given — the dumps as
+  if those registries alone had been loaded, without reading them again.
+- **rpslq reads bgpq4's `SOURCE::OBJECT`** (`RIPE::AS-FOO`): the set, and its
+  indirect members, are looked up in that registry, and what it reaches —
+  nested sets, its ASes' routes — in the default sources, as bgpq4 does. Over
+  IRRd, whois and dumps alike. `RIPE::AS65001` takes that AS's routes from
+  RIPE alone. Held to bgpq4 on random IRRs; four corners where bgpq4 slips
+  are pinned as divergences.
+- **rpslq `-d`** traces each question it asks of its source — the set or
+  routes asked for, the registry, what came back, how long it took — and a
+  count at the end, to stderr. The list itself is unchanged.
+
+### Fixed
+
+- `rpslq --dump` with `-S` uses only the registries `-S` names, in its order,
+  as `-S` does for a server; it only ranked them, and unioned every
+  registry's routes.
+
 ## [0.15.0] - 2026-09-25
 
 ### Added

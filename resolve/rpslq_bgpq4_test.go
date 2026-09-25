@@ -285,6 +285,96 @@ func TestRpslqExceptMatchesBgpq4(t *testing.T) {
 	}
 }
 
+// SOURCE::SET looks the set up in one registry and what it reaches in the
+// default sources, as bgpq4 does (without -L or EXCEPT): over random IRRs that define sets in both
+// registries, as-sets named with the registry that holds them, under several
+// -S, for prefix lists and AS lists.
+func TestRpslqSourcePrefixMatchesBgpq4(t *testing.T) {
+	needBgpq4Output(t)
+	compared := 0
+	for seed := uint64(0); seed < 30; seed++ {
+		r := rand.New(rand.NewPCG(seed, 23))
+		m := randomModel(r, true)
+		addr := irrtest.New(m.texts(r)...).WithSources("RIPE", "RADB").IRRd(t)
+		listed := map[string]bool{} // names some set lists as a member
+		for _, set := range m.sets {
+			for _, mm := range set.members {
+				if mm.kind == "set" {
+					listed[mm.set] = true
+				}
+			}
+		}
+		for _, set := range m.sets {
+			if set.class != types.ClassAsSet {
+				continue // bgpq4 then expands route-sets shallowly: "source-route-set"
+			}
+			if listed[set.name] {
+				continue // a way back to the top's name: "source-cycle"
+			}
+			top := set.source + "::" + set.name
+			for _, sources := range []string{"RIPE,RADB", "RADB", "RIPE"} {
+				for _, flags := range [][]string{{"-4"}, {"-6"}, {"-t", "-j"}} {
+					// No -L: with it, bgpq4 ignores SOURCE:: ("source-with-depth").
+					args := append(append([]string{"-h", addr, "-S", sources, "-p"}, flags...), top)
+					if compareRpslq(t, fmt.Sprintf("seed %d", seed), args) {
+						compared++
+					}
+				}
+			}
+		}
+	}
+	if compared < 100 {
+		t.Errorf("only %d lists compared", compared)
+	}
+}
+
+// Where rpslq and bgpq4 knowingly differ over SOURCE:: (divergences.md),
+// each side's answer, pinned. Both registries hold AS-TOP; RIPE's lists
+// itself.
+func TestRpslqSourceDivergences(t *testing.T) {
+	needBgpq4Output(t)
+	addr := irrtest.New(
+		"as-set: AS-TOP\nmembers: AS65001, AS-TOP\nsource: RIPE\n",
+		"as-set: AS-TOP\nmembers: AS65002\nsource: RADB\n",
+		"route-set: RS-X\nmembers: 192.0.2.0/24, RS-Y\nsource: RADB\n",
+		"route-set: RS-Y\nmembers: 198.51.100.0/24\nsource: RADB\n",
+		"route: 10.1.0.0/24\norigin: AS65001\nsource: RADB\n",
+		"route: 203.0.113.0/24\norigin: AS65003\nsource: RIPE\n",
+	).WithSources("RIPE", "RADB").IRRd(t)
+	base := []string{"-h", addr, "-S", "RADB", "-p"}
+	for _, c := range []struct {
+		id         string
+		args       []string
+		rpslq, bgp string
+	}{
+		// RIPE's AS-TOP lists AS-TOP: a cycle to the engine; to bgpq4, which
+		// has not marked the top as seen, a set to look up in the default
+		// sources — RADB's AS-TOP.
+		{"source-cycle", []string{"-tj", "RIPE::AS-TOP"}, `{"NN": [ 65001 ]}`, `{"NN": [ 65001,65002 ]}`},
+		// With -L (or EXCEPT), bgpq4 looks the top up in the default sources.
+		{"source-with-depth", []string{"-L", "8", "-tj", "RIPE::AS-TOP"}, `{"NN": [ 65001 ]}`, `{"NN": [ 65002 ]}`},
+		// Once SOURCE:: is used, bgpq4 asks for every route-set with "!i"
+		// rather than "!i…,1", and keeps only its prefix members.
+		{"source-route-set", []string{"-F", `%n/%l\n`, "RS-X"}, "192.0.2.0/24 198.51.100.0/24", "192.0.2.0/24 198.51.100.0/24"},
+		{"source-route-set", []string{"-F", `%n/%l\n`, "RIPE::AS65003", "RS-X"},
+			"192.0.2.0/24 198.51.100.0/24 203.0.113.0/24", "192.0.2.0/24"},
+		// bgpq4 cannot read SOURCE:: on an AS number, and drops it.
+		{"source-as-number", []string{"-F", `%n/%l\n`, "RIPE::AS65003"}, "203.0.113.0/24", ""},
+	} {
+		args := append(append([]string(nil), base...), c.args...)
+		var got, errs bytes.Buffer
+		if code := rpslq.Run(context.Background(), args, &got, &errs); code != 0 {
+			t.Fatalf("%s: rpslq exit %d: %s", c.id, code, errs.String())
+		}
+		if g := strings.Join(strings.Fields(got.String()), " "); g != c.rpslq {
+			t.Errorf("%s %v: rpslq %q, pinned %q", c.id, c.args, g, c.rpslq)
+		}
+		if g := strings.Join(strings.Fields(runBgpq4Text(t, args)), " "); g != c.bgp {
+			t.Errorf("%s %v: bgpq4 %q, pinned %q", c.id, c.args, g, c.bgp)
+		}
+	}
+}
+
 // Where rpslq and bgpq4 knowingly differ (testdata/bgpq4/divergences.md,
 // "rpslq"), each side's answer, pinned.
 func TestRpslqKnownDivergences(t *testing.T) {
