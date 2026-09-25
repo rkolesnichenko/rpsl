@@ -26,7 +26,7 @@ var rpslqFormats = [][]string{nil, {"-j"}, {"-b"}, {"-J"}}
 // differential uses (in bgpq4-compatible mode), with bgpq4's special AS
 // numbers dropped and kept (-p).
 func TestRpslqMatchesBgpq4(t *testing.T) {
-	needBgpq4(t)
+	needBgpq4Output(t)
 	for seed := uint64(0); seed < 20; seed++ {
 		r := rand.New(rand.NewPCG(seed, 11))
 		m := randomModel(r, true)
@@ -67,7 +67,7 @@ func TestRpslqMatchesBgpq4(t *testing.T) {
 // to expand an as-set ("!a"), and so does rpslq --server-expand, so the two agree on the
 // server's answer — its recursion, special AS numbers kept — byte for byte.
 func TestRpslqServerSideMatchesBgpq4(t *testing.T) {
-	needBgpq4(t)
+	needBgpq4Output(t)
 	for seed := uint64(0); seed < 20; seed++ {
 		r := rand.New(rand.NewPCG(seed, 13))
 		m := randomModel(r, true)
@@ -156,7 +156,7 @@ func compareRpslq(t *testing.T, label string, args []string) (wrote bool) {
 // and refuses what bgpq4 refuses: the full matrix over one random IRR, and
 // random combinations, bundled or not, over others.
 func TestRpslqVendorsMatchBgpq4(t *testing.T) {
-	needBgpq4(t)
+	needBgpq4Output(t)
 	for seed := uint64(0); seed < 12; seed++ {
 		r := rand.New(rand.NewPCG(seed, 17))
 		m := randomModel(r, true)
@@ -238,7 +238,7 @@ func TestRpslqVendorsMatchBgpq4(t *testing.T) {
 // EXCEPT leaves the same sets and AS numbers out of an as-set's expansion as
 // bgpq4's stoplist does, for prefix lists and AS lists alike.
 func TestRpslqExceptMatchesBgpq4(t *testing.T) {
-	needBgpq4(t)
+	needBgpq4Output(t)
 	compared, changed := 0, 0
 	for seed := uint64(0); seed < 30; seed++ {
 		r := rand.New(rand.NewPCG(seed, 19))
@@ -288,7 +288,7 @@ func TestRpslqExceptMatchesBgpq4(t *testing.T) {
 // Where rpslq and bgpq4 knowingly differ (testdata/bgpq4/divergences.md,
 // "rpslq"), each side's answer, pinned.
 func TestRpslqKnownDivergences(t *testing.T) {
-	needBgpq4(t)
+	needBgpq4Output(t)
 	addr := irrtest.New(
 		"route-set: RS-TOP\nmembers: 192.0.2.0/24, RS-BAD, AS-BAD, 10.0.0.0/30^+\nsource: RIPE\n",
 		"route-set: RS-BAD\nmembers: 198.51.100.0/24\nsource: RIPE\n",
@@ -326,7 +326,7 @@ func TestRpslqKnownDivergences(t *testing.T) {
 // the sets nest deeper, bgpq4 leaves the deeper ones out and rpslq fails
 // ("depth-limit" in divergences.md).
 func TestRpslqDepthLimit(t *testing.T) {
-	needBgpq4(t)
+	needBgpq4Output(t)
 	addr := irrtest.New(
 		"as-set: AS-TOP\nmembers: AS1, AS-MID\nsource: RIPE\n",
 		"as-set: AS-MID\nmembers: AS2, AS-LOW\nsource: RIPE\n",
@@ -351,7 +351,7 @@ func TestRpslqDepthLimit(t *testing.T) {
 // broken to the left, a single zero word not compressed — in every vendor,
 // and in -F's netmasks.
 func TestRpslqAddressesMatchBgpq4(t *testing.T) {
-	needBgpq4(t)
+	needBgpq4Output(t)
 	addr := irrtest.New().IRRd(t)
 	prefixes := []string{"::1.2.3.0/120", "::ffff:1.2.3.0/120", "::/96", "::102/128", "::1/128",
 		"1:0:0:2:0:0:3:4/128", "1:0:2:3:4:5:6:7/128", "2001:db8::/32"}
