@@ -29,7 +29,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -60,11 +59,6 @@ type Client struct {
 	HTTP         *http.Client // nil: http.DefaultClient with a 10-minute timeout per file
 	MaxFileBytes int64        // cap on a snapshot or delta after decompression; 0: DefaultMaxFileBytes
 
-	// Keep decides which objects the mirror holds. nil keeps what the engine
-	// uses (resolve.Expandable), and skips the other classes without parsing
-	// them.
-	Keep func(object.Object) bool
-
 	// OnDiagnostics, when set, is called for each object that raised
 	// diagnostics, or was discarded — its source: not the database's, no
 	// primary key (§9.2) — with rule "nrtm4/discarded". Discarding an object
@@ -89,7 +83,7 @@ type state struct {
 	next     *ecdsa.PublicKey
 	nextPEM  string
 	seen     map[string]fileRef // "S3", "D4" -> the reference a valid notification file gave
-	objs     map[string]object.Object
+	corpus   *resolve.Corpus
 	stamp    time.Time
 	stale    bool
 	lastSeen int64 // the latest notification file's version
@@ -98,7 +92,6 @@ type state struct {
 // view is one published version.
 type view struct {
 	src    *resolve.MemSource
-	objs   []object.Object
 	status Status
 }
 
@@ -108,7 +101,7 @@ type Status struct {
 	Version   int64     // the version the mirror holds; 0 before the first load
 	Timestamp time.Time // of the notification file that version came from
 	Stale     bool      // that file was over 24 hours old (§5.6): warned, not refused
-	Objects   int
+	Objects   int       // held, whole or reduced (see resolve.Corpus)
 	// CurrentKey is the PEM of the key the last notification file verified
 	// with: Client.PublicKey, or the key it rotated to (§9.6). Persist it and
 	// pass it as PublicKey next time, or a rotation while the program was
@@ -125,7 +118,7 @@ type Update struct {
 	Deltas    int    // delta files applied
 	Added     int    // objects added or replaced
 	Deleted   int    // objects deleted
-	Discarded int    // objects left out (Keep, or §9.2)
+	Discarded int    // objects left out: nothing the engine uses, or §9.2
 	Stale     bool   // the notification file was over 24 hours old
 }
 
@@ -139,15 +132,13 @@ func (c *Client) Source() *resolve.MemSource {
 	return nil
 }
 
-// Objects returns the objects of the same version, for combining mirrors of
-// several databases — or a mirror with dumps and RPKI pseudo objects — in one
-// resolve.NewMemSource with a source precedence. The slice is shared; do not
-// modify it.
-func (c *Client) Objects() []object.Object {
-	if v := c.view.Load(); v != nil {
-		return v.objs
-	}
-	return nil
+// CopyTo merges the mirror's current version into dst, for expanding
+// against several mirrors — RIPE and RIPE-NONAUTH — or a mirror with dumps and
+// RPKI pseudo routes, under one precedence (dst.Source("RIPE", …)).
+func (c *Client) CopyTo(dst *resolve.Corpus) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	dst.Merge(c.st.corpus)
 }
 
 // Status reports the version the mirror holds and the keys it trusts.
@@ -193,14 +184,14 @@ func (c *Client) Sync(ctx context.Context) (Update, error) {
 		return u, err
 	}
 	if u.Reason != "" {
-		objs, discarded, err := c.loadSnapshot(ctx, n)
+		corpus, added, discarded, err := c.loadSnapshot(ctx, n)
 		if err != nil {
 			return u, fmt.Errorf("nrtm4: %s: snapshot %d: %w", c.Database, n.Snapshot.Version, err)
 		}
-		c.st.session, c.st.version, c.st.objs = n.SessionID, n.Snapshot.Version, objs
+		c.st.session, c.st.version, c.st.corpus = n.SessionID, n.Snapshot.Version, corpus
 		c.st.seen = map[string]fileRef{}
 		c.failures = 0
-		u.Snapshot, u.Added, u.Discarded = true, len(objs), discarded
+		u.Snapshot, u.Added, u.Discarded = true, added, discarded
 	}
 	c.remember(n)
 	var derr error
@@ -327,64 +318,61 @@ func (c *Client) remember(n *notification) {
 // loadSnapshot reads the snapshot into a new object store, streaming: the
 // store is returned only when the file's hash and header check out and every
 // record is well-formed.
-func (c *Client) loadSnapshot(ctx context.Context, n *notification) (map[string]object.Object, int, error) {
+func (c *Client) loadSnapshot(ctx context.Context, n *notification) (*resolve.Corpus, int, int, error) {
 	u, err := c.resolve(n.Snapshot.URL)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	body, err := c.open(ctx, u)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	defer body.Close()
 	h := sha256.New()
 	tee := io.TeeReader(body, h)
 	r, err := c.decompress(u, tee)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	seq := newSeqReader(r, maxRecord)
 	if err := c.fileHeader(seq, "snapshot", n, n.Snapshot.Version); err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
-	objs := map[string]object.Object{}
-	discarded := 0
+	corpus := &resolve.Corpus{}
+	added, discarded := 0, 0
 	for {
 		rec, err := seq.next()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, 0, err
 		}
 		text, err := objectText(rec)
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, 0, err
 		}
-		k, o, ok := c.object(text)
-		switch {
-		case o != nil:
-			objs[k] = o
-		case ok:
-			delete(objs, k)
-			discarded++
-		default:
+		if o := c.object(text); o != nil && corpus.Put(o) {
+			added++
+		} else {
 			discarded++
 		}
 	}
 	if err := drain(tee); err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	if err := hashes(h, n.Snapshot.Hash); err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
-	return objs, discarded, nil
+	return corpus, added, discarded, nil
 }
 
-// change is one validated record of a delta.
+// change is one validated record of a delta: a delete of class and primary
+// key, or an object to put (nil: it was discarded, and changes nothing).
 type change struct {
-	key string
-	obj object.Object // nil: delete, or the new version was discarded
+	del       bool
+	class, pk string
+	obj       object.Object
 }
 
 // applyDelta fetches, verifies and parses a whole delta file, and only then
@@ -419,114 +407,99 @@ func (c *Client) applyDelta(ctx context.Context, n *notification, d fileRef) (ad
 		if err != nil {
 			return 0, 0, 0, err
 		}
-		ch, disc, err := c.change(rec)
+		ch, err := c.change(rec)
 		if err != nil {
 			return 0, 0, 0, fmt.Errorf("change %d: %w", len(changes)+1, err)
 		}
 		changes = append(changes, ch)
-		discarded += disc
 	}
 	if len(changes) == 0 {
 		return 0, 0, 0, errors.New("no changes (§8.3: a delta holds at least one)")
 	}
 	for _, ch := range changes {
-		if ch.obj != nil {
-			c.st.objs[ch.key] = ch.obj
+		switch {
+		case ch.del:
+			if c.st.corpus.Delete(ch.class, ch.pk, c.Database) {
+				deleted++
+			}
+		case ch.obj != nil && c.st.corpus.Put(ch.obj):
 			added++
-		} else if _, ok := c.st.objs[ch.key]; ok {
-			delete(c.st.objs, ch.key)
-			deleted++
+		default:
+			discarded++ // left out; a version it replaces is gone (Corpus.Put)
 		}
 	}
 	return added, deleted, discarded, nil
 }
 
 // change reads one delta record.
-func (c *Client) change(rec []byte) (change, int, error) {
+func (c *Client) change(rec []byte) (change, error) {
 	m, err := jsonObject(rec)
 	if err != nil {
-		return change{}, 0, err
+		return change{}, err
 	}
 	action, err := str(m, "action")
 	if err != nil {
-		return change{}, 0, err
+		return change{}, err
 	}
 	switch action {
 	case "delete":
 		class, err := str(m, "object_class")
 		if err != nil {
-			return change{}, 0, err
+			return change{}, err
 		}
 		pk, err := str(m, "primary_key")
 		if err != nil {
-			return change{}, 0, err
+			return change{}, err
 		}
 		if class == "" || pk == "" {
-			return change{}, 0, errors.New("a delete without an object class or primary key")
+			return change{}, errors.New("a delete without an object class or primary key")
 		}
-		return change{key: key(class, pk)}, 0, nil
+		return change{del: true, class: class, pk: pk}, nil
 	case "add_modify":
 		text, err := str(m, "object")
 		if err != nil {
-			return change{}, 0, err
+			return change{}, err
 		}
-		k, o, ok := c.object(text)
-		if o != nil {
-			return change{key: k, obj: o}, 0, nil
-		}
-		if ok {
-			return change{key: k}, 1, nil // the new version is left out: so is the old
-		}
-		return change{key: "\x00"}, 1, nil // no key: nothing to replace
+		return change{obj: c.object(text)}, nil
 	}
-	return change{}, 0, fmt.Errorf("action %q, want \"add_modify\" or \"delete\"", action)
+	return change{}, fmt.Errorf("action %q, want \"add_modify\" or \"delete\"", action)
 }
 
-// keepClasses are the classes resolve.Expandable can accept, so that the
-// default Keep skips the others without parsing them.
+// keepClasses are the classes the engine can use, so that the others are
+// skipped without being parsed.
 var keepClasses = map[string]bool{
 	"as-set": true, "route-set": true, "rtr-set": true, "filter-set": true, "peering-set": true,
 	"route": true, "route6": true, "aut-num": true, "inet-rtr": true,
 }
 
-// object parses one object text. It returns the object's key and the decoded
-// object when the mirror keeps it; the key alone (ok) when the object is left
-// out — a replaced older version must go too; and nothing when the text has
-// no key at all.
-func (c *Client) object(text string) (k string, o object.Object, ok bool) {
-	if c.Keep == nil {
-		class, _, _ := strings.Cut(text, ":")
-		if !keepClasses[strings.ToLower(strings.TrimSpace(class))] {
-			return "", nil, false // a class the engine has no use for: skipped unparsed
-		}
+// object parses and decodes one object text, or returns nil when it is left
+// out: a class the engine has no use for (skipped unparsed), or — with a
+// diagnostic — an object with no primary key, of another source (§9.2), or
+// that did not decode as its class.
+func (c *Client) object(text string) object.Object {
+	class, _, _ := strings.Cut(text, ":")
+	if !keepClasses[strings.ToLower(strings.TrimSpace(class))] {
+		return nil
 	}
 	raw, ds := rpsl.ParseObject(text)
-	k, ok = objectKey(raw)
-	if !ok {
+	if _, ok := objectKey(raw); !ok {
 		c.discard(raw, ds, "it has no class, or no primary key")
-		return "", nil, false
+		return nil
 	}
 	if src, has := raw.GetFirst("source"); !has || !strings.EqualFold(strings.TrimSpace(src.Value), c.Database) {
 		c.discard(raw, ds, fmt.Sprintf("its source: is not %s", c.Database))
-		return k, nil, true
+		return nil
 	}
 	obj, dds := object.Decode(raw)
 	ds = append(ds, dds...)
-	keep := resolve.Expandable
-	if c.Keep != nil {
-		keep = c.Keep
-	}
-	if !keep(obj) {
-		if c.Keep != nil {
-			return k, nil, true // left out by the caller's choice: no diagnostic
-		}
+	if !resolve.Expandable(obj) {
 		c.discard(raw, ds, "it did not decode as its class")
-		return k, nil, true
+		return nil
 	}
 	if len(ds) > 0 && c.OnDiagnostics != nil {
 		c.OnDiagnostics(raw, ds)
 	}
-	return k, obj, true
+	return obj
 }
 
 func (c *Client) discard(raw *ast.Object, ds []ast.Diagnostic, why string) {
@@ -577,25 +550,16 @@ func objectText(rec []byte) (string, error) {
 // publish makes the state visible as a new view; with changed false only the
 // status moves.
 func (c *Client) publish(changed bool) {
+	if c.st.version == 0 {
+		return
+	}
 	prev := c.view.Load()
 	v := &view{status: Status{SessionID: c.st.session, Version: c.st.version, Timestamp: c.st.stamp,
-		Stale: c.st.stale, Objects: len(c.st.objs), CurrentKey: c.st.curPEM, NextKey: c.st.nextPEM}}
+		Stale: c.st.stale, Objects: c.st.corpus.Len(), CurrentKey: c.st.curPEM, NextKey: c.st.nextPEM}}
 	if changed || prev == nil {
-		if c.st.version == 0 {
-			return
-		}
-		keys := make([]string, 0, len(c.st.objs))
-		for k := range c.st.objs {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		v.objs = make([]object.Object, len(keys))
-		for i, k := range keys {
-			v.objs[i] = c.st.objs[k]
-		}
-		v.src = resolve.NewMemSource(v.objs)
+		v.src = c.st.corpus.Source()
 	} else {
-		v.src, v.objs = prev.src, prev.objs
+		v.src = prev.src
 	}
 	c.view.Store(v)
 }

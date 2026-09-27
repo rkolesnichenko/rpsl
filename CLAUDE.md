@@ -122,6 +122,10 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   whole or not at all, nothing after a refused one. Each version is published as a new immutable
   MemSource (one expansion = one version). `internal/nrtmtest` is an independent spec-following
   server; when a test fails, first check the fake server obeys the draft (it has twice broken §4.3).
+- **`resolve.Corpus` is how loaders hold objects**: sets and `member-of:` claimants whole, other
+  routes as (prefix, origin, source), the rest dropped — 460 MB for RIPE, not 3.7 GB. `Corpus.Source`
+  and `NewMemSource` share `buildMemSource`; `TestCorpusMatchesMemSource` holds every answer equal.
+  Don't retain decoded objects in a loader again.
 - **Prefix-range operators** `^+ ^- ^n ^n-m`: first-class type with a capped `Materialize`.
 - **Dict ↔ decoder agreement**: if `object/profiles.go` lists an attribute on a class, the
   matching `decodeXxx` in `object/classes.go` must read it. Drift silently drops data

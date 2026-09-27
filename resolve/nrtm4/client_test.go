@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/rkolesnichenko/rpsl/ast"
-	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/nrtmtest"
 	"github.com/rkolesnichenko/rpsl/types"
@@ -355,8 +354,9 @@ func TestClientDiscards(t *testing.T) {
 		route("192.0.2.0/24", 1, ""),
 		nrtmtest.Change{Class: "route", PK: "x", Text: "route: 198.51.100.0/24\norigin: AS1\nsource: OTHER\n"}, // another source
 		nrtmtest.Change{Class: "route", PK: "y", Text: "route: 203.0.113.0/24\nsource: TEST\n"},                // no origin: no key
-		nrtmtest.Change{Class: "person", PK: "P1", Text: "person: A\nnic-hdl: P1-TEST\nsource: TEST\n"},        // not kept, unparsed
-		nrtmtest.Change{Class: "route", PK: "z", Text: "route: 10.0.0.0/8\norigin: ASX\nsource: TEST\n"},       // kept, as DumpLoader keeps it; the engine ignores it
+		nrtmtest.Change{Class: "person", PK: "P1", Text: "person: A\nnic-hdl: P1-TEST\nsource: TEST\n"},        // not the engine's, unparsed
+		nrtmtest.Change{Class: "route", PK: "z", Text: "route: 10.0.0.0/8\norigin: ASX\nsource: TEST\n"},       // no AS's route
+		nrtmtest.Change{Class: "aut-num", PK: "AS1", Text: "aut-num: AS1\nas-name: X\nsource: TEST\n"},         // claims nothing
 	)
 	var rules []string
 	c := newClient(s, "TEST")
@@ -366,26 +366,46 @@ func TestClientDiscards(t *testing.T) {
 		}
 	}
 	u := mustSync(t, c)
-	if c.Status().Objects != 2 || u.Discarded != 3 {
-		t.Errorf("kept %d, discarded %d; want 2 and 3", c.Status().Objects, u.Discarded)
+	if c.Status().Objects != 1 || u.Discarded != 5 {
+		t.Errorf("kept %d, discarded %d; want 1 and 5", c.Status().Objects, u.Discarded)
 	}
 	if n := strings.Count(strings.Join(rules, " "), "nrtm4/discarded"); n != 2 {
 		t.Errorf("%d nrtm4/discarded diagnostics, want 2 (other source, no key): %v", n, rules)
 	}
-	// A new version that is left out removes the old one.
+	// An update from another source is discarded, as IRRd discards it: the
+	// object it names stays.
 	s.Publish(nrtmtest.Change{Class: "route", PK: "192.0.2.0/24AS1", Text: "route: 192.0.2.0/24\norigin: AS1\nsource: ELSEWHERE\n"})
 	if mustSync(t, c); c.Status().Objects != 1 {
-		t.Errorf("the old version stayed: %d objects", c.Status().Objects)
+		t.Errorf("the object went: %d objects", c.Status().Objects)
 	}
+	// An update the engine has no use for removes the version it replaces.
+	s.Publish(nrtmtest.Change{Class: "aut-num", PK: "AS2", Text: "aut-num: AS2\nmember-of: AS-X\nsource: TEST\n"})
+	s.Publish(nrtmtest.Change{Class: "aut-num", PK: "AS2", Text: "aut-num: AS2\nsource: TEST\n"})
+	if mustSync(t, c); c.Status().Objects != 1 {
+		t.Errorf("the replaced aut-num stayed: %d objects", c.Status().Objects)
+	}
+}
 
-	// Keep: the caller's choice, any class.
-	s2 := nrtmtest.New(t, "TEST")
-	s2.Publish(route("192.0.2.0/24", 1, ""), nrtmtest.Change{Class: "person", PK: "P1", Text: "person: A\nnic-hdl: P1-TEST\nsource: TEST\n"})
-	c2 := newClient(s2, "TEST")
-	c2.Keep = func(o object.Object) bool { return o.Class() == "person" }
-	mustSync(t, c2)
-	if objs := c2.Objects(); len(objs) != 1 || objs[0].Class() != "person" {
-		t.Errorf("Keep: %v", objs)
+// CopyTo merges a mirror's version into a corpus of the caller's, to expand
+// against several databases under one precedence.
+func TestClientCopyTo(t *testing.T) {
+	a, b := nrtmtest.New(t, "RIPE"), nrtmtest.New(t, "RIPE-NONAUTH")
+	a.Publish(asSet("AS-X", "AS1"), route("192.0.2.0/24", 1, "")) // source TEST: discarded
+	a.Publish(nrtmtest.Change{Class: "as-set", PK: "AS-X", Text: "as-set: AS-X\nmembers: AS1\nsource: RIPE\n"})
+	b.Publish(nrtmtest.Change{Class: "route", PK: "192.0.2.0/24AS1", Text: "route: 192.0.2.0/24\norigin: AS1\nsource: RIPE-NONAUTH\n"})
+	ca, cb := newClient(a, "RIPE"), newClient(b, "RIPE-NONAUTH")
+	mustSync(t, ca)
+	mustSync(t, cb)
+	all := &resolve.Corpus{}
+	ca.CopyTo(all)
+	cb.CopyTo(all)
+	if all.Len() != 2 {
+		t.Fatalf("merged %d objects, want 2", all.Len())
+	}
+	n, _ := types.ParseSetName("AS-X")
+	ps, err := (&resolve.Expander{Src: all.Source("RIPE", "RIPE-NONAUTH")}).ExpandPrefixes(context.Background(), n)
+	if err != nil || ps.Len() != 1 {
+		t.Errorf("AS-X over both mirrors: %v, %v", ps.List(), err)
 	}
 }
 

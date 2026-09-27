@@ -166,11 +166,11 @@ Imports run strictly downward — `resolve → object → policy → types → a
 | `types` | `…/rpsl/types` | Leaf value types: `ASN`, `SetName`, `PrefixRange`, `AddrFamily`, `NICHandle` | — |
 | `ast` | `…/rpsl/ast` | Generic lossless `Object`/`Attribute` model; `Diagnostic`/`Severity` | `lexer` |
 | `lexer` | `…/rpsl/lexer` | Hand-written scanner; total-partition `Tokenize` | — |
-| `resolve` | `…/rpsl/resolve` | Pure expansion `Expander` + `Source` interface + `MemSource` | `object`, `types` |
+| `resolve` | `…/rpsl/resolve` | Pure expansion `Expander` + `Source` interface + `MemSource`, and `Corpus` (objects held as the engine uses them) | `object`, `types` |
 | `resolve/irrd` | `…/rpsl/resolve/irrd` | `Source` over an IRRd query port (RADB/NTT/…) | `resolve`, `object` |
 | `resolve/whois` | `…/rpsl/resolve/whois` | `Source` over plain WHOIS (RIPE-DB) | `resolve`, `object` |
 | `resolve/rdap` | `…/rpsl/resolve/rdap` | RDAP registration client (not a `Source`) | `types` |
-| `resolve/nrtm4` | `…/rpsl/resolve/nrtm4` | NRTMv4 mirror `Client`: `Sync`/`Run`, `Source()` per version, `Objects()` | `resolve`, `object`, `ast` |
+| `resolve/nrtm4` | `…/rpsl/resolve/nrtm4` | NRTMv4 mirror `Client`: `Sync`/`Run`, `Source()` per version, `CopyTo` a `Corpus` | `resolve`, `object`, `ast` |
 | `resolve/rpki` | `…/rpsl/resolve/rpki` | VRPs (`ReadJSON`, `ApplySLURM`, RFC 6811 `Validate`), `Filter` (an RPKI-aware `Source`), IRRd's pseudo objects (`WriteRPSL`) | `resolve`, `object`, `types` |
 
 Per-module guides: [`lexer`](lexer/README.md) · [`ast`](ast/README.md) ·
