@@ -9,6 +9,8 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-09-27
+
 ### Added
 
 - **`resolve/rpki`: RPKI-aware expansion, as IRRd 4 does it.** IRRd validates
@@ -730,7 +732,8 @@ The first release. There is no earlier version to migrate from.
   values do; a few common RP-attributes have typed helpers.
 - **`rdap` is not a `Source`.** RDAP serves registration data, not IRR sets.
 
-[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.13.0...v0.14.0
