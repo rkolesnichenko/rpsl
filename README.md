@@ -33,6 +33,7 @@ Every layer ships. Until v1.0.0, a minor version may change the API; the
 | `policy` | RFC 2622 §6 routing-policy parser → sealed-interface AST, and the §8.1/§9 attribute sub-grammars | shipped |
 | `resolve` | Pure expansion engine for as-set, route-set, rtr-set, peering-set and filter-set, + in-memory, dump and caching `Source`s | shipped |
 | `resolve/{irrd,whois,rdap}` | Live IRRd / WHOIS / RDAP backends | shipped |
+| `resolve/rpki` | RPKI-aware expansion as IRRd 4 does it: RFC 6811 validation against a validator's VRPs (and RFC 8416 SLURM), suppressing invalid routes from any `Source`, and IRRd's ROA pseudo objects | shipped |
 | `auth` | Who may create, modify or delete an object, under the RIPE Database's and IRRd's rules (`auth.RIPE`, `auth.IRRd`), with lookups and cryptography injected | shipped |
 
 RFC 4012 (RPSLng) is supported: `mp-import`/`mp-export`/`mp-default`, the `afi`
@@ -132,6 +133,13 @@ looked up in that registry, what it reaches in the default sources. See
 `resolve/testdata/bgpq4/divergences.md`. `-d` traces every question rpslq asks
 of its source, and the answer, to stderr.
 
+`--rpki vrps.json` makes rpslq RPKI-aware the way IRRd 4 is (RADB runs it so):
+the routes the VRPs make RPKI invalid are left out, from any source, and a
+`--dump` gains each VRP as a route of the registry `RPKI`, as RADB serves them
+by default — so an offline expansion of the registries' own dumps, which are
+not filtered, matches what bgpq4 gets from RADB. `--slurm` amends the VRPs.
+The JSON is what rpki-client and Routinator export; bgpq4 has no such option.
+
 ## Module map
 
 Imports run strictly downward — `resolve → object → policy → types → ast → lexer`
@@ -149,6 +157,7 @@ Imports run strictly downward — `resolve → object → policy → types → a
 | `resolve/irrd` | `…/rpsl/resolve/irrd` | `Source` over an IRRd query port (RADB/NTT/…) | `resolve`, `object` |
 | `resolve/whois` | `…/rpsl/resolve/whois` | `Source` over plain WHOIS (RIPE-DB) | `resolve`, `object` |
 | `resolve/rdap` | `…/rpsl/resolve/rdap` | RDAP registration client (not a `Source`) | `types` |
+| `resolve/rpki` | `…/rpsl/resolve/rpki` | VRPs (`ReadJSON`, `ApplySLURM`, RFC 6811 `Validate`), `Filter` (an RPKI-aware `Source`), IRRd's pseudo objects (`WriteRPSL`) | `resolve`, `object`, `types` |
 
 Per-module guides: [`lexer`](lexer/README.md) · [`ast`](ast/README.md) ·
 [`types`](types/README.md) · [`resolve`](resolve/README.md).
@@ -334,17 +343,22 @@ FUZZTIME=15s scripts/check.sh  # ... plus every fuzz target (what CI runs)
   `FuzzParseInterface`, `FuzzParsePeer`, `FuzzParseRPAttribute`,
   `FuzzParseTypedef`, `FuzzParseProtocol`, `FuzzFilterString` (policy);
   `FuzzReadFrame`, `FuzzParseMembers` (resolve/irrd); `FuzzScanResponse`
-  (resolve/whois).
+  (resolve/whois); `FuzzReadJSON`, `FuzzApplySLURM` (resolve/rpki);
+  `FuzzAggregate` (resolve/internal/filtergen).
 - **Real data (opt-in)** — `scripts/fetch-irr-dumps.sh` downloads the public
   dumps of RIPE, APNIC, ARIN, AFRINIC, LACNIC, RADB and the ten IRRs RADB
   mirrors (about 13.3 million objects); `RPSL_REALDATA=$PWD/.data go test -run TestRealData ./examples/bulk-ripe/bulk`
   checks lossless streaming, error rates, and order-independent expansion of the
-  largest real sets.
+  largest real sets; the script also fetches the VRPs NTT exports for IRRd, and
+  `RPSL_REALDATA=$PWD/.data go test -run TestRealDataRPKI ./resolve/rpki`
+  validates every registry's routes with them.
 - **Live backends (opt-in)** — `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve`
   queries RADB, RIPE and RDAP read-only;
   `RPSL_LIVE=1 go test -run 'TestRIPETemplatesAreCurrent|TestIRRdSourceIsCurrent' ./object`
   checks that the RIPE profile's template fixtures still match whois.ripe.net,
-  and the IRRd profile's source still matches IRRd's latest release.
+  and the IRRd profile's source still matches IRRd's latest release;
+  `RPSL_LIVE=1 RPSL_REALDATA=$PWD/.data go test -run TestLive ./resolve/rpki`
+  checks RPKI validation against what RADB hides and serves.
 - **Benchmarks** — every module benchmarks its hot paths on generated input;
   `scripts/bench.sh [ref]` compares the working tree with a ref (the latest
   release by default) on your machine, with `benchstat` when installed. With

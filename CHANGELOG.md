@@ -9,6 +9,29 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **`resolve/rpki`: RPKI-aware expansion, as IRRd 4 does it.** IRRd validates
+  every route object against the RPKI (RFC 6811) and suppresses the invalid
+  ones from its answers and exports, and serves each ROA as a route of the
+  source `RPKI`, which RADB lists by default. A registry's own dump or a whois
+  server does neither. `ReadJSON` reads the VRP export of rpki-client,
+  Routinator and IRRd's `roa_source`; `ApplySLURM` applies an RFC 8416 file;
+  `Validate` is IRRd's rule (AS0 covers, never matches); `Filter` makes any
+  `Source` suppress the invalid routes; `WriteRPSL` writes IRRd's pseudo
+  objects, byte for byte, as a dump for `DumpLoader`. Checked against IRRd's
+  own tests and a capture from RADB, a model with random ROAs over every
+  backend, and — opt-in — every registry's routes (RADB's and NTT's filtered
+  exports are 0.15% and 0.05% invalid by today's VRPs; BELL's unfiltered dump
+  79%, none of which RADB serves).
+- **rpslq `--rpki file` and `--slurm file`**: the routes the VRPs make invalid
+  are left out, from any source, and a `--dump` gains the pseudo routes as the
+  registry `RPKI` (chosen with `-S` like any other), so an offline expansion
+  matches bgpq4 against RADB. Held to bgpq4 against an RPKI-aware server on
+  random IRRs. `-d` traces each route left out.
+- `resolve/internal/irrtest` emulates IRRd's RPKI-aware mode (`WithRPKI`).
+- `scripts/fetch-irr-dumps.sh rpki` fetches the VRPs NTT exports for IRRd.
+
 ## [0.16.0] - 2026-09-25
 
 ### Added

@@ -55,6 +55,13 @@ func (t *tracer) logf(since time.Time, format string, args ...any) {
 	fmt.Fprintf(t.w, "rpslq: debug: "+format+" in %s\n", append(args, time.Since(since).Round(time.Millisecond))...)
 }
 
+// notef writes a note that is not a query, such as a route left out.
+func (t *tracer) notef(format string, args ...any) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	fmt.Fprintf(t.w, "rpslq: debug: "+format+"\n", args...)
+}
+
 // summary writes the count of questions asked and the time since the start.
 func (t *tracer) summary() {
 	t.mu.Lock()

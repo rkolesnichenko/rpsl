@@ -6,9 +6,10 @@
 #
 # Registries: ripe apnic (every split class), arin afrinic lacnic (one file
 # each), radb, and the IRRs RADB mirrors: altdb bboi bell canarie jpirr nestegg
-# nttcom panix reach tc (one file each, over FTP from RADB). Each goes to
-# .data/<registry>/ (DIR overrides .data, which is gitignored); about 480 MB
-# compressed in all. A file is only re-downloaded when the server's copy is
+# nttcom panix reach tc (one file each, over FTP from RADB); and rpki, the VRPs
+# NTT exports for IRRd (IRRd's default rpki.roa_source), for the RPKI checks.
+# Each goes to .data/<registry>/ (DIR overrides .data, which is gitignored);
+# about 590 MB in all. A file is only re-downloaded when the server's copy is
 # newer. RADB's FTP server often times out, so an FTP download is tried five
 # times and an HTTPS one three; a registry that still fails is reported and the
 # others are fetched anyway.
@@ -16,7 +17,7 @@ set -u
 cd "$(dirname "$0")/.."
 base=${DIR:-.data}
 mirrors="altdb bboi bell canarie jpirr nestegg nttcom panix reach tc"
-registries=${*:-ripe apnic arin afrinic lacnic radb $mirrors}
+registries=${*:-ripe apnic arin afrinic lacnic radb $mirrors rpki}
 failed=""
 
 ripe_classes="as-block as-set aut-num domain filter-set inet-rtr inet6num inetnum irt key-cert mntner
@@ -61,8 +62,9 @@ for r in $registries; do
 	radb) urls="radb.db.gz=ftp://ftp.radb.net/radb/dbase/radb.db.gz" ;;
 	altdb | bboi | bell | canarie | jpirr | nestegg | nttcom | panix | reach | tc)
 		urls="$r.db.gz=ftp://ftp.radb.net/radb/dbase/$r.db.gz" ;;
+	rpki) urls="vrps.json=https://rpki.gin.ntt.net/api/export.json" ;;
 	*)
-		echo "unknown registry $r (known: ripe apnic arin afrinic lacnic radb $mirrors)" >&2
+		echo "unknown registry $r (known: ripe apnic arin afrinic lacnic radb $mirrors rpki)" >&2
 		failed="$failed $r"
 		continue ;;
 	esac
