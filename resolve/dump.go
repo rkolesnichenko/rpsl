@@ -73,7 +73,7 @@ func (l *DumpLoader) Read(r io.Reader) error {
 				l.OnDiagnostics(o, dds)
 			}
 		}
-		if !usable(obj) {
+		if !Expandable(obj) {
 			continue
 		}
 		l.Stats.Kept++
@@ -136,10 +136,11 @@ func LoadDumps(rs []io.Reader, sourcePrecedence ...string) (*MemSource, error) {
 	return l.Source(), nil
 }
 
-// usable reports whether the engine has any use for an object: the set classes
-// it traverses, the routes it expands to, and the objects that can claim
-// membership indirectly.
-func usable(o object.Object) bool {
+// Expandable reports whether the engine has any use for an object: the set
+// classes it traverses, the routes it expands to, and the objects that can
+// claim membership indirectly. DumpLoader keeps these and drops the rest, and
+// so does a mirror (resolve/nrtm4) by default.
+func Expandable(o object.Object) bool {
 	if _, ok := o.(object.NamedSet); ok {
 		return true
 	}

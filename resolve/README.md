@@ -231,6 +231,28 @@ suppresses route objects, not members. Over an IRRd that is not RPKI-aware,
 the indirect route members `!i` folds into a set are beyond it; RADB
 suppresses those itself.
 
+## A mirror kept current (`resolve/nrtm4`)
+
+A dump is out of date the day it is written. Where a registry publishes
+NRTMv4 — the RIPE Database does, for `RIPE` and `RIPE-NONAUTH` — a
+`nrtm4.Client` keeps a verified mirror current:
+
+```go
+c := &nrtm4.Client{
+	URL:       "https://nrtm.db.ripe.net/nrtmv4/RIPE/update-notification-file.jose",
+	Database:  "RIPE",
+	PublicKey: key, // PEM, from https://ftp.ripe.net/ripe/dbase/nrtmv4/nrtmv4_public_key.txt
+}
+c.Sync(ctx)                   // the snapshot, then the deltas since
+go c.Run(ctx, time.Minute, nil)
+e := &resolve.Expander{Src: c.Source()} // one version, whole, per expansion
+```
+
+Every file is verified — the notification file's ES256 signature (with
+in-band key rotation), each snapshot's and delta's SHA-256 — and a delta
+applies whole or not at all. Persist `Status().CurrentKey`: after a rotation
+it, not the key you started with, verifies.
+
 ## Concurrency
 
 `Expander.Concurrency` fetches a whole breadth-first level at once, which hides
