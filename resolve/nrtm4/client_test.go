@@ -461,6 +461,9 @@ func mustKey(t *testing.T, s string) *ecdsa.PublicKey {
 // severity the client emits.
 func TestDiscardRuleIsDocumented(t *testing.T) {
 	doc, err := os.ReadFile("../../docs/diagnostics.md")
+	if os.IsNotExist(err) {
+		t.Skip("docs/ is not in the resolve module's zip; the repository's own run checks it")
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
