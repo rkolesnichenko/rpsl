@@ -9,6 +9,23 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **`resolve/nrtm4`: an NRTMv4 mirror client** (draft-ietf-grow-nrtm-v4), the
+  protocol IRRd 4 and the RIPE Database publish changes with. `Client.Sync`
+  loads the snapshot and applies the deltas since; `Run` keeps polling. The
+  notification file's ES256 signature (with in-band key rotation), each
+  file's SHA-256 and header, and the delta chain are verified before
+  anything is used; a delta applies whole or not at all. Each version is
+  published as an immutable `MemSource` (`Source()`), so an expansion sees one
+  version whole. Held to an independent server (`internal/nrtmtest`) over
+  random histories and every way a server can misbehave, and — opt-in — to
+  the RIPE Database's live feed. Standard library only.
+- **`resolve.Expandable`**: the classes the engine uses, which `DumpLoader`
+  keeps and a mirror keeps by default.
+- README: a dump differs from what RADB serves by its scope filter
+  (special-purpose origins, bogons) as well as by RPKI and time.
+
 ## [0.17.0] - 2026-09-27
 
 ### Added

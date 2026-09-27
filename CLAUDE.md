@@ -40,7 +40,7 @@ resolve → object → policy → types → ast → lexer (never the reverse).
 - Inter-module requires name the latest release (v0.1.0); the `go.work` `use` set overrides them
   with the local directories, so edits are seen across modules at once. Bump them only when releasing.
 - `Diagnostic`/`Severity` live in the `ast` module (so `object` can emit them); `rpsl` re-exports via aliases.
-- Net-using Source backends are isolated in `resolve/` sub-packages (irrd/whois/rdap) to keep core `resolve` socket-free.
+- Net-using Source backends are isolated in `resolve/` sub-packages (irrd/whois/rdap/nrtm4) to keep core `resolve` socket-free.
 - Tests use in-process fake servers over a localhost listener + a `Dial` hook (no real network);
   the bgpq4 differential runs bgpq4 against an in-process IRRd (`resolve/internal/irrtest`) when bgpq4
   is installed; the snapshot goldens are its checked-in output; a live diff is opt-in via env vars.
@@ -116,6 +116,12 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   `WriteRPSL` is IRRd's pseudo-object text byte for byte (fixture captured from RADB).
   irrtest's `WithRPKI` is an independent port — keep it independent of package rpki.
   Only RADB's and NTT's dumps are RPKI-filtered; the other mirrors on RADB's FTP are not.
+- **NRTMv4 (`resolve/nrtm4`) verifies before it uses.** ES256 on the notification file (key
+  rotation: current, then announced next, never the old again), SHA-256 on each file, headers
+  against session/version, the delta chain contiguous from the version held — a delta applies
+  whole or not at all, nothing after a refused one. Each version is published as a new immutable
+  MemSource (one expansion = one version). `internal/nrtmtest` is an independent spec-following
+  server; when a test fails, first check the fake server obeys the draft (it has twice broken §4.3).
 - **Prefix-range operators** `^+ ^- ^n ^n-m`: first-class type with a capped `Materialize`.
 - **Dict ↔ decoder agreement**: if `object/profiles.go` lists an attribute on a class, the
   matching `decodeXxx` in `object/classes.go` must read it. Drift silently drops data
@@ -137,14 +143,15 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   (all six modules incl. examples/bulk-ripe under -race, gofmt, invariants) with
   `scripts/check.sh`; `FUZZTIME=15s scripts/check.sh` also runs every fuzz target.
 - `go test -run 'TestRoundTrip|TestStreamRoundTrip' .` — the lossless guard (root module).
-- Fuzz (30 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
+- Fuzz (32 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
   FuzzFormat (ast); FuzzParseSetName, FuzzParseRangeOperator, FuzzParsePrefixRange,
   FuzzParseRouterID (types); FuzzParseStream, FuzzDecode (root); FuzzParseImport,
   FuzzParseASPathRegexp, FuzzParseFilter, FuzzParsePeering, FuzzParseInject,
   FuzzParseComponents, FuzzParseAggrMtd, FuzzParseIfaddr, FuzzParseInterface, FuzzParsePeer,
   FuzzParseRPAttribute, FuzzParseTypedef, FuzzParseProtocol, FuzzFilterString (policy);
   FuzzReadFrame, FuzzParseMembers (resolve/irrd); FuzzScanResponse (resolve/whois);
-  FuzzAggregate (resolve/internal/filtergen); FuzzReadJSON, FuzzApplySLURM (resolve/rpki).
+  FuzzAggregate (resolve/internal/filtergen); FuzzReadJSON, FuzzApplySLURM (resolve/rpki);
+  FuzzParseNotification, FuzzReadDelta (resolve/nrtm4).
 - Opt-in: `RPSL_REALDATA=$PWD/.data go test -run TestRealData ./examples/bulk-ripe/bulk`
   (RIPE, APNIC, ARIN, AFRINIC, LACNIC, RADB and RADB's ten mirrors, via scripts/fetch-irr-dumps.sh);
   `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve`;
@@ -152,7 +159,9 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   (RIPE profile vs whois -t; IRRd profile's fixture vs IRRd's latest release);
   `RPSL_REALDATA=$PWD/.data go test -run TestRealDataRPKI ./resolve/rpki` (every registry's
   routes vs NTT's VRPs; RADB's and NTT's filtered exports ≤1% invalid) and, with `RPSL_LIVE=1`
-  too, `-run TestLive ./resolve/rpki` (Validate vs what RADB hides; pseudo-object rendering).
+  too, `-run TestLive ./resolve/rpki` (Validate vs what RADB hides; pseudo-object rendering);
+  `RPSL_LIVE=1 go test -run TestLiveRIPE ./resolve/nrtm4` (RIPE's NRTMv4 signature and newest delta),
+  `RPSL_LIVE_NRTM=1 … -run TestLiveRIPEMirror` (a full RIPE mirror, ~400 MB).
 - `rpslq` (resolve/cmd/rpslq; logic in resolve/internal/rpslq, formats in resolve/internal/filtergen)
   is bgpq4 on this engine: bgpq4's getopt command line, every vendor/kind/shape, and -A as a
   node-for-node port of bgpq4's radix tree (filtergen/tree.go) — don't "improve" its

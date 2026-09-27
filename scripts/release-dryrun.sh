@@ -118,7 +118,11 @@ for spec in "types:$M/types" "lexer:$M/lexer" "ast:$M/ast $M/lexer" \
 			exit 1
 		fi
 		pkgs=$(go list -f '{{if eq .Module.Path "'"$mod"'"}}{{.ImportPath}}{{end}}' "$mod/..." | grep .)
-		go test -count=1 $pkgs >/dev/null
+		if ! out=$(go test -count=1 $pkgs 2>&1); then
+			echo "FAIL: $mod@$V: its tests fail from the zip:"
+			echo "$out" | grep -v '^ok' | tail -40
+			exit 1
+		fi
 		echo "$mod@$V: modules $(echo $got), its tests pass from the zip"
 	)
 done

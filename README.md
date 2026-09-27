@@ -34,6 +34,7 @@ Every layer ships. Until v1.0.0, a minor version may change the API; the
 | `resolve` | Pure expansion engine for as-set, route-set, rtr-set, peering-set and filter-set, + in-memory, dump and caching `Source`s | shipped |
 | `resolve/{irrd,whois,rdap}` | Live IRRd / WHOIS / RDAP backends | shipped |
 | `resolve/rpki` | RPKI-aware expansion as IRRd 4 does it: RFC 6811 validation against a validator's VRPs (and RFC 8416 SLURM), suppressing invalid routes from any `Source`, and IRRd's ROA pseudo objects | shipped |
+| `resolve/nrtm4` | An NRTMv4 mirror client (draft-ietf-grow-nrtm-v4): a signed, hash-checked mirror of an IRR database — the RIPE Database publishes one — kept current, one immutable `Source` per version | shipped |
 | `auth` | Who may create, modify or delete an object, under the RIPE Database's and IRRd's rules (`auth.RIPE`, `auth.IRRd`), with lookups and cryptography injected | shipped |
 
 RFC 4012 (RPSLng) is supported: `mp-import`/`mp-export`/`mp-default`, the `afi`
@@ -64,6 +65,18 @@ RFC 2725 §7 update-transaction protocol.
   `mbrs-by-ref:`. `whois.Source` can.
 - **bgpq4 disagrees in a few places**, pinned by tests and listed in
   `resolve/testdata/bgpq4/divergences.md`.
+- **A dump is not quite what RADB serves.** Besides RPKI (`resolve/rpki`),
+  RADB's IRRd applies its scope filter: it hides routes originated by
+  special-purpose AS numbers (AS23456, 64496–65535 and others) and routes in
+  bogon space (10/8, 192.168/16, 224/4, …), including ROA pseudo routes for
+  such ASes. RADB's own dump already leaves them out; the other registries'
+  dumps hold a few hundred among 4.6 million routes, which matter only with
+  `-p` or for a bogon route with a public origin. The rest of the difference
+  is time: a dump a day old differs from RADB by a few dozen of AS-DECIX's
+  827,000 prefixes (routes and as-sets changed since, ROAs imported at other
+  times), and RADB's mirrors can lag the registries they copy. Where a
+  registry publishes NRTMv4 (the RIPE Database does), `resolve/nrtm4` keeps a
+  mirror current to the minute instead.
 - **`auth` models each registry's defaults.** IRRd's settings (such as
   turning off parent checks for routes) and the paths a registry keeps for its
   own staff (overrides, RIPE NCC's maintainers) are out of scope, as is the
@@ -157,6 +170,7 @@ Imports run strictly downward — `resolve → object → policy → types → a
 | `resolve/irrd` | `…/rpsl/resolve/irrd` | `Source` over an IRRd query port (RADB/NTT/…) | `resolve`, `object` |
 | `resolve/whois` | `…/rpsl/resolve/whois` | `Source` over plain WHOIS (RIPE-DB) | `resolve`, `object` |
 | `resolve/rdap` | `…/rpsl/resolve/rdap` | RDAP registration client (not a `Source`) | `types` |
+| `resolve/nrtm4` | `…/rpsl/resolve/nrtm4` | NRTMv4 mirror `Client`: `Sync`/`Run`, `Source()` per version, `Objects()` | `resolve`, `object`, `ast` |
 | `resolve/rpki` | `…/rpsl/resolve/rpki` | VRPs (`ReadJSON`, `ApplySLURM`, RFC 6811 `Validate`), `Filter` (an RPKI-aware `Source`), IRRd's pseudo objects (`WriteRPSL`) | `resolve`, `object`, `types` |
 
 Per-module guides: [`lexer`](lexer/README.md) · [`ast`](ast/README.md) ·
@@ -344,6 +358,7 @@ FUZZTIME=15s scripts/check.sh  # ... plus every fuzz target (what CI runs)
   `FuzzParseTypedef`, `FuzzParseProtocol`, `FuzzFilterString` (policy);
   `FuzzReadFrame`, `FuzzParseMembers` (resolve/irrd); `FuzzScanResponse`
   (resolve/whois); `FuzzReadJSON`, `FuzzApplySLURM` (resolve/rpki);
+  `FuzzParseNotification`, `FuzzReadDelta` (resolve/nrtm4);
   `FuzzAggregate` (resolve/internal/filtergen).
 - **Real data (opt-in)** — `scripts/fetch-irr-dumps.sh` downloads the public
   dumps of RIPE, APNIC, ARIN, AFRINIC, LACNIC, RADB and the ten IRRs RADB

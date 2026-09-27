@@ -99,3 +99,14 @@ attribute of it.
 | `dict/unknown-attr` | Warning | An attribute the class does not allow (both built-in profiles reject unknown attributes; a custom one may allow them). |
 | `dict/missing-required` | Error | A required attribute, or one of a required group (`filter`/`mp-filter`), is missing or has no value. |
 | `dict/cardinality` | Error | A single-valued attribute appears more than once. |
+
+## `nrtm4/` — mirroring (`resolve/nrtm4`)
+
+The NRTMv4 client reports each object it leaves out of a mirror to
+`Client.OnDiagnostics`, after the object's own diagnostics, with the rule
+**`nrtm4/discarded`**, severity **Warning**: its `source:` is not the mirrored
+database's, it has no class or primary key, or it did not decode as its class.
+A discarded object never fails the file it came in (draft-ietf-grow-nrtm-v4
+§9.2). This rule lives in the `resolve` module, so it is listed here rather
+than in a table (`resolve/nrtm4`'s `TestDiscardRuleIsDocumented` holds this
+paragraph to the code).
