@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rkolesnichenko/rpsl/object"
+	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
@@ -48,7 +48,7 @@ func TestLiveRIPE(t *testing.T) {
 	if c.st.stale || len(n.Deltas) == 0 {
 		t.Fatalf("RIPE's notification file: stale %v, %d deltas", c.st.stale, len(n.Deltas))
 	}
-	c.st.objs = map[string]object.Object{}
+	c.st.corpus = &resolve.Corpus{}
 	if _, _, _, err := c.applyDelta(ctx, n, n.Deltas[len(n.Deltas)-1]); err != nil {
 		t.Fatal(err)
 	}

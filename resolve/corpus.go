@@ -1,0 +1,292 @@
+package resolve
+
+import (
+	"net/netip"
+	"sort"
+	"strings"
+
+	"github.com/rkolesnichenko/rpsl/object"
+	"github.com/rkolesnichenko/rpsl/types"
+)
+
+// Corpus holds IRR objects the way the engine uses them. Sets, and the
+// objects that claim membership of a set (member-of:), are kept whole: GetSet
+// and MembersByRef return them. Every other route and route6 is kept as its
+// prefix, origin and source, all that OriginatedRoutes needs of it; aut-nums
+// and inet-rtrs that claim nothing, and every other class, are not kept at
+// all. For the RIPE Database that is about a tenth of the memory the decoded
+// objects take.
+//
+// An object is identified by its class, its primary key and its source, so a
+// later object replaces an earlier one with the same identity — as an NRTM
+// update does — whether either is kept whole, reduced or not at all.
+//
+// The zero value is empty and ready to use. A Corpus is not safe for
+// concurrent mutation; a MemSource built from it (Source, SourceOf) is
+// immutable and unaffected by later changes.
+type Corpus struct {
+	whole   map[wholeKey]held
+	routes  map[routeKey]struct{}
+	sources map[string]string // upper-case source name -> the one copy kept
+	seq     uint64
+}
+
+// wholeKey identifies a whole object: its class, canonical primary key and
+// upper-case source.
+type wholeKey struct{ class, pk, source string }
+
+// routeKey is a reduced route: identity and content at once.
+type routeKey struct {
+	prefix netip.Prefix // canonical
+	origin types.ASN
+	source string // upper-case
+}
+
+type held struct {
+	obj object.Object
+	key wholeKey
+	seq uint64 // load order: MemSource's ties go to the object loaded first
+}
+
+// Put keeps what the engine needs of o, replacing any object with its class,
+// primary key and source. It reports whether anything of o is kept; when
+// nothing is, an earlier object with its identity is still removed.
+func (c *Corpus) Put(o object.Object) bool {
+	o = value(o)
+	if o == nil {
+		return false
+	}
+	if c.whole == nil {
+		c.whole, c.routes, c.sources = map[wholeKey]held{}, map[routeKey]struct{}{}, map[string]string{}
+	}
+	if s, ok := o.(object.NamedSet); ok {
+		k := wholeKey{o.Class(), s.SetName().String(), c.intern(s.SetSource())}
+		c.putWhole(k, o)
+		return true
+	}
+	var memberOf []types.SetName
+	var source string
+	var k wholeKey
+	var rk routeKey
+	route := false
+	switch t := o.(type) {
+	case object.Route:
+		if !t.Prefix.IsValid() || t.Origin == 0 && !asnDecodes(t, "origin") {
+			return false // no AS's route, and no key to replace by
+		}
+		route, rk = true, routeKey{t.Prefix.Masked(), t.Origin, ""}
+		memberOf, source = t.MemberOf, t.Source
+	case object.Route6:
+		if !t.Prefix.IsValid() || t.Origin == 0 && !asnDecodes(t, "origin") {
+			return false
+		}
+		route, rk = true, routeKey{t.Prefix.Masked(), t.Origin, ""}
+		memberOf, source = t.MemberOf, t.Source
+	case object.AutNum:
+		if t.AS == 0 && !asnDecodes(t, "aut-num") {
+			return false
+		}
+		k = wholeKey{"aut-num", t.AS.String(), ""}
+		memberOf, source = t.MemberOf, t.Source
+	case object.InetRtr:
+		if strings.TrimSpace(t.Name) == "" {
+			return false
+		}
+		k = wholeKey{"inet-rtr", strings.ToUpper(strings.TrimSpace(t.Name)), ""}
+		memberOf, source = t.MemberOf, t.Source
+	default:
+		return false
+	}
+	src := c.intern(source)
+	if route {
+		rk.source = src
+		k = wholeKey{o.Class(), rk.prefix.String() + rk.origin.String(), src}
+		delete(c.routes, rk)
+		if len(memberOf) == 0 {
+			delete(c.whole, k)
+			c.routes[rk] = struct{}{}
+			return true
+		}
+		c.putWhole(k, o)
+		return true
+	}
+	k.source = src
+	if len(memberOf) == 0 {
+		delete(c.whole, k)
+		return false
+	}
+	c.putWhole(k, o)
+	return true
+}
+
+func (c *Corpus) putWhole(k wholeKey, o object.Object) {
+	c.seq++
+	c.whole[k] = held{o, k, c.seq}
+}
+
+// intern returns the one copy of a source name the corpus keeps, upper-case:
+// a substring of an object's text would keep the whole text alive.
+func (c *Corpus) intern(source string) string {
+	up := strings.ToUpper(strings.TrimSpace(source))
+	if s, ok := c.sources[up]; ok {
+		return s
+	}
+	s := strings.Clone(up)
+	c.sources[s] = s
+	return s
+}
+
+// Delete removes the object of class with primaryKey and source, as an NRTM
+// delete names it — the key as RFC 2622 defines it, a route's prefix and
+// origin run together ("192.0.2.0/24AS64500") — compared in canonical form,
+// so "2001:DB8::/32as1" is "2001:db8::/32AS1". It reports whether there was
+// one.
+func (c *Corpus) Delete(class, primaryKey, source string) bool {
+	if c.whole == nil {
+		return false
+	}
+	class = strings.ToLower(strings.TrimSpace(class))
+	src := strings.ToUpper(strings.TrimSpace(source))
+	pk, ok := canonicalKey(class, primaryKey)
+	if !ok {
+		return false
+	}
+	k := wholeKey{class, pk, src}
+	if _, found := c.whole[k]; found {
+		delete(c.whole, k)
+		return true
+	}
+	if class == "route" || class == "route6" {
+		p, a, _ := splitRouteKey(primaryKey)
+		rk := routeKey{p, a, src}
+		if _, found := c.routes[rk]; found {
+			delete(c.routes, rk)
+			return true
+		}
+	}
+	return false
+}
+
+// canonicalKey returns a class's primary key in the form Put keys objects by.
+func canonicalKey(class, pk string) (string, bool) {
+	pk = strings.TrimSpace(pk)
+	switch class {
+	case "route", "route6":
+		p, a, ok := splitRouteKey(pk)
+		if !ok {
+			return "", false
+		}
+		return p.String() + a.String(), true
+	case "aut-num":
+		a, err := types.ParseASN(pk)
+		return a.String(), err == nil
+	case "as-set", "route-set", "rtr-set", "filter-set", "peering-set":
+		n, err := types.ParseSetName(pk)
+		return n.String(), err == nil
+	case "inet-rtr":
+		return strings.ToUpper(pk), pk != ""
+	}
+	return "", false
+}
+
+// splitRouteKey reads a route's primary key: its prefix and origin run
+// together, the origin from the last "AS".
+func splitRouteKey(pk string) (netip.Prefix, types.ASN, bool) {
+	i := strings.LastIndex(strings.ToUpper(pk), "AS")
+	if i <= 0 {
+		return netip.Prefix{}, 0, false
+	}
+	p, perr := types.ParsePrefix(strings.TrimSpace(pk[:i]))
+	a, aerr := types.ParseASN(pk[i:])
+	if perr != nil || aerr != nil {
+		return netip.Prefix{}, 0, false
+	}
+	return p.Masked(), a, true
+}
+
+// Merge adds other's objects, after this corpus's own in load order; an
+// object with the identity of one already here replaces it. other is not
+// changed.
+func (c *Corpus) Merge(other *Corpus) {
+	if other == nil || other.whole == nil {
+		return
+	}
+	if c.whole == nil {
+		c.whole, c.routes, c.sources = map[wholeKey]held{}, map[routeKey]struct{}{}, map[string]string{}
+	}
+	for _, h := range other.ordered(nil) {
+		k := h.key
+		k.source = c.intern(k.source)
+		c.putWhole(k, h.obj)
+	}
+	for rk := range other.routes {
+		rk.source = c.intern(rk.source)
+		delete(c.whole, wholeKey{routeClass(rk.prefix), rk.prefix.String() + rk.origin.String(), rk.source})
+		c.routes[rk] = struct{}{}
+	}
+}
+
+func routeClass(p netip.Prefix) string {
+	if p.Addr().Is4() {
+		return "route"
+	}
+	return "route6"
+}
+
+// ordered returns the whole objects in load order, those whose source keep
+// accepts (nil: all).
+func (c *Corpus) ordered(keep func(source string) bool) []held {
+	out := make([]held, 0, len(c.whole))
+	for _, h := range c.whole {
+		if keep == nil || keep(h.key.source) {
+			out = append(out, h)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].seq < out[j].seq })
+	return out
+}
+
+// Len returns the number of objects held, whole or reduced.
+func (c *Corpus) Len() int { return len(c.whole) + len(c.routes) }
+
+// Source builds a MemSource over the corpus: the one NewMemSource builds
+// over the same objects, with the same source precedence.
+func (c *Corpus) Source(sourcePrecedence ...string) *MemSource {
+	return c.build(nil, sourcePrecedence)
+}
+
+// SourceOf builds a MemSource over the objects of the given sources only
+// (compared without regard to case), in the precedence given; an object
+// without a source: is left out. It is DumpLoader.SourceOf's meaning.
+func (c *Corpus) SourceOf(sources ...string) *MemSource {
+	want := map[string]bool{}
+	for _, s := range sources {
+		want[strings.ToUpper(strings.TrimSpace(s))] = true
+	}
+	return c.build(func(s string) bool { return s != "" && want[s] }, sources)
+}
+
+func (c *Corpus) build(keep func(string) bool, precedence []string) *MemSource {
+	hs := c.ordered(keep)
+	objs := make([]object.Object, len(hs))
+	for i, h := range hs {
+		objs[i] = h.obj
+	}
+	s := buildMemSource(objs, precedence)
+	for rk := range c.routes {
+		if keep == nil || keep(rk.source) {
+			s.routes[rk.origin] = append(s.routes[rk.origin], rk.prefix)
+		}
+	}
+	// A map has no order: sort each AS's routes, so that every build of the
+	// same corpus answers alike.
+	for _, ps := range s.routes {
+		sort.Slice(ps, func(i, j int) bool {
+			if c := ps[i].Addr().Compare(ps[j].Addr()); c != 0 {
+				return c < 0
+			}
+			return ps[i].Bits() < ps[j].Bits()
+		})
+	}
+	return s
+}

@@ -2,7 +2,6 @@ package resolve
 
 import (
 	"io"
-	"strings"
 
 	"github.com/rkolesnichenko/rpsl"
 	"github.com/rkolesnichenko/rpsl/ast"
@@ -11,9 +10,10 @@ import (
 
 // Loading an IRR bulk dump — RIPE's split files, an IRRd export — into a
 // MemSource, so the engine can expand against a snapshot with no network at
-// all. The dump is streamed one object at a time, and only the classes the
-// engine can use are kept, so memory is proportional to what is retained
-// rather than to the file.
+// all. The dump is streamed one object at a time into a Corpus, which keeps
+// only what the engine uses — sets and membership claimants whole, other
+// routes as prefix, origin and source — so memory follows that rather than
+// the file.
 //
 // Compression is the caller's business: wrap the reader in a gzip.Reader (or
 // anything else) and pass that. Keeping it out here is what lets this file
@@ -24,7 +24,7 @@ import (
 // per-attribute and the rest of such an object is good.
 type DumpStats struct {
 	Objects   int // objects read
-	Kept      int // objects the engine can use, and so retained
+	Kept      int // objects the engine uses, and so retained (whole or reduced; see Corpus)
 	Diagnosed int // objects that raised at least one Error
 }
 
@@ -44,7 +44,7 @@ type DumpLoader struct {
 	// Stats accumulates across every Read.
 	Stats DumpStats
 
-	objs []object.Object
+	corpus Corpus
 }
 
 // Read streams one dump and retains the objects the engine can use: the set
@@ -73,11 +73,9 @@ func (l *DumpLoader) Read(r io.Reader) error {
 				l.OnDiagnostics(o, dds)
 			}
 		}
-		if !Expandable(obj) {
-			continue
+		if l.corpus.Put(obj) {
+			l.Stats.Kept++
 		}
-		l.Stats.Kept++
-		l.objs = append(l.objs, obj)
 	}
 	return nil
 }
@@ -85,7 +83,7 @@ func (l *DumpLoader) Read(r io.Reader) error {
 // Source builds a MemSource over everything read so far. The loader may be read
 // from again afterwards; a later Source includes the new objects too.
 func (l *DumpLoader) Source() *MemSource {
-	return NewMemSource(l.objs, l.Sources...)
+	return l.corpus.Source(l.Sources...)
 }
 
 // SourceOf builds a MemSource over the objects read so far whose source: is
@@ -94,25 +92,13 @@ func (l *DumpLoader) Source() *MemSource {
 // looks a set up in one registry — bgpq4's RIPE::AS-FOO — without reading the
 // dumps again. An object without a source: is left out.
 func (l *DumpLoader) SourceOf(sources ...string) *MemSource {
-	var objs []object.Object
-	for _, o := range l.objs {
-		raw := o.Raw()
-		if raw == nil {
-			continue
-		}
-		a, ok := raw.GetFirst("source")
-		if !ok {
-			continue
-		}
-		for _, s := range sources {
-			if equalFoldASCII(strings.TrimSpace(a.Value), strings.TrimSpace(s)) {
-				objs = append(objs, o)
-				break
-			}
-		}
-	}
-	return NewMemSource(objs, sources...)
+	return l.corpus.SourceOf(sources...)
 }
+
+// Corpus returns what the loader holds, for merging with other corpora — a
+// mirror (resolve/nrtm4), RPKI pseudo routes — under one precedence. It is the
+// loader's own: reading more dumps changes it.
+func (l *DumpLoader) Corpus() *Corpus { return &l.corpus }
 
 // LoadDump reads one dump into a MemSource. It is DumpLoader for the common
 // case; use the loader itself to read several files, to set a source

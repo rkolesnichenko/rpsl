@@ -212,6 +212,12 @@ cached := resolve.NewCache(live, time.Hour)  // a caching Source over any other
 and collapses identical lookups already in flight into one backend call.
 `DumpLoader` reads several files into one Source and reports what it saw.
 
+What it holds is a `Corpus`: sets and membership claimants whole, every other
+route as its prefix, origin and source, nothing of the rest — RIPE's dumps in
+460 MB rather than the 3.7 GB their decoded objects take. `Corpus.Merge`
+combines dumps, mirrors (`nrtm4.Client.CopyTo`) and RPKI pseudo routes, and
+`Corpus.Source("RIPE", "RADB")` builds the `MemSource` with a precedence.
+
 ## RPKI-aware expansion (`resolve/rpki`)
 
 IRRd 4 validates every route object against the RPKI (RFC 6811) and hides the

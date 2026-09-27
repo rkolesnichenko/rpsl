@@ -9,6 +9,31 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **`resolve.Corpus`**: IRR objects held as the engine uses them — sets and
+  membership claimants (`member-of:`) whole, every other route as its prefix,
+  origin and source (94 bytes, not 4.7 KB), nothing of the rest. `Put`
+  replaces by class, primary key and source; `Delete` takes an NRTM delete;
+  `Merge` combines; `Source`/`SourceOf` build the `MemSource`, through the
+  same code as `NewMemSource`. RIPE's dumps load in 460 MB of heap instead of
+  3.7 GB, and a full RIPE mirror peaks under 1 GB instead of 6.6 GB.
+- `DumpLoader.Corpus`, for merging a loader's objects with a mirror's.
+
+### Changed
+
+- **`DumpLoader` holds a `Corpus`.** Its answers are unchanged (held to
+  `NewMemSource` over the random IRRs and the largest real sets of RIPE and
+  ARIN). `Stats.Kept` counts what is held in either form, so aut-nums and
+  inet-rtrs that claim no membership no longer count; and two objects with
+  one class, primary key and source in the dumps are one object, the later —
+  a registry cannot have both.
+- **`nrtm4.Client` holds a `Corpus`.** `Objects()` is replaced by
+  `CopyTo(*resolve.Corpus)`, and `Keep` is removed: a mirror holds what the
+  engine uses. An update whose `source:` is not the mirrored database's is
+  discarded and now leaves the object it names in place, as IRRd does; an
+  object of another class is still skipped unparsed.
+
 ## [0.18.0] - 2026-09-27
 
 ### Added

@@ -607,22 +607,50 @@ Every file is verified before any of it is used:
   (§9.2). A delete names class and primary key, matched in canonical form
   (`2001:DB8::/32AS1` is `2001:db8::/32AS1`).
 
-The client keeps only the classes the engine uses (`resolve.Expandable`) unless
-told otherwise, skipping the rest unparsed, and publishes each version it
-reaches as a new immutable `MemSource` (rebuilt in about 70 ms for RIPE's
-650,000 such objects): an expansion takes one `Source()` and sees one version
-whole while the mirror moves on. Mirroring RIPE from scratch — the 403 MB snapshot and a
-day of deltas — takes about a minute and a half; the 650,000 objects hold
-about 3.7 GB of heap, as loading the same classes from RIPE's dumps does
-(each keeps its lossless text beside its typed form). `Objects()` combines mirrors — RIPE and
-RIPE-NONAUTH — or a mirror with dumps and RPKI pseudo objects under one
-precedence.
+The client skips the classes the engine has no use for unparsed, holds the
+rest in a `resolve.Corpus` (§8.9), and publishes each version it reaches as a
+new immutable `MemSource`: an expansion takes one `Source()` and sees one
+version whole while the mirror moves on. Mirroring RIPE from scratch — the
+403 MB snapshot and a day of deltas — takes about 80 seconds and peaks under
+1 GB. `CopyTo` merges a mirror's version into a caller's `Corpus`, to combine
+mirrors — RIPE and RIPE-NONAUTH — or a mirror with dumps and RPKI pseudo
+routes under one precedence.
 
 Two choices differ from IRRd. A notification file over 24 hours old is
 reported (`Status.Stale`) and still used, as the draft allows; IRRd refuses
 it. And the state lives in memory: a restart loads the snapshot again, and
 `Status.CurrentKey` is the one thing to persist, so a key rotated while the
 program was down still verifies.
+
+### 8.9 What a loaded IRR costs (`Corpus`)
+
+A decoded object is expensive: its lossless text, one 152-byte attribute per
+line (RIPE adds seven lines of `remarks:` to every object it dumps or
+mirrors), a position table per attribute, and a typed struct — 4.7 KB for a
+RIPE route, 18.6 KB for an aut-num with its policies parsed. Holding every
+object a registry's dumps or mirror hold cost 3.7 GB for RIPE, of which the
+`MemSource` the engine expands against needed 380 MB: it keeps a route as a
+prefix in a map by origin, and only sets and membership claimants whole.
+
+`resolve.Corpus` keeps objects in that form from the start. Sets, and the
+objects that claim membership of one (`member-of:`), are kept whole — `GetSet`
+and `MembersByRef` return them; every other route and route6 is kept as its
+prefix, origin and source, a comparable map key of about 94 bytes; aut-nums
+and inet-rtrs that claim nothing, and every other class, are not kept. An
+object is identified by class, canonical primary key and source, so a later
+one replaces an earlier one — an NRTM update, or a route gaining or losing
+`member-of:` and moving between the two forms — and `Delete` takes an NRTM
+delete's class and key. A source name is interned: a substring of an
+object's text would keep the text alive.
+
+`DumpLoader` and `nrtm4.Client` hold a `Corpus`; `Corpus.Source` builds
+through the same code as `NewMemSource`, and a property test over the random
+IRRs holds every answer — each set, each AS's routes in each family, each
+set's claimants, every expansion — to `NewMemSource` over the same objects,
+as an opt-in test does for the largest real sets of RIPE and ARIN. RIPE's
+dumps now load into 460 MB of heap instead of 3.7 GB. The one change in
+meaning: two objects with one identity in one source — which a registry
+cannot have, its primary keys being unique — are one object, the later.
 
 ## 9. Top-level façade
 

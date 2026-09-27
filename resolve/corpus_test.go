@@ -1,0 +1,347 @@
+package resolve_test
+
+import (
+	"context"
+	"fmt"
+	"math/rand/v2"
+	"net/netip"
+	"reflect"
+	"runtime"
+	"slices"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/rkolesnichenko/rpsl"
+	"github.com/rkolesnichenko/rpsl/object"
+	"github.com/rkolesnichenko/rpsl/resolve"
+	"github.com/rkolesnichenko/rpsl/types"
+)
+
+// sameAnswers holds a MemSource built from a Corpus to NewMemSource over the
+// same objects: every set looked up, every AS's routes in each family (as
+// sets: the engine deduplicates), every set's honored claimants.
+func sameAnswers(t *testing.T, label string, objs []object.Object, got, want *resolve.MemSource) {
+	t.Helper()
+	ctx := context.Background()
+	names := map[string]types.SetName{}
+	asns := map[types.ASN]bool{0: true, 64999: true}
+	for _, o := range objs {
+		if s, ok := o.(object.NamedSet); ok {
+			names[s.SetName().String()] = s.SetName()
+		}
+		switch r := o.(type) {
+		case object.Route:
+			asns[r.Origin] = true
+		case object.Route6:
+			asns[r.Origin] = true
+		case object.AutNum:
+			asns[r.AS] = true
+		}
+	}
+	missing, _ := types.ParseSetName("AS-NOT-THERE")
+	names[missing.String()] = missing
+	for _, n := range names {
+		gs, gerr := got.GetSet(ctx, n)
+		ws, werr := want.GetSet(ctx, n)
+		if (gerr == nil) != (werr == nil) || !reflect.DeepEqual(gs, ws) {
+			t.Fatalf("%s: GetSet(%s) = %v, %v; want %v, %v", label, n, gs, gerr, ws, werr)
+		}
+		if ws == nil {
+			continue
+		}
+		gm, _ := got.MembersByRef(ctx, ws)
+		wm, _ := want.MembersByRef(ctx, ws)
+		if !slices.Equal(texts(gm), texts(wm)) {
+			t.Fatalf("%s: MembersByRef(%s) = %v; want %v", label, n, texts(gm), texts(wm))
+		}
+	}
+	for as := range asns {
+		for _, afi := range []types.AFI{types.AFIv4, types.AFIv6, types.AFIAny} {
+			gr, _ := got.OriginatedRoutes(ctx, as, afi)
+			wr, _ := want.OriginatedRoutes(ctx, as, afi)
+			if !slices.Equal(distinct(gr), distinct(wr)) {
+				t.Fatalf("%s: OriginatedRoutes(%s, %v) = %v; want %v", label, as, afi, gr, wr)
+			}
+		}
+	}
+}
+
+func texts(objs []object.Object) []string {
+	var out []string
+	for _, o := range objs {
+		out = append(out, o.Raw().String())
+	}
+	sort.Strings(out)
+	return out
+}
+
+func distinct(ps []netip.Prefix) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range ps {
+		if !seen[p.String()] {
+			seen[p.String()] = true
+			out = append(out, p.String())
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// latest returns objs with one object per identity — class, primary key,
+// source — the later one, at its own position: what a Corpus holds, since a
+// registry has one object per key and a later one is an update. The model
+// draws duplicates (two aut-nums for one AS in one source), which real
+// registries cannot have.
+func latest(objs []object.Object) []object.Object {
+	id := func(o object.Object) string {
+		src := ""
+		if a, ok := o.Raw().GetFirst("source"); ok {
+			src = strings.ToUpper(strings.TrimSpace(a.Value))
+		}
+		switch t := o.(type) {
+		case object.NamedSet:
+			return o.Class() + " " + t.SetName().String() + " " + src
+		case object.Route:
+			return fmt.Sprintf("route %s%s %s", t.Prefix.Masked(), t.Origin, src)
+		case object.Route6:
+			return fmt.Sprintf("route6 %s%s %s", t.Prefix.Masked(), t.Origin, src)
+		case object.AutNum:
+			return fmt.Sprintf("aut-num %s %s", t.AS, src)
+		}
+		return fmt.Sprintf("%p", o)
+	}
+	last := map[string]int{}
+	for i, o := range objs {
+		last[id(o)] = i
+	}
+	var out []object.Object
+	for i, o := range objs {
+		if last[id(o)] == i {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+func corpusOf(objs []object.Object) *resolve.Corpus {
+	c := &resolve.Corpus{}
+	for _, o := range objs {
+		c.Put(o)
+	}
+	return c
+}
+
+// A MemSource built from a Corpus answers as NewMemSource over the same
+// objects does, and so expands every set to the oracle's answer, over the
+// random IRRs of the model — two sources, precedence, claims honored and not,
+// and objects the engine has no use for.
+func TestCorpusMatchesMemSource(t *testing.T) {
+	checked := 0
+	defer func() {
+		if !t.Failed() && checked < 100 {
+			t.Errorf("only %d seeds were checked against the oracle", checked)
+		}
+	}()
+	for seed := uint64(0); seed < 1500; seed++ {
+		r := rand.New(rand.NewPCG(seed, 5))
+		m := randomModel(r, false)
+		texts := m.texts(r)
+		objs := latest(decodeAll(t, texts))
+		label := fmt.Sprintf("seed %d", seed)
+		c := corpusOf(objs)
+		sameAnswers(t, label, objs, c.Source("RIPE", "RADB"), resolve.NewMemSource(objs, "RIPE", "RADB"))
+		sameAnswers(t, label+" without precedence", objs, c.Source(), resolve.NewMemSource(objs))
+		if seed%5 == 0 && len(objs) == len(decodeAll(t, texts)) { // the oracle reads every object
+			checkModel(t, label+" (corpus)", newOracle(m), texts, c.Source("RIPE", "RADB"), true)
+			checked++
+		}
+		// SourceOf: one registry alone.
+		var ripe []object.Object
+		for _, o := range objs {
+			if a, ok := o.Raw().GetFirst("source"); ok && strings.EqualFold(strings.TrimSpace(a.Value), "RIPE") {
+				ripe = append(ripe, o)
+			}
+		}
+		sameAnswers(t, label+" SourceOf(RIPE)", ripe, c.SourceOf("ripe"), resolve.NewMemSource(ripe, "ripe"))
+	}
+}
+
+func decodeOne(t *testing.T, text string) object.Object {
+	t.Helper()
+	raw, _ := rpsl.ParseObject(text)
+	o, _ := rpsl.Decode(raw)
+	return o
+}
+
+// TestCorpusKeeps: sets and objects that claim membership whole, other routes
+// reduced, and nothing of the rest.
+func TestCorpusKeeps(t *testing.T) {
+	c := &resolve.Corpus{}
+	for _, tc := range []struct {
+		text string
+		kept bool
+	}{
+		{"as-set: AS-X\nmembers: AS1\nsource: RIPE\n", true},
+		{"route: 192.0.2.0/24\norigin: AS1\nsource: RIPE\n", true},
+		{"route: 198.51.100.0/24\norigin: AS1\nmember-of: RS-X\nmnt-by: M\nsource: RIPE\n", true},
+		{"aut-num: AS1\nas-name: X\nmember-of: AS-X\nsource: RIPE\n", true},
+		{"aut-num: AS2\nas-name: Y\nsource: RIPE\n", false},           // claims nothing: no expansion reads it
+		{"person: A\nnic-hdl: A1-RIPE\nsource: RIPE\n", false},        // not the engine's
+		{"route: 203.0.113.0/24\norigin: ASX\nsource: RIPE\n", false}, // no AS's route
+		{"route: 203.0.113.0/24\nsource: RIPE\n", false},              // no origin at all
+	} {
+		if got := c.Put(decodeOne(t, tc.text)); got != tc.kept {
+			t.Errorf("Put(%q) = %v, want %v", tc.text, got, tc.kept)
+		}
+	}
+	if c.Len() != 4 {
+		t.Errorf("Len = %d, want 4", c.Len())
+	}
+	var nilRoute *object.Route
+	if c.Put(nilRoute) {
+		t.Error("a nil *Route was kept")
+	}
+	r := decodeOne(t, "route: 10.0.0.0/8\norigin: AS7\nsource: RIPE\n").(object.Route)
+	if !c.Put(&r) || c.Len() != 5 {
+		t.Error("a *Route was not kept")
+	}
+}
+
+// TestCorpusReplaces: an object replaces the one with its class, primary key
+// and source — whole or reduced, either way round — and a replacement the
+// engine has no use for removes the old one.
+func TestCorpusReplaces(t *testing.T) {
+	ctx := context.Background()
+	routes := func(c *resolve.Corpus, as types.ASN) []string {
+		ps, _ := c.Source().OriginatedRoutes(ctx, as, types.AFIAny)
+		return distinct(ps)
+	}
+	c := &resolve.Corpus{}
+	c.Put(decodeOne(t, "route: 192.0.2.0/24\norigin: AS1\nsource: RIPE\n"))
+	c.Put(decodeOne(t, "route: 192.0.2.0/24\norigin: AS1\nsource: RADB\n")) // another source: both kept
+	if c.Len() != 2 {
+		t.Fatalf("Len = %d", c.Len())
+	}
+	// The same route gains member-of: now whole, still one object.
+	c.Put(decodeOne(t, "route: 192.0.2.0/24\norigin: as1\nmember-of: RS-X\nmnt-by: M\nsource: ripe\n"))
+	if c.Len() != 2 || !slices.Equal(routes(c, 1), []string{"192.0.2.0/24"}) {
+		t.Fatalf("after gaining member-of: Len %d, routes %v", c.Len(), routes(c, 1))
+	}
+	set := decodeOne(t, "route-set: RS-X\nmbrs-by-ref: ANY\nsource: RIPE\n")
+	c.Put(set)
+	if m, _ := c.Source().MembersByRef(ctx, set.(object.NamedSet)); len(m) != 1 {
+		t.Fatalf("claimants %v", m)
+	}
+	// ... and loses it: reduced again, and no longer a claimant.
+	c.Put(decodeOne(t, "route: 192.0.2.0/24\norigin: AS1\nsource: RIPE\n"))
+	if m, _ := c.Source().MembersByRef(ctx, set.(object.NamedSet)); len(m) != 0 || c.Len() != 3 {
+		t.Fatalf("after losing member-of: claimants %v, Len %d", m, c.Len())
+	}
+	// An aut-num that stops claiming membership is gone.
+	c.Put(decodeOne(t, "aut-num: AS1\nas-name: X\nmember-of: AS-X\nsource: RIPE\n"))
+	if c.Put(decodeOne(t, "aut-num: AS1\nas-name: X\nsource: RIPE\n")) || c.Len() != 3 {
+		t.Fatalf("an aut-num that no longer claims: Len %d", c.Len())
+	}
+	// A set replaced keeps one version.
+	c.Put(decodeOne(t, "as-set: AS-Y\nmembers: AS1\nsource: RIPE\n"))
+	c.Put(decodeOne(t, "as-set: as-y\nmembers: AS2\nsource: RIPE\n"))
+	n, _ := types.ParseSetName("AS-Y")
+	s, _ := c.Source().GetSet(ctx, n)
+	if as := s.(object.AsSet); len(as.Members) != 1 || as.Members[0].AS != 2 {
+		t.Fatalf("AS-Y = %+v", as.Members)
+	}
+}
+
+func TestCorpusDelete(t *testing.T) {
+	c := &resolve.Corpus{}
+	c.Put(decodeOne(t, "route6: 2001:db8::/32\norigin: AS1\nsource: RIPE\n"))
+	c.Put(decodeOne(t, "route: 192.0.2.0/24\norigin: AS1\nmember-of: RS-X\nsource: RIPE\n"))
+	c.Put(decodeOne(t, "as-set: AS1:AS-FOO\nsource: RIPE\n"))
+	c.Put(decodeOne(t, "aut-num: AS1\nmember-of: AS1:AS-FOO\nsource: RIPE\n"))
+	for _, d := range [][3]string{
+		{"ROUTE6", "2001:DB8::/32as1", "ripe"}, // reduced, spelled otherwise
+		{"route", "192.0.2.0/24AS1", "RIPE"},   // whole
+		{"as-set", "as1:as-foo", "RIPE"},       // a set
+		{"aut-num", "as1", "RIPE"},             // an aut-num
+	} {
+		if !c.Delete(d[0], d[1], d[2]) {
+			t.Errorf("Delete(%v) found nothing", d)
+		}
+	}
+	if c.Len() != 0 {
+		t.Errorf("Len = %d after deleting everything", c.Len())
+	}
+	if c.Delete("route", "192.0.2.0/24AS1", "RIPE") || c.Delete("route", "not a key", "RIPE") {
+		t.Error("deleted twice, or deleted junk")
+	}
+}
+
+// TestCorpusMerge: another corpus's objects join, a same-keyed one replacing;
+// ties between sources still go to the object loaded first.
+func TestCorpusMerge(t *testing.T) {
+	a, b := &resolve.Corpus{}, &resolve.Corpus{}
+	a.Put(decodeOne(t, "as-set: AS-X\nmembers: AS1\nsource: ALTDB\n"))
+	b.Put(decodeOne(t, "as-set: AS-X\nmembers: AS2\nsource: NTTCOM\n"))
+	b.Put(decodeOne(t, "route: 192.0.2.0/24\norigin: AS2\nsource: NTTCOM\n"))
+	a.Merge(b)
+	if a.Len() != 3 || b.Len() != 2 {
+		t.Fatalf("Len %d, %d", a.Len(), b.Len())
+	}
+	n, _ := types.ParseSetName("AS-X")
+	s, _ := a.Source().GetSet(context.Background(), n) // no precedence: the first loaded
+	if s.SetSource() != "ALTDB" {
+		t.Errorf("a tie went to %s", s.SetSource())
+	}
+	s, _ = a.Source("NTTCOM").GetSet(context.Background(), n)
+	if s.SetSource() != "NTTCOM" {
+		t.Errorf("precedence gave %s", s.SetSource())
+	}
+	// Every build answers in one order.
+	for i := 0; i < 5; i++ {
+		c := &resolve.Corpus{}
+		for _, p := range []string{"203.0.113.0/24", "10.0.0.0/8", "2001:db8::/32", "10.0.0.0/16", "192.0.2.0/24"} {
+			c.Put(decodeOne(t, fmt.Sprintf("route: %s\norigin: AS9\nsource: X\n", p)))
+		}
+		ps, _ := c.Source().OriginatedRoutes(context.Background(), 9, types.AFIAny)
+		if got := fmt.Sprint(ps); got != "[10.0.0.0/8 10.0.0.0/16 192.0.2.0/24 203.0.113.0/24 2001:db8::/32]" {
+			t.Fatalf("routes in the order %s", got)
+		}
+	}
+	// The source a MemSource was built from does not change with the corpus.
+	src := a.Source()
+	a.Delete("route", "192.0.2.0/24AS2", "NTTCOM")
+	if ps, _ := src.OriginatedRoutes(context.Background(), 2, types.AFIAny); len(ps) != 1 {
+		t.Errorf("a built MemSource changed: %v", ps)
+	}
+}
+
+// TestCorpusMemory holds a reduced route to a bound on the heap: its prefix,
+// origin and source, not the decoded object (4.7 KB for a RIPE route).
+func TestCorpusMemory(t *testing.T) {
+	if testing.Short() {
+		t.Skip("measures the heap")
+	}
+	const n = 100_000
+	heap := func() uint64 {
+		runtime.GC()
+		runtime.GC()
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		return m.HeapAlloc
+	}
+	before := heap()
+	c := &resolve.Corpus{}
+	for i := 0; i < n; i++ {
+		text := fmt.Sprintf("route: 10.%d.%d.0/24\ndescr: a route with the remarks RIPE adds\norigin: AS%d\nmnt-by: MNT-X\n"+
+			"remarks: ****************************\nremarks: * THIS OBJECT IS MODIFIED\nsource: RIPE\n", i>>8&255, i&255, 64500+i%1000)
+		c.Put(decodeOne(t, text))
+	}
+	per := (heap() - before) / n
+	if per > 300 {
+		t.Errorf("%d bytes per reduced route, want at most 300", per)
+	}
+	t.Logf("%d bytes per reduced route", per)
+	runtime.KeepAlive(c)
+}

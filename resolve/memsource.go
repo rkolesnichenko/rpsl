@@ -30,6 +30,12 @@ type MemSource struct {
 // after all listed ones, and ties go to the object loaded first. Routes are
 // unioned across sources.
 func NewMemSource(objs []object.Object, sourcePrecedence ...string) *MemSource {
+	return buildMemSource(objs, sourcePrecedence)
+}
+
+// buildMemSource indexes objs; NewMemSource and Corpus both build with it,
+// so that the two cannot answer differently.
+func buildMemSource(objs []object.Object, sourcePrecedence []string) *MemSource {
 	s := &MemSource{
 		sets:   map[string]object.NamedSet{},
 		routes: map[types.ASN][]netip.Prefix{},

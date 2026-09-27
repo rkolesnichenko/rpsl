@@ -87,7 +87,9 @@ func TestWriteRPSLLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"192.0.2.0/24", "192.0.2.0/24", "2001:db8::/32"}
+	// The two pseudo objects of 192.0.2.0/24 (maxLength 24 and 25) are one
+	// route to the engine, as "!g" lists a prefix once.
+	want := []string{"192.0.2.0/24", "2001:db8::/32"}
 	if len(got) != len(want) {
 		t.Fatalf("AS64496 routes %v, want %v", got, want)
 	}

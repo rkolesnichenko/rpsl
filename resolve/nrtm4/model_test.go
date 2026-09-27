@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
+	"net/netip"
 	"slices"
 	"sort"
 	"strings"
@@ -69,63 +70,53 @@ func randomChange(r *rand.Rand) nrtmtest.Change {
 	}
 }
 
-// want is the server's database as the mirror should hold it: the objects of
-// the classes it keeps, by key, as text.
-func want(s *nrtmtest.Server) map[string]string {
-	out := map[string]string{}
-	for k, text := range s.Objects() {
-		class, pk, _ := strings.Cut(k, " ")
-		if keepClasses[class] {
-			out[key(class, pk)] = strings.TrimRight(text, "\n")
-		}
-	}
-	return out
-}
-
-func held(c *Client) map[string]string {
-	out := map[string]string{}
-	for _, o := range c.Objects() {
-		k, _ := objectKey(o.Raw())
-		out[k] = strings.TrimRight(o.Raw().String(), "\n")
-	}
-	return out
-}
-
-// checkMirror compares a client's mirror with the server's database, object
-// by object and in every expansion of the sets.
+// checkMirror compares a client's mirror with the server's database: a
+// Corpus built from the server's objects must hold as many and answer as the
+// mirror does — each set, each AS's routes — and every set must expand alike.
 func checkMirror(t *testing.T, label string, c *Client, s *nrtmtest.Server) {
 	t.Helper()
-	w, h := want(s), held(c)
-	if len(w) != len(h) {
-		t.Fatalf("%s: holds %d objects, the server %d:\nheld %v\nwant %v", label, len(h), len(w), keys(h), keys(w))
+	ref := &resolve.Corpus{}
+	var texts []string
+	for _, text := range s.Objects() {
+		texts = append(texts, text)
 	}
-	for k, text := range w {
-		if h[k] != text {
-			t.Fatalf("%s: %s is %q, want %q", label, k, h[k], text)
-		}
-	}
-	var objs []object.Object
-	for _, text := range w {
-		o, _ := rpsl.ParseObject(text + "\n")
+	sort.Strings(texts)
+	for _, text := range texts {
+		o, _ := rpsl.ParseObject(text)
 		obj, _ := object.Decode(o)
-		objs = append(objs, obj)
+		ref.Put(obj)
 	}
-	ref := resolve.NewMemSource(objs)
+	if got := c.Status().Objects; got != ref.Len() {
+		t.Fatalf("%s: holds %d objects, the server's database %d", label, got, ref.Len())
+	}
+	want, got := ref.Source(), c.Source()
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
 		n, _ := types.ParseSetName(fmt.Sprintf("AS-S%d", i))
-		got, gerr := (&resolve.Expander{Src: c.Source()}).ExpandPrefixes(ctx, n)
-		exp, werr := (&resolve.Expander{Src: ref}).ExpandPrefixes(ctx, n)
-		if (gerr == nil) != (werr == nil) || gerr == nil && !slices.Equal(got.List(), exp.List()) {
-			t.Fatalf("%s: %s = %v, %v; want %v, %v", label, n, got.List(), gerr, exp.List(), werr)
+		gs, _ := got.GetSet(ctx, n)
+		ws, _ := want.GetSet(ctx, n)
+		if (gs == nil) != (ws == nil) || gs != nil && gs.Raw().String() != ws.Raw().String() {
+			t.Fatalf("%s: GetSet(%s) = %v, want %v", label, n, gs, ws)
+		}
+		gp, gerr := (&resolve.Expander{Src: got}).ExpandPrefixes(ctx, n)
+		wp, werr := (&resolve.Expander{Src: want}).ExpandPrefixes(ctx, n)
+		if (gerr == nil) != (werr == nil) || gerr == nil && !slices.Equal(gp.List(), wp.List()) {
+			t.Fatalf("%s: %s = %v, %v; want %v, %v", label, n, gp.List(), gerr, wp.List(), werr)
+		}
+	}
+	for as := types.ASN(65001); as <= 65004; as++ {
+		gr, _ := got.OriginatedRoutes(ctx, as, types.AFIAny)
+		wr, _ := want.OriginatedRoutes(ctx, as, types.AFIAny)
+		if !slices.Equal(sorted(gr), sorted(wr)) {
+			t.Fatalf("%s: AS%d originates %v, want %v", label, as, gr, wr)
 		}
 	}
 }
 
-func keys(m map[string]string) []string {
+func sorted(ps []netip.Prefix) []string {
 	var out []string
-	for k := range m {
-		out = append(out, k)
+	for _, p := range ps {
+		out = append(out, p.String())
 	}
 	sort.Strings(out)
 	return out
