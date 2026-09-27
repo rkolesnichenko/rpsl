@@ -25,6 +25,7 @@ import (
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/filtergen"
 	"github.com/rkolesnichenko/rpsl/resolve/irrd"
+	"github.com/rkolesnichenko/rpsl/resolve/rpki"
 	"github.com/rkolesnichenko/rpsl/resolve/whois"
 	"github.com/rkolesnichenko/rpsl/types"
 )
@@ -90,6 +91,13 @@ Source (IRRd by default):
   --server-expand let the IRRd server expand as-sets (IRRd 4's !a), as plain
                   bgpq4 does: one query rather than one per AS, but the
                   server's rules rather than the engine's
+  --rpki file     be RPKI-aware as IRRd 4 is, with the VRPs in file (JSON as
+                  rpki-client and Routinator export it; gzip or plain): leave
+                  out every route they make RPKI invalid, and with --dump add
+                  each as a route from the registry RPKI (chosen as any other
+                  with -S). A server has applied its own VRPs already, so
+                  against one this can only leave out more
+  --slurm file    amend --rpki's VRPs with an RFC 8416 SLURM file
 
 Other:
   --ranges        write RPSL ranges as they are rather than every prefix
@@ -113,6 +121,7 @@ type config struct {
 	host, sources     string
 	whois             bool
 	dumps             []string
+	rpki, slurm       string
 	ranges            bool
 	serverSide        bool
 	special           bool
@@ -297,6 +306,10 @@ func parse(args []string) (*config, bool, error) {
 			c.whois = true
 		case "dump":
 			c.dumps = append(c.dumps, op.arg)
+		case "rpki":
+			c.rpki = op.arg
+		case "slurm":
+			c.slurm = op.arg
 		case "ranges":
 			c.ranges = true
 		case "server-expand":
@@ -350,6 +363,10 @@ func (c *config) check(operands []string) error {
 		return usagef("--ranges writes the RPSL ranges as they are; -A, -R and -r work on the prefixes they hold")
 	case c.serverSide && (c.whois || len(c.dumps) > 0):
 		return usagef("--server-expand asks an IRRd server to expand as-sets, so it needs IRRd, not --whois or --dump")
+	case c.serverSide && c.rpki != "":
+		return usagef("--server-expand gets prefixes without their origins, so --rpki cannot validate them")
+	case c.slurm != "" && c.rpki == "":
+		return usagef("--slurm amends --rpki's VRPs, so it needs --rpki")
 	}
 	for i, a := range operands {
 		if a == "EXCEPT" {
@@ -422,17 +439,27 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	be, err := source(c.host, c.sources, c.whois, c.dumps, c.conc)
+	vrps, err := loadVRPs(c.rpki, c.slurm)
+	if err != nil {
+		fmt.Fprintln(stderr, "rpslq:", err)
+		return exitFail
+	}
+	be, err := source(c.host, c.sources, c.whois, c.dumps, c.conc, vrps)
 	if err != nil {
 		fmt.Fprintln(stderr, "rpslq:", err)
 		return exitFail
 	}
 	defer be.close()
 	var trace *tracer
-	src := be.src
 	if c.debug {
 		trace = newTracer(stderr)
 		defer trace.summary()
+	}
+	if vrps != nil {
+		be.filter(vrps, trace)
+	}
+	src := be.src
+	if trace != nil {
 		src = &traceSource{src: src, t: trace}
 	}
 	if c.whois && c.conc > maxWhoisConns {
@@ -591,8 +618,60 @@ type backend struct {
 	close    func()
 }
 
-// source builds the backend the flags describe.
-func source(host, sources string, useWhois bool, files []string, conns int) (*backend, error) {
+// filter makes the backend, and each registry-restricted one, RPKI-aware:
+// the routes vrps make invalid are left out, and traced when trace is set.
+func (be *backend) filter(vrps *rpki.VRPs, trace *tracer) {
+	wrap := func(src resolve.Source, label string) resolve.Source {
+		f := &rpki.Filter{Src: src, VRPs: vrps}
+		if trace != nil {
+			f.OnSuppress = func(p netip.Prefix, origin types.ASN) {
+				trace.notef("rpki: %s %s is invalid, left out%s", origin, p, label)
+			}
+		}
+		return f
+	}
+	be.src = wrap(be.src, "")
+	restrict := be.restrict
+	be.restrict = func(reg string) resolve.Source { return wrap(restrict(reg), " ["+reg+"]") }
+}
+
+// loadVRPs reads --rpki's VRPs, amended by --slurm's file; nil without --rpki.
+func loadVRPs(file, slurm string) (*rpki.VRPs, error) {
+	if file == "" {
+		return nil, nil
+	}
+	read := func(name string, fn func(io.Reader) error) error {
+		f, err := os.Open(name)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		r, err := maybeGzip(f)
+		if err == nil {
+			err = fn(r)
+		}
+		if err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+		return nil
+	}
+	var vrps *rpki.VRPs
+	err := read(file, func(r io.Reader) (err error) {
+		vrps, err = rpki.ReadJSON(r)
+		return err
+	})
+	if err == nil && slurm != "" {
+		err = read(slurm, func(r io.Reader) (err error) {
+			vrps, err = vrps.ApplySLURM(r)
+			return err
+		})
+	}
+	return vrps, err
+}
+
+// source builds the backend the flags describe. With vrps, a dump backend
+// holds their pseudo route objects too, as the registry RPKI.
+func source(host, sources string, useWhois bool, files []string, conns int, vrps *rpki.VRPs) (*backend, error) {
 	var prio []string
 	for _, s := range strings.Split(sources, ",") {
 		if s = strings.TrimSpace(s); s != "" {
@@ -620,6 +699,15 @@ func source(host, sources string, useWhois bool, files []string, conns int) (*ba
 			}
 			if err := l.Read(r); err != nil {
 				return nil, fmt.Errorf("%s: %w", name, err)
+			}
+		}
+		if vrps != nil {
+			pr, pw := io.Pipe()
+			go func() { pw.CloseWithError(vrps.WriteRPSL(pw)) }()
+			err := l.Read(pr)
+			pr.Close()
+			if err != nil {
+				return nil, fmt.Errorf("--rpki: %w", err)
 			}
 		}
 		// -S chooses the registries, as it does for a server ("!s"): only

@@ -212,6 +212,25 @@ cached := resolve.NewCache(live, time.Hour)  // a caching Source over any other
 and collapses identical lookups already in flight into one backend call.
 `DumpLoader` reads several files into one Source and reports what it saw.
 
+## RPKI-aware expansion (`resolve/rpki`)
+
+IRRd 4 validates every route object against the RPKI (RFC 6811) and hides the
+invalid ones, and serves each ROA as a route of the source `RPKI`; RADB lists
+that source by default. A registry's own dump, or a whois server, does neither.
+`resolve/rpki` does both for any `Source`:
+
+```go
+vrps, err := rpki.ReadJSON(f)            // rpki-client's or Routinator's JSON export
+vrps, err = vrps.ApplySLURM(slurm)       // optional: RFC 8416 local overrides
+src := &rpki.Filter{Src: mem, VRPs: vrps} // invalid routes left out, as IRRd does
+err = vrps.WriteRPSL(w)                  // IRRd's pseudo objects, for DumpLoader.Read
+```
+
+`Filter` leaves a route-set's listed prefixes alone, as IRRd does: it
+suppresses route objects, not members. Over an IRRd that is not RPKI-aware,
+the indirect route members `!i` folds into a set are beyond it; RADB
+suppresses those itself.
+
 ## Concurrency
 
 `Expander.Concurrency` fetches a whole breadth-first level at once, which hides

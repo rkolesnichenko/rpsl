@@ -325,6 +325,11 @@ type oracle struct {
 	ex   resolve.Exclusion
 	exS  map[string]bool    // ex.Sets, canonical
 	exA  map[types.ASN]bool // ex.ASNs
+
+	rpki   bool   // IRRd's RPKI-aware mode: RPKI-invalid routes are suppressed
+	roas   []mROA // the ROAs it validates with
+	pseudo bool   // the ROAs are routes too, from the source RPKI
+	folded bool   // indirect route members arrive as prefixes, beyond suppression
 }
 
 // excluding returns the oracle for expansions that leave out ex: an excluded
@@ -467,12 +472,20 @@ func (o *oracle) asns(top string) []types.ASN {
 	return out
 }
 
-// routes returns what as originates, over both sources.
+// routes returns what as originates, over both sources — and from the ROAs,
+// with the pseudo source — without the suppressed routes.
 func (o *oracle) routes(as types.ASN) []netip.Prefix {
 	var out []netip.Prefix
 	for _, c := range o.m.objs {
-		if c.class != "aut-num" && c.as == as {
+		if c.class != "aut-num" && c.as == as && !o.suppressed(c) {
 			out = append(out, c.pfx)
+		}
+	}
+	if o.pseudo {
+		for _, roa := range o.roas {
+			if roa.as == as {
+				out = append(out, roa.pfx)
+			}
 		}
 	}
 	return out
@@ -561,7 +574,7 @@ func (o *oracle) prefixes(top string, afi types.AFI) []netip.Prefix {
 					if !o.exA[c.as] {
 						add("", o.routes(c.as))
 					}
-				} else {
+				} else if o.folded || !o.suppressed(c) {
 					add("", []netip.Prefix{c.pfx})
 				}
 			}

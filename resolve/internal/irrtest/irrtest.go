@@ -4,8 +4,9 @@
 // from the objects' attributes, not through the resolve package — so tests can
 // hold the backends, and bgpq4, against an independent server.
 //
-// "!i<set>,1" resolves recursively as IRRd does (see Recursive), and "!a"
-// expands an as-set to its routes' prefixes as IRRd 4 does (see ASetPrefixes).
+// "!i<set>,1" resolves recursively as IRRd does (see Recursive), "!a"
+// expands an as-set to its routes' prefixes as IRRd 4 does (see ASetPrefixes),
+// and WithRPKI turns on IRRd 4's RPKI-aware mode.
 package irrtest
 
 import (
@@ -32,6 +33,9 @@ type DB struct {
 	byOrigin map[types.ASN][]int // origin -> route and route6 objects
 	claims   map[string][]int    // upper-case set name -> objects naming it in member-of
 
+	rpki bool  // IRRd's RPKI-aware mode (WithRPKI)
+	roas []ROA // the ROAs it imported
+
 	mu   sync.Mutex
 	cmds []string
 }
@@ -42,6 +46,7 @@ type entry struct {
 	class  string
 	key    string // upper-case
 	source string // upper-case
+	pseudo bool   // a pseudo route object made from a ROA
 }
 
 // New loads RPSL objects, one per text.
@@ -94,6 +99,98 @@ func (db *DB) WithSources(names ...string) *DB {
 	return db
 }
 
+// ROA is one ROA as IRRd 4 imports it from rpki.roa_source.
+type ROA struct {
+	Prefix    netip.Prefix // canonical
+	ASN       types.ASN
+	MaxLength int
+	TA        string
+}
+
+// WithRPKI puts db in IRRd 4's RPKI-aware mode with roas, and returns db.
+// Route and route6 objects that are RPKI invalid are suppressed from every
+// answer — decided here as IRRd's validators.py decides it, not by package
+// rpki, so that tests can hold one to the other — and each ROA is served as
+// IRRd's pseudo route object from the source RPKI. Route objects in whois and
+// "!m" answers carry IRRd's rpki-ov-state: line. Call it after the objects
+// are loaded.
+func (db *DB) WithRPKI(roas ...ROA) *DB {
+	db.rpki = true
+	db.roas = append(db.roas, roas...)
+	db.extra = append(db.extra, "RPKI")
+	for _, r := range roas {
+		text := pseudoText(r)
+		o, _ := rpsl.ParseObject(text)
+		db.Add(o, text)
+		db.objs[len(db.objs)-1].pseudo = true
+	}
+	return db
+}
+
+// pseudoText renders a ROA as IRRd's RPSLObjectFromROA does, with IRRd's
+// default rpki.pseudo_irr_remarks.
+func pseudoText(r ROA) string {
+	class := "route"
+	if r.Prefix.Addr().Is6() {
+		class = "route6"
+	}
+	col := func(name, value string) string { return fmt.Sprintf("%-16s%s\n", name+":", value) }
+	indent := strings.Repeat(" ", 16)
+	return col(class, r.Prefix.String()) +
+		col("descr", fmt.Sprintf("RPKI ROA for %s / AS%d", r.Prefix, uint32(r.ASN))) +
+		col("remarks", fmt.Sprintf("This AS%d route object represents routing data retrieved", uint32(r.ASN))) +
+		indent + "from the RPKI. This route object is the result of an automated\n" +
+		indent + "RPKI-to-IRR conversion process performed by IRRd.\n" +
+		col("max-length", strconv.Itoa(r.MaxLength)) +
+		col("origin", fmt.Sprintf("AS%d", uint32(r.ASN))) +
+		col("source", "RPKI  # Trust Anchor: "+r.TA)
+}
+
+// status is the RPKI state IRRd gives e — "valid", "invalid" or "not_found",
+// as SingleRouteROAValidator.validate_route computes it — or "" when e has
+// none: not in RPKI-aware mode, not a route, or a pseudo object.
+func (db *DB) status(e entry) string {
+	if !db.rpki || e.pseudo || e.class != "route" && e.class != "route6" {
+		return ""
+	}
+	p, err := types.ParsePrefix(e.key)
+	a, ok := e.obj.GetFirst("origin")
+	if err != nil || !ok {
+		return "not_found"
+	}
+	origin, err := types.ParseASN(strings.TrimSpace(a.Value))
+	if err != nil {
+		return "not_found"
+	}
+	p = p.Masked()
+	covered := false
+	for _, r := range db.roas { // ip_less_specific_or_exact
+		if r.Prefix.Addr().Is4() != p.Addr().Is4() || r.Prefix.Bits() > p.Bits() || !r.Prefix.Contains(p.Addr()) {
+			continue
+		}
+		covered = true
+		if r.ASN != 0 && r.ASN == origin && p.Bits() <= r.MaxLength {
+			return "valid"
+		}
+	}
+	if covered {
+		return "invalid"
+	}
+	return "not_found"
+}
+
+// visible reports whether IRRd serves e: suppressed objects are in no answer.
+func (db *DB) visible(e entry) bool { return db.status(e) != "invalid" }
+
+// text is e as IRRd serves it: in RPKI-aware mode a route object ends with
+// its rpki-ov-state:.
+func (db *DB) text(e entry) string {
+	if st := db.status(e); st != "" {
+		return e.String() + fmt.Sprintf("%-16s%s\n", "rpki-ov-state:", st)
+	}
+	return e.String()
+}
+
 // String returns the object's text.
 func (e entry) String() string {
 	if e.text != "" {
@@ -135,12 +232,16 @@ func (db *DB) sources() []string {
 // in their priority order.
 func (db *DB) find(sel []string, class, key string) (entry, bool) {
 	idx := db.byKey[class+" "+strings.ToUpper(key)]
-	if len(sel) == 0 && len(idx) > 0 {
-		return db.objs[idx[0]], true
+	if len(sel) == 0 {
+		for _, i := range idx {
+			if db.visible(db.objs[i]) {
+				return db.objs[i], true
+			}
+		}
 	}
 	for _, s := range sel {
 		for _, i := range idx {
-			if db.objs[i].source == s {
+			if db.objs[i].source == s && db.visible(db.objs[i]) {
 				return db.objs[i], true
 			}
 		}
@@ -191,7 +292,7 @@ func (db *DB) Members(sel []string, name string) (members []string, ok bool) {
 	}
 	for _, i := range db.claims[strings.ToUpper(name)] {
 		e := db.objs[i]
-		if e.source != set.source {
+		if e.source != set.source || !db.visible(e) {
 			continue
 		}
 		switch {
@@ -350,7 +451,7 @@ func (db *DB) Routes(sel []string, as types.ASN, v6 bool) []netip.Prefix {
 	var out []netip.Prefix
 	for _, i := range db.byOrigin[as] {
 		e := db.objs[i]
-		if e.class != class || len(sel) > 0 && !contains(sel, e.source) {
+		if e.class != class || len(sel) > 0 && !contains(sel, e.source) || !db.visible(e) {
 			continue
 		}
 		p, err := types.ParsePrefix(e.key) // as IRRd reads route keys: padded or abbreviated IPv4 too
@@ -471,7 +572,7 @@ func (db *DB) irrdConn(c net.Conn) {
 		case strings.HasPrefix(cmd, "!m"):
 			class, key, _ := strings.Cut(cmd[2:], ",")
 			if e, ok := db.find(sel, strings.ToLower(class), key); ok {
-				frame(c, strings.TrimRight(e.String(), "\n"))
+				frame(c, strings.TrimRight(db.text(e), "\n"))
 			} else {
 				fmt.Fprint(c, "D\n")
 			}
@@ -539,12 +640,12 @@ query:
 	}
 	var out []string
 	for _, e := range db.objs { // load order, not priority: the client picks
-		if len(sel) > 0 && !contains(sel, e.source) || len(classes) > 0 && !containsFold(classes, e.class) {
+		if len(sel) > 0 && !contains(sel, e.source) || len(classes) > 0 && !containsFold(classes, e.class) || !db.visible(e) {
 			continue
 		}
 		if attr == "" && strings.EqualFold(e.key, value) ||
 			attr != "" && containsFold(items(e.obj, attr), value) {
-			out = append(out, e.String())
+			out = append(out, db.text(e))
 		}
 	}
 	if len(out) == 0 {

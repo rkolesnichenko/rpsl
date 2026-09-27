@@ -110,6 +110,12 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
 - **`Expander.Concurrency` must not change a result.** Discovery fetches a whole breadth-first
   level at once and merges in the level's own order; `TestConcurrencyDoesNotChangeResults`
   compares serial and parallel over 200 random graphs.
+- **RPKI (`resolve/rpki`) is IRRd 4's RPKI-aware mode**, validated against IRRd's own code
+  and tests: RFC 6811 with AS0 covering but never matching; `Filter` suppresses route
+  *objects* (OriginatedRoutes, route claimants), never a route-set's listed prefixes;
+  `WriteRPSL` is IRRd's pseudo-object text byte for byte (fixture captured from RADB).
+  irrtest's `WithRPKI` is an independent port — keep it independent of package rpki.
+  Only RADB's and NTT's dumps are RPKI-filtered; the other mirrors on RADB's FTP are not.
 - **Prefix-range operators** `^+ ^- ^n ^n-m`: first-class type with a capped `Materialize`.
 - **Dict ↔ decoder agreement**: if `object/profiles.go` lists an attribute on a class, the
   matching `decodeXxx` in `object/classes.go` must read it. Drift silently drops data
@@ -131,19 +137,22 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   (all six modules incl. examples/bulk-ripe under -race, gofmt, invariants) with
   `scripts/check.sh`; `FUZZTIME=15s scripts/check.sh` also runs every fuzz target.
 - `go test -run 'TestRoundTrip|TestStreamRoundTrip' .` — the lossless guard (root module).
-- Fuzz (28 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
+- Fuzz (30 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
   FuzzFormat (ast); FuzzParseSetName, FuzzParseRangeOperator, FuzzParsePrefixRange,
   FuzzParseRouterID (types); FuzzParseStream, FuzzDecode (root); FuzzParseImport,
   FuzzParseASPathRegexp, FuzzParseFilter, FuzzParsePeering, FuzzParseInject,
   FuzzParseComponents, FuzzParseAggrMtd, FuzzParseIfaddr, FuzzParseInterface, FuzzParsePeer,
   FuzzParseRPAttribute, FuzzParseTypedef, FuzzParseProtocol, FuzzFilterString (policy);
   FuzzReadFrame, FuzzParseMembers (resolve/irrd); FuzzScanResponse (resolve/whois);
-  FuzzAggregate (resolve/internal/filtergen).
+  FuzzAggregate (resolve/internal/filtergen); FuzzReadJSON, FuzzApplySLURM (resolve/rpki).
 - Opt-in: `RPSL_REALDATA=$PWD/.data go test -run TestRealData ./examples/bulk-ripe/bulk`
   (RIPE, APNIC, ARIN, AFRINIC, LACNIC, RADB and RADB's ten mirrors, via scripts/fetch-irr-dumps.sh);
   `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve`;
   `RPSL_LIVE=1 go test -run 'TestRIPETemplatesAreCurrent|TestIRRdSourceIsCurrent' ./object`
-  (RIPE profile vs whois -t; IRRd profile's fixture vs IRRd's latest release).
+  (RIPE profile vs whois -t; IRRd profile's fixture vs IRRd's latest release);
+  `RPSL_REALDATA=$PWD/.data go test -run TestRealDataRPKI ./resolve/rpki` (every registry's
+  routes vs NTT's VRPs; RADB's and NTT's filtered exports ≤1% invalid) and, with `RPSL_LIVE=1`
+  too, `-run TestLive ./resolve/rpki` (Validate vs what RADB hides; pseudo-object rendering).
 - `rpslq` (resolve/cmd/rpslq; logic in resolve/internal/rpslq, formats in resolve/internal/filtergen)
   is bgpq4 on this engine: bgpq4's getopt command line, every vendor/kind/shape, and -A as a
   node-for-node port of bgpq4's radix tree (filtergen/tree.go) — don't "improve" its

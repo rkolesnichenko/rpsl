@@ -33,6 +33,7 @@ rpsl/                  # ROOT module: top-level façade + object/ + policy/
     irrd/              #   socket-using Source over an IRRd query port
     whois/             #   socket-using Source over plain WHOIS (RIPE-DB)
     rdap/              #   RDAP registration client (registration metadata only)
+    rpki/              #   RPKI-aware expansion as IRRd 4 does it (no sockets)
 ```
 
 Four leaves (`lexer`, `ast`, `types`, `resolve`) ship as independently `go get`-able modules so a minimal consumer of `types` never transitively pulls in the resolver. The top-level `rpsl` façade, `object`, and `policy` live in the ROOT module — they share the same release cadence as the façade. The `resolve/{irrd,whois,rdap}` subpackages are inside the `resolve` module but isolated so that `cd resolve && go list -deps .` does **not** include `net`: every socket lives only in a backend subpackage.
@@ -517,6 +518,60 @@ AS — as `resolve.Source` injects the engine's, with `MemDatabase` for tests
 and dumps; the cryptography is injected as a `Verifier`. `RouteCreation` stays
 as RFC 2725 §9.9's route check, the one that also asks the origin AS.
 
+### 8.7 RPKI-aware expansion (`resolve/rpki`)
+
+IRRd 4 is RPKI-aware by default (`irrd/rpki`): it imports the VRPs a
+relying-party validator exports, validates every route and route6 object with
+RFC 6811 origin validation, and **suppresses** the invalid ones — they vanish
+from query answers, database exports and NRTM, so an as-set's expansion over
+RADB never contains them. It also serves each ROA as a **pseudo route object**
+of the source `RPKI` (prefix, origin, `max-length:`), and RADB lists `RPKI`
+among its default sources, so bgpq4 against RADB gets those routes too
+(AS13335: 258 of 4,615 `!g` prefixes exist only as ROAs). A registry's own dump
+(RIPE, APNIC, ARIN, AFRINIC, LACNIC, and the mirrors RADB passes on unfiltered),
+whois.ripe.net, or an older IRRd shows neither effect. Only RADB's and NTT's
+exports come filtered.
+
+The rule, as IRRd's `validate_route` states it: a route is **valid** when some
+VRP covering its prefix (the same prefix or less specific, same family) names
+its origin, which is not AS0, with a `maxLength` of at least its length;
+**invalid** when VRPs cover it and none matches; **not_found** when none covers
+it. An AS0 VRP covers but never matches (RFC 6483 §4).
+
+`resolve/rpki` reproduces both effects over any `Source`, without sockets:
+
+- `VRPs` indexes the payloads (exact prefix → grants, with a bitmask of the
+  lengths present, so `Validate` looks up only lengths that have VRPs).
+  `ReadJSON` reads the export rpki-client, Routinator and IRRd's
+  `rpki.roa_source` use, strictly as IRRd does — one bad record fails the read,
+  keys are exact — and `ApplySLURM` applies an RFC 8416 file as IRRd's
+  importer does (filters drop VRPs, never assertions; assertions get the TA
+  `SLURM file`).
+- `Filter` wraps a `Source`: `OriginatedRoutes` drops the prefixes invalid for
+  the AS asked about, `MembersByRef` the invalid route claimants. Sets and
+  their listed members pass through — IRRd suppresses route objects, not the
+  prefixes a route-set names. A route's state depends only on its prefix and
+  origin, so filtering prefixes equals IRRd's per-object suppression when no
+  source is `rpki_excluded` (IRRd's default); per-source exclusion is not
+  modelled, since `OriginatedRoutes` does not say which registry a prefix
+  came from.
+- `WriteRPSL` writes the pseudo objects byte for byte as IRRd renders them, as
+  a dump for `DumpLoader`: the registry `RPKI` then takes part in source
+  precedence, `SourceOf` and rpslq's `-S` and `SOURCE::` like any other.
+
+Two limits are deliberate. Over an IRRd that is not RPKI-aware, `irrd.Source`
+receives a route-set's indirect route members folded into `!i` as plain
+prefixes, which `Filter` cannot tell from listed ones (an RPKI-aware IRRd
+suppresses them itself). And `Filter` hides the pseudo route of an AS0 VRP,
+which IRRd marks valid; it matters only to a set that lists AS0. Freshness is
+the caller's: the VRPs are a snapshot passed in, as a `Source`'s cache policy
+is its own.
+
+rpslq's `--rpki` (and `--slurm`) wraps every backend in `Filter` and, with
+`--dump`, loads the pseudo objects; against a live server it can only leave out
+more than the server's own VRPs did. `--server-expand` refuses it: `!a` answers
+prefixes without origins.
+
 ## 9. Top-level façade
 
 ```go
@@ -607,9 +662,9 @@ The correctness bar is "matches the tools operators already trust," so testing i
 
 1. **Golden round-trip corpus.** A directory of real objects from RIPE/RADB/ARIN; assert `Parse → String` is byte-identical. This guards the lossless property and catches lexer regressions.
 2. **Policy tests from the RFCs.** Table tests for the grammar's forms, and every routing-policy example in RFC 2622, 2650 and 4012 kept verbatim in `policy/testdata/rfc-examples.txt`: each must parse clean, except the one the parser rejects on purpose (RFC 2622's `NOT` in a peering).
-3. **A model of the engine.** Random IRRs — as-sets and route-sets in two sources, range operators on every kind of member, indirect members honored and rejected, cycles, missing and invalid members, `AS-ANY` — are expanded by the engine and by a brute-force oracle that evaluates RFC 2622 straight from the generator's model, never from parsed text. They must agree on AS numbers, prefixes of each family, `Missing()`, and on `MaxDepth`/`MaxPrefixes` holding exactly at the true depth and size. The same IRRs are served by `resolve/internal/irrtest`, an in-process server that answers the IRRd and whois protocols as IRRd does, so `irrd.Source`, `whois.Source` and `MemSource` are held to the same oracle.
-4. **Differential expansion vs. `bgpq4`.** A real `bgpq4` binary queries `irrtest` serving the same objects the engine expands (bgpq4 recurses through as-sets itself with `-L`; route-sets it asks the server to resolve with `!i…,1`, which `irrtest` implements as IRRd does). Random IRRs must expand identically, AS numbers and both families' prefixes; the golden expansions of the snapshot in `resolve/testdata` are bgpq4's own output, re-checked whenever bgpq4 is installed (CI installs it). Where the two knowingly differ — bgpq4 drops the single-length `^n` form (a bgpq4 bug), neither IRRd nor bgpq4 applies range operators on set and AS members, bgpq4 follows route-sets listed in as-sets — the difference is pinned in `resolve/testdata/bgpq4/divergences.md` and a test, so a change on either side fails. `rpslq` is held to the binary the same way, over every vendor, kind of list and shape (`-A`, `-R`, `-r`, `-s`, `-W`, `-w`, …) and `EXCEPT`, with its own divergences pinned alongside. An opt-in run (`RPSL_REALDATA`) does the same for the largest and a random sample of real RIPE sets. An older opt-in diff against bgpq4 on a live IRR runs when `RPSL_BGPQ4_SERVER`/`RPSL_BGPQ4_SET` are set.
-5. **Fuzzing** (`go test -fuzz`) of every parser that takes untrusted text — lexer, attribute lists, set names, range operators, prefix ranges, the stream, decoding, editing, the policy parser (import, filter, peering, AS-path regexp), what the network backends read from a server (the IRRd frame reader and member list, the whois response scanner), and rpslq's port of bgpq4's aggregation (any prefix set, aggregated and refined, without a panic — bgpq4 aborts on an "unreachable point" — and aggregation losing and adding nothing) — for properties, not only for panics:
+3. **A model of the engine.** Random IRRs — as-sets and route-sets in two sources, range operators on every kind of member, indirect members honored and rejected, cycles, missing and invalid members, `AS-ANY` — are expanded by the engine and by a brute-force oracle that evaluates RFC 2622 straight from the generator's model, never from parsed text. They must agree on AS numbers, prefixes of each family, `Missing()`, and on `MaxDepth`/`MaxPrefixes` holding exactly at the true depth and size. The same IRRs are served by `resolve/internal/irrtest`, an in-process server that answers the IRRd and whois protocols as IRRd does, so `irrd.Source`, `whois.Source` and `MemSource` are held to the same oracle. With random ROAs added, the oracle also applies RFC 6811 from the model: `rpki.Filter` over `MemSource` (with and without `WriteRPSL`'s pseudo objects), the backends against `irrtest` in IRRd's RPKI-aware mode (its own port of IRRd's validator and pseudo-object rendering), and `Filter` over a server that is not RPKI-aware must all agree with it.
+4. **Differential expansion vs. `bgpq4`.** A real `bgpq4` binary queries `irrtest` serving the same objects the engine expands (bgpq4 recurses through as-sets itself with `-L`; route-sets it asks the server to resolve with `!i…,1`, which `irrtest` implements as IRRd does). Random IRRs must expand identically, AS numbers and both families' prefixes; the golden expansions of the snapshot in `resolve/testdata` are bgpq4's own output, re-checked whenever bgpq4 is installed (CI installs it). Where the two knowingly differ — bgpq4 drops the single-length `^n` form (a bgpq4 bug), neither IRRd nor bgpq4 applies range operators on set and AS members, bgpq4 follows route-sets listed in as-sets — the difference is pinned in `resolve/testdata/bgpq4/divergences.md` and a test, so a change on either side fails. `rpslq` is held to the binary the same way, over every vendor, kind of list and shape (`-A`, `-R`, `-r`, `-s`, `-W`, `-w`, …) and `EXCEPT`, with its own divergences pinned alongside. An opt-in run (`RPSL_REALDATA`) does the same for the largest and a random sample of real RIPE sets. `rpslq --dump --rpki` is held to bgpq4 against an RPKI-aware `irrtest` holding the same objects and ROAs, with bgpq4 recursing itself and letting the server expand, with the pseudo source selected and not. An older opt-in diff against bgpq4 on a live IRR runs when `RPSL_BGPQ4_SERVER`/`RPSL_BGPQ4_SET` are set.
+5. **Fuzzing** (`go test -fuzz`) of every parser that takes untrusted text — lexer, attribute lists, set names, range operators, prefix ranges, the stream, decoding, editing, the policy parser (import, filter, peering, AS-path regexp), what the network backends read from a server (the IRRd frame reader and member list, the whois response scanner), the VRP export and SLURM readers (what they accept is well-formed and its pseudo objects load back one per VRP; a SLURM file only drops VRPs it may and adds those it asserts), and rpslq's port of bgpq4's aggregation (any prefix set, aggregated and refined, without a panic — bgpq4 aborts on an "unreachable point" — and aggregation losing and adding nothing) — for properties, not only for panics:
    - every token's span and segments point at its bytes, and its kind follows the line rules the stream shares;
    - the stream is lossless, splits objects where the lexer sees them end, yields each object exactly as `ParseObject` reads its text (positions shifted), resumes after a break, and under caps drops only whole, diagnosed objects;
    - `Append`/`Set` produce text that parses back to exactly the edit, other attributes' bytes untouched;
@@ -618,7 +673,7 @@ The correctness bar is "matches the tools operators already trust," so testing i
 6. **Engine property tests** with synthetic set graphs (cyclic and deep nestings, operator cycles) against brute-force oracles, to verify results, limits and termination, and an oracle for `RangeOperator.Apply` against the per-prefix meaning of RFC 2622 §2.
 7. **Contracts.** Every attribute a validation profile lists lands in its own field of the typed struct (`TestEveryAttributeLandsInItsOwnField`), an attribute decodes to the same type in every class that has it (`TestAttributeTypesAgreeAcrossClasses`), and every diagnostic rule the library emits is in `docs/diagnostics.md` with its severity, and every rule listed there is emitted (`TestDiagnosticRulesAreDocumented`).
 8. **Real-data regression** (opt-in, `RPSL_REALDATA`). Streams the public dumps of sixteen registries (`scripts/fetch-irr-dumps.sh`: every split class of RIPE and APNIC; ARIN, AFRINIC, LACNIC and RADB; and the ten IRRs RADB mirrors, such as NTTCOM, ALTDB and JPIRR; about 13.3 million objects) and checks that the stream is lossless, raises no stream-level diagnostics, decodes every route and route6 to a valid prefix, and puts Errors of any one family on at most 0.1 % of objects (at least 3 tolerated). RIPE's dumps are also validated against the RIPE profile, RADB's and its mirrors' against the IRRd profile, and ARIN's against the ARIN profile — each against the software that registry runs; the other registries run their own. What a registry's dump does to its data (RIPE removes some `auth:` lines, ARIN ends with a line reading `EOF`) is listed per registry with its reason, and a problem in a registry's own data too frequent for the error limit (person names where a NIC handle belongs, in RADB and its mirrors) is declared the same way, counted by cause rather than tolerated in bulk, and a registry whose data misuses RPSL more often than the limit allows (TC's aut-nums) raises that one family's limit, with its reason. For RIPE and APNIC it then expands the largest real as-sets and route-sets twice, in opposite input orders, and requires identical results.
-9. **Live smoke test** (opt-in, `RPSL_LIVE=1`). Queries RADB (over both the IRRd protocol and whois), RIPE whois and RIPE RDAP read-only and asserts only stable facts (AS3333 originates 193.0.0.0/21; a made-up set is not found). It caught IRRd closing the connection after one command without `!!`, and IRRd's whois parser needing every flag before `-i`. `TestRIPETemplatesAreCurrent` (in `object`, same switch) compares the RIPE template fixtures with whois.ripe.net, so a template change there fails a test here.
+9. **Live smoke test** (opt-in, `RPSL_LIVE=1`). Queries RADB (over both the IRRd protocol and whois), RIPE whois and RIPE RDAP read-only and asserts only stable facts (AS3333 originates 193.0.0.0/21; a made-up set is not found). It caught IRRd closing the connection after one command without `!!`, and IRRd's whois parser needing every flag before `-i`. `TestRIPETemplatesAreCurrent` (in `object`, same switch) compares the RIPE template fixtures with whois.ripe.net, so a template change there fails a test here. The RPKI checks run on the same switches: `TestRealDataRPKI` validates every registry's routes with the VRPs NTT exports for IRRd — RADB's and NTT's exports, filtered by their RPKI-aware IRRds, must be nearly clean (at most 1 %, for ROAs issued since) — and `TestLiveRPKIAgreesWithRADB` samples BELL's unfiltered routes and requires RADB to hide those `Validate` finds invalid and serve the valid ones; `TestLivePseudoObjectIsCurrent` holds `WriteRPSL` to RADB's rendering.
 
 10. **Benchmarks** of every hot path — the lexer, the stream, decoding and validation, the policy parser, the expansion engine — on inputs generated in code, and (opt-in, `RPSL_REALDATA`) on the RIPE dumps. `check.sh` runs each once so none breaks unnoticed; `scripts/bench.sh` compares two refs on one machine with `benchstat`. Nothing times them in CI, where shared runners make timing meaningless.
 
@@ -645,7 +700,7 @@ sub-grammar of RFC 2622 §8.1 and §9 parsed, the `policy` AST with canonical `S
 engine expanding every set class — including `EvalFilter` over the enumerable fragment of the
 filter language — with in-memory, dump and caching `Source`s, optional concurrency and the
 bgpq4 differential, the three live backends in `resolve/{irrd,whois,rdap}`, and the `auth`
-package for RFC 2725 and RIPE's `mnt-irt:` consent rule. See [README.md#Status](../README.md#status) for the same matrix in
+package for RFC 2725 and RIPE's `mnt-irt:` consent rule, and RPKI-aware expansion as IRRd 4 does it (`resolve/rpki`, §8.7). See [README.md#Status](../README.md#status) for the same matrix in
 shipping form.
 
 Three limits are deliberate and are not gaps. AS-path regexps are parsed but never evaluated

@@ -1,0 +1,17 @@
+route:          1.1.1.0/24
+descr:          RPKI ROA for 1.1.1.0/24 / AS13335
+remarks:        This AS13335 route object represents routing data retrieved
+                from the RPKI. This route object is the result of an automated
+                RPKI-to-IRR conversion process performed by IRRd.
+max-length:     24
+origin:         AS13335
+source:         RPKI  # Trust Anchor: apnic
+
+route6:         2001:470:2a2::/48
+descr:          RPKI ROA for 2001:470:2a2::/48 / AS13335
+remarks:        This AS13335 route object represents routing data retrieved
+                from the RPKI. This route object is the result of an automated
+                RPKI-to-IRR conversion process performed by IRRd.
+max-length:     48
+origin:         AS13335
+source:         RPKI  # Trust Anchor: arin
