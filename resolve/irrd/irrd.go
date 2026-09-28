@@ -352,10 +352,8 @@ func (s *Source) fetchObject(ctx context.Context, class, key, source string) (ob
 		}
 	}
 	payload, err := q.do(ctx, "!m"+class+","+key)
-	if errors.Is(err, errUnknownSource) {
-		if q != s {
-			q.unknown.Store(true)
-		}
+	if errors.Is(err, errUnknownSource) && q != s {
+		q.unknown.Store(true) // data can name any registry: ask the server once
 		return nil, resolve.ErrNotFound
 	}
 	if errors.Is(err, errNotFound) {
