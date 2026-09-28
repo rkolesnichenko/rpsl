@@ -140,7 +140,7 @@ func TestWhoisIRRdErrorIsReported(t *testing.T) {
 	ctx := context.Background()
 	_, err1 := src.GetSet(ctx, types.Ref(mustSet(t, "AS-FOO")))
 	_, err2 := src.OriginatedRoutes(ctx, 10, types.AFIAny)
-	_, err3 := src.MembersByRef(ctx, refSet(t, "RS-REF", "TEST", "ANY"))
+	_, err3 := src.MembersByRef(ctx, refSet(t, "RS-REF", "BOGUS", "ANY"))
 	for i, err := range []error{err1, err2, err3} {
 		var se *ServerError
 		if !errors.As(err, &se) || se.Message != "One or more selected sources are unavailable." ||

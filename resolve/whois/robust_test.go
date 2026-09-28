@@ -22,9 +22,9 @@ import (
 func TestWhoisServerErrorsAreReported(t *testing.T) {
 	denied := "% This is the RIPE Database query service.\n\n%ERROR:201: access denied for 192.0.2.1\n%\n% Sorry.\n"
 	fw := newFakeWhois(t, map[string]string{
-		"-r -T as-set AS-FOO":                    denied,
-		"-r -T route,route6 -i origin AS10":      denied,
-		"-r -T route,route6 -i member-of RS-REF": denied,
+		"-r -T as-set AS-FOO":                            denied,
+		"-r -T route,route6 -i origin AS10":              denied,
+		"-s TEST -r -T route,route6 -i member-of RS-REF": denied,
 	})
 	src := &Source{Addr: fw.addr()}
 	ctx := context.Background()

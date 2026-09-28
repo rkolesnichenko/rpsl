@@ -117,7 +117,7 @@ func TestWhoisMembersByRefMntnerCheck(t *testing.T) {
 	resp := "route: 198.51.100.0/24\norigin: AS10\nmember-of: RS-REF\nmnt-by: MAINT-GOOD\nsource: TEST\n\n" +
 		"route: 203.0.113.0/24\norigin: AS20\nmember-of: RS-REF\nmnt-by: MAINT-EVIL\nsource: TEST\n"
 	fw := newFakeWhois(t, map[string]string{
-		"-r -T route,route6 -i member-of RS-REF": resp,
+		"-s TEST -r -T route,route6 -i member-of RS-REF": resp,
 	})
 	src := &Source{Addr: fw.addr(), Timeout: 2 * time.Second}
 	got, err := src.MembersByRef(context.Background(), refSet(t, "RS-REF", "TEST", "MAINT-GOOD"))
@@ -136,7 +136,7 @@ func TestWhoisMembersByRefMntnerCheck(t *testing.T) {
 func TestEngineExpandPrefixesOverWhois(t *testing.T) {
 	fw := newFakeWhois(t, map[string]string{
 		"-r -T route-set RS-REF": "route-set: RS-REF\nmbrs-by-ref: MAINT-GOOD\nsource: TEST\n",
-		"-r -T route,route6 -i member-of RS-REF": "route: 198.51.100.0/24\norigin: AS10\nmember-of: RS-REF\nmnt-by: MAINT-GOOD\nsource: TEST\n\n" +
+		"-s TEST -r -T route,route6 -i member-of RS-REF": "route: 198.51.100.0/24\norigin: AS10\nmember-of: RS-REF\nmnt-by: MAINT-GOOD\nsource: TEST\n\n" +
 			"route: 203.0.113.0/24\norigin: AS20\nmember-of: RS-REF\nmnt-by: MAINT-EVIL\nsource: TEST\n",
 	})
 	src := &Source{Addr: fw.addr(), Timeout: 2 * time.Second}

@@ -506,16 +506,16 @@ func (db *DB) irrdConn(c net.Conn) {
 		case strings.HasPrefix(cmd, "!s"):
 			var next []string
 			known := db.sources()
-			bad := ""
+			bad := false
 			for _, s := range strings.Split(cmd[2:], ",") {
 				s = strings.ToUpper(strings.TrimSpace(s))
 				if !contains(known, s) {
-					bad = s
+					bad = true
 				}
 				next = append(next, s)
 			}
-			if bad != "" {
-				fmt.Fprintf(c, "F Unknown source %s\n", bad)
+			if bad {
+				fmt.Fprint(c, "F One or more selected sources are unavailable.\n")
 			} else {
 				sel = next
 				fmt.Fprint(c, "C\n")
@@ -636,6 +636,11 @@ query:
 			break query
 		default:
 			value = tokens[i]
+		}
+	}
+	for _, s := range sel {
+		if !contains(db.sources(), s) {
+			return "%% ERROR: One or more selected sources are unavailable.\n" // IRRd's whois reply
 		}
 	}
 	var out []string

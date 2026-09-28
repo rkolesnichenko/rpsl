@@ -96,32 +96,41 @@ func (s *Source) maxResponse() int64 {
 	return s.MaxResponse
 }
 
-// GetSet fetches a set object of any class by name. When the server returns
-// it from several sources, the one from the source listed first in Sources
-// wins; without Sources, the first the server returns.
+// GetSet fetches a set object of any class by name. An unscoped ref is looked
+// up in Sources (the copy from the source listed first wins; without Sources,
+// the first the server returns). A scoped ref (RIPE::AS-FOO) is looked up in
+// that registry alone, with "-s", whatever Sources lists; a registry the server
+// does not know is resolve.ErrNotFound.
 func (s *Source) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error) {
-	if ref.IsScoped() {
-		return nil, fmt.Errorf("whois: scoped lookup of %s is not supported", ref)
-	}
 	name := ref.Name()
 	if name.IsZero() {
 		return nil, errors.New("whois: empty set name")
 	}
+	sources := s.Sources
+	if ref.IsScoped() {
+		sources = []string{ref.Source()}
+	}
 	class := name.Class().String()
-	objs, err := s.queryObjects(ctx, "-r -T "+class+" "+name.String())
+	objs, err := s.queryObjectsIn(ctx, sources, "-r -T "+class+" "+name.String())
 	if err != nil {
+		if ref.IsScoped() && unknownSource(err) {
+			return nil, resolve.ErrNotFound
+		}
 		return nil, err
 	}
 	var best object.NamedSet
-	bestRank := len(s.Sources)
+	bestRank := len(sources)
 	for _, o := range objs {
 		set, ok := o.(object.NamedSet)
 		if !ok || set.SetName() != name || set.Class() != class {
 			continue
 		}
-		rank := slices.IndexFunc(s.Sources, func(n string) bool { return strings.EqualFold(n, set.SetSource()) })
+		rank := slices.IndexFunc(sources, func(n string) bool { return strings.EqualFold(n, strings.TrimSpace(set.SetSource())) })
 		if rank < 0 {
-			rank = len(s.Sources)
+			if ref.IsScoped() {
+				continue // not the registry asked for
+			}
+			rank = len(sources)
 		}
 		if best == nil || rank < bestRank {
 			best, bestRank = set, rank
@@ -133,10 +142,18 @@ func (s *Source) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet,
 	return best, nil
 }
 
+// unknownSource reports a server's refusal of a source it does not have:
+// RIPE's "%ERROR:102: unknown source", IRRd's "%% ERROR: One or more selected
+// sources are unavailable."
+func unknownSource(err error) bool {
+	var se *ServerError
+	return errors.As(err, &se) && (se.Code == 102 || strings.Contains(se.Message, "sources are unavailable"))
+}
+
 // OriginatedRoutes returns prefixes originated by as, via the inverse "origin"
 // query, filtered to afi.
 func (s *Source) OriginatedRoutes(ctx context.Context, as types.ASN, afi types.AFI) ([]netip.Prefix, error) {
-	objs, err := s.queryObjects(ctx, "-r -T route,route6 -i origin "+as.String())
+	objs, err := s.queryObjectsIn(ctx, s.Sources, "-r -T route,route6 -i origin "+as.String())
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +187,11 @@ func (s *Source) MembersByRef(ctx context.Context, set object.NamedSet) ([]objec
 	if classes == "" {
 		return nil, nil
 	}
-	objs, err := s.queryObjects(ctx, "-r -T "+classes+" -i member-of "+set.SetName().String())
+	sources := s.Sources
+	if src, err := types.ParseSourceName(strings.TrimSpace(set.SetSource())); err == nil {
+		sources = []string{src} // ClaimAllowed keeps only the set's own source's claims
+	}
+	objs, err := s.queryObjectsIn(ctx, sources, "-r -T "+classes+" -i member-of "+set.SetName().String())
 	if err != nil {
 		return nil, err
 	}
@@ -198,17 +219,19 @@ func claimantClasses(c types.SetClass) string {
 	return ""
 }
 
-// queryObjects runs one WHOIS query and decodes every object in the response.
-func (s *Source) queryObjects(ctx context.Context, q string) ([]object.Object, error) {
-	if len(s.Sources) > 0 {
-		names := make([]string, len(s.Sources))
-		for i, n := range s.Sources {
-			if !validSourceName(n) {
+// queryObjectsIn runs one WHOIS query scoped to sources (a "-s" filter; no
+// filter when empty) and decodes every object in the response.
+func (s *Source) queryObjectsIn(ctx context.Context, sources []string, q string) ([]object.Object, error) {
+	if len(sources) > 0 {
+		canonical := make([]string, len(sources))
+		for i, n := range sources {
+			c, err := types.ParseSourceName(n)
+			if err != nil {
 				return nil, fmt.Errorf("whois: invalid source name %q", n)
 			}
-			names[i] = strings.ToUpper(n)
+			canonical[i] = c
 		}
-		q = "-s " + strings.Join(names, ",") + " " + q
+		q = "-s " + strings.Join(canonical, ",") + " " + q
 	}
 	data, err := s.query(ctx, q)
 	if err != nil {
@@ -309,21 +332,6 @@ func scanResponse(data []byte) ([]byte, *ServerError) {
 		out = append(out, '\n')
 	}
 	return out, serr
-}
-
-// validSourceName reports whether n is a plain IRR source name: letters,
-// digits, '-' and '_' only, so it cannot carry a flag or another query line.
-func validSourceName(n string) bool {
-	if n == "" {
-		return false
-	}
-	for i := 0; i < len(n); i++ {
-		c := n[i]
-		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '-' || c == '_') {
-			return false
-		}
-	}
-	return true
 }
 
 func afiMatches(afi types.AFI, p netip.Prefix) bool {
