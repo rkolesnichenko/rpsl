@@ -5,6 +5,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/rkolesnichenko/rpsl/ast"
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
@@ -63,4 +64,86 @@ func ParseSrcMember(item string, container types.SetClass) (SetMember, error) {
 		return bad, fmt.Errorf("range operator not valid on a scoped %s in src-members: %q", cls, item)
 	}
 	return SetMember{Kind: MemberSet, Set: ref.Name(), Source: ref.Source(), Op: op, Raw: item}, nil
+}
+
+// memberKey is a member's primary key with the registry removed (spec §5.2):
+// the set name, the AS number, or the prefix range itself. The draft compares
+// members by it (§2.3 step 2, §3.1, §3.3).
+type memberKey struct {
+	kind MemberKind
+	as   types.ASN
+	set  types.SetName
+	rng  types.PrefixRange
+}
+
+// keyOf returns m's key, and false for a MemberInvalid member.
+func keyOf(m SetMember) (memberKey, bool) {
+	switch m.Kind {
+	case MemberAS:
+		return memberKey{kind: MemberAS, as: m.AS}, true
+	case MemberSet:
+		return memberKey{kind: MemberSet, set: m.Set}, true
+	case MemberPrefixRange:
+		return memberKey{kind: MemberPrefixRange, rng: m.Range}, true
+	}
+	return memberKey{}, false
+}
+
+// srcMembers decodes src-members: for a set of class container whose
+// members:/mp-members: are listed. An item that does not parse is an Error
+// (rule) and left out. One set name under two registries (§3.3) is an Error at
+// each item (rule-conflict), and both are left out, so the name resolves
+// through members: by precedence. An item missing from members:/mp-members:
+// (§3.1) is a Warning (rule-unlisted) and kept: the resolver follows it. An
+// item repeated under the same registry is kept once.
+func (d *decoder) srcMembers(rule string, container types.SetClass, listed ...[]SetMember) []SetMember {
+	type parsed struct {
+		m  SetMember
+		it listItem
+	}
+	var ps []parsed
+	registries := map[types.SetName]map[string]bool{}
+	for _, it := range d.listItems("src-members") {
+		m, err := ParseSrcMember(it.Value, container)
+		if err != nil {
+			d.diagAt(ast.Error, it.span(), rule, err.Error())
+			continue
+		}
+		ps = append(ps, parsed{m, it})
+		if m.Kind == MemberSet {
+			if registries[m.Set] == nil {
+				registries[m.Set] = map[string]bool{}
+			}
+			registries[m.Set][m.Source] = true
+		}
+	}
+	in := map[memberKey]bool{}
+	for _, l := range listed {
+		for _, m := range l {
+			if k, ok := keyOf(m); ok {
+				in[k] = true
+			}
+		}
+	}
+	var out []SetMember
+	kept := map[memberKey]bool{}
+	for _, p := range ps {
+		if p.m.Kind == MemberSet && len(registries[p.m.Set]) > 1 {
+			d.diagAt(ast.Error, p.it.span(), rule+"-conflict", fmt.Sprintf(
+				"%s is named under %d registries; src-members: may name a set once (draft-ietf-grow-rpsl-registry-scoped-members §3.3), so it is resolved through members: instead",
+				p.m.Set, len(registries[p.m.Set])))
+			continue
+		}
+		k, _ := keyOf(p.m)
+		if !in[k] {
+			d.diagAt(ast.Warning, p.it.span(), rule+"-unlisted", fmt.Sprintf(
+				"src-members: item %q is not in members: or mp-members: (draft-ietf-grow-rpsl-registry-scoped-members §3.1); it is still resolved",
+				p.it.Value))
+		}
+		if !kept[k] {
+			kept[k] = true
+			out = append(out, p.m)
+		}
+	}
+	return out
 }

@@ -318,11 +318,12 @@ func decodeRoute6(d *decoder) Route6 {
 type AsSet struct {
 	Common
 	Registry
-	Name      types.SetName
-	Members   []SetMember
-	MpMembers []SetMember
-	MbrsByRef []string
-	raw       *ast.Object
+	Name       types.SetName
+	Members    []SetMember
+	MpMembers  []SetMember
+	SrcMembers []SetMember // src-members: (draft-ietf-grow-rpsl-registry-scoped-members)
+	MbrsByRef  []string
+	raw        *ast.Object
 }
 
 // Class returns "as-set".
@@ -332,14 +333,17 @@ func (s AsSet) Class() string { return "as-set" }
 func (s AsSet) Raw() *ast.Object { return s.raw }
 
 func decodeAsSet(d *decoder) AsSet {
+	members := d.members("members", "object/as-set-members", types.ClassAsSet)
+	mp := d.members("mp-members", "object/as-set-mp-members", types.ClassAsSet)
 	return AsSet{
-		Common:    d.common("as-set"),
-		Registry:  d.registry("as-set"),
-		Name:      d.setKey("as-set", "object/as-set-name", types.ClassAsSet),
-		Members:   d.members("members", "object/as-set-members", types.ClassAsSet),
-		MpMembers: d.members("mp-members", "object/as-set-mp-members", types.ClassAsSet),
-		MbrsByRef: d.list("mbrs-by-ref"),
-		raw:       d.o,
+		Common:     d.common("as-set"),
+		Registry:   d.registry("as-set"),
+		Name:       d.setKey("as-set", "object/as-set-name", types.ClassAsSet),
+		Members:    members,
+		MpMembers:  mp,
+		SrcMembers: d.srcMembers("object/as-set-src-members", types.ClassAsSet, members, mp),
+		MbrsByRef:  d.list("mbrs-by-ref"),
+		raw:        d.o,
 	}
 }
 
@@ -348,11 +352,12 @@ func decodeAsSet(d *decoder) AsSet {
 type RouteSet struct {
 	Common
 	Registry
-	Name      types.SetName
-	Members   []SetMember
-	MpMembers []SetMember
-	MbrsByRef []string
-	raw       *ast.Object
+	Name       types.SetName
+	Members    []SetMember
+	MpMembers  []SetMember
+	SrcMembers []SetMember // src-members: (draft-ietf-grow-rpsl-registry-scoped-members)
+	MbrsByRef  []string
+	raw        *ast.Object
 }
 
 // Class returns "route-set".
@@ -362,13 +367,16 @@ func (s RouteSet) Class() string { return "route-set" }
 func (s RouteSet) Raw() *ast.Object { return s.raw }
 
 func decodeRouteSet(d *decoder) RouteSet {
+	members := d.members("members", "object/route-set-members", types.ClassRouteSet)
+	mp := d.members("mp-members", "object/route-set-mp-members", types.ClassRouteSet)
 	return RouteSet{
-		Common:    d.common("route-set"),
-		Registry:  d.registry("route-set"),
-		Name:      d.setKey("route-set", "object/route-set-name", types.ClassRouteSet),
-		Members:   d.members("members", "object/route-set-members", types.ClassRouteSet),
-		MpMembers: d.members("mp-members", "object/route-set-mp-members", types.ClassRouteSet),
-		MbrsByRef: d.list("mbrs-by-ref"),
-		raw:       d.o,
+		Common:     d.common("route-set"),
+		Registry:   d.registry("route-set"),
+		Name:       d.setKey("route-set", "object/route-set-name", types.ClassRouteSet),
+		Members:    members,
+		MpMembers:  mp,
+		SrcMembers: d.srcMembers("object/route-set-src-members", types.ClassRouteSet, members, mp),
+		MbrsByRef:  d.list("mbrs-by-ref"),
+		raw:        d.o,
 	}
 }
