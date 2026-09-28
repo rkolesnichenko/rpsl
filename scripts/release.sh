@@ -12,8 +12,9 @@
 # fetch again — and it retries a `go mod tidy` the checksum database is not
 # ready for. Last, from an empty module cache: every module's @latest is the
 # version, a consumer of each gets only what it requires and its tests pass
-# from the published zip, and rpslq installs; then the GitHub release, from the
-# changelog section.
+# from the published zip, and rpslq installs; then rpslq's binaries, built from
+# the published module for each platform, and the GitHub release, from the
+# changelog section, with the binaries attached.
 #
 # Each step first checks whether it is done — its tag on the remote, its commit
 # made — so after a failure the same command resumes where it stopped.
@@ -25,6 +26,7 @@
 #   RELEASE_SKIP_CI  1: do not ask GitHub whether CI passed
 #   RELEASE_ON_PUSH  a command run with the module directories after each tag push
 #   RELEASE_STOP_AFTER  stop after this step (1-5), as if it had failed there
+#   RELEASE_DIST     directory to leave rpslq's archives in (a temporary one)
 set -eu
 
 V=
@@ -249,16 +251,53 @@ got=$("$tmp/bin/rpslq" -v)
 [ "$got" = "rpslq $V" ] || fail "rpslq -v says \"$got\", not \"rpslq $V\""
 echo "$got installs"
 
+step "7. rpslq binaries, built from the published module"
+dist=${RELEASE_DIST:-$tmp/dist}
+mkdir -p "$dist" "$tmp/build"
+(
+	cd "$tmp/build"
+	go mod init example.com/rpslq-build >/dev/null 2>&1
+	go get "$M/resolve@$V" >/dev/null 2>&1 || fail "go get $M/resolve@$V"
+	license=$(go list -m -f '{{.Dir}}' "$M/resolve")/LICENSE
+	for p in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+		os=${p%/*} arch=${p#*/}
+		exe=rpslq
+		[ "$os" = windows ] && exe=rpslq.exe
+		stage=$tmp/stage-$os-$arch
+		mkdir -p "$stage"
+		GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "$stage/$exe" "$M/resolve/cmd/rpslq" ||
+			fail "building rpslq for $p"
+		cp "$license" "$stage/LICENSE"
+		cat >"$stage/README.txt" <<README
+rpslq $V ($os/$arch): router filters from IRR data, as bgpq4 writes them,
+on the rpsl engine. Its command line is bgpq4's; see
+https://github.com/rkolesnichenko/rpsl/blob/main/docs/rpslq.md
+README
+		name=rpslq_${V}_${os}_$arch
+		if [ "$os" = windows ]; then
+			(cd "$stage" && zip -q -X "$dist/$name.zip" "$exe" LICENSE README.txt)
+		else
+			tar -czf "$dist/$name.tar.gz" -C "$stage" "$exe" LICENSE README.txt
+		fi
+		echo "built $name"
+	done
+)
+if command -v sha256sum >/dev/null; then sum="sha256sum"; else sum="shasum -a 256"; fi
+(cd "$dist" && rm -f SHA256SUMS && $sum rpslq_"${V}"_* >SHA256SUMS)
+echo "checksums in $dist/SHA256SUMS"
+
 if [ -n "$GH_RELEASE" ]; then
-	step "7. the GitHub release"
+	step "8. the GitHub release, with the binaries"
+	assets=$(ls "$dist"/rpslq_"${V}"_* "$dist/SHA256SUMS")
 	if gh release view "$V" >/dev/null 2>&1; then
-		echo "the GitHub release $V exists already"
+		echo "the GitHub release $V exists: attaching the binaries"
+		gh release upload "$V" $assets --clobber
 	else
 		X=${V#v}
 		awk -v h="## [$X]" 'index($0, h) == 1 {f = 1; next} /^## \[/ {f = 0} f' CHANGELOG.md |
 			sed -e '/./,$!d' >"$tmp/notes.md"
 		[ -s "$tmp/notes.md" ] || fail "no notes for $V in CHANGELOG.md"
-		gh release create "$V" --title "$V" --notes-file "$tmp/notes.md" --latest --verify-tag
+		gh release create "$V" --title "$V" --notes-file "$tmp/notes.md" --latest --verify-tag $assets
 	fi
 fi
 

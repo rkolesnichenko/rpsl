@@ -11,6 +11,14 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ### Added
 
+- **rpslq binaries**: every release carries rpslq for Linux and macOS (amd64,
+  arm64) and Windows (amd64), static, built by `release.sh` from the
+  published module (so `rpslq -v` names the release), with `SHA256SUMS`.
+  `release-dryrun.sh` builds and checks every archive.
+- **`docs/rpslq.md`**, rpslq for bgpq4 users: install, what is the same, what
+  rpslq adds (`--rpki`, `--dump`, `--whois`, `SOURCE::`, `-d`), and where the
+  two differ on purpose.
+
 - **`scripts/release.sh vX.Y.Z`** releases every module as RELEASING.md
   describes: it refuses to start unless the tree, changelog and CI are ready,
   tags and pushes in dependency order, waits for the Go proxy (asking only for
