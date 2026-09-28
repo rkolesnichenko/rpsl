@@ -98,6 +98,11 @@ go get github.com/rkolesnichenko/rpsl/resolve  # the expansion engine
 
 Go 1.23+ is required (the streaming parser returns an `iter.Seq2`).
 
+`rpslq`, the bgpq4-compatible command, needs no Go toolchain: each
+[release](https://github.com/rkolesnichenko/rpsl/releases/latest) carries
+static binaries for Linux and macOS (amd64, arm64) and Windows (amd64), with
+`SHA256SUMS`. [`docs/rpslq.md`](docs/rpslq.md) is its page for bgpq4 users.
+
 ## rpslq: bgpq4's job on this engine
 
 `rpslq` writes router filters from IRR data, as bgpq4 does, with this
@@ -105,7 +110,7 @@ library's expansion engine: its mbrs-by-ref checks, range operators and
 limits, over IRRd, whois or an offline dump.
 
 ```sh
-go install github.com/rkolesnichenko/rpsl/resolve/cmd/rpslq@latest
+go install github.com/rkolesnichenko/rpsl/resolve/cmd/rpslq@latest   # or a release's binary
 rpslq -h whois.radb.net -S RADB,RIPE -6Ab AS-EXAMPLE    # BIRD, IPv6, aggregated
 rpslq -h whois.radb.net -JEA -l POLICY/TERM AS-EXAMPLE  # Junos route-filter
 rpslq -h whois.radb.net -f 65000 AS-EXAMPLE             # Cisco as-path list

@@ -34,7 +34,7 @@ proxy=$tmp/proxy
 export GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=mod
 export GOPROXY="file://$proxy" GONOSUMDB="$M" GOMODCACHE="$tmp/modcache"
 export RELEASE_REMOTE=rehearsal RELEASE_PROXY="file://$proxy" RELEASE_POLL=1 RELEASE_WAIT=120 RELEASE_SKIP_CI=1
-export RELEASE_ON_PUSH="$tmp/publish"
+export RELEASE_ON_PUSH="$tmp/publish" RELEASE_DIST="$tmp/dist"
 
 step() { printf '\n== dryrun: %s\n' "$*"; }
 git_() { git -c user.name=release-dryrun -c user.email=dryrun@localhost "$@"; }
@@ -113,6 +113,36 @@ step "release.sh again: it resumes and finishes"
 release "$V" || die "the resumed release failed"
 [ "$(remote_tags)" = "ast/$V lexer/$V resolve/$V types/$V $V " ] || die "the remote has: $(remote_tags)"
 [ "$(git rev-parse HEAD)" = "$(git rev-parse rehearsal/main)" ] || die "main is not pushed"
+
+step "rpslq's archives"
+cd "$tmp/dist"
+if command -v sha256sum >/dev/null; then sha256sum -c --quiet SHA256SUMS; else shasum -a 256 -c --quiet SHA256SUMS; fi ||
+	die "SHA256SUMS does not verify"
+native=$(go env GOOS)_$(go env GOARCH)
+for p in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64 windows_amd64; do
+	os=${p%_*} arch=${p#*_}
+	x=$tmp/x-$p
+	mkdir -p "$x"
+	if [ "$os" = windows ]; then
+		a=rpslq_${V}_$p.zip exe=rpslq.exe
+		[ -f "$a" ] || die "no $a"
+		(cd "$x" && unzip -q "$tmp/dist/$a")
+	else
+		a=rpslq_${V}_$p.tar.gz exe=rpslq
+		[ -f "$a" ] || die "no $a"
+		tar -xzf "$a" -C "$x"
+	fi
+	[ "$(ls "$x" | tr '\n' ' ')" = "LICENSE README.txt $exe " ] || die "$a holds $(ls "$x" | tr '\n' ' ')"
+	info=$(go version -m "$x/$exe")
+	echo "$info" | grep -q "GOOS=$os" && echo "$info" | grep -q "GOARCH=$arch" || die "$a is not built for $os/$arch"
+	echo "$info" | grep -Eq "(mod|dep)[[:space:]]+$M/resolve[[:space:]]+$V[[:space:]]+h1:" || die "$a is not built from resolve $V:
+$info"
+	if [ "$p" = "$native" ]; then
+		[ "$("$x/$exe" -v)" = "rpslq $V" ] || die "$a: rpslq -v says $("$x/$exe" -v)"
+	fi
+	echo "$a: $os/$arch, from resolve $V"
+done
+cd "$work"
 
 step "release dry run: ok"
 echo "The release commits release.sh made, in order:"

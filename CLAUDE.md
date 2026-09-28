@@ -176,7 +176,9 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   Its IRRd queries use `irrd.Source.Pipeline` (one connection, many queries in flight).
 - Releasing: `scripts/release.sh vX.Y.Z` does RELEASING.md's steps (tag order lexer/types → ast →
   root → resolve), waits for the proxy, verifies from an empty module cache, and resumes after a
-  failure. Rehearse first with `scripts/release-dryrun.sh` (runs release.sh against a bare repo and
+  failure; it also builds rpslq's binaries (5 platforms, from the published module) and attaches
+  them to the GitHub release. `docs/rpslq.md` is rpslq's page for bgpq4 users. Rehearse first with
+  `scripts/release-dryrun.sh` (runs release.sh against a bare repo and
   a local proxy; publishes nothing) — alone, not beside check.sh. Never query the proxy for an
   unpushed tag: it caches the miss for ~30 minutes.
 - Performance: `scripts/bench.sh [ref]` compares benchmarks with a ref (default: latest tag).
