@@ -99,7 +99,11 @@ func (s *Source) maxResponse() int64 {
 // GetSet fetches a set object of any class by name. When the server returns
 // it from several sources, the one from the source listed first in Sources
 // wins; without Sources, the first the server returns.
-func (s *Source) GetSet(ctx context.Context, name types.SetName) (object.NamedSet, error) {
+func (s *Source) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error) {
+	if ref.IsScoped() {
+		return nil, fmt.Errorf("whois: scoped lookup of %s is not supported", ref)
+	}
+	name := ref.Name()
 	if name.IsZero() {
 		return nil, errors.New("whois: empty set name")
 	}

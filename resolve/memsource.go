@@ -2,6 +2,7 @@ package resolve
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 	"strings"
 
@@ -80,9 +81,12 @@ func (s *MemSource) indexClaims(o object.Object) {
 	}
 }
 
-// GetSet returns the named set or ErrNotFound.
-func (s *MemSource) GetSet(_ context.Context, name types.SetName) (object.NamedSet, error) {
-	if set, ok := s.sets[name.String()]; ok {
+// GetSet returns the set ref names or ErrNotFound.
+func (s *MemSource) GetSet(_ context.Context, ref types.SetRef) (object.NamedSet, error) {
+	if ref.IsScoped() {
+		return nil, fmt.Errorf("resolve: MemSource: scoped lookup of %s is not supported", ref)
+	}
+	if set, ok := s.sets[ref.Name().String()]; ok {
 		return set, nil
 	}
 	return nil, ErrNotFound

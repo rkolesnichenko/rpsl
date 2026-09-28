@@ -13,12 +13,13 @@ import (
 // ASNSet is a deduplicated set of ASNs produced by ExpandAS.
 type ASNSet struct {
 	m       map[types.ASN]struct{}
-	missing []types.SetName
+	missing []types.SetRef
 }
 
 // Missing lists the nested sets that were referenced but not found, sorted by
-// canonical name. They expanded to nothing (as in bgpq4).
-func (s ASNSet) Missing() []types.SetName { return s.missing }
+// String(); a scoped reference prints as RIPE::AS-FOO. They expanded to nothing
+// (as in bgpq4).
+func (s ASNSet) Missing() []types.SetRef { return s.missing }
 
 func newASSet() *ASNSet { return &ASNSet{m: make(map[types.ASN]struct{})} }
 
@@ -43,12 +44,12 @@ func (s ASNSet) List() []types.ASN {
 // PrefixSet is a deduplicated set of prefixes produced by ExpandPrefixes.
 type PrefixSet struct {
 	m       map[netip.Prefix]struct{}
-	missing []types.SetName
+	missing []types.SetRef
 }
 
 // Missing lists the nested sets that were referenced but not found; see
 // ASNSet.Missing.
-func (s PrefixSet) Missing() []types.SetName { return s.missing }
+func (s PrefixSet) Missing() []types.SetRef { return s.missing }
 
 func newPrefixSet() *PrefixSet { return &PrefixSet{m: make(map[netip.Prefix]struct{})} }
 
@@ -81,7 +82,7 @@ func (s PrefixSet) List() []netip.Prefix {
 // Canonical), so equivalent spellings count once.
 type RangeSet struct {
 	m       map[types.PrefixRange]struct{}
-	missing []types.SetName
+	missing []types.SetRef
 }
 
 func newRangeSet() *RangeSet { return &RangeSet{m: make(map[types.PrefixRange]struct{})} }
@@ -99,7 +100,7 @@ func (s RangeSet) Len() int { return len(s.m) }
 
 // Missing lists the nested sets that were referenced but not found; see
 // ASNSet.Missing.
-func (s RangeSet) Missing() []types.SetName { return s.missing }
+func (s RangeSet) Missing() []types.SetRef { return s.missing }
 
 // List returns the ranges ordered by address, prefix length, then window.
 func (s RangeSet) List() []types.PrefixRange {
@@ -144,7 +145,7 @@ func listString[T fmt.Stringer](items []T) string {
 // denotes, by address or by inet-rtr name.
 type RouterSet struct {
 	m       map[types.RouterID]struct{}
-	missing []types.SetName
+	missing []types.SetRef
 }
 
 func newRouterSet() *RouterSet { return &RouterSet{m: map[types.RouterID]struct{}{}} }
@@ -161,8 +162,9 @@ func (s RouterSet) Has(r types.RouterID) bool { _, ok := s.m[r]; return ok }
 // Len returns the number of distinct routers.
 func (s RouterSet) Len() int { return len(s.m) }
 
-// Missing returns the nested sets that were not found, sorted.
-func (s RouterSet) Missing() []types.SetName { return s.missing }
+// Missing returns the nested sets that were not found, sorted by String(); a
+// scoped reference prints as RIPE::AS-FOO.
+func (s RouterSet) Missing() []types.SetRef { return s.missing }
 
 // List returns the routers sorted by their canonical text.
 func (s RouterSet) List() []types.RouterID {
@@ -182,7 +184,7 @@ func (s RouterSet) String() string { return listString(s.List()) }
 type PeeringSet struct {
 	list    []policy.Peering
 	seen    map[string]bool
-	missing []types.SetName
+	missing []types.SetRef
 }
 
 func newPeeringSet() *PeeringSet { return &PeeringSet{seen: map[string]bool{}} }
@@ -205,8 +207,9 @@ func (s PeeringSet) Has(text string) bool { return s.seen[text] }
 // Len returns the number of distinct peerings.
 func (s PeeringSet) Len() int { return len(s.list) }
 
-// Missing returns the nested sets that were not found, sorted.
-func (s PeeringSet) Missing() []types.SetName { return s.missing }
+// Missing returns the nested sets that were not found, sorted by String(); a
+// scoped reference prints as RIPE::AS-FOO.
+func (s PeeringSet) Missing() []types.SetRef { return s.missing }
 
 // List returns the peerings in discovery order.
 func (s PeeringSet) List() []policy.Peering {
@@ -237,10 +240,10 @@ func peeringText(p policy.Peering) string {
 	return fmt.Sprintf("%v", p)
 }
 
-// sortedNames returns a copy of ns sorted by canonical name.
-func sortedNames(ns []types.SetName) []types.SetName {
-	out := make([]types.SetName, len(ns))
-	copy(out, ns)
+// sortedRefs returns a copy of rs sorted by String().
+func sortedRefs(rs []types.SetRef) []types.SetRef {
+	out := make([]types.SetRef, len(rs))
+	copy(out, rs)
 	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
 	return out
 }

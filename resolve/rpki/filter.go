@@ -37,8 +37,8 @@ type Filter struct {
 }
 
 // GetSet returns Src's answer unchanged.
-func (f *Filter) GetSet(ctx context.Context, name types.SetName) (object.NamedSet, error) {
-	return f.Src.GetSet(ctx, name)
+func (f *Filter) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error) {
+	return f.Src.GetSet(ctx, ref)
 }
 
 // OriginatedRoutes returns Src's routes for as without those Invalid for as.

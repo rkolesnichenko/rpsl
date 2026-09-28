@@ -78,7 +78,7 @@ func TestWhoisGetSet(t *testing.T) {
 		"-r -T as-set AS-FOO": "as-set: AS-FOO\nmembers: AS1\nmembers: AS-BAR\nsource: TEST\n",
 	})
 	src := &Source{Addr: fw.addr(), Timeout: 2 * time.Second}
-	set, err := src.GetSet(context.Background(), mustSet(t, "AS-FOO"))
+	set, err := src.GetSet(context.Background(), types.Ref(mustSet(t, "AS-FOO")))
 	if err != nil {
 		t.Fatalf("GetSet: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestWhoisGetSet(t *testing.T) {
 func TestWhoisGetSetNotFound(t *testing.T) {
 	fw := newFakeWhois(t, map[string]string{})
 	src := &Source{Addr: fw.addr(), Timeout: 2 * time.Second}
-	if _, err := src.GetSet(context.Background(), mustSet(t, "AS-MISSING")); err != resolve.ErrNotFound {
+	if _, err := src.GetSet(context.Background(), types.Ref(mustSet(t, "AS-MISSING"))); err != resolve.ErrNotFound {
 		t.Errorf("err = %v, want resolve.ErrNotFound", err)
 	}
 }
@@ -141,7 +141,7 @@ func TestEngineExpandPrefixesOverWhois(t *testing.T) {
 	})
 	src := &Source{Addr: fw.addr(), Timeout: 2 * time.Second}
 	e := &resolve.Expander{Src: src}
-	got, err := e.ExpandPrefixes(context.Background(), mustSet(t, "RS-REF"))
+	got, err := e.ExpandPrefixes(context.Background(), types.Ref(mustSet(t, "RS-REF")))
 	if err != nil {
 		t.Fatalf("ExpandPrefixes: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestWhoisGetSetFollowsSourcePriority(t *testing.T) {
 		want    string
 	}{{[]string{"ripe", "RADB"}, "RIPE"}, {[]string{"RADB", "RIPE"}, "RADB"}, {nil, "RADB"}} {
 		src := &Source{Addr: fw.addr(), Sources: c.sources, Timeout: 2 * time.Second}
-		set, err := src.GetSet(context.Background(), mustSet(t, "AS-FOO"))
+		set, err := src.GetSet(context.Background(), types.Ref(mustSet(t, "AS-FOO")))
 		if err != nil || set.SetSource() != c.want {
 			t.Errorf("Sources %v: GetSet = %+v, %v; want the %s set", c.sources, set, err, c.want)
 		}

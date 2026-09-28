@@ -37,7 +37,7 @@ func TestNoLengthMembers(t *testing.T) {
 	name, _ := types.ParseSetName("RS-S")
 	const want = "[192.0.2.0/24 206.197.238.0/32 2001:db8::32/128]"
 	for label, src := range map[string]resolve.Source{"memory": resolve.NewMemSource(objs), "irrd": ir} {
-		got, err := (&resolve.Expander{Src: src}).ExpandPrefixes(context.Background(), name)
+		got, err := (&resolve.Expander{Src: src}).ExpandPrefixes(context.Background(), types.Ref(name))
 		if err != nil || fmt.Sprint(got.List()) != want {
 			t.Errorf("%s: ExpandPrefixes(RS-S) = %v, %v; want %s", label, got.List(), err, want)
 		}

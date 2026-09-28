@@ -26,7 +26,7 @@ func TestFilterSetReferencedTwice(t *testing.T) {
 	)
 	e := &Expander{Src: src}
 	ctx := context.Background()
-	got, err := e.ExpandFilterSet(ctx, mustSet(t, "FLTR-TOP"))
+	got, err := e.ExpandFilterSet(ctx, types.Ref(mustSet(t, "FLTR-TOP")))
 	if want := "10.0.0.0/8"; err != nil || strings.Join(rangeList(got), " ") != want {
 		t.Errorf("ExpandFilterSet(FLTR-TOP) = %v, %v; want %s", rangeList(got), err, want)
 	}
@@ -54,7 +54,7 @@ func TestFilterSetCycleFixpoint(t *testing.T) {
 	e := &Expander{Src: src}
 	want := "10.1.0.0/16 10.2.0.0/16"
 	for _, n := range []string{"FLTR-A", "FLTR-B", "FLTR-TOP"} {
-		got, err := e.ExpandFilterSet(context.Background(), mustSet(t, n))
+		got, err := e.ExpandFilterSet(context.Background(), types.Ref(mustSet(t, n)))
 		if err != nil || strings.Join(rangeList(got), " ") != want {
 			t.Errorf("ExpandFilterSet(%s) = %v, %v; want %s", n, rangeList(got), err, want)
 		}
@@ -68,11 +68,11 @@ type getSetCounter struct {
 	n  int
 }
 
-func (c *getSetCounter) GetSet(ctx context.Context, name types.SetName) (object.NamedSet, error) {
+func (c *getSetCounter) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error) {
 	c.mu.Lock()
 	c.n++
 	c.mu.Unlock()
-	return c.MemSource.GetSet(ctx, name)
+	return c.MemSource.GetSet(ctx, ref)
 }
 
 // MaxVisited bounds one EvalFilter call as a whole: each set reference used to

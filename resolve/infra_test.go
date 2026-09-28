@@ -35,12 +35,12 @@ func TestConcurrencyDoesNotChangeResults(t *testing.T) {
 		if seed%2 == 1 {
 			ex.Sets = []types.SetName{mustSet(t, fmt.Sprintf("AS-S%d", 1+r.IntN(5)))}
 		}
-		serial, err := (&Expander{Src: src, Exclude: ex}).ExpandAS(context.Background(), top)
+		serial, err := (&Expander{Src: src, Exclude: ex}).ExpandAS(context.Background(), types.Ref(top))
 		if err != nil {
 			t.Fatalf("seed %d: %v", seed, err)
 		}
 		for _, n := range []int{2, 8, 64} {
-			got, err := (&Expander{Src: src, Concurrency: n, Exclude: ex}).ExpandAS(context.Background(), top)
+			got, err := (&Expander{Src: src, Concurrency: n, Exclude: ex}).ExpandAS(context.Background(), types.Ref(top))
 			if err != nil {
 				t.Fatalf("seed %d, concurrency %d: %v", seed, n, err)
 			}
@@ -69,22 +69,22 @@ func TestConcurrencyPrefixesAndRouters(t *testing.T) {
 	serial := &Expander{Src: src}
 	parallel := &Expander{Src: src, Concurrency: 8}
 
-	a, err := serial.ExpandPrefixes(ctx, mustSet(t, "AS-TOP"))
+	a, err := serial.ExpandPrefixes(ctx, types.Ref(mustSet(t, "AS-TOP")))
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := parallel.ExpandPrefixes(ctx, mustSet(t, "AS-TOP"))
+	b, err := parallel.ExpandPrefixes(ctx, types.Ref(mustSet(t, "AS-TOP")))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if a.String() != b.String() {
 		t.Errorf("prefixes: serial %v, parallel %v", a, b)
 	}
-	c, err := serial.ExpandRouters(ctx, mustSet(t, "RTRS-TOP"))
+	c, err := serial.ExpandRouters(ctx, types.Ref(mustSet(t, "RTRS-TOP")))
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := parallel.ExpandRouters(ctx, mustSet(t, "RTRS-TOP"))
+	d, err := parallel.ExpandRouters(ctx, types.Ref(mustSet(t, "RTRS-TOP")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestConcurrentRoutesFetchedOncePerAS(t *testing.T) {
 		"route: 192.0.2.0/24\norigin: AS1\nsource: TEST\n",
 		"route: 198.51.100.0/24\norigin: AS2\nsource: TEST\n",
 	), calls: map[types.ASN]int{}}
-	if _, err := (&Expander{Src: src, Concurrency: 8}).ExpandPrefixes(context.Background(), mustSet(t, "AS-TOP")); err != nil {
+	if _, err := (&Expander{Src: src, Concurrency: 8}).ExpandPrefixes(context.Background(), types.Ref(mustSet(t, "AS-TOP"))); err != nil {
 		t.Fatal(err)
 	}
 	for as, n := range src.calls {
@@ -116,7 +116,7 @@ func TestConcurrentFetchPropagatesError(t *testing.T) {
 	src := &failingSource{MemSource: corpus(t,
 		asSet("AS-TOP", "AS-B, AS-C"), asSet("AS-B", "AS1"), asSet("AS-C", "AS2")),
 		fail: "AS-C", err: boom}
-	_, err := (&Expander{Src: src, Concurrency: 8}).ExpandAS(context.Background(), mustSet(t, "AS-TOP"))
+	_, err := (&Expander{Src: src, Concurrency: 8}).ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-TOP")))
 	if !errors.Is(err, boom) {
 		t.Errorf("err = %v, want %v", err, boom)
 	}
@@ -128,11 +128,11 @@ type failingSource struct {
 	err  error
 }
 
-func (s *failingSource) GetSet(ctx context.Context, name types.SetName) (object.NamedSet, error) {
-	if name.String() == s.fail {
+func (s *failingSource) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error) {
+	if ref.Name().String() == s.fail {
 		return nil, s.err
 	}
-	return s.MemSource.GetSet(ctx, name)
+	return s.MemSource.GetSet(ctx, ref)
 }
 
 // ---- Cache ----
@@ -149,7 +149,7 @@ func TestCache(t *testing.T) {
 	ctx := context.Background()
 	top := mustSet(t, "AS-TOP")
 
-	first, err := e.ExpandPrefixes(ctx, top)
+	first, err := e.ExpandPrefixes(ctx, types.Ref(top))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestCache(t *testing.T) {
 		t.Fatal("the first expansion asked the Source nothing")
 	}
 	for i := 0; i < 5; i++ {
-		got, err := e.ExpandPrefixes(ctx, top)
+		got, err := e.ExpandPrefixes(ctx, types.Ref(top))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -178,7 +178,7 @@ func TestCache(t *testing.T) {
 	if got := c.Stats().Entries; got != 0 {
 		t.Errorf("Entries after Purge = %d", got)
 	}
-	if _, err := e.ExpandPrefixes(ctx, top); err != nil {
+	if _, err := e.ExpandPrefixes(ctx, types.Ref(top)); err != nil {
 		t.Fatal(err)
 	}
 	if inner.total() == afterFirst {
@@ -194,7 +194,7 @@ func TestCacheNegativeAndErrors(t *testing.T) {
 	ctx := context.Background()
 	gone := mustSet(t, "AS-GONE")
 	for i := 0; i < 3; i++ {
-		if _, err := c.GetSet(ctx, gone); !errors.Is(err, ErrNotFound) {
+		if _, err := c.GetSet(ctx, types.Ref(gone)); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("GetSet err = %v, want ErrNotFound", err)
 		}
 	}
@@ -206,7 +206,7 @@ func TestCacheNegativeAndErrors(t *testing.T) {
 	failing := &failingSource{MemSource: corpus(t, asSet("AS-X", "AS1")), fail: "AS-X", err: boom}
 	c2 := NewCache(failing, 0)
 	for i := 0; i < 2; i++ {
-		if _, err := c2.GetSet(ctx, mustSet(t, "AS-X")); !errors.Is(err, boom) {
+		if _, err := c2.GetSet(ctx, types.Ref(mustSet(t, "AS-X"))); !errors.Is(err, boom) {
 			t.Fatalf("GetSet err = %v, want %v", err, boom)
 		}
 	}
@@ -220,11 +220,11 @@ func TestCacheTTLAndEviction(t *testing.T) {
 	inner := &callCounter{MemSource: corpus(t, asSet("AS-X", "AS1"))}
 	c := NewCache(inner, time.Millisecond)
 	ctx, name := context.Background(), mustSet(t, "AS-X")
-	if _, err := c.GetSet(ctx, name); err != nil {
+	if _, err := c.GetSet(ctx, types.Ref(name)); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(3 * time.Millisecond)
-	if _, err := c.GetSet(ctx, name); err != nil {
+	if _, err := c.GetSet(ctx, types.Ref(name)); err != nil {
 		t.Fatal(err)
 	}
 	if inner.sets != 2 {
@@ -262,7 +262,7 @@ func TestCacheSingleFlight(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := c.GetSet(context.Background(), mustSet(t, "AS-X")); err != nil {
+			if _, err := c.GetSet(context.Background(), types.Ref(mustSet(t, "AS-X"))); err != nil {
 				t.Error(err)
 			}
 		}()
@@ -286,7 +286,7 @@ func TestCacheConcurrentExpansions(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			got, err := e.ExpandPrefixes(context.Background(), mustSet(t, "AS-TOP"))
+			got, err := e.ExpandPrefixes(context.Background(), types.Ref(mustSet(t, "AS-TOP")))
 			if err != nil {
 				t.Error(err)
 				return
@@ -307,11 +307,11 @@ type callCounter struct {
 	claims int
 }
 
-func (c *callCounter) GetSet(ctx context.Context, n types.SetName) (object.NamedSet, error) {
+func (c *callCounter) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error) {
 	c.mu.Lock()
 	c.sets++
 	c.mu.Unlock()
-	return c.MemSource.GetSet(ctx, n)
+	return c.MemSource.GetSet(ctx, ref)
 }
 
 func (c *callCounter) OriginatedRoutes(ctx context.Context, as types.ASN, afi types.AFI) ([]netip.Prefix, error) {
@@ -341,12 +341,12 @@ type slowSource struct {
 	calls int
 }
 
-func (s *slowSource) GetSet(ctx context.Context, n types.SetName) (object.NamedSet, error) {
+func (s *slowSource) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error) {
 	s.mu.Lock()
 	s.calls++
 	s.mu.Unlock()
 	time.Sleep(s.delay)
-	return s.MemSource.GetSet(ctx, n)
+	return s.MemSource.GetSet(ctx, ref)
 }
 
 func (s *slowSource) count() int {
@@ -385,14 +385,14 @@ func TestLoadDump(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := (&Expander{Src: src}).ExpandPrefixes(context.Background(), mustSet(t, "AS-TOP"))
+	got, err := (&Expander{Src: src}).ExpandPrefixes(context.Background(), types.Ref(mustSet(t, "AS-TOP")))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if want := "[192.0.2.0/24 2001:db8::/32]"; got.String() != want {
 		t.Errorf("ExpandPrefixes = %v, want %v", got, want)
 	}
-	as, err := (&Expander{Src: src}).ExpandAS(context.Background(), mustSet(t, "AS-TOP"))
+	as, err := (&Expander{Src: src}).ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-TOP")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,7 +423,7 @@ func TestDumpLoaderStats(t *testing.T) {
 	if l.Stats.Objects != 6 || l.Stats.Kept != 5 {
 		t.Errorf("Stats after a second read = %+v", l.Stats)
 	}
-	as, err := (&Expander{Src: l.Source()}).ExpandAS(context.Background(), mustSet(t, "AS-MORE"))
+	as, err := (&Expander{Src: l.Source()}).ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-MORE")))
 	if err != nil || as.String() != "[AS9]" {
 		t.Errorf("ExpandAS(AS-MORE) = %v, %v", as, err)
 	}
@@ -457,7 +457,7 @@ source:         TEST
 	}
 	// The good set still loads, and the malformed route is kept: decoding is
 	// per-attribute, so its origin: is still usable.
-	as, err := (&Expander{Src: l.Source()}).ExpandAS(context.Background(), mustSet(t, "AS-GOOD"))
+	as, err := (&Expander{Src: l.Source()}).ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-GOOD")))
 	if err != nil || as.String() != "[AS1]" {
 		t.Errorf("ExpandAS(AS-GOOD) = %v, %v", as, err)
 	}
@@ -471,7 +471,7 @@ func TestLoadDumps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := (&Expander{Src: src}).ExpandAS(context.Background(), mustSet(t, "AS-DUP"))
+	got, err := (&Expander{Src: src}).ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-DUP")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -498,13 +498,13 @@ func TestDumpLoaderSourceOf(t *testing.T) {
 	}
 	ctx := context.Background()
 	all, ripe := l.Source(), l.SourceOf("ripe")
-	if got, _ := (&Expander{Src: all}).ExpandAS(ctx, mustSet(t, "AS-DUP")); got.String() != "[AS2]" {
+	if got, _ := (&Expander{Src: all}).ExpandAS(ctx, types.Ref(mustSet(t, "AS-DUP"))); got.String() != "[AS2]" {
 		t.Errorf("all dumps: %v, want RADB's AS-DUP", got)
 	}
-	if got, _ := (&Expander{Src: ripe}).ExpandAS(ctx, mustSet(t, "AS-DUP")); got.String() != "[AS1 AS7]" {
+	if got, _ := (&Expander{Src: ripe}).ExpandAS(ctx, types.Ref(mustSet(t, "AS-DUP"))); got.String() != "[AS1 AS7]" {
 		t.Errorf("RIPE's alone: %v, want RIPE's AS-DUP and its indirect member", got)
 	}
-	if _, err := ripe.GetSet(ctx, mustSet(t, "AS-ONLY-RADB")); !errors.Is(err, ErrNotFound) {
+	if _, err := ripe.GetSet(ctx, types.Ref(mustSet(t, "AS-ONLY-RADB"))); !errors.Is(err, ErrNotFound) {
 		t.Errorf("a RADB set in RIPE's view: %v", err)
 	}
 	if ps, _ := ripe.OriginatedRoutes(ctx, 1, types.AFIAny); len(ps) != 0 {
@@ -522,7 +522,7 @@ func TestCacheMembersByRef(t *testing.T) {
 	c := NewCache(inner, 0)
 	e := &Expander{Src: c}
 	ctx, top := context.Background(), mustSet(t, "AS-REF")
-	first, err := e.ExpandAS(ctx, top)
+	first, err := e.ExpandAS(ctx, types.Ref(top))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -531,7 +531,7 @@ func TestCacheMembersByRef(t *testing.T) {
 	}
 	claims := inner.claims
 	for i := 0; i < 3; i++ {
-		got, err := e.ExpandAS(ctx, top)
+		got, err := e.ExpandAS(ctx, types.Ref(top))
 		if err != nil || got.String() != first.String() {
 			t.Fatalf("expansion %d = %v, %v", i, got, err)
 		}
@@ -597,7 +597,7 @@ func TestEvalFilterMissingSets(t *testing.T) {
 // The error types say what went wrong.
 func TestErrorStrings(t *testing.T) {
 	e := &Expander{Src: corpus(t, asSet("AS-X", "AS-ANY"))}
-	_, err := e.ExpandAS(context.Background(), mustSet(t, "AS-X"))
+	_, err := e.ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-X")))
 	var anyErr *AnySetError
 	if !errors.As(err, &anyErr) || !strings.Contains(anyErr.Error(), "AS-ANY") {
 		t.Errorf("err = %v, want an AnySetError naming AS-ANY", err)
@@ -616,7 +616,7 @@ type cancelOnceSource struct {
 	once    sync.Once
 }
 
-func (s *cancelOnceSource) GetSet(ctx context.Context, n types.SetName) (object.NamedSet, error) {
+func (s *cancelOnceSource) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error) {
 	first := false
 	s.once.Do(func() { first = true })
 	if first {
@@ -624,7 +624,7 @@ func (s *cancelOnceSource) GetSet(ctx context.Context, n types.SetName) (object.
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
-	return s.MemSource.GetSet(ctx, n)
+	return s.MemSource.GetSet(ctx, ref)
 }
 
 // A caller that joins another's lookup is not failed by that caller's
@@ -636,11 +636,11 @@ func TestCacheWaiterSurvivesFillerCancel(t *testing.T) {
 
 	ctxA, cancelA := context.WithCancel(context.Background())
 	errA := make(chan error, 1)
-	go func() { _, err := c.GetSet(ctxA, name); errA <- err }()
+	go func() { _, err := c.GetSet(ctxA, types.Ref(name)); errA <- err }()
 	<-src.started
 
 	errB := make(chan error, 1)
-	go func() { _, err := c.GetSet(context.Background(), name); errB <- err }()
+	go func() { _, err := c.GetSet(context.Background(), types.Ref(name)); errB <- err }()
 	for c.Stats().Hits == 0 { // B has joined A's lookup
 		runtime.Gosched()
 	}

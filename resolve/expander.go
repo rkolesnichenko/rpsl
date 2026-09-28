@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/netip"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/rkolesnichenko/rpsl/object"
@@ -139,17 +140,19 @@ func (e *Expander) afiAllows(p netip.Prefix) bool {
 // Cycles are skipped (as in bgpq4). A missing top-level set returns an error
 // wrapping ErrNotFound; missing nested sets expand to nothing and are listed by
 // ASNSet.Missing. AFI only filters prefixes; ExpandAS is family-agnostic.
-func (e *Expander) ExpandAS(ctx context.Context, n types.SetName) (ASNSet, error) {
-	out, _, err := e.expandAS(ctx, n)
+// A scoped ref (RIPE::AS-FOO) looks the named set up in that registry only; the
+// scope does not cascade to what it lists.
+func (e *Expander) ExpandAS(ctx context.Context, ref types.SetRef) (ASNSet, error) {
+	out, _, err := e.expandAS(ctx, ref)
 	return out, err
 }
 
 // expandAS is ExpandAS, also returning how many sets discovery reached.
-func (e *Expander) expandAS(ctx context.Context, n types.SetName) (ASNSet, int, error) {
-	if n.Class() != types.ClassAsSet {
-		return ASNSet{}, 0, fmt.Errorf("resolve: ExpandAS %s: %w", n, ErrSetClass)
+func (e *Expander) expandAS(ctx context.Context, ref types.SetRef) (ASNSet, int, error) {
+	if ref.Name().Class() != types.ClassAsSet {
+		return ASNSet{}, 0, fmt.Errorf("resolve: ExpandAS %s: %w", ref, ErrSetClass)
 	}
-	g, err := e.discover(ctx, n)
+	g, err := e.discover(ctx, ref)
 	if err != nil {
 		return ASNSet{}, 0, err
 	}
@@ -179,18 +182,20 @@ func (e *Expander) expandAS(ctx context.Context, n types.SetName) (ASNSet, int, 
 // including ones through range operators, resolve to the RFC's least fixpoint
 // (RS-A = X ∪ RS-B^+, RS-B = RS-A gives X ∪ X^+). The AFI constraint applies
 // throughout. A set of another class returns an error wrapping ErrSetClass.
-func (e *Expander) ExpandPrefixRanges(ctx context.Context, n types.SetName) (RangeSet, error) {
-	out, _, err := e.expandRanges(ctx, n, e.maxPrefixes())
+// A scoped ref (RIPE::AS-FOO) looks the named set up in that registry only; the
+// scope does not cascade to what it lists.
+func (e *Expander) ExpandPrefixRanges(ctx context.Context, ref types.SetRef) (RangeSet, error) {
+	out, _, err := e.expandRanges(ctx, ref, e.maxPrefixes())
 	return out, err
 }
 
 // expandRanges is ExpandPrefixRanges with a cap of maxRanges ranges, also
 // returning how many sets discovery reached.
-func (e *Expander) expandRanges(ctx context.Context, n types.SetName, maxRanges int) (RangeSet, int, error) {
-	if c := n.Class(); c != types.ClassAsSet && c != types.ClassRouteSet {
-		return RangeSet{}, 0, fmt.Errorf("resolve: expand prefixes of %s: %w", n, ErrSetClass)
+func (e *Expander) expandRanges(ctx context.Context, ref types.SetRef, maxRanges int) (RangeSet, int, error) {
+	if c := ref.Name().Class(); c != types.ClassAsSet && c != types.ClassRouteSet {
+		return RangeSet{}, 0, fmt.Errorf("resolve: expand prefixes of %s: %w", ref, ErrSetClass)
 	}
-	g, err := e.discover(ctx, n)
+	g, err := e.discover(ctx, ref)
 	if err != nil {
 		return RangeSet{}, 0, err
 	}
@@ -198,7 +203,7 @@ func (e *Expander) expandRanges(ctx context.Context, n types.SetName, maxRanges 
 		return RangeSet{}, 0, err
 	}
 	v := &evaluator{e: e, ctx: ctx, g: g, out: newRangeSet(), done: map[evalState]bool{}, max: maxRanges}
-	if err := v.walk(n, opStack{}); err != nil {
+	if err := v.walk(ref, opStack{}); err != nil {
 		return RangeSet{}, 0, err
 	}
 	v.out.missing = g.missing
@@ -211,11 +216,13 @@ func (e *Expander) expandRanges(ctx context.Context, n types.SetName, maxRanges 
 // exhaust memory, and duplicates are never charged against it. The context is
 // checked while enumerating, too, so even a range as large as the cap allows
 // stops promptly when ctx is cancelled.
-func (e *Expander) ExpandPrefixes(ctx context.Context, n types.SetName) (PrefixSet, error) {
+// A scoped ref (RIPE::AS-FOO) looks the named set up in that registry only; the
+// scope does not cascade to what it lists.
+func (e *Expander) ExpandPrefixes(ctx context.Context, ref types.SetRef) (PrefixSet, error) {
 	// Ranges are not capped here: overlapping ones ("/31" and "/31^+") are
 	// several ranges but no more prefixes, and only distinct prefixes count.
 	// The walk that finds them is bounded by MaxVisited.
-	ranges, _, err := e.expandRanges(ctx, n, math.MaxInt)
+	ranges, _, err := e.expandRanges(ctx, ref, math.MaxInt)
 	if err != nil {
 		return PrefixSet{}, err
 	}
@@ -228,7 +235,7 @@ func (e *Expander) ExpandPrefixes(ctx context.Context, n types.SetName) (PrefixS
 			}
 			out.add(p)
 			if out.Len() > e.maxPrefixes() {
-				return PrefixSet{}, &SetTooLargeError{Name: n, Limit: LimitPrefixes, Max: e.maxPrefixes(), Count: out.Len()}
+				return PrefixSet{}, &SetTooLargeError{Name: ref, Limit: LimitPrefixes, Max: e.maxPrefixes(), Count: out.Len()}
 			}
 		}
 	}
@@ -243,9 +250,9 @@ func (e *Expander) ExpandPrefixes(ctx context.Context, n types.SetName) (PrefixS
 
 // setGraph is the part of the IRR reachable from one top-level set.
 type setGraph struct {
-	top     types.SetName
-	nodes   map[string]*setNode          // canonical name -> fetched set
-	missing []types.SetName              // nested sets that were not found
+	top     types.SetRef
+	nodes   map[types.SetRef]*setNode    // fetched sets, by the reference that reached them
+	missing []types.SetRef               // nested sets that were not found
 	routes  map[types.ASN][]netip.Prefix // originated routes (prefix expansions only)
 	ex      excluded                     // what the expansion leaves out
 }
@@ -260,24 +267,27 @@ type setNode struct {
 
 // discover fetches every set reachable from top breadth-first, so each set is
 // fetched once and first reached at its shortest distance. It follows only the
-// nested sets RFC 2622 allows (see nestable), so from an as-set only as-sets.
-func (e *Expander) discover(ctx context.Context, top types.SetName) (*setGraph, error) {
-	g := &setGraph{top: top, nodes: map[string]*setNode{}, ex: e.excluded()}
-	seen := map[string]bool{top.String(): true}
-	for level, depth := []types.SetName{top}, 0; len(level) > 0; depth++ {
+// nested sets RFC 2622 allows (see nestable), so from an as-set only as-sets. A
+// reference scoped to a registry is its own node: RIPE::AS-X and AS-X are
+// fetched separately (the scope selects where, draft §2.3, and never
+// cascades: a node's nested references come from its own object).
+func (e *Expander) discover(ctx context.Context, top types.SetRef) (*setGraph, error) {
+	g := &setGraph{top: top, nodes: map[types.SetRef]*setNode{}, ex: e.excluded()}
+	seen := map[types.SetRef]bool{top: true}
+	for level, depth := []types.SetRef{top}, 0; len(level) > 0; depth++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		for _, n := range level {
-			if isAnySet(n) {
-				return nil, &AnySetError{Name: n}
+			if isAnySet(n.Name()) {
+				return nil, &AnySetError{Name: n.Name()}
 			}
 		}
 		got, err := e.fetchLevel(ctx, level)
 		if err != nil {
 			return nil, err
 		}
-		var next []types.SetName
+		var next []types.SetRef
 		for i, n := range level {
 			res := got[i]
 			if res.err != nil {
@@ -290,9 +300,9 @@ func (e *Expander) discover(ctx context.Context, top types.SetName) (*setGraph, 
 				g.missing = append(g.missing, n)
 				continue
 			}
-			g.nodes[n.String()] = &setNode{set: res.set, claims: res.claims}
-			for _, name := range nestedNames(res.set) {
-				if seen[name.String()] || g.ex.set(name) {
+			g.nodes[n] = &setNode{set: res.set, claims: res.claims}
+			for _, ref := range nestedRefs(res.set) {
+				if seen[ref] || g.ex.set(ref.Name()) {
 					continue
 				}
 				if depth+1 > e.maxDepth() {
@@ -301,8 +311,8 @@ func (e *Expander) discover(ctx context.Context, top types.SetName) (*setGraph, 
 				if len(seen) >= e.maxVisited() {
 					return nil, &SetTooLargeError{Name: top, Limit: LimitVisited, Max: e.maxVisited(), Count: len(seen) + 1}
 				}
-				seen[name.String()] = true
-				next = append(next, name)
+				seen[ref] = true
+				next = append(next, ref)
 			}
 		}
 		level = next
@@ -320,37 +330,37 @@ type fetchResult struct {
 }
 
 // fetchLevel fetches every set of one breadth-first level, up to Concurrency at
-// a time, and returns the results in the order the names were given — so the
+// a time, and returns the results in the order the refs were given — so the
 // graph is built identically however many fetches ran in parallel.
-func (e *Expander) fetchLevel(ctx context.Context, names []types.SetName) ([]fetchResult, error) {
-	out := make([]fetchResult, len(names))
-	if n := e.concurrency(); n > 1 && len(names) > 1 {
+func (e *Expander) fetchLevel(ctx context.Context, refs []types.SetRef) ([]fetchResult, error) {
+	out := make([]fetchResult, len(refs))
+	if n := e.concurrency(); n > 1 && len(refs) > 1 {
 		sem := make(chan struct{}, n)
 		var wg sync.WaitGroup
-		for i, name := range names {
+		for i, ref := range refs {
 			wg.Add(1)
 			sem <- struct{}{}
-			go func(i int, name types.SetName) {
+			go func(i int, ref types.SetRef) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				out[i] = e.fetchOne(ctx, name)
-			}(i, name)
+				out[i] = e.fetchOne(ctx, ref)
+			}(i, ref)
 		}
 		wg.Wait()
 		return out, ctx.Err()
 	}
-	for i, name := range names {
-		out[i] = e.fetchOne(ctx, name)
+	for i, ref := range refs {
+		out[i] = e.fetchOne(ctx, ref)
 	}
 	return out, nil
 }
 
 // fetchOne fetches one set and the indirect members it honours. Every claim is
 // re-checked here with ClaimAllowed, so a lenient Source cannot widen a set.
-func (e *Expander) fetchOne(ctx context.Context, name types.SetName) fetchResult {
-	set, err := e.Src.GetSet(ctx, name)
+func (e *Expander) fetchOne(ctx context.Context, ref types.SetRef) fetchResult {
+	set, err := e.Src.GetSet(ctx, ref)
 	if err == nil {
-		set, err = checkSet(name, set)
+		set, err = checkSet(ref, set)
 	}
 	if err != nil {
 		return fetchResult{err: err}
@@ -370,22 +380,27 @@ func (e *Expander) fetchOne(ctx context.Context, name types.SetName) fetchResult
 	return fetchResult{set: set, claims: claims}
 }
 
-// checkSet returns set, as a value, if it is the set name asks for. A set
-// whose class is not the one its name denotes ("route-set: AS-EVIL") is invalid
-// data, and is treated as not found: expanded under its name's rules it would
-// let an as-set pull in prefixes, or claims, that its class does not allow. A
-// set of another name is a fault of the Source, which has answered a different
-// question.
-func checkSet(name types.SetName, set object.NamedSet) (object.NamedSet, error) {
+// checkSet returns set, as a value, if it is the set ref asks for. A set of
+// another name, or for a scoped ref one from another registry, is a fault of
+// the Source, which has answered a different question: a backend that ignored
+// the scope must not be expanded as if it had honoured it. A set whose class
+// is not the one its name denotes ("route-set: AS-EVIL") is invalid data, and
+// is treated as not found: expanded under its name's rules it would let an
+// as-set pull in prefixes, or claims, that its class does not allow.
+func checkSet(ref types.SetRef, set object.NamedSet) (object.NamedSet, error) {
 	if set == nil {
 		return nil, ErrNotFound // a Source that returns neither a set nor an error
 	}
 	set = setValue(set)
+	name := ref.Name()
 	if got := set.SetName(); got != name {
-		return nil, fmt.Errorf("resolve: asked for %s, the Source returned %s", name, got)
+		return nil, fmt.Errorf("resolve: asked for %s, the Source returned %s", ref, got)
+	}
+	if ref.IsScoped() && !equalFoldASCII(strings.TrimSpace(set.SetSource()), ref.Source()) {
+		return nil, fmt.Errorf("resolve: asked for %s, the Source returned %s from %q", ref, name, set.SetSource())
 	}
 	if set.Class() != name.Class().String() {
-		return nil, fmt.Errorf("resolve: %s is a %s: %w", name, set.Class(), ErrNotFound)
+		return nil, fmt.Errorf("resolve: %s is a %s: %w", ref, set.Class(), ErrNotFound)
 	}
 	return set, nil
 }
@@ -400,63 +415,64 @@ func setValue(set object.NamedSet) object.NamedSet {
 }
 
 // ordered returns the graph's nodes in a stable order — the top set first,
-// then the rest by canonical name — so a result built by walking them does not
+// then the rest by reference — so a result built by walking them does not
 // depend on map iteration order.
 func (g *setGraph) ordered() []*setNode {
-	names := make([]string, 0, len(g.nodes))
-	for n := range g.nodes {
-		if n != g.top.String() {
-			names = append(names, n)
+	refs := make([]types.SetRef, 0, len(g.nodes))
+	for r := range g.nodes {
+		if r != g.top {
+			refs = append(refs, r)
 		}
 	}
-	sort.Strings(names)
+	sort.Slice(refs, func(i, j int) bool { return refs[i].String() < refs[j].String() })
 	out := make([]*setNode, 0, len(g.nodes))
-	if nd, ok := g.nodes[g.top.String()]; ok {
+	if nd, ok := g.nodes[g.top]; ok {
 		out = append(out, nd)
 	}
-	for _, n := range names {
-		out = append(out, g.nodes[n])
+	for _, r := range refs {
+		out = append(out, g.nodes[r])
 	}
 	return out
 }
 
-// members returns the direct members of a set whose members are ASNs, prefix
-// ranges and nested sets — an as-set or a route-set — and nothing for any
-// other class, whose members are of a different kind entirely.
+// members returns the members a resolver follows of a set whose members are
+// ASNs, prefix ranges and nested sets — an as-set or a route-set — src-members:
+// first (object.DirectMembers), and nothing for any other class.
 func members(set object.NamedSet) []object.SetMember {
 	if s, ok := set.(object.Set); ok {
-		return s.SetMembers()
+		return object.DirectMembers(s)
 	}
 	return nil
 }
 
-// nestedNames returns the sets a set points to, following only the nestings
+// nestedRefs returns the sets a set points to, following only the nestings
 // RFC 2622 §5.1-5.6 allows for its class: an as-set lists as-sets; a route-set
 // lists route-sets and as-sets (the routes their ASes originate); an rtr-set
 // lists rtr-sets; a peering-set lists peering-sets. A nesting the RFC does not
 // allow is invalid data and is not followed — a route-set inside an as-set
 // would add prefixes that no route object backs. A filter-set has no member
-// list at all; EvalFilter walks its expression instead.
-func nestedNames(set object.NamedSet) []types.SetName {
+// list at all; EvalFilter walks its expression instead. A src-members:
+// reference is scoped (object.DirectMembers); every other is not.
+func nestedRefs(set object.NamedSet) []types.SetRef {
 	parent := set.SetName().Class()
-	var out []types.SetName
+	var out []types.SetRef
 	switch s := set.(type) {
 	case object.Set:
-		for _, m := range s.SetMembers() {
-			if m.Kind == object.MemberSet && nestable(parent, m.Set.Class()) {
-				out = append(out, m.Set)
+		for _, m := range object.DirectMembers(s) {
+			if m.Kind == object.MemberSet && nestable(parent, m.Set.Class()) && !m.Ref().IsZero() {
+				out = append(out, m.Ref())
 			}
 		}
 	case object.RouterSet:
 		for _, m := range s.SetRouters() {
 			if m.Kind == object.RtrMemberSet && nestable(parent, m.Set.Class()) {
-				out = append(out, m.Set)
+				out = append(out, types.Ref(m.Set))
 			}
 		}
 	case object.PeeringGroup:
 		for _, p := range s.SetPeerings() {
 			if ref, ok := p.(policy.PeeringSetRef); ok && nestable(parent, ref.Name.Class()) {
-				out = append(out, ref.Name)
+				out = append(out, types.Ref(ref.Name))
 			}
 		}
 	}
@@ -589,20 +605,19 @@ type evaluator struct {
 }
 
 type evalState struct {
-	set string // canonical set name
+	set types.SetRef
 	ops opStack
 }
 
-func (v *evaluator) walk(name types.SetName, ops opStack) error {
+func (v *evaluator) walk(ref types.SetRef, ops opStack) error {
 	if err := v.ctx.Err(); err != nil {
 		return err
 	}
-	canon := name.String()
-	v.done[evalState{canon, ops}] = true
+	v.done[evalState{ref, ops}] = true
 	if v.visits++; v.visits > v.e.maxVisited() {
 		return &SetTooLargeError{Name: v.g.top, Limit: LimitVisited, Max: v.e.maxVisited(), Count: v.visits}
 	}
-	nd := v.g.nodes[canon]
+	nd := v.g.nodes[ref]
 	for _, m := range members(nd.set) {
 		switch m.Kind {
 		case object.MemberPrefixRange:
@@ -614,20 +629,21 @@ func (v *evaluator) walk(name types.SetName, ops opStack) error {
 				return err
 			}
 		case object.MemberSet:
-			if !nestable(name.Class(), m.Set.Class()) {
+			if !nestable(ref.Name().Class(), m.Set.Class()) {
 				continue // e.g. a route-set listed in an as-set, even if reachable elsewhere
 			}
 			if v.g.ex.set(m.Set) {
 				continue // excluded, even the top set listing itself
 			}
-			if _, ok := v.g.nodes[m.Set.String()]; !ok {
+			child := m.Ref()
+			if _, ok := v.g.nodes[child]; !ok {
 				continue // missing (reported)
 			}
-			child := ops.push(m.Op)
-			if v.done[evalState{m.Set.String(), child}] {
+			next := ops.push(m.Op)
+			if v.done[evalState{child, next}] {
 				continue // already walked, or on the current path: its ranges are already counted
 			}
-			if err := v.walk(m.Set, child); err != nil {
+			if err := v.walk(child, next); err != nil {
 				return err
 			}
 		}

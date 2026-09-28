@@ -439,9 +439,9 @@ func runResolvePass(ctx context.Context, opts Options, autNums []object.AutNum, 
 		var asResult resolve.ASNSet
 		var asErr error
 		if t.name.Class() == types.ClassAsSet { // ExpandAS is defined for as-sets only
-			asResult, asErr = exp.ExpandAS(sctx, t.name)
+			asResult, asErr = exp.ExpandAS(sctx, types.Ref(t.name))
 		}
-		pfxResult, pfxErr := exp.ExpandPrefixes(sctx, t.name)
+		pfxResult, pfxErr := exp.ExpandPrefixes(sctx, types.Ref(t.name))
 		cancel()
 		sample.ElapsedNS = time.Since(t0).Nanoseconds()
 		sample.ASNs = asResult.Len()

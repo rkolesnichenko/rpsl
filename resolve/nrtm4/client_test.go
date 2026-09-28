@@ -44,7 +44,7 @@ func expand(t *testing.T, c *Client, set string) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ps, err := (&resolve.Expander{Src: c.Source()}).ExpandPrefixes(context.Background(), n)
+	ps, err := (&resolve.Expander{Src: c.Source()}).ExpandPrefixes(context.Background(), types.Ref(n))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +405,7 @@ func TestClientCopyTo(t *testing.T) {
 		t.Fatalf("merged %d objects, want 2", all.Len())
 	}
 	n, _ := types.ParseSetName("AS-X")
-	ps, err := (&resolve.Expander{Src: all.Source("RIPE", "RIPE-NONAUTH")}).ExpandPrefixes(context.Background(), n)
+	ps, err := (&resolve.Expander{Src: all.Source("RIPE", "RIPE-NONAUTH")}).ExpandPrefixes(context.Background(), types.Ref(n))
 	if err != nil || ps.Len() != 1 {
 		t.Errorf("AS-X over both mirrors: %v, %v", ps.List(), err)
 	}

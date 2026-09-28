@@ -84,7 +84,7 @@ func TestBgpq4RealData(t *testing.T) {
 		reasons := divergentFeatures(db, name)
 		n := mustSet(t, name)
 		var tl *resolve.SetTooLargeError
-		_, err := (&resolve.Expander{Src: src}).ExpandPrefixes(context.Background(), n)
+		_, err := (&resolve.Expander{Src: src}).ExpandPrefixes(context.Background(), types.Ref(n))
 		switch {
 		case errors.As(err, &tl) && tl.Limit == resolve.LimitPrefixes:
 			tooLarge++ // more prefixes than the default cap; bgpq4 would print them all

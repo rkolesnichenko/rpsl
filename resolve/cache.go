@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 
@@ -67,7 +68,7 @@ const (
 
 type cacheKey struct {
 	kind cacheKind
-	name string    // the canonical set name, or "" for a route lookup
+	name string    // the set reference, or (set source, set name) for claims; "" for a route lookup
 	as   types.ASN // the AS, for a route lookup
 	afi  types.AFI
 }
@@ -91,10 +92,11 @@ func NewCache(src Source, ttl time.Duration) *Cache {
 
 var _ Source = (*Cache)(nil)
 
-// GetSet returns the named set, from the cache when it is there and fresh.
-func (c *Cache) GetSet(ctx context.Context, name types.SetName) (object.NamedSet, error) {
-	e, err := c.lookup(ctx, cacheKey{kind: kindSet, name: name.String()}, func(ctx context.Context, e *cacheEntry) {
-		e.set, e.err = c.Src.GetSet(ctx, name)
+// GetSet returns the set ref names, from the cache when it is there and fresh.
+// A scoped and an unscoped reference to one name are cached apart.
+func (c *Cache) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error) {
+	e, err := c.lookup(ctx, cacheKey{kind: kindSet, name: ref.String()}, func(ctx context.Context, e *cacheEntry) {
+		e.set, e.err = c.Src.GetSet(ctx, ref)
 	})
 	if err != nil {
 		return nil, err
@@ -124,7 +126,8 @@ func (c *Cache) MembersByRef(ctx context.Context, set object.NamedSet) ([]object
 	if set == nil {
 		return nil, nil
 	}
-	key := cacheKey{kind: kindClaims, name: set.SetName().String()}
+	// two same-named sets of two registries have different claimants
+	key := cacheKey{kind: kindClaims, name: strings.ToUpper(strings.TrimSpace(set.SetSource())) + "::" + set.SetName().String()}
 	e, err := c.lookup(ctx, key, func(ctx context.Context, e *cacheEntry) {
 		e.claims, e.err = c.Src.MembersByRef(ctx, set)
 	})

@@ -607,7 +607,7 @@ func decodeAll(t *testing.T, texts []string) []object.Object {
 	return objs
 }
 
-func names(ns []types.SetName) []string {
+func names(ns []types.SetRef) []string {
 	var out []string
 	for _, n := range ns {
 		out = append(out, n.String())
@@ -645,7 +645,7 @@ func checkModel(t *testing.T, label string, o *oracle, texts []string, src resol
 		_, anySet := o.reach(top)
 		wantMissing := o.missing(top)
 		if o.sets[top].class == types.ClassAsSet {
-			got, err := (&resolve.Expander{Exclude: o.ex, Src: src}).ExpandAS(ctx, n)
+			got, err := (&resolve.Expander{Exclude: o.ex, Src: src}).ExpandAS(ctx, types.Ref(n))
 			var anyErr *resolve.AnySetError
 			switch {
 			case anySet:
@@ -660,7 +660,7 @@ func checkModel(t *testing.T, label string, o *oracle, texts []string, src resol
 		}
 		for _, afi := range []types.AFI{types.AFIv4, types.AFIv6, types.AFIAny} {
 			want := o.prefixes(top, afi)
-			got, err := (&resolve.Expander{Exclude: o.ex, Src: src, AFI: afi}).ExpandPrefixes(ctx, n)
+			got, err := (&resolve.Expander{Exclude: o.ex, Src: src, AFI: afi}).ExpandPrefixes(ctx, types.Ref(n))
 			var anyErr *resolve.AnySetError
 			switch {
 			case anySet:
@@ -677,10 +677,10 @@ func checkModel(t *testing.T, label string, o *oracle, texts []string, src resol
 			if !limits || len(want) < 2 {
 				continue
 			}
-			if _, err := (&resolve.Expander{Exclude: o.ex, Src: src, AFI: afi, MaxPrefixes: len(want)}).ExpandPrefixes(ctx, n); err != nil {
+			if _, err := (&resolve.Expander{Exclude: o.ex, Src: src, AFI: afi, MaxPrefixes: len(want)}).ExpandPrefixes(ctx, types.Ref(n)); err != nil {
 				fail("ExpandPrefixes(%s, %v) with MaxPrefixes = its size %d: %v", top, afi, len(want), err)
 			}
-			_, err = (&resolve.Expander{Exclude: o.ex, Src: src, AFI: afi, MaxPrefixes: len(want) - 1}).ExpandPrefixes(ctx, n)
+			_, err = (&resolve.Expander{Exclude: o.ex, Src: src, AFI: afi, MaxPrefixes: len(want) - 1}).ExpandPrefixes(ctx, types.Ref(n))
 			if tl := (*resolve.SetTooLargeError)(nil); !errors.As(err, &tl) || tl.Limit != resolve.LimitPrefixes {
 				fail("ExpandPrefixes(%s, %v) with MaxPrefixes %d under its size: err %v", top, afi, len(want)-1, err)
 			}
@@ -696,10 +696,10 @@ func checkModel(t *testing.T, label string, o *oracle, texts []string, src resol
 		if depth < 2 {
 			continue
 		}
-		if _, err := (&resolve.Expander{Exclude: o.ex, Src: src, MaxDepth: depth}).ExpandPrefixes(ctx, n); err != nil {
+		if _, err := (&resolve.Expander{Exclude: o.ex, Src: src, MaxDepth: depth}).ExpandPrefixes(ctx, types.Ref(n)); err != nil {
 			fail("ExpandPrefixes(%s) with MaxDepth = its depth %d: %v", top, depth, err)
 		}
-		_, err := (&resolve.Expander{Exclude: o.ex, Src: src, MaxDepth: depth - 1}).ExpandPrefixes(ctx, n)
+		_, err := (&resolve.Expander{Exclude: o.ex, Src: src, MaxDepth: depth - 1}).ExpandPrefixes(ctx, types.Ref(n))
 		if tl := (*resolve.SetTooLargeError)(nil); !errors.As(err, &tl) || tl.Limit != resolve.LimitDepth {
 			fail("ExpandPrefixes(%s) with MaxDepth %d under its depth: err %v", top, depth-1, err)
 		}

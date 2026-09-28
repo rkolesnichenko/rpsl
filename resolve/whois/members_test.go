@@ -21,7 +21,7 @@ func TestEngineExpandsCommaMembersOverWhois(t *testing.T) {
 		"-r -T as-set AS-BAR": "as-set: AS-BAR\nmembers: AS3,\n  AS4\nsource: TEST\n",
 	})
 	e := &resolve.Expander{Src: &Source{Addr: fw.addr(), Timeout: 2 * time.Second}}
-	got, err := e.ExpandAS(context.Background(), mustSet(t, "AS-FOO"))
+	got, err := e.ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-FOO")))
 	if err != nil || !reflect.DeepEqual(got.List(), []types.ASN{1, 2, 3, 4}) {
 		t.Errorf("ExpandAS(AS-FOO) = %v, %v; want [AS1 AS2 AS3 AS4]", got.List(), err)
 	}
@@ -54,7 +54,7 @@ func TestWhoisRejectsZeroSetName(t *testing.T) {
 		t.Error("dialed for a zero SetName")
 		return nil, errors.New("unreachable")
 	}}
-	if _, err := src.GetSet(context.Background(), types.SetName{}); err == nil {
+	if _, err := src.GetSet(context.Background(), types.Ref(types.SetName{})); err == nil {
 		t.Error("GetSet(zero SetName) succeeded, want an error")
 	}
 	if _, err := src.MembersByRef(context.Background(), object.RouteSet{MbrsByRef: []string{"ANY"}}); err == nil {

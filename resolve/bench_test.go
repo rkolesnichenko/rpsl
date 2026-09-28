@@ -85,7 +85,7 @@ func BenchmarkExpandAS(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		got, err := e.ExpandAS(ctx, name)
+		got, err := e.ExpandAS(ctx, types.Ref(name))
 		if err != nil || got.Len() != 10000 {
 			b.Fatalf("ExpandAS: %d ASNs, %v; want 10000", got.Len(), err)
 		}
@@ -98,7 +98,7 @@ func BenchmarkExpandPrefixes(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		got, err := e.ExpandPrefixes(ctx, name)
+		got, err := e.ExpandPrefixes(ctx, types.Ref(name))
 		if err != nil || got.Len() != 50000 {
 			b.Fatalf("ExpandPrefixes: %d prefixes, %v; want 50000", got.Len(), err)
 		}
@@ -111,7 +111,7 @@ func BenchmarkExpandPrefixRanges(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		got, err := e.ExpandPrefixRanges(ctx, name)
+		got, err := e.ExpandPrefixRanges(ctx, types.Ref(name))
 		if err != nil || got.Len() == 0 {
 			b.Fatalf("ExpandPrefixRanges: %d ranges, %v", got.Len(), err)
 		}

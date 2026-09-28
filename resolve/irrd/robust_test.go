@@ -117,7 +117,7 @@ func TestContextCancelsStalledQuery(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		time.AfterFunc(50*time.Millisecond, cancel)
 		start := time.Now()
-		_, err := src.GetSet(ctx, mustSet(t, "AS-X"))
+		_, err := src.GetSet(ctx, types.Ref(mustSet(t, "AS-X")))
 		if took := time.Since(start); took > time.Second || !errors.Is(err, context.Canceled) {
 			t.Errorf("%s: GetSet returned %v after %v; want context.Canceled promptly", name, err, took)
 		}
@@ -134,7 +134,7 @@ func TestContextDeadlineBoundsQuery(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	if _, err := src.GetSet(ctx, mustSet(t, "AS-X")); time.Since(start) > time.Second || !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := src.GetSet(ctx, types.Ref(mustSet(t, "AS-X"))); time.Since(start) > time.Second || !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("GetSet = %v after %v; want context.DeadlineExceeded after ~200ms", err, time.Since(start))
 	}
 }
@@ -197,7 +197,7 @@ func TestFrameHeaderDoesNotPreallocate(t *testing.T) {
 	src := &Source{Addr: srv.addr()}
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
-	_, err := src.GetSet(context.Background(), mustSet(t, "AS-X"))
+	_, err := src.GetSet(context.Background(), types.Ref(mustSet(t, "AS-X")))
 	runtime.ReadMemStats(&after)
 	if err == nil {
 		t.Fatal("a truncated 256 MiB frame was accepted")
@@ -212,11 +212,11 @@ func TestMaxResponseRejectsLargeFrames(t *testing.T) {
 	srv := newRawServer(t, func(_ int64, c net.Conn, br *bufio.Reader) {
 		commands(c, br, func(string) bool { fmt.Fprint(c, frame(big)); return true })
 	})
-	if _, err := (&Source{Addr: srv.addr(), MaxResponse: 1000}).GetSet(context.Background(), mustSet(t, "AS-X")); err == nil ||
+	if _, err := (&Source{Addr: srv.addr(), MaxResponse: 1000}).GetSet(context.Background(), types.Ref(mustSet(t, "AS-X"))); err == nil ||
 		!strings.Contains(err.Error(), "MaxResponse") {
 		t.Errorf("err = %v, want a MaxResponse error", err)
 	}
-	if _, err := (&Source{Addr: srv.addr(), MaxResponse: 5000}).GetSet(context.Background(), mustSet(t, "AS-X")); err != nil {
+	if _, err := (&Source{Addr: srv.addr(), MaxResponse: 5000}).GetSet(context.Background(), types.Ref(mustSet(t, "AS-X"))); err != nil {
 		t.Errorf("frame within MaxResponse failed: %v", err)
 	}
 }
@@ -239,7 +239,7 @@ func TestRejectedSourceListIsAnError(t *testing.T) {
 			}
 		})
 		src := &Source{Addr: srv.addr(), Sources: []string{"BOGUS"}, KeepAlive: keep}
-		_, err := src.GetSet(context.Background(), mustSet(t, "AS-X"))
+		_, err := src.GetSet(context.Background(), types.Ref(mustSet(t, "AS-X")))
 		if err == nil || errors.Is(err, resolve.ErrNotFound) || !strings.Contains(err.Error(), "BOGUS") {
 			t.Errorf("%s: err = %v, want an error naming the rejected source list", name, err)
 		}
@@ -334,7 +334,7 @@ func TestTimeoutCoversTheWholeQuery(t *testing.T) {
 	}
 	src := &Source{Dial: slowDial, Timeout: time.Second}
 	start := time.Now()
-	if _, err := src.GetSet(context.Background(), mustSet(t, "AS-X")); !errors.Is(err, context.DeadlineExceeded) ||
+	if _, err := src.GetSet(context.Background(), types.Ref(mustSet(t, "AS-X"))); !errors.Is(err, context.DeadlineExceeded) ||
 		time.Since(start) > 1400*time.Millisecond {
 		t.Errorf("slow dial: GetSet = %v after %v; want context.DeadlineExceeded after ~1s", err, time.Since(start))
 	}
@@ -343,10 +343,10 @@ func TestTimeoutCoversTheWholeQuery(t *testing.T) {
 	// a second query started 200ms later must also finish within its own 600ms,
 	// the wait for the slot included (it used to take 400ms + 600ms).
 	held := &Source{Addr: srv.addr(), MaxConns: 1, Timeout: 600 * time.Millisecond}
-	go held.GetSet(context.Background(), mustSet(t, "AS-HOLD"))
+	go held.GetSet(context.Background(), types.Ref(mustSet(t, "AS-HOLD")))
 	time.Sleep(200 * time.Millisecond)
 	start = time.Now()
-	if _, err := held.GetSet(context.Background(), mustSet(t, "AS-X")); !errors.Is(err, context.DeadlineExceeded) ||
+	if _, err := held.GetSet(context.Background(), types.Ref(mustSet(t, "AS-X"))); !errors.Is(err, context.DeadlineExceeded) ||
 		time.Since(start) > 850*time.Millisecond {
 		t.Errorf("slot wait: GetSet = %v after %v; want context.DeadlineExceeded after ~600ms", err, time.Since(start))
 	}
@@ -360,7 +360,7 @@ func TestSourcesAreValidated(t *testing.T) {
 			t.Errorf("dialed with Sources %q", bad)
 			return nil, errors.New("unreachable")
 		}}
-		if _, err := src.GetSet(context.Background(), mustSet(t, "AS-X")); err == nil {
+		if _, err := src.GetSet(context.Background(), types.Ref(mustSet(t, "AS-X"))); err == nil {
 			t.Errorf("Sources %q accepted", bad)
 		}
 	}
@@ -383,7 +383,7 @@ func TestSourcesAreValidated(t *testing.T) {
 			}
 		}
 	})
-	(&Source{Addr: srv.addr(), Sources: []string{"RIPE", "radb"}, Timeout: 2 * time.Second}).GetSet(context.Background(), mustSet(t, "AS-X"))
+	(&Source{Addr: srv.addr(), Sources: []string{"RIPE", "radb"}, Timeout: 2 * time.Second}).GetSet(context.Background(), types.Ref(mustSet(t, "AS-X")))
 	var got []string
 	for len(sent) > 0 {
 		got = append(got, <-sent)
@@ -403,7 +403,7 @@ func TestClosedSourceRefusesQueries(t *testing.T) {
 	if err := src.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := src.GetSet(context.Background(), mustSet(t, "AS-X")); !errors.Is(err, ErrClosed) {
+	if _, err := src.GetSet(context.Background(), types.Ref(mustSet(t, "AS-X"))); !errors.Is(err, ErrClosed) {
 		t.Errorf("GetSet after Close = %v, want ErrClosed", err)
 	}
 	if err := src.Close(); err != nil {

@@ -49,7 +49,7 @@ func TestParseMembersByContainerClass(t *testing.T) {
 func TestEngineSkipsUnparseableIRRdTokens(t *testing.T) {
 	fs := newFakeServer(t, map[string]string{"!iAS-X": frame("AS1 garbage AS2^+")})
 	e := &resolve.Expander{Src: &Source{Addr: fs.addr(), Timeout: 2 * time.Second}}
-	got, err := e.ExpandAS(context.Background(), mustSet(t, "AS-X"))
+	got, err := e.ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-X")))
 	if err != nil || !reflect.DeepEqual(got.List(), []types.ASN{1}) {
 		t.Errorf("ExpandAS(AS-X) = %v, %v; want [AS1]", got.List(), err)
 	}
@@ -61,7 +61,7 @@ func TestGetSetRejectsZeroName(t *testing.T) {
 		t.Error("dialed for a zero SetName")
 		return nil, errors.New("unreachable")
 	}}
-	if _, err := src.GetSet(context.Background(), types.SetName{}); err == nil {
+	if _, err := src.GetSet(context.Background(), types.Ref(types.SetName{})); err == nil {
 		t.Error("GetSet(zero SetName) succeeded, want an error")
 	}
 }

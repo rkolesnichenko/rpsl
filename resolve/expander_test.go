@@ -71,7 +71,7 @@ func TestExpandASNestedDedup(t *testing.T) {
 		asSet("AS-MID", "AS2", "AS3", "AS1"), // AS1 duplicated
 	)
 	e := &Expander{Src: src}
-	got, err := e.ExpandAS(context.Background(), mustSet(t, "AS-TOP"))
+	got, err := e.ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-TOP")))
 	if err != nil {
 		t.Fatalf("ExpandAS: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestExpandASCycle(t *testing.T) {
 		asSet("AS-B", "AS2", "AS-A"), // cycle back to AS-A
 	)
 	e := &Expander{Src: src}
-	got, err := e.ExpandAS(context.Background(), mustSet(t, "AS-A"))
+	got, err := e.ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-A")))
 	if err != nil {
 		t.Fatalf("ExpandAS: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestExpandPrefixesFromASCone(t *testing.T) {
 		"route: 192.0.2.0/24\norigin: AS2\nsource: TEST\n",
 	)
 	e := &Expander{Src: src}
-	got, err := e.ExpandPrefixes(context.Background(), mustSet(t, "AS-CONE"))
+	got, err := e.ExpandPrefixes(context.Background(), types.Ref(mustSet(t, "AS-CONE")))
 	if err != nil {
 		t.Fatalf("ExpandPrefixes: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestExpandPrefixesFromASCone(t *testing.T) {
 func TestExpandPrefixesRangeMaterialize(t *testing.T) {
 	src := corpus(t, routeSet("RS-RANGE", "192.0.2.0/24^26"))
 	e := &Expander{Src: src}
-	got, err := e.ExpandPrefixes(context.Background(), mustSet(t, "RS-RANGE"))
+	got, err := e.ExpandPrefixes(context.Background(), types.Ref(mustSet(t, "RS-RANGE")))
 	if err != nil {
 		t.Fatalf("ExpandPrefixes: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestExpandPrefixesAFIConstraint(t *testing.T) {
 	mk := func(afi types.AFI) PrefixSet {
 		src := corpus(t, routeSet("RS-MIX", "192.0.2.0/24", "2001:db8::/32"))
 		e := &Expander{Src: src, AFI: afi}
-		got, err := e.ExpandPrefixes(context.Background(), mustSet(t, "RS-MIX"))
+		got, err := e.ExpandPrefixes(context.Background(), types.Ref(mustSet(t, "RS-MIX")))
 		if err != nil {
 			t.Fatalf("ExpandPrefixes(afi=%v): %v", afi, err)
 		}
@@ -147,7 +147,7 @@ func TestExpandPrefixesAFIConstraint(t *testing.T) {
 func TestExpandPrefixesMaxPrefixes(t *testing.T) {
 	src := corpus(t, routeSet("RS-BIG", "0.0.0.0/0^+"))
 	e := &Expander{Src: src, MaxPrefixes: 10}
-	_, err := e.ExpandPrefixes(context.Background(), mustSet(t, "RS-BIG"))
+	_, err := e.ExpandPrefixes(context.Background(), types.Ref(mustSet(t, "RS-BIG")))
 	var tooLarge *SetTooLargeError
 	if !errors.As(err, &tooLarge) {
 		t.Fatalf("err = %v, want SetTooLargeError", err)
@@ -167,7 +167,7 @@ func TestExpandASMaxVisited(t *testing.T) {
 	texts = append(texts, asSet("AS-WIDE", members...))
 	src := corpus(t, texts...)
 	e := &Expander{Src: src, MaxVisited: 50}
-	_, err := e.ExpandAS(context.Background(), mustSet(t, "AS-WIDE"))
+	_, err := e.ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-WIDE")))
 	var tooLarge *SetTooLargeError
 	if !errors.As(err, &tooLarge) {
 		t.Fatalf("err = %v, want SetTooLargeError", err)
@@ -187,7 +187,7 @@ func TestExpandContextCancellationMidWalk(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := e.ExpandAS(ctx, mustSet(t, "AS-X"))
+		_, err := e.ExpandAS(ctx, types.Ref(mustSet(t, "AS-X")))
 		done <- err
 	}()
 	cancel()
@@ -205,7 +205,7 @@ func TestExpandContextCancellationMidWalk(t *testing.T) {
 // are honored deep in walk loops, not just at entry.
 type blockingSource struct{ block chan struct{} }
 
-func (b *blockingSource) GetSet(ctx context.Context, _ types.SetName) (object.NamedSet, error) {
+func (b *blockingSource) GetSet(ctx context.Context, _ types.SetRef) (object.NamedSet, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -227,7 +227,7 @@ func (b *blockingSource) MembersByRef(context.Context, object.NamedSet) ([]objec
 func TestExpandPrefixesBudgetAcrossMembers(t *testing.T) {
 	src := corpus(t, routeSet("RS-MULTI", "192.0.2.0/29^+", "198.51.100.0/29^+"))
 	e := &Expander{Src: src, MaxPrefixes: 10}
-	_, err := e.ExpandPrefixes(context.Background(), mustSet(t, "RS-MULTI"))
+	_, err := e.ExpandPrefixes(context.Background(), types.Ref(mustSet(t, "RS-MULTI")))
 	var tooLarge *SetTooLargeError
 	if !errors.As(err, &tooLarge) {
 		t.Fatalf("err = %v, want SetTooLargeError", err)
@@ -246,7 +246,7 @@ func TestDualMembershipMntnerCheck(t *testing.T) {
 		"route: 203.0.113.0/24\norigin: AS20\nmember-of: RS-REF\nmnt-by: MAINT-EVIL\nsource: TEST\n",
 	)
 	e := &Expander{Src: src}
-	got, err := e.ExpandPrefixes(context.Background(), mustSet(t, "RS-REF"))
+	got, err := e.ExpandPrefixes(context.Background(), types.Ref(mustSet(t, "RS-REF")))
 	if err != nil {
 		t.Fatalf("ExpandPrefixes: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestDualMembershipAny(t *testing.T) {
 		"route: 203.0.113.0/24\norigin: AS20\nmember-of: RS-OPEN\nmnt-by: MAINT-B\nsource: TEST\n",
 	)
 	e := &Expander{Src: src}
-	got, _ := e.ExpandPrefixes(context.Background(), mustSet(t, "RS-OPEN"))
+	got, _ := e.ExpandPrefixes(context.Background(), types.Ref(mustSet(t, "RS-OPEN")))
 	if got.Len() != 2 {
 		t.Errorf("mbrs-by-ref: ANY should admit both; got %v", got.List())
 	}
@@ -273,7 +273,7 @@ func TestContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	e := &Expander{Src: src}
-	if _, err := e.ExpandAS(ctx, mustSet(t, "AS-A")); !errors.Is(err, context.Canceled) {
+	if _, err := e.ExpandAS(ctx, types.Ref(mustSet(t, "AS-A"))); !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v, want context.Canceled", err)
 	}
 }
@@ -297,7 +297,7 @@ func TestPropertyCyclicGraphTerminates(t *testing.T) {
 	// The default MaxDepth suffices: depth is the shortest nesting distance, and
 	// the +7 chords keep it small even though the +1 ring is 60 sets long.
 	e := &Expander{Src: src}
-	got, err := e.ExpandAS(context.Background(), mustSet(t, "AS-0"))
+	got, err := e.ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-0")))
 	if err != nil {
 		t.Fatalf("ExpandAS: %v", err)
 	}

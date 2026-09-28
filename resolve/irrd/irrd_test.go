@@ -104,7 +104,7 @@ func TestGetSetParsesMembers(t *testing.T) {
 		"!iAS-TOP": frame("AS1 AS-SUB"),
 	})
 	src := &Source{Addr: fs.addr(), Timeout: 2 * time.Second}
-	set, err := src.GetSet(context.Background(), mustSet(t, "AS-TOP"))
+	set, err := src.GetSet(context.Background(), types.Ref(mustSet(t, "AS-TOP")))
 	if err != nil {
 		t.Fatalf("GetSet: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestGetSetParsesMembers(t *testing.T) {
 func TestGetSetNotFound(t *testing.T) {
 	fs := newFakeServer(t, map[string]string{})
 	src := &Source{Addr: fs.addr(), Timeout: 2 * time.Second}
-	_, err := src.GetSet(context.Background(), mustSet(t, "AS-MISSING"))
+	_, err := src.GetSet(context.Background(), types.Ref(mustSet(t, "AS-MISSING")))
 	if !errors.Is(err, resolve.ErrNotFound) {
 		t.Errorf("err = %v, want resolve.ErrNotFound", err)
 	}
@@ -174,7 +174,7 @@ func TestEngineOverIRRdSource(t *testing.T) {
 	})
 	src := &Source{Addr: fs.addr(), Timeout: 2 * time.Second}
 	e := &resolve.Expander{Src: src}
-	got, err := e.ExpandAS(context.Background(), mustSet(t, "AS-TOP"))
+	got, err := e.ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-TOP")))
 	if err != nil {
 		t.Fatalf("ExpandAS: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestEngineExpandPrefixesOverIRRd(t *testing.T) {
 	})
 	src := &Source{Addr: fs.addr(), Timeout: 2 * time.Second}
 	e := &resolve.Expander{Src: src}
-	got, err := e.ExpandPrefixes(context.Background(), mustSet(t, "RS-X"))
+	got, err := e.ExpandPrefixes(context.Background(), types.Ref(mustSet(t, "RS-X")))
 	if err != nil {
 		t.Fatalf("ExpandPrefixes: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestKeepAliveEndToEnd(t *testing.T) {
 	src := &Source{Addr: fs.addr(), Timeout: 2 * time.Second, KeepAlive: true}
 	defer src.Close()
 	e := &resolve.Expander{Src: src}
-	got, err := e.ExpandAS(context.Background(), mustSet(t, "AS-TOP"))
+	got, err := e.ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-TOP")))
 	if err != nil {
 		t.Fatalf("ExpandAS: %v", err)
 	}
@@ -268,15 +268,15 @@ func TestGetSetEmptyIsNotMissing(t *testing.T) {
 	})
 	src := &Source{Addr: fs.addr(), Timeout: 2 * time.Second}
 	for _, name := range []string{"AS-EMPTY", "RS-EMPTY"} {
-		set, err := src.GetSet(context.Background(), mustSet(t, name))
+		set, err := src.GetSet(context.Background(), types.Ref(mustSet(t, name)))
 		if err != nil || set == nil || len(set.(object.Set).SetMembers()) != 0 || set.SetName() != mustSet(t, name) {
 			t.Errorf("GetSet(%s) = %+v, %v; want the empty set", name, set, err)
 		}
 	}
-	if _, err := src.GetSet(context.Background(), mustSet(t, "AS-GONE")); !errors.Is(err, resolve.ErrNotFound) {
+	if _, err := src.GetSet(context.Background(), types.Ref(mustSet(t, "AS-GONE"))); !errors.Is(err, resolve.ErrNotFound) {
 		t.Errorf("GetSet(AS-GONE) err = %v, want ErrNotFound", err)
 	}
-	asns, err := (&resolve.Expander{Src: src}).ExpandAS(context.Background(), mustSet(t, "AS-EMPTY"))
+	asns, err := (&resolve.Expander{Src: src}).ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-EMPTY")))
 	if err != nil || asns.Len() != 0 {
 		t.Errorf("ExpandAS(AS-EMPTY) = %v, %v; want empty, no error", asns, err)
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/rkolesnichenko/rpsl"
 	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/resolve"
+	"github.com/rkolesnichenko/rpsl/types"
 )
 
 // TestRealDataCorpus (opt-in: RPSL_REALDATA) holds a Corpus to NewMemSource on
@@ -69,8 +70,8 @@ func TestRealDataCorpus(t *testing.T) {
 			}
 			checked++
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			wp, werr := (&resolve.Expander{Src: want}).ExpandPrefixes(ctx, s.SetName())
-			gp, gerr := (&resolve.Expander{Src: got}).ExpandPrefixes(ctx, s.SetName())
+			wp, werr := (&resolve.Expander{Src: want}).ExpandPrefixes(ctx, types.Ref(s.SetName()))
+			gp, gerr := (&resolve.Expander{Src: got}).ExpandPrefixes(ctx, types.Ref(s.SetName()))
 			cancel()
 			if (werr == nil) != (gerr == nil) || werr == nil && !slices.Equal(wp.List(), gp.List()) {
 				t.Errorf("%s %s: corpus %d prefixes (%v), all objects %d (%v)", reg, s.SetName(), gp.Len(), gerr, wp.Len(), werr)

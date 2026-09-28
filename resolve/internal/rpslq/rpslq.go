@@ -885,7 +885,7 @@ func (q *query) fail(what string, err error) int {
 
 // warnMissing reports the nested sets an expansion did not find, as bgpq4
 // reports what it cannot use.
-func (q *query) warnMissing(top string, missing []types.SetName) {
+func (q *query) warnMissing(top string, missing []types.SetRef) {
 	for _, m := range missing {
 		fmt.Fprintf(q.stderr, "rpslq: %s: %s not found, skipped\n", top, m)
 	}
@@ -908,7 +908,7 @@ func (q *query) asns(ctx context.Context, args []string) ([]types.ASN, int) {
 			fmt.Fprintf(q.stderr, "rpslq: an AS list or as-path filter takes as-sets and AS numbers, not %s\n", o.text)
 			return nil, exitUsage
 		}
-		got, err := q.expander(o).ExpandAS(ctx, o.set)
+		got, err := q.expander(o).ExpandAS(ctx, types.Ref(o.set))
 		if err != nil {
 			return nil, q.fail(o.text, err)
 		}
@@ -975,7 +975,7 @@ func (q *query) prefixes(ctx context.Context, args []string) ([]types.PrefixRang
 				}
 			}
 		case o.set.Class() == types.ClassAsSet:
-			got, err := q.expander(o).ExpandAS(ctx, o.set)
+			got, err := q.expander(o).ExpandAS(ctx, types.Ref(o.set))
 			if err != nil {
 				return nil, q.fail(o.text, err)
 			}
@@ -984,7 +984,7 @@ func (q *query) prefixes(ctx context.Context, args []string) ([]types.PrefixRang
 				asns[a] = true
 			}
 		default:
-			got, err := q.expander(o).ExpandPrefixRanges(ctx, o.set)
+			got, err := q.expander(o).ExpandPrefixRanges(ctx, types.Ref(o.set))
 			if err != nil {
 				return nil, q.fail(o.text, err)
 			}

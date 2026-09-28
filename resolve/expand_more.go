@@ -27,11 +27,13 @@ import (
 // membership through mbrs-by-ref. A set of another class returns an error
 // wrapping ErrSetClass; a missing top-level set one wrapping ErrNotFound.
 // Missing nested sets expand to nothing and are listed by RouterSet.Missing.
-func (e *Expander) ExpandRouters(ctx context.Context, n types.SetName) (RouterSet, error) {
-	if n.Class() != types.ClassRtrSet {
-		return RouterSet{}, fmt.Errorf("resolve: ExpandRouters %s: %w", n, ErrSetClass)
+// A scoped ref (RIPE::AS-FOO) looks the named set up in that registry only; the
+// scope does not cascade to what it lists.
+func (e *Expander) ExpandRouters(ctx context.Context, ref types.SetRef) (RouterSet, error) {
+	if ref.Name().Class() != types.ClassRtrSet {
+		return RouterSet{}, fmt.Errorf("resolve: ExpandRouters %s: %w", ref, ErrSetClass)
 	}
-	g, err := e.discover(ctx, n)
+	g, err := e.discover(ctx, ref)
 	if err != nil {
 		return RouterSet{}, err
 	}
@@ -65,17 +67,19 @@ func (e *Expander) ExpandRouters(ctx context.Context, n types.SetName) (RouterSe
 // and mp-peering: specifications of every peering-set reachable from it, with
 // nested peering-set references followed and replaced by what they denote.
 // A set of another class returns an error wrapping ErrSetClass.
-func (e *Expander) ExpandPeerings(ctx context.Context, n types.SetName) (PeeringSet, error) {
-	if n.Class() != types.ClassPeeringSet {
-		return PeeringSet{}, fmt.Errorf("resolve: ExpandPeerings %s: %w", n, ErrSetClass)
+// A scoped ref (RIPE::AS-FOO) looks the named set up in that registry only; the
+// scope does not cascade to what it lists.
+func (e *Expander) ExpandPeerings(ctx context.Context, ref types.SetRef) (PeeringSet, error) {
+	if ref.Name().Class() != types.ClassPeeringSet {
+		return PeeringSet{}, fmt.Errorf("resolve: ExpandPeerings %s: %w", ref, ErrSetClass)
 	}
-	g, err := e.discover(ctx, n)
+	g, err := e.discover(ctx, ref)
 	if err != nil {
 		return PeeringSet{}, err
 	}
 	out := newPeeringSet()
 	// Walk in the graph's discovery order so the result does not depend on map
-	// iteration: the top set first, then the rest by canonical name.
+	// iteration: the top set first, then the rest by reference.
 	for _, nd := range g.ordered() {
 		pg, ok := nd.set.(object.PeeringGroup)
 		if !ok {
@@ -95,20 +99,23 @@ func (e *Expander) ExpandPeerings(ctx context.Context, n types.SetName) (Peering
 // ExpandFilterSet evaluates a filter-set's filter into the prefix ranges it
 // denotes, choosing filter: or mp-filter: by the expander's AFI. A set of
 // another class returns an error wrapping ErrSetClass; see EvalFilter for what
-// a filter can and cannot denote.
-func (e *Expander) ExpandFilterSet(ctx context.Context, n types.SetName) (RangeSet, error) {
-	if n.Class() != types.ClassFilterSet {
-		return RangeSet{}, fmt.Errorf("resolve: ExpandFilterSet %s: %w", n, ErrSetClass)
+// a filter can and cannot denote. A scoped ref fetches the filter-set from that
+// registry; the filter-sets and sets its filter names are unscoped, as filter
+// syntax has no registry.
+func (e *Expander) ExpandFilterSet(ctx context.Context, ref types.SetRef) (RangeSet, error) {
+	if ref.Name().Class() != types.ClassFilterSet {
+		return RangeSet{}, fmt.Errorf("resolve: ExpandFilterSet %s: %w", ref, ErrSetClass)
 	}
 	ev := newFilterEval(e, ctx)
-	fg, err := ev.filterSet(n)
+	ev.top = ref
+	fg, err := ev.filterSet(ref.Name())
 	if err != nil {
-		return RangeSet{}, fmt.Errorf("expand %s: %w", n, err)
+		return RangeSet{}, fmt.Errorf("expand %s: %w", ref, err)
 	}
 	if fg == nil {
-		return RangeSet{}, fmt.Errorf("expand %s: %w", n, ErrNotFound)
+		return RangeSet{}, fmt.Errorf("expand %s: %w", ref, ErrNotFound)
 	}
-	got, err := ev.run(policy.FilterSetRef{Name: n})
+	got, err := ev.run(policy.FilterSetRef{Name: ref.Name()})
 	if err != nil {
 		return RangeSet{}, err
 	}
@@ -166,9 +173,10 @@ type rangeSetOf map[types.PrefixRange]struct{}
 type filterEval struct {
 	e       *Expander
 	ctx     context.Context
-	missing []types.SetName
+	missing []types.SetRef
 	visits  int           // filter terms evaluated and sets reached, against MaxVisited
 	cur     types.SetName // the filter-set being evaluated, to name it in errors
+	top     types.SetRef  // the filter-set ExpandFilterSet names, fetched in its scope
 
 	sets   map[string]object.FilterGroup // filter-sets fetched; nil for one not found
 	memo   map[string]rangeSetOf         // filter-set values of this pass
@@ -252,18 +260,18 @@ func (ev *filterEval) result(got rangeSetOf) RangeSet {
 	for r := range got {
 		out.add(r)
 	}
-	out.missing = sortedNames(ev.missing)
+	out.missing = sortedRefs(ev.missing)
 	return *out
 }
 
 // note records a set the filter named but the Source does not have.
-func (ev *filterEval) note(n types.SetName) {
+func (ev *filterEval) note(r types.SetRef) {
 	for _, m := range ev.missing {
-		if m == n {
+		if m == r {
 			return
 		}
 	}
-	ev.missing = append(ev.missing, n)
+	ev.missing = append(ev.missing, r)
 }
 
 // cap enforces MaxPrefixes on a working set as it grows.
@@ -272,7 +280,7 @@ func (ev *filterEval) cap(got rangeSetOf, n types.SetName) error {
 		if n.IsZero() {
 			n = ev.cur
 		}
-		return &SetTooLargeError{Name: n, Limit: LimitPrefixes, Max: ev.e.maxPrefixes(), Count: len(got)}
+		return &SetTooLargeError{Name: types.Ref(n), Limit: LimitPrefixes, Max: ev.e.maxPrefixes(), Count: len(got)}
 	}
 	return nil
 }
@@ -280,7 +288,7 @@ func (ev *filterEval) cap(got rangeSetOf, n types.SetName) error {
 // visit charges n visits against MaxVisited.
 func (ev *filterEval) visit(n int) error {
 	if ev.visits += n; ev.visits > ev.e.maxVisited() {
-		return &SetTooLargeError{Name: ev.cur, Limit: LimitVisited, Max: ev.e.maxVisited(), Count: ev.visits}
+		return &SetTooLargeError{Name: types.Ref(ev.cur), Limit: LimitVisited, Max: ev.e.maxVisited(), Count: ev.visits}
 	}
 	return nil
 }
@@ -291,7 +299,7 @@ func (ev *filterEval) eval(f policy.Filter, depth int) (rangeSetOf, error) {
 		return nil, err
 	}
 	if depth > ev.e.maxDepth() {
-		return nil, &SetTooLargeError{Name: ev.cur, Limit: LimitDepth, Max: ev.e.maxDepth(), Count: depth}
+		return nil, &SetTooLargeError{Name: types.Ref(ev.cur), Limit: LimitDepth, Max: ev.e.maxDepth(), Count: depth}
 	}
 	if err := ev.visit(1); err != nil {
 		return nil, err
@@ -379,7 +387,7 @@ func (ev *filterEval) setRef(n types.SetName, op types.RangeOperator, depth int)
 			if !errors.Is(err, ErrNotFound) {
 				return nil, err
 			}
-			ev.note(n)
+			ev.note(types.Ref(n))
 			return rangeSetOf{}, nil
 		}
 		for _, m := range rs.Missing() {
@@ -430,7 +438,7 @@ func (ev *filterEval) filterSetValue(n types.SetName, depth int) (rangeSetOf, er
 		return nil, err
 	}
 	if fg == nil {
-		ev.note(n)
+		ev.note(types.Ref(n))
 		return rangeSetOf{}, nil
 	}
 	outer := ev.cur
@@ -454,9 +462,13 @@ func (ev *filterEval) filterSet(n types.SetName) (object.FilterGroup, error) {
 	if err := ev.visit(1); err != nil {
 		return nil, err
 	}
-	set, err := ev.e.Src.GetSet(ev.ctx, n)
+	ref := types.Ref(n)
+	if !ev.top.IsZero() && n == ev.top.Name() {
+		ref = ev.top // one filter-set per name per call: a cycle back to the top reuses its copy
+	}
+	set, err := ev.e.Src.GetSet(ev.ctx, ref)
 	if err == nil {
-		set, err = checkSet(n, set)
+		set, err = checkSet(ref, set)
 	}
 	var fg object.FilterGroup
 	switch {
@@ -475,7 +487,7 @@ func (ev *filterEval) prefixRanges(n types.SetName) (RangeSet, error) {
 	if rs, ok := ev.ranges[n.String()]; ok {
 		return rs, nil
 	}
-	rs, reached, err := ev.e.expandRanges(ev.ctx, n, ev.e.maxPrefixes())
+	rs, reached, err := ev.e.expandRanges(ev.ctx, types.Ref(n), ev.e.maxPrefixes())
 	if err != nil {
 		return RangeSet{}, err
 	}
@@ -491,7 +503,7 @@ func (ev *filterEval) asSet(n types.SetName) (ASNSet, error) {
 	if s, ok := ev.asns[n.String()]; ok {
 		return s, nil
 	}
-	s, reached, err := ev.e.expandAS(ev.ctx, n)
+	s, reached, err := ev.e.expandAS(ev.ctx, types.Ref(n))
 	if err != nil {
 		return ASNSet{}, err
 	}
@@ -507,7 +519,7 @@ func (ev *filterEval) asSet(n types.SetName) (ASNSet, error) {
 // what RFC 2622 §5.6 means by them.
 func (ev *filterEval) asExpr(e policy.ASExpr, depth int) (map[types.ASN]bool, error) {
 	if depth > ev.e.maxDepth() {
-		return nil, &SetTooLargeError{Name: ev.cur, Limit: LimitDepth, Max: ev.e.maxDepth(), Count: depth}
+		return nil, &SetTooLargeError{Name: types.Ref(ev.cur), Limit: LimitDepth, Max: ev.e.maxDepth(), Count: depth}
 	}
 	switch x := e.(type) {
 	case nil:
@@ -529,7 +541,7 @@ func (ev *filterEval) asExpr(e policy.ASExpr, depth int) (map[types.ASN]bool, er
 			if !errors.Is(err, ErrNotFound) {
 				return nil, err
 			}
-			ev.note(x.Name)
+			ev.note(types.Ref(x.Name))
 			return map[types.ASN]bool{}, nil
 		}
 		for _, m := range set.Missing() {

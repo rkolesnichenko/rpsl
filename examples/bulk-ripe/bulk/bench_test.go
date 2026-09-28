@@ -103,7 +103,7 @@ func BenchmarkRealDataExpand(b *testing.B) {
 		sort.Slice(sets, func(i, j int) bool { return len(sets[i].Members) > len(sets[j].Members) })
 		e := &resolve.Expander{Src: realExpansion.src}
 		for _, s := range sets {
-			if _, err := e.ExpandPrefixes(ctx, s.Name); err == nil {
+			if _, err := e.ExpandPrefixes(ctx, types.Ref(s.Name)); err == nil {
 				realExpansion.set = s.Name
 				return
 			}
@@ -118,7 +118,7 @@ func BenchmarkRealDataExpand(b *testing.B) {
 	b.ResetTimer()
 	var prefixes int
 	for i := 0; i < b.N; i++ {
-		got, err := e.ExpandPrefixes(ctx, realExpansion.set)
+		got, err := e.ExpandPrefixes(ctx, types.Ref(realExpansion.set))
 		if err != nil {
 			b.Fatal(err)
 		}

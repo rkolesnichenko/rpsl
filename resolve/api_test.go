@@ -26,7 +26,7 @@ func TestSynthesizedAndPointerObjects(t *testing.T) {
 		&object.AutNum{AS: 6, MemberOf: []types.SetName{set}, Common: common},
 		object.AutNum{AS: 7, MemberOf: []types.SetName{set}, Common: object.Common{MntBy: []string{"MNT-EVIL"}, Source: "TEST"}},
 	}
-	got, err := (&Expander{Src: NewMemSource(objs)}).ExpandAS(context.Background(), set)
+	got, err := (&Expander{Src: NewMemSource(objs)}).ExpandAS(context.Background(), types.Ref(set))
 	if err != nil || !reflect.DeepEqual(asnList(got), []uint32{1, 5, 6}) {
 		t.Errorf("ExpandAS(AS-P) = %v, %v; want [1 5 6]", asnList(got), err)
 	}
@@ -40,18 +40,18 @@ func TestSynthesizedAndPointerObjects(t *testing.T) {
 func TestErrorTypes(t *testing.T) {
 	ctx := context.Background()
 	src := corpus(t, asSet("AS-A", "AS-B"), asSet("AS-B", "AS1"), asSet("AS-ANYHOLDER", "AS-ANY"))
-	_, err := (&Expander{Src: src, MaxVisited: 1}).ExpandAS(ctx, mustSet(t, "AS-A"))
+	_, err := (&Expander{Src: src, MaxVisited: 1}).ExpandAS(ctx, types.Ref(mustSet(t, "AS-A")))
 	var tl *SetTooLargeError
 	if !errors.As(err, &tl) || tl.Limit != LimitVisited || tl.Max != 1 || tl.Count != 2 ||
 		!strings.Contains(err.Error(), "MaxVisited (1)") {
 		t.Errorf("err = %v (%+v), want *SetTooLargeError naming MaxVisited (1), count 2", err, tl)
 	}
-	_, err = (&Expander{Src: src}).ExpandAS(ctx, mustSet(t, "AS-ANYHOLDER"))
+	_, err = (&Expander{Src: src}).ExpandAS(ctx, types.Ref(mustSet(t, "AS-ANYHOLDER")))
 	var any *AnySetError
 	if !errors.As(err, &any) || any.Name.String() != "AS-ANY" {
 		t.Errorf("err = %v, want *AnySetError{AS-ANY}", err)
 	}
-	_, err = (&Expander{Src: src}).ExpandAS(ctx, mustSet(t, "AS-NOPE"))
+	_, err = (&Expander{Src: src}).ExpandAS(ctx, types.Ref(mustSet(t, "AS-NOPE")))
 	if !errors.Is(err, ErrNotFound) || strings.Count(err.Error(), "resolve:") != 1 {
 		t.Errorf("err = %q, want one wrapping ErrNotFound without a doubled prefix", err)
 	}
@@ -68,10 +68,10 @@ func TestNegativeLimitsAreUnlimited(t *testing.T) {
 		chain = append(chain, asSet(fmt.Sprintf("AS-C%d", i), fmt.Sprintf("AS-C%d, AS%d", i+1, i+1)))
 	}
 	src := corpus(t, append(chain, asSet("AS-C40", "AS41"))...)
-	if _, err := (&Expander{Src: src}).ExpandAS(context.Background(), mustSet(t, "AS-C0")); err == nil {
+	if _, err := (&Expander{Src: src}).ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-C0"))); err == nil {
 		t.Error("a 40-deep chain passed the default MaxDepth")
 	}
-	if got, err := (&Expander{Src: src, MaxDepth: -1}).ExpandAS(context.Background(), mustSet(t, "AS-C0")); err != nil || got.Len() != 41 {
+	if got, err := (&Expander{Src: src, MaxDepth: -1}).ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-C0"))); err != nil || got.Len() != 41 {
 		t.Errorf("MaxDepth -1: %d ASNs, %v; want 41", got.Len(), err)
 	}
 }

@@ -33,10 +33,10 @@ func ExampleExpander() {
 	name, _ := types.ParseSetName("AS-CONE")
 	ctx := context.Background()
 
-	asns, _ := e.ExpandAS(ctx, name)
+	asns, _ := e.ExpandAS(ctx, types.Ref(name))
 	fmt.Println("ASNs:", asns.List())
 
-	prefixes, _ := e.ExpandPrefixes(ctx, name)
+	prefixes, _ := e.ExpandPrefixes(ctx, types.Ref(name))
 	for _, p := range prefixes.List() {
 		fmt.Println("prefix:", p)
 	}

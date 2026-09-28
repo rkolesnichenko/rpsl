@@ -45,7 +45,7 @@ func TestLiveSmoke(t *testing.T) {
 			if err != nil || !slices.Contains(routes, ncc) {
 				t.Errorf("OriginatedRoutes(AS3333) = %v, %v; want it to include %s", routes, err, ncc)
 			}
-			asns, err := (&resolve.Expander{Src: src}).ExpandAS(ctx, set)
+			asns, err := (&resolve.Expander{Src: src}).ExpandAS(ctx, types.Ref(set))
 			if err != nil || asns.Len() == 0 {
 				t.Errorf("ExpandAS(AS-RIPENCC) = %v, %v; want a non-empty set", asns, err)
 			}
@@ -60,7 +60,7 @@ func TestLiveSmoke(t *testing.T) {
 			t.Fatal(err)
 		}
 		src := &irrd.Source{Addr: "whois.radb.net:43"}
-		if _, err := src.GetSet(ctx, missing); !errors.Is(err, resolve.ErrNotFound) {
+		if _, err := src.GetSet(ctx, types.Ref(missing)); !errors.Is(err, resolve.ErrNotFound) {
 			t.Errorf("GetSet(%s) err = %v, want ErrNotFound", missing, err)
 		}
 	})

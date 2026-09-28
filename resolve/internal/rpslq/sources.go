@@ -23,11 +23,11 @@ type topSource struct {
 	own resolve.Source
 }
 
-func (s *topSource) GetSet(ctx context.Context, n types.SetName) (rpslobj.NamedSet, error) {
-	if n == s.top {
-		return s.own.GetSet(ctx, n)
+func (s *topSource) GetSet(ctx context.Context, ref types.SetRef) (rpslobj.NamedSet, error) {
+	if !ref.IsScoped() && ref.Name() == s.top {
+		return s.own.GetSet(ctx, ref)
 	}
-	return s.Source.GetSet(ctx, n)
+	return s.Source.GetSet(ctx, ref)
 }
 
 func (s *topSource) MembersByRef(ctx context.Context, set rpslobj.NamedSet) ([]rpslobj.Object, error) {
@@ -77,14 +77,14 @@ type traceSource struct {
 	t     *tracer
 }
 
-func (s *traceSource) GetSet(ctx context.Context, n types.SetName) (rpslobj.NamedSet, error) {
+func (s *traceSource) GetSet(ctx context.Context, ref types.SetRef) (rpslobj.NamedSet, error) {
 	start := time.Now()
-	set, err := s.src.GetSet(ctx, n)
+	set, err := s.src.GetSet(ctx, ref)
 	switch {
 	case err != nil:
-		s.t.logf(start, "GetSet %s%s: %v", n, s.label, err)
+		s.t.logf(start, "GetSet %s%s: %v", ref, s.label, err)
 	default:
-		s.t.logf(start, "GetSet %s%s: %s", n, s.label, describeSet(set))
+		s.t.logf(start, "GetSet %s%s: %s", ref, s.label, describeSet(set))
 	}
 	return set, err
 }

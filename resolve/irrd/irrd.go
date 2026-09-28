@@ -174,7 +174,11 @@ func validSourceName(n string) bool {
 // GetSet asks for the object itself ("!m"): a set that exists is returned
 // empty, and a missing one maps to resolve.ErrNotFound. A set of any other
 // class is fetched with "!m" and decoded.
-func (s *Source) GetSet(ctx context.Context, name types.SetName) (object.NamedSet, error) {
+func (s *Source) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error) {
+	if ref.IsScoped() {
+		return nil, fmt.Errorf("irrd: scoped lookup of %s is not supported", ref)
+	}
+	name := ref.Name()
 	if name.IsZero() {
 		return nil, errors.New("irrd: empty set name")
 	}

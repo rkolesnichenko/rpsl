@@ -42,8 +42,8 @@ func sameAnswers(t *testing.T, label string, objs []object.Object, got, want *re
 	missing, _ := types.ParseSetName("AS-NOT-THERE")
 	names[missing.String()] = missing
 	for _, n := range names {
-		gs, gerr := got.GetSet(ctx, n)
-		ws, werr := want.GetSet(ctx, n)
+		gs, gerr := got.GetSet(ctx, types.Ref(n))
+		ws, werr := want.GetSet(ctx, types.Ref(n))
 		if (gerr == nil) != (werr == nil) || !reflect.DeepEqual(gs, ws) {
 			t.Fatalf("%s: GetSet(%s) = %v, %v; want %v, %v", label, n, gs, gerr, ws, werr)
 		}
@@ -259,7 +259,7 @@ func TestCorpusReplaces(t *testing.T) {
 	c.Put(decodeOne(t, "as-set: AS-Y\nmembers: AS1\nsource: RIPE\n"))
 	c.Put(decodeOne(t, "as-set: as-y\nmembers: AS2\nsource: RIPE\n"))
 	n, _ := types.ParseSetName("AS-Y")
-	s, _ := c.Source().GetSet(ctx, n)
+	s, _ := c.Source().GetSet(ctx, types.Ref(n))
 	if as := s.(object.AsSet); len(as.Members) != 1 || as.Members[0].AS != 2 {
 		t.Fatalf("AS-Y = %+v", as.Members)
 	}
@@ -301,11 +301,11 @@ func TestCorpusMerge(t *testing.T) {
 		t.Fatalf("Len %d, %d", a.Len(), b.Len())
 	}
 	n, _ := types.ParseSetName("AS-X")
-	s, _ := a.Source().GetSet(context.Background(), n) // no precedence: the first loaded
+	s, _ := a.Source().GetSet(context.Background(), types.Ref(n)) // no precedence: the first loaded
 	if s.SetSource() != "ALTDB" {
 		t.Errorf("a tie went to %s", s.SetSource())
 	}
-	s, _ = a.Source("NTTCOM").GetSet(context.Background(), n)
+	s, _ = a.Source("NTTCOM").GetSet(context.Background(), types.Ref(n))
 	if s.SetSource() != "NTTCOM" {
 		t.Errorf("precedence gave %s", s.SetSource())
 	}
@@ -381,11 +381,11 @@ func TestCorpusKeepsClaimantWithBadOrigin(t *testing.T) {
 	}
 	n, _ := types.ParseSetName("RS-FOO")
 	ctx := context.Background()
-	want, err := (&resolve.Expander{Src: resolve.NewMemSource(objs)}).ExpandPrefixes(ctx, n)
+	want, err := (&resolve.Expander{Src: resolve.NewMemSource(objs)}).ExpandPrefixes(ctx, types.Ref(n))
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := (&resolve.Expander{Src: corpusOf(objs).Source()}).ExpandPrefixes(ctx, n)
+	got, err := (&resolve.Expander{Src: corpusOf(objs).Source()}).ExpandPrefixes(ctx, types.Ref(n))
 	if err != nil || !slices.Equal(got.List(), want.List()) {
 		t.Errorf("corpus %v (%v), NewMemSource %v", got.List(), err, want.List())
 	}
@@ -425,7 +425,7 @@ func TestCorpusUpdateKeepsLoadOrder(t *testing.T) {
 	c.Put(decodeOne(t, "as-set: AS-FOO\nmembers: AS2\nsource: B\n"))
 	c.Put(decodeOne(t, "as-set: AS-FOO\nmembers: AS3\nsource: A\n")) // A updated
 	n, _ := types.ParseSetName("AS-FOO")
-	s, _ := c.Source().GetSet(context.Background(), n)
+	s, _ := c.Source().GetSet(context.Background(), types.Ref(n))
 	if s.SetSource() != "A" {
 		t.Errorf("after A's update, %s's AS-FOO wins", s.SetSource())
 	}

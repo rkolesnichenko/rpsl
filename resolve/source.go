@@ -15,10 +15,10 @@ import (
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
-// ErrNotFound is returned by a Source when a requested set does not exist. For a
+// ErrNotFound is returned by a Source when a requested object does not exist. For a
 // nested reference the engine expands it to nothing and lists it in the result's
 // Missing(); for the top-level set it returns an error wrapping ErrNotFound.
-var ErrNotFound = errors.New("resolve: set not found")
+var ErrNotFound = errors.New("resolve: not found")
 
 // ErrSetClass is returned when the named set's class does not fit the
 // expansion: ExpandAS takes an as-set; ExpandPrefixes and ExpandPrefixRanges
@@ -51,7 +51,7 @@ func (l Limit) String() string {
 // full result is built: Max is the cap and Count the value reached (at least
 // Max+1).
 type SetTooLargeError struct {
-	Name  types.SetName
+	Name  types.SetRef
 	Limit Limit
 	Max   int
 	Count int
@@ -91,13 +91,20 @@ func (e *AnySetError) Error() string {
 // MembersByRef report "nothing there" as an empty result, not an error, and any
 // other error aborts the expansion.
 type Source interface {
-	// GetSet fetches a set object by name. It returns ErrNotFound (wrapped is
-	// fine) when the set does not exist; a nil set with a nil error is treated
-	// the same way.
-	GetSet(ctx context.Context, name types.SetName) (object.NamedSet, error)
+	// GetSet fetches the set ref names. An unscoped ref is resolved by the
+	// Source's precedence. A scoped ref is resolved only in that registry —
+	// any registry the Source holds, even one its default list leaves out —
+	// and a registry it does not know is ErrNotFound
+	// (draft-ietf-grow-rpsl-registry-scoped-members §2.3 step 1). For a scoped
+	// ref the returned set's SetSource() must be ref.Source(). It returns
+	// ErrNotFound (wrapped is fine) when the set does not exist; a nil set with
+	// a nil error is treated the same way.
+	GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error)
 
 	// OriginatedRoutes returns the prefixes a given AS originates, filtered to
 	// the requested address family (types.AFIUnspecified or AFIAny = all).
+	// Routes are never scoped: a scoped set's member ASes' routes come from the
+	// default precedence, as bgpq4 does for SOURCE::SET.
 	OriginatedRoutes(ctx context.Context, as types.ASN, afi types.AFI) ([]netip.Prefix, error)
 
 	// MembersByRef returns the objects whose claim of membership in set is

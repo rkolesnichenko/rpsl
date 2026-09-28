@@ -34,7 +34,7 @@ func ExampleClient() {
 	// Each Source is one version, whole: take one per expansion.
 	e := &resolve.Expander{Src: c.Source()}
 	name, _ := types.ParseSetName("AS-RIPENCC")
-	prefixes, err := e.ExpandPrefixes(ctx, name)
+	prefixes, err := e.ExpandPrefixes(ctx, types.Ref(name))
 	if err != nil {
 		log.Fatal(err)
 	}
