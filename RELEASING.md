@@ -38,16 +38,38 @@ Every item must pass on the commit you are about to release.
 3. `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve` and
    `RPSL_LIVE=1 go test -run TestRIPETemplatesAreCurrent ./object`.
 4. **`scripts/release-dryrun.sh vX.Y.Z`**, with the version you are about to
-   release (it refuses one that is already tagged), performs every step below in a
-   temporary repository against a local proxy, builds and tests each module with
-   `GOWORK=off`, checks that a consumer of each module gets only what it
-   requires, runs each module's tests from its published zip, and lists the
-   files each release commit must hold. It publishes nothing.
+   release (it refuses one that is already tagged), runs the real
+   `scripts/release.sh` on a copy of the tree against a bare git repository and a
+   local proxy that publishes each tag a moment after it is pushed. It checks the
+   script's refusals, stops it after step 2 and runs it again (it must resume),
+   and the script's own last step checks each module from an empty module cache.
+   It publishes nothing. Run it on its own: beside `check.sh` the two exhaust the
+   machine's localhost ports.
 5. `CHANGELOG.md`: the release's section is dated (`## [X.Y.Z] - YYYY-MM-DD`)
    and linked at the bottom, and a new empty `## [Unreleased]` sits above it. Commit that, push `main`, and
    wait for CI to pass on it.
 
-## Each release (example: v0.2.0)
+## Each release
+
+```sh
+scripts/release.sh vX.Y.Z
+```
+
+It refuses to start unless the tree is clean, on `main` and pushed, the
+changelog dated and linked, and CI green on HEAD; then it runs the steps below
+in order, waits for the Go proxy after each push, verifies every module from an
+empty module cache, and creates the GitHub release from the changelog section
+(`--no-gh-release` leaves that to you). If anything fails, fix it and run the
+same command again: each step checks whether it is done and resumes.
+
+Never ask the proxy (or `go get`) for a version or commit that is not pushed
+yet: the proxy and the checksum database cache the miss for about half an
+hour. The script only asks for pushed tags, and asks by the tag's commit too,
+which makes a proxy that cached a miss fetch again.
+
+### What the script does, step by step (example: v0.2.0)
+
+For reference, and for finishing by hand if the script cannot:
 
 Run every command from the repository root. Every `go mod tidy` runs with
 `GOWORK=off`, so it resolves siblings from the proxy exactly as a consumer

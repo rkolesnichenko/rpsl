@@ -174,8 +174,11 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   the bgpq4 binary byte for byte (and its refusals to bgpq4's); deliberate differences are
   pinned in resolve/testdata/bgpq4/divergences.md. rpslq-only options are `--long`.
   Its IRRd queries use `irrd.Source.Pipeline` (one connection, many queries in flight).
-- Releasing: RELEASING.md (tag order lexer/types → ast → root → resolve); rehearse first with
-  `scripts/release-dryrun.sh` (local proxy, publishes nothing).
+- Releasing: `scripts/release.sh vX.Y.Z` does RELEASING.md's steps (tag order lexer/types → ast →
+  root → resolve), waits for the proxy, verifies from an empty module cache, and resumes after a
+  failure. Rehearse first with `scripts/release-dryrun.sh` (runs release.sh against a bare repo and
+  a local proxy; publishes nothing) — alone, not beside check.sh. Never query the proxy for an
+  unpushed tag: it caches the miss for ~30 minutes.
 - Performance: `scripts/bench.sh [ref]` compares benchmarks with a ref (default: latest tag).
 - Leaf isolation: `cd types && go list -deps ./... | grep rkolesnichenko` must show only itself.
 - Engine purity: `cd resolve && go list -deps .` must NOT include `net` (sockets live only
