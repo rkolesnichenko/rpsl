@@ -9,6 +9,16 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **`scripts/release.sh vX.Y.Z`** releases every module as RELEASING.md
+  describes: it refuses to start unless the tree, changelog and CI are ready,
+  tags and pushes in dependency order, waits for the Go proxy (asking only for
+  pushed tags, and by commit when a miss is cached), verifies every module
+  from an empty module cache, creates the GitHub release, and resumes after a
+  failure. `scripts/release-dryrun.sh` now rehearses by running it against a
+  bare repository and a local proxy, including its refusals and a resume.
+
 ## [0.19.0] - 2026-09-27
 
 ### Added
