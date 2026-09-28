@@ -25,6 +25,13 @@ import (
 // concurrent mutation; a MemSource built from it (Source, SourceOf) is
 // immutable and unaffected by later changes.
 type Corpus struct {
+	// KeepPolicy keeps every aut-num and inet-rtr, as its text, so that a
+	// MemSource built from the corpus is a PolicySource that serves them (an
+	// aut-num costs 2.5 KB as text, 18 KB decoded: RIPE's 39,918 take 95 MB).
+	// Set it before the first Put. Without it only those that claim membership
+	// of a set are kept.
+	KeepPolicy bool
+
 	whole   map[wholeKey]held
 	routes  map[routeKey]struct{}
 	sources map[string]string // upper-case source name -> the one copy kept
@@ -43,9 +50,10 @@ type routeKey struct {
 }
 
 type held struct {
-	obj object.Object
-	key wholeKey
-	seq uint64 // load order: MemSource's ties go to the object loaded first
+	obj  object.Object
+	text string // an aut-num or inet-rtr kept as text (KeepPolicy); obj is nil then
+	key  wholeKey
+	seq  uint64 // load order: MemSource's ties go to the object loaded first
 }
 
 // Put keeps what the engine needs of o, replacing any object with its class,
@@ -102,6 +110,14 @@ func (c *Corpus) Put(o object.Object) bool {
 		c.putWhole(k, o)
 		return true
 	}
+	if c.KeepPolicy && (class == "aut-num" || class == "inet-rtr") {
+		if raw := o.Raw(); raw != nil {
+			c.putText(k, raw.String())
+		} else {
+			c.putWhole(k, o) // built by hand: no text to keep
+		}
+		return true
+	}
 	delete(c.whole, k)
 	if route {
 		c.routes[rk] = struct{}{}
@@ -138,11 +154,21 @@ func (c *Corpus) init() {
 // by which MemSource breaks ties between sources: an update is not a new load.
 func (c *Corpus) putWhole(k wholeKey, o object.Object) {
 	if h, ok := c.whole[k]; ok {
-		c.whole[k] = held{o, k, h.seq}
+		c.whole[k] = held{obj: o, key: k, seq: h.seq}
 		return
 	}
 	c.seq++
-	c.whole[k] = held{o, k, c.seq}
+	c.whole[k] = held{obj: o, key: k, seq: c.seq}
+}
+
+// putText is putWhole for an object kept as its text.
+func (c *Corpus) putText(k wholeKey, text string) {
+	if h, ok := c.whole[k]; ok {
+		c.whole[k] = held{text: text, key: k, seq: h.seq}
+		return
+	}
+	c.seq++
+	c.whole[k] = held{text: text, key: k, seq: c.seq}
 }
 
 // intern returns the one copy of a source name the corpus keeps, upper-case:
@@ -246,7 +272,15 @@ func (c *Corpus) Merge(other *Corpus) {
 	}
 	c.init()
 	for _, h := range other.ordered(nil) {
-		c.Put(h.obj) // re-derived, so a whole route replaces a reduced one here
+		if h.obj != nil {
+			c.Put(h.obj) // re-derived, so a whole route replaces a reduced one here
+			continue
+		}
+		// A policy entry kept as text (KeepPolicy): no object to re-derive from,
+		// so its held value is copied as it is.
+		k := h.key
+		k.source = c.intern(k.source)
+		c.putText(k, h.text)
 	}
 	for rk := range other.routes {
 		rk.source = c.intern(rk.source)
@@ -300,11 +334,19 @@ func (c *Corpus) SourceOf(sources ...string) *MemSource {
 
 func (c *Corpus) build(dflt func(string) bool, precedence []string) *MemSource {
 	hs := c.ordered(nil) // every source: scoped lookups and claims see them all
-	objs := make([]object.Object, len(hs))
-	for i, h := range hs {
-		objs[i] = h.obj
+	objs := make([]object.Object, 0, len(hs))
+	for _, h := range hs {
+		if h.obj != nil {
+			objs = append(objs, h.obj)
+		}
 	}
 	s := newMemSource(objs, precedence, dflt)
+	for _, h := range hs {
+		if h.obj == nil && h.text != "" {
+			s.addPolicy(h.key.class, h.key.pk, h.key.source, nil, h.text)
+		}
+	}
+	s.finish()
 	for rk := range c.routes {
 		if dflt == nil || dflt(rk.source) {
 			s.routes[rk.origin] = append(s.routes[rk.origin], rk.prefix)

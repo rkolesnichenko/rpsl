@@ -63,6 +63,26 @@ func (f *Filter) MembersByRef(ctx context.Context, set object.NamedSet) ([]objec
 	}), nil
 }
 
+// AutNum returns Src's aut-num unchanged: RPKI suppresses route objects only.
+func (f *Filter) AutNum(ctx context.Context, as types.ASN, source string) (object.AutNum, error) {
+	ps, ok := f.Src.(resolve.PolicySource)
+	if !ok {
+		return object.AutNum{}, resolve.ErrNoPolicy
+	}
+	return ps.AutNum(ctx, as, source)
+}
+
+// InetRtr returns Src's inet-rtr unchanged.
+func (f *Filter) InetRtr(ctx context.Context, name, source string) (object.InetRtr, error) {
+	ps, ok := f.Src.(resolve.PolicySource)
+	if !ok {
+		return object.InetRtr{}, resolve.ErrNoPolicy
+	}
+	return ps.InetRtr(ctx, name, source)
+}
+
+var _ resolve.PolicySource = (*Filter)(nil)
+
 // keep returns the elements of xs that ok accepts: xs itself when it accepts
 // them all, as it usually does, and a copy only once one is left out.
 func keep[T any](xs []T, ok func(T) bool) []T {

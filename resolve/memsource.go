@@ -16,10 +16,13 @@ import (
 // read generically from each object's lossless attributes, so MembersByRef can
 // enforce the mbrs-by-ref mntner check without a typed field on every class.
 type MemSource struct {
-	sets   map[types.SetName][]memSet   // every held copy, precedence order (winner first)
-	dflt   func(source string) bool     // the sources unscoped lookups and routes see; nil: all
-	routes map[types.ASN][]netip.Prefix // origin AS -> originated prefixes, default sources only
-	claims map[string][]object.Object   // canonical set name -> member-of claimants, every source
+	sets    map[types.SetName][]memSet   // every held copy, precedence order (winner first)
+	dflt    func(source string) bool     // the sources unscoped lookups and routes see; nil: all
+	routes  map[types.ASN][]netip.Prefix // origin AS -> originated prefixes, default sources only
+	claims  map[string][]object.Object   // canonical set name -> member-of claimants, every source
+	autnums map[types.ASN][]policyEntry  // AS -> aut-num copies, precedence order
+	rtrs    map[string][]policyEntry     // upper-case inet-rtr name -> copies, precedence order
+	rank    func(source string) int      // precedence rank; lower wins, ties keep load order
 }
 
 // memSet is one copy of a set and its upper-case source.
@@ -49,12 +52,14 @@ func NewMemSource(objs []object.Object, sourcePrecedence ...string) *MemSource {
 // sources dflt admits (nil: all). Scoped lookups and claims see every source.
 func newMemSource(objs []object.Object, sourcePrecedence []string, dflt func(string) bool) *MemSource {
 	s := &MemSource{
-		sets:   map[types.SetName][]memSet{},
-		dflt:   dflt,
-		routes: map[types.ASN][]netip.Prefix{},
-		claims: map[string][]object.Object{},
+		sets:    map[types.SetName][]memSet{},
+		dflt:    dflt,
+		routes:  map[types.ASN][]netip.Prefix{},
+		claims:  map[string][]object.Object{},
+		autnums: map[types.ASN][]policyEntry{},
+		rtrs:    map[string][]policyEntry{},
 	}
-	rank := func(source string) int {
+	s.rank = func(source string) int {
 		for i, src := range sourcePrecedence {
 			if equalFoldASCII(source, strings.TrimSpace(src)) {
 				return i
@@ -74,12 +79,29 @@ func newMemSource(objs []object.Object, sourcePrecedence []string, dflt func(str
 			s.routes[origin] = append(s.routes[origin], p)
 		}
 		s.indexClaims(o)
+		switch t := o.(type) {
+		case object.AutNum:
+			s.addPolicy("aut-num", t.AS.String(), t.Source, t, "")
+		case object.InetRtr:
+			s.addPolicy("inet-rtr", t.Name, t.Source, t, "")
+		}
 	}
-	for _, copies := range s.sets {
-		// Stable: ties keep load order, so the object loaded first wins.
-		sort.SliceStable(copies, func(i, j int) bool { return rank(copies[i].source) < rank(copies[j].source) })
-	}
+	s.finish()
 	return s
+}
+
+// finish orders every copy of a set, aut-num and inet-rtr by precedence;
+// ties keep load order, so the object loaded first wins.
+func (s *MemSource) finish() {
+	for _, copies := range s.sets {
+		sort.SliceStable(copies, func(i, j int) bool { return s.rank(copies[i].source) < s.rank(copies[j].source) })
+	}
+	for _, es := range s.autnums {
+		sort.SliceStable(es, func(i, j int) bool { return s.rank(es[i].source) < s.rank(es[j].source) })
+	}
+	for _, es := range s.rtrs {
+		sort.SliceStable(es, func(i, j int) bool { return s.rank(es[i].source) < s.rank(es[j].source) })
+	}
 }
 
 func (s *MemSource) admits(source string) bool {

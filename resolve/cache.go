@@ -64,6 +64,8 @@ const (
 	kindSet cacheKind = iota
 	kindRoutes
 	kindClaims
+	kindAutNum
+	kindInetRtr
 )
 
 type cacheKey struct {
@@ -81,6 +83,7 @@ type cacheEntry struct {
 	set    object.NamedSet
 	routes []netip.Prefix
 	claims []object.Object
+	obj    object.Object // AutNum or InetRtr
 	err    error
 }
 
@@ -140,6 +143,47 @@ func (c *Cache) MembersByRef(ctx context.Context, set object.NamedSet) ([]object
 	}
 	return append([]object.Object(nil), e.claims...), nil
 }
+
+// AutNum returns the aut-num of as, from the cache when it is there and fresh.
+func (c *Cache) AutNum(ctx context.Context, as types.ASN, source string) (object.AutNum, error) {
+	ps, ok := c.Src.(PolicySource)
+	if !ok {
+		return object.AutNum{}, ErrNoPolicy
+	}
+	e, err := c.lookup(ctx, cacheKey{kind: kindAutNum, as: as, name: strings.ToUpper(source)}, func(ctx context.Context, e *cacheEntry) {
+		an, err := ps.AutNum(ctx, as, source)
+		e.obj, e.err = an, err
+	})
+	if err != nil {
+		return object.AutNum{}, err
+	}
+	if e.err != nil {
+		return object.AutNum{}, e.err
+	}
+	return e.obj.(object.AutNum), nil
+}
+
+// InetRtr returns the inet-rtr named name, from the cache when it is there and fresh.
+func (c *Cache) InetRtr(ctx context.Context, name, source string) (object.InetRtr, error) {
+	ps, ok := c.Src.(PolicySource)
+	if !ok {
+		return object.InetRtr{}, ErrNoPolicy
+	}
+	key := cacheKey{kind: kindInetRtr, name: strings.ToUpper(source) + "::" + rtrKey(name)}
+	e, err := c.lookup(ctx, key, func(ctx context.Context, e *cacheEntry) {
+		ir, err := ps.InetRtr(ctx, name, source)
+		e.obj, e.err = ir, err
+	})
+	if err != nil {
+		return object.InetRtr{}, err
+	}
+	if e.err != nil {
+		return object.InetRtr{}, e.err
+	}
+	return e.obj.(object.InetRtr), nil
+}
+
+var _ PolicySource = (*Cache)(nil)
 
 // lookup returns the entry for key, filling it with fill on a miss. Concurrent
 // lookups of one key wait for the first rather than each calling the Source.

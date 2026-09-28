@@ -22,8 +22,11 @@ import (
 // same objects: every set looked up, unscoped and under each of scopes plus an
 // unknown registry ("NOSUCH"), every AS's routes in each family (as sets: the
 // engine deduplicates), and every set's honored claimants, unscoped and per
-// scope.
-func sameAnswers(t *testing.T, label string, objs []object.Object, got, want *resolve.MemSource, scopes []string) {
+// scope. When policy is set, got and want are PolicySources built from a
+// Corpus{KeepPolicy: true} and NewMemSource over the same objects: AutNum is
+// also compared for every ASN it enumerates, unscoped, per scope and under an
+// unknown registry.
+func sameAnswers(t *testing.T, label string, objs []object.Object, got, want *resolve.MemSource, scopes []string, policy bool) {
 	t.Helper()
 	ctx := context.Background()
 	names := map[string]types.SetName{}
@@ -74,6 +77,24 @@ func sameAnswers(t *testing.T, label string, objs []object.Object, got, want *re
 			wr, _ := want.OriginatedRoutes(ctx, as, afi)
 			if !slices.Equal(distinct(gr), distinct(wr)) {
 				t.Fatalf("%s: OriginatedRoutes(%s, %v) = %v; want %v", label, as, afi, gr, wr)
+			}
+		}
+	}
+	if !policy {
+		return
+	}
+	for as := range asns {
+		for _, src := range []string{"", "RIPE", "RADB", "NOSUCH"} {
+			ga, gerr := got.AutNum(ctx, as, src)
+			wa, werr := want.AutNum(ctx, as, src)
+			if (gerr == nil) != (werr == nil) {
+				t.Fatalf("%s: AutNum(%s, %q) err = %v; want %v", label, as, src, gerr, werr)
+			}
+			if gerr != nil {
+				continue
+			}
+			if ga.Raw().String() != wa.Raw().String() || ga.AS != wa.AS || ga.AsName != wa.AsName || ga.Source != wa.Source {
+				t.Fatalf("%s: AutNum(%s, %q) = %+v; want %+v", label, as, src, ga, wa)
 			}
 		}
 	}
@@ -163,6 +184,10 @@ func TestCorpusMatchesMemSource(t *testing.T) {
 		objs := latest(decodeAll(t, texts))
 		label := fmt.Sprintf("seed %d", seed)
 		c := corpusOf(objs)
+		cp := &resolve.Corpus{KeepPolicy: true}
+		for _, o := range objs {
+			cp.Put(o)
+		}
 		// What the model never draws but registries hold: an origin that does
 		// not decode (on a claimant, and not), a prefix with host bits set.
 		rs := fmt.Sprintf("RS-S%d", r.IntN(3))
@@ -173,9 +198,9 @@ func TestCorpusMatchesMemSource(t *testing.T) {
 			"route: 10.0.0.4/30\norigin: ASY\nsource: RIPE\n",
 		}
 		odd := latest(append(append([]object.Object(nil), objs...), decodeAll(t, oddTexts)...))
-		sameAnswers(t, label+" with odd routes", odd, corpusOf(odd).Source("RIPE", "RADB"), resolve.NewMemSource(odd, "RIPE", "RADB"), []string{"RIPE", "RADB"})
-		sameAnswers(t, label, objs, c.Source("RIPE", "RADB"), resolve.NewMemSource(objs, "RIPE", "RADB"), []string{"RIPE", "RADB"})
-		sameAnswers(t, label+" without precedence", objs, c.Source(), resolve.NewMemSource(objs), []string{"RIPE", "RADB"})
+		sameAnswers(t, label+" with odd routes", odd, corpusOf(odd).Source("RIPE", "RADB"), resolve.NewMemSource(odd, "RIPE", "RADB"), []string{"RIPE", "RADB"}, false)
+		sameAnswers(t, label, objs, cp.Source("RIPE", "RADB"), resolve.NewMemSource(objs, "RIPE", "RADB"), []string{"RIPE", "RADB"}, true)
+		sameAnswers(t, label+" without precedence", objs, c.Source(), resolve.NewMemSource(objs), []string{"RIPE", "RADB"}, false)
 		if seed%5 == 0 && len(objs) == len(decodeAll(t, texts)) { // the oracle reads every object
 			checkModel(t, label+" (corpus)", newOracle(m), texts, c.Source("RIPE", "RADB"), true)
 			checked++
@@ -187,7 +212,7 @@ func TestCorpusMatchesMemSource(t *testing.T) {
 				ripe = append(ripe, o)
 			}
 		}
-		sameAnswers(t, label+" SourceOf(RIPE)", ripe, c.SourceOf("ripe"), resolve.NewMemSource(ripe, "ripe"), []string{"RIPE"})
+		sameAnswers(t, label+" SourceOf(RIPE)", ripe, c.SourceOf("ripe"), resolve.NewMemSource(ripe, "ripe"), []string{"RIPE"}, false)
 	}
 }
 
