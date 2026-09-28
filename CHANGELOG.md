@@ -9,6 +9,8 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-09-28
+
 ### Added
 
 - **rpslq binaries**: every release carries rpslq for Linux and macOS (amd64,
@@ -831,7 +833,8 @@ The first release. There is no earlier version to migrate from.
   values do; a few common RP-attributes have typed helpers.
 - **`rdap` is not a `Source`.** RDAP serves registration data, not IRR sets.
 
-[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.19.1...HEAD
+[0.19.1]: https://github.com/rkolesnichenko/rpsl/compare/v0.19.0...v0.19.1
 [0.19.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.16.0...v0.17.0
