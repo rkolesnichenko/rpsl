@@ -635,4 +635,10 @@ func TestClientKeepsPolicy(t *testing.T) {
 	if _, err := c.Source().AutNum(context.Background(), 1, ""); !errors.Is(err, resolve.ErrNotFound) {
 		t.Errorf("after the delta's delete: %v", err)
 	}
+	// Without KeepPolicy the mirror's Source serves no policy objects.
+	plain := newClient(s, "TEST")
+	mustSync(t, plain)
+	if _, err := plain.Source().AutNum(context.Background(), 1, ""); !errors.Is(err, resolve.ErrNoPolicy) {
+		t.Errorf("a mirror without KeepPolicy: AutNum = %v; want ErrNoPolicy", err)
+	}
 }

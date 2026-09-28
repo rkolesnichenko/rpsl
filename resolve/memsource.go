@@ -23,6 +23,7 @@ type MemSource struct {
 	autnums map[types.ASN][]policyEntry  // AS -> aut-num copies, precedence order
 	rtrs    map[string][]policyEntry     // upper-case inet-rtr name -> copies, precedence order
 	rank    func(source string) int      // precedence rank; lower wins, ties keep load order
+	policy  bool                         // serves aut-nums and inet-rtrs (else AutNum/InetRtr are ErrNoPolicy)
 }
 
 // memSet is one copy of a set and its upper-case source.
@@ -43,6 +44,8 @@ type memSet struct {
 // (RIPE::AS-FOO) finds the copy whose source: is that registry, whatever the
 // precedence; one no object's source: names is ErrNotFound.
 //
+// It is a PolicySource that serves every aut-num and inet-rtr in objs.
+//
 // Corpus.Source builds with it too, so that the two cannot answer differently.
 func NewMemSource(objs []object.Object, sourcePrecedence ...string) *MemSource {
 	return newMemSource(objs, sourcePrecedence, nil)
@@ -58,6 +61,7 @@ func newMemSource(objs []object.Object, sourcePrecedence []string, dflt func(str
 		claims:  map[string][]object.Object{},
 		autnums: map[types.ASN][]policyEntry{},
 		rtrs:    map[string][]policyEntry{},
+		policy:  true, // it indexes every aut-num and inet-rtr it is given
 	}
 	s.rank = func(source string) int {
 		for i, src := range sourcePrecedence {

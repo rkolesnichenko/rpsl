@@ -24,7 +24,9 @@ type PolicySource interface {
 }
 
 // ErrNoPolicy is returned by a wrapper (Cache, rpki.Filter) whose inner Source
-// is not a PolicySource.
+// is not a PolicySource, and by a MemSource built from a Corpus (DumpLoader,
+// nrtm4.Client) without KeepPolicy, which holds only the aut-nums and
+// inet-rtrs that claim membership of a set.
 var ErrNoPolicy = errors.New("resolve: source serves no policy objects")
 
 // policyEntry is an aut-num or inet-rtr a MemSource serves: decoded when it
@@ -65,11 +67,15 @@ func (s *MemSource) pick(entries []policyEntry, source string) (policyEntry, err
 	return policyEntry{}, ErrNotFound
 }
 
-// AutNum returns the aut-num of as, from source ("" for the precedence). A
+// AutNum returns the aut-num of as, from source ("" for the precedence), or
+// ErrNoPolicy from a MemSource built from a Corpus without KeepPolicy. A
 // text-kept entry (Corpus.KeepPolicy) is decoded on every call — MemSource
 // holds no decoded cache of its own, so it stays an immutable, freely
 // shareable value; wrap it in a Cache for repeated lookups.
 func (s *MemSource) AutNum(_ context.Context, as types.ASN, source string) (object.AutNum, error) {
+	if !s.policy {
+		return object.AutNum{}, ErrNoPolicy
+	}
 	e, err := s.pick(s.autnums[as], source)
 	if err != nil {
 		return object.AutNum{}, fmt.Errorf("resolve: aut-num %s: %w", as, err)
@@ -82,9 +88,13 @@ func (s *MemSource) AutNum(_ context.Context, as types.ASN, source string) (obje
 }
 
 // InetRtr returns the inet-rtr named name (compared without regard to case),
-// from source ("" for the precedence). Like AutNum, a text-kept entry is
-// decoded on every call; wrap the source in a Cache for repeated lookups.
+// from source ("" for the precedence), or ErrNoPolicy as AutNum. Like
+// AutNum, a text-kept entry is decoded on every call; wrap the source in a
+// Cache for repeated lookups.
 func (s *MemSource) InetRtr(_ context.Context, name, source string) (object.InetRtr, error) {
+	if !s.policy {
+		return object.InetRtr{}, ErrNoPolicy
+	}
 	e, err := s.pick(s.rtrs[rtrKey(name)], source)
 	if err != nil {
 		return object.InetRtr{}, fmt.Errorf("resolve: inet-rtr %s: %w", name, err)

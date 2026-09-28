@@ -26,7 +26,8 @@ import (
 // scope. When policy is set, got and want are PolicySources built from a
 // Corpus{KeepPolicy: true} and NewMemSource over the same objects: AutNum and
 // InetRtr are also compared, for every ASN and inet-rtr name objs holds,
-// unscoped, per scope and under an unknown registry.
+// unscoped, per scope and under an unknown registry; when it is not, got is
+// a plain Corpus build and must answer both with ErrNoPolicy.
 func sameAnswers(t *testing.T, label string, objs []object.Object, got, want *resolve.MemSource, scopes []string, policy bool) {
 	t.Helper()
 	ctx := context.Background()
@@ -85,6 +86,18 @@ func sameAnswers(t *testing.T, label string, objs []object.Object, got, want *re
 		}
 	}
 	if !policy {
+		// got is a Corpus built without KeepPolicy: it serves no policy
+		// objects at all, never the subset (claimants) it happens to hold.
+		for as := range asns {
+			if _, err := got.AutNum(ctx, as, ""); !errors.Is(err, resolve.ErrNoPolicy) {
+				t.Fatalf("%s: plain corpus AutNum(%s) err = %v; want ErrNoPolicy", label, as, err)
+			}
+		}
+		for name := range rtrNames {
+			if _, err := got.InetRtr(ctx, name, ""); !errors.Is(err, resolve.ErrNoPolicy) {
+				t.Fatalf("%s: plain corpus InetRtr(%s) err = %v; want ErrNoPolicy", label, name, err)
+			}
+		}
 		return
 	}
 	for as := range asns {
@@ -444,16 +457,20 @@ func TestCorpusMergePolicyText(t *testing.T) {
 	if plain.Len() != 0 {
 		t.Fatalf("Len = %d after merging a text entry into a plain corpus, want 0", plain.Len())
 	}
-	if _, err := plain.Source().AutNum(ctx, 3, ""); !errors.Is(err, resolve.ErrNotFound) {
-		t.Errorf("a plain corpus served a merged text entry: %v", err)
+	if _, err := plain.Source().AutNum(ctx, 3, ""); !errors.Is(err, resolve.ErrNoPolicy) {
+		t.Errorf("a plain corpus answered a policy lookup: %v; want ErrNoPolicy", err)
 	}
-	// A whole claimant merged into a plain corpus is unaffected by that rule.
+	// A whole claimant merged into a plain corpus is unaffected by that rule:
+	// it is held, as a claimant (a plain corpus serves no policy objects).
 	plain2 := &resolve.Corpus{}
 	claim := &resolve.Corpus{KeepPolicy: true}
 	claim.Put(decodeOne(t, "aut-num: AS4\nas-name: CLAIM4\nmember-of: AS-X\nmnt-by: M\nsource: RIPE\n"))
 	plain2.Merge(claim)
-	if an, err := plain2.Source().AutNum(ctx, 4, ""); err != nil || an.AsName != "CLAIM4" {
-		t.Fatalf("a plain corpus dropped a merged whole claimant: %+v, %v", an, err)
+	if plain2.Len() != 1 {
+		t.Fatalf("a plain corpus dropped a merged whole claimant: Len = %d", plain2.Len())
+	}
+	if _, err := plain2.Source().AutNum(ctx, 4, ""); !errors.Is(err, resolve.ErrNoPolicy) {
+		t.Errorf("a plain corpus answered a policy lookup: %v; want ErrNoPolicy", err)
 	}
 }
 
@@ -605,4 +622,14 @@ func TestDumpLoaderKeepsPolicy(t *testing.T) {
 		t.Fatalf("Read: %v", err)
 	}
 	checkPolicy(t, "DumpLoader", l.Source())
+	// Without KeepPolicy the loader's sources serve no policy objects.
+	plain := &resolve.DumpLoader{Sources: []string{"RIPE", "RADB"}}
+	if err := plain.Read(strings.NewReader(strings.Join(policyTexts, "\n"))); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	for label, src := range map[string]*resolve.MemSource{"Source": plain.Source(), "SourceOf": plain.SourceOf("RIPE")} {
+		if _, err := src.AutNum(context.Background(), 3, ""); !errors.Is(err, resolve.ErrNoPolicy) {
+			t.Errorf("DumpLoader without KeepPolicy, %s: AutNum = %v; want ErrNoPolicy", label, err)
+		}
+	}
 }

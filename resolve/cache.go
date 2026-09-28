@@ -151,7 +151,7 @@ func (c *Cache) AutNum(ctx context.Context, as types.ASN, source string) (object
 	if !ok {
 		return object.AutNum{}, ErrNoPolicy
 	}
-	e, err := c.lookup(ctx, cacheKey{kind: kindAutNum, as: as, src: strings.ToUpper(source)}, func(ctx context.Context, e *cacheEntry) {
+	e, err := c.lookup(ctx, cacheKey{kind: kindAutNum, as: as, src: policySourceKey(source)}, func(ctx context.Context, e *cacheEntry) {
 		an, err := ps.AutNum(ctx, as, source)
 		e.obj, e.err = an, err
 	})
@@ -170,7 +170,7 @@ func (c *Cache) InetRtr(ctx context.Context, name, source string) (object.InetRt
 	if !ok {
 		return object.InetRtr{}, ErrNoPolicy
 	}
-	key := cacheKey{kind: kindInetRtr, name: rtrKey(name), src: strings.ToUpper(source)}
+	key := cacheKey{kind: kindInetRtr, name: rtrKey(name), src: policySourceKey(source)}
 	e, err := c.lookup(ctx, key, func(ctx context.Context, e *cacheEntry) {
 		ir, err := ps.InetRtr(ctx, name, source)
 		e.obj, e.err = ir, err
@@ -185,6 +185,18 @@ func (c *Cache) InetRtr(ctx context.Context, name, source string) (object.InetRt
 }
 
 var _ PolicySource = (*Cache)(nil)
+
+// policySourceKey is the cache key of a policy lookup's source: its canonical
+// form, as the lookups compare it (types.ParseSourceName), so every spelling
+// of one registry shares an entry; a name that is not a source name keeps its
+// raw text, which no canonical name equals (strings.ToUpper would fold
+// "ripeſ" into the valid "RIPES").
+func policySourceKey(source string) string {
+	if canon, err := types.ParseSourceName(source); err == nil {
+		return canon
+	}
+	return source
+}
 
 // lookup returns the entry for key, filling it with fill on a miss. Concurrent
 // lookups of one key wait for the first rather than each calling the Source.

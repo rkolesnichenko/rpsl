@@ -29,7 +29,8 @@ type Corpus struct {
 	// MemSource built from the corpus is a PolicySource that serves them (an
 	// aut-num costs 2.5 KB as text, 18 KB decoded: RIPE's 39,918 take 95 MB).
 	// Set it before the first Put. Without it only those that claim membership
-	// of a set are kept.
+	// of a set are kept, and a MemSource built from the corpus answers AutNum
+	// and InetRtr with ErrNoPolicy rather than serve that partial subset.
 	KeepPolicy bool
 
 	whole   map[wholeKey]held
@@ -357,6 +358,10 @@ func (c *Corpus) build(dflt func(string) bool, precedence []string) *MemSource {
 	// ignores every other class.
 	s.autnums = map[types.ASN][]policyEntry{}
 	s.rtrs = map[string][]policyEntry{}
+	// Without KeepPolicy the corpus holds only the aut-nums and inet-rtrs that
+	// claim membership of a set: a policy lookup over them would be a partial
+	// answer posing as a whole one, so the MemSource serves none (ErrNoPolicy).
+	s.policy = c.KeepPolicy
 	for _, h := range hs {
 		s.addPolicy(h.key.class, h.key.pk, h.key.source, h.obj, h.text)
 	}

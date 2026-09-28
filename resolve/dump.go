@@ -37,8 +37,9 @@ type DumpLoader struct {
 	Sources []string
 
 	// KeepPolicy keeps every aut-num and inet-rtr (as Corpus.KeepPolicy does),
-	// so that Source and SourceOf are PolicySources that serve them. Set it
-	// before the first Read.
+	// so that Source and SourceOf are PolicySources that serve them; without
+	// it their AutNum and InetRtr return ErrNoPolicy. Set it before the first
+	// Read.
 	KeepPolicy bool
 
 	// OnDiagnostics, when set, is called for every object that raised

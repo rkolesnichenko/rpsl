@@ -7,6 +7,7 @@ import (
 
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/rpki"
+	"github.com/rkolesnichenko/rpsl/types"
 )
 
 var policyTexts = []string{
@@ -58,12 +59,22 @@ func TestPolicySource(t *testing.T) {
 	checkPolicy(t, "Cache", resolve.NewCache(c.Source("RIPE", "RADB"), 0))
 	checkPolicy(t, "rpki.Filter", &rpki.Filter{Src: c.Source("RIPE", "RADB")})
 
-	var plain resolve.Corpus // without KeepPolicy: only the claimant aut-num is held
+	// Without KeepPolicy a corpus holds only the aut-nums and inet-rtrs that
+	// claim membership of a set, so its MemSource serves no policy objects at
+	// all — even the claimant AS3 it holds — rather than a partial answer.
+	var plain resolve.Corpus
 	for _, o := range objs {
 		plain.Put(o)
 	}
-	if _, err := plain.Source().AutNum(context.Background(), 1, ""); !errors.Is(err, resolve.ErrNotFound) {
-		t.Errorf("a Corpus without KeepPolicy served AS1: %v", err)
+	for label, src := range map[string]*resolve.MemSource{"Source": plain.Source(), "SourceOf": plain.SourceOf("RIPE")} {
+		for _, as := range []types.ASN{1, 3} {
+			if an, err := src.AutNum(context.Background(), as, ""); !errors.Is(err, resolve.ErrNoPolicy) {
+				t.Errorf("plain Corpus %s: AutNum(%s) = %q, %v; want ErrNoPolicy", label, as, an.AsName, err)
+			}
+		}
+		if _, err := src.InetRtr(context.Background(), "rtr1.example.net", ""); !errors.Is(err, resolve.ErrNoPolicy) {
+			t.Errorf("plain Corpus %s: InetRtr = %v; want ErrNoPolicy", label, err)
+		}
 	}
 }
 
@@ -145,5 +156,30 @@ func TestPolicyWrappersOverPlainSource(t *testing.T) {
 		if _, err := ps.AutNum(context.Background(), 1, ""); !errors.Is(err, resolve.ErrNoPolicy) {
 			t.Errorf("%s: err = %v, want ErrNoPolicy", name, err)
 		}
+	}
+}
+
+// TestCachePolicyKeyIsCanonical: the Cache keys a policy lookup by the source
+// in the canonical form the lookup itself uses, so a name that is not a source
+// name — which strings.ToUpper would fold into a valid one ("ripeſ" into
+// "RIPES") — never shares, or poisons, the entry of a real registry.
+func TestCachePolicyKeyIsCanonical(t *testing.T) {
+	objs := decodeAll(t, []string{
+		"aut-num: AS1\nas-name: ONE\nsource: RIPES\n",
+		"inet-rtr: r.example.net\nlocal-as: AS1\nsource: RIPES\n",
+	})
+	ctx := context.Background()
+	c := resolve.NewCache(resolve.NewMemSource(objs), 0)
+	if an, err := c.AutNum(ctx, 1, "ripes"); err != nil || an.AsName != "ONE" {
+		t.Fatalf(`AutNum(AS1, "ripes") = %q, %v; want ONE`, an.AsName, err)
+	}
+	if an, err := c.AutNum(ctx, 1, "ripeſ"); err == nil {
+		t.Errorf(`AutNum(AS1, "ripeſ") = %q from the cache; want an invalid source name`, an.AsName)
+	}
+	if ir, err := c.InetRtr(ctx, "r.example.net", "RIPES"); err != nil || ir.LocalAS != 1 {
+		t.Fatalf(`InetRtr(r, "RIPES") = %+v, %v; want LocalAS 1`, ir, err)
+	}
+	if ir, err := c.InetRtr(ctx, "r.example.net", "ripeſ"); err == nil {
+		t.Errorf(`InetRtr(r, "ripeſ") = %+v from the cache; want an invalid source name`, ir)
 	}
 }

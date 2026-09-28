@@ -78,7 +78,8 @@ type Client struct {
 	Now func() time.Time
 
 	// KeepPolicy keeps aut-nums and inet-rtrs, so Source() serves them
-	// (resolve.Corpus.KeepPolicy).
+	// (resolve.Corpus.KeepPolicy); without it its AutNum and InetRtr return
+	// resolve.ErrNoPolicy.
 	KeepPolicy bool
 
 	mu       sync.Mutex // serializes Sync
