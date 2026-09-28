@@ -43,7 +43,7 @@ func TestExpandRouters(t *testing.T) {
 		rtrSet("RTRS-INNER", "rtr2.example.net", "2001:db8::1"),
 	)
 	e := &Expander{Src: src}
-	got, err := e.ExpandRouters(context.Background(), mustSet(t, "RTRS-TOP"))
+	got, err := e.ExpandRouters(context.Background(), types.Ref(mustSet(t, "RTRS-TOP")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestExpandRoutersCyclesAndMissing(t *testing.T) {
 		rtrSet("RTRS-B", "b.example.net", "RTRS-A", "RTRS-GONE"),
 	)
 	e := &Expander{Src: src}
-	got, err := e.ExpandRouters(context.Background(), mustSet(t, "RTRS-A"))
+	got, err := e.ExpandRouters(context.Background(), types.Ref(mustSet(t, "RTRS-A")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,11 +81,11 @@ func TestExpandRoutersCyclesAndMissing(t *testing.T) {
 		t.Errorf("Missing = %v, want [RTRS-GONE]", ms)
 	}
 	// A missing top-level set is an error, as everywhere else.
-	if _, err := e.ExpandRouters(context.Background(), mustSet(t, "RTRS-NOPE")); !errors.Is(err, ErrNotFound) {
+	if _, err := e.ExpandRouters(context.Background(), types.Ref(mustSet(t, "RTRS-NOPE"))); !errors.Is(err, ErrNotFound) {
 		t.Errorf("missing top set err = %v, want ErrNotFound", err)
 	}
 	// Only an rtr-set expands to routers.
-	if _, err := e.ExpandRouters(context.Background(), mustSet(t, "AS-FOO")); !errors.Is(err, ErrSetClass) {
+	if _, err := e.ExpandRouters(context.Background(), types.Ref(mustSet(t, "AS-FOO"))); !errors.Is(err, ErrSetClass) {
 		t.Errorf("ExpandRouters of an as-set err = %v, want ErrSetClass", err)
 	}
 }
@@ -98,7 +98,7 @@ func TestExpandRoutersIndirectMembers(t *testing.T) {
 	badMnt := "inet-rtr: wrongmnt.example.net\nlocal-as: AS1\nmember-of: RTRS-REF\nmnt-by: MNT-OTHER\nsource: RIPE\n"
 	badSrc := "inet-rtr: wrongsrc.example.net\nlocal-as: AS1\nmember-of: RTRS-REF\nmnt-by: MNT-OK\nsource: RADB\n"
 	e := &Expander{Src: corpus(t, set, good, badMnt, badSrc)}
-	got, err := e.ExpandRouters(context.Background(), mustSet(t, "RTRS-REF"))
+	got, err := e.ExpandRouters(context.Background(), types.Ref(mustSet(t, "RTRS-REF")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestExpandPeerings(t *testing.T) {
 		prngSet("PRNG-INNER", "AS3", "AS1"),
 	)
 	e := &Expander{Src: src}
-	got, err := e.ExpandPeerings(context.Background(), mustSet(t, "PRNG-TOP"))
+	got, err := e.ExpandPeerings(context.Background(), types.Ref(mustSet(t, "PRNG-TOP")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestExpandPeerings(t *testing.T) {
 	if len(got.List()) != 3 || got.String() == "" {
 		t.Errorf("List %v, String %q", got.List(), got.String())
 	}
-	if _, err := e.ExpandPeerings(context.Background(), mustSet(t, "AS-FOO")); !errors.Is(err, ErrSetClass) {
+	if _, err := e.ExpandPeerings(context.Background(), types.Ref(mustSet(t, "AS-FOO"))); !errors.Is(err, ErrSetClass) {
 		t.Errorf("ExpandPeerings of an as-set err = %v, want ErrSetClass", err)
 	}
 }
@@ -139,7 +139,7 @@ func TestExpandPeeringsCycle(t *testing.T) {
 		prngSet("PRNG-A", "AS1", "PRNG-B"),
 		prngSet("PRNG-B", "AS2", "PRNG-A", "PRNG-GONE"),
 	)}
-	got, err := e.ExpandPeerings(context.Background(), mustSet(t, "PRNG-A"))
+	got, err := e.ExpandPeerings(context.Background(), types.Ref(mustSet(t, "PRNG-A")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +284,7 @@ func TestExpandFilterSet(t *testing.T) {
 	e := &Expander{Src: src}
 	ctx := context.Background()
 
-	got, err := e.ExpandFilterSet(ctx, mustSet(t, "FLTR-TOP"))
+	got, err := e.ExpandFilterSet(ctx, types.Ref(mustSet(t, "FLTR-TOP")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +292,7 @@ func TestExpandFilterSet(t *testing.T) {
 		t.Errorf("ExpandFilterSet(FLTR-TOP) = %v, want %v", rangeList(got), want)
 	}
 
-	got, err = e.ExpandFilterSet(ctx, mustSet(t, "FLTR-A"))
+	got, err = e.ExpandFilterSet(ctx, types.Ref(mustSet(t, "FLTR-A")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +301,7 @@ func TestExpandFilterSet(t *testing.T) {
 	}
 
 	// mp-filter: carries the IPv6 form, and is used when there is no filter:.
-	got, err = e.ExpandFilterSet(ctx, mustSet(t, "FLTR-MP"))
+	got, err = e.ExpandFilterSet(ctx, types.Ref(mustSet(t, "FLTR-MP")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,10 +309,10 @@ func TestExpandFilterSet(t *testing.T) {
 		t.Errorf("ExpandFilterSet(FLTR-MP) = %v, want %v", rangeList(got), want)
 	}
 
-	if _, err := e.ExpandFilterSet(ctx, mustSet(t, "FLTR-GONE")); !errors.Is(err, ErrNotFound) {
+	if _, err := e.ExpandFilterSet(ctx, types.Ref(mustSet(t, "FLTR-GONE"))); !errors.Is(err, ErrNotFound) {
 		t.Errorf("missing filter-set err = %v, want ErrNotFound", err)
 	}
-	if _, err := e.ExpandFilterSet(ctx, mustSet(t, "AS-FOO")); !errors.Is(err, ErrSetClass) {
+	if _, err := e.ExpandFilterSet(ctx, types.Ref(mustSet(t, "AS-FOO"))); !errors.Is(err, ErrSetClass) {
 		t.Errorf("ExpandFilterSet of an as-set err = %v, want ErrSetClass", err)
 	}
 }

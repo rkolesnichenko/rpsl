@@ -296,20 +296,9 @@ func TestRpslqSourcePrefixMatchesBgpq4(t *testing.T) {
 		r := rand.New(rand.NewPCG(seed, 23))
 		m := randomModel(r, true)
 		addr := irrtest.New(m.texts(r)...).WithSources("RIPE", "RADB").IRRd(t)
-		listed := map[string]bool{} // names some set lists as a member
-		for _, set := range m.sets {
-			for _, mm := range set.members {
-				if mm.kind == "set" {
-					listed[mm.set] = true
-				}
-			}
-		}
 		for _, set := range m.sets {
 			if set.class != types.ClassAsSet {
 				continue // bgpq4 then expands route-sets shallowly: "source-route-set"
-			}
-			if listed[set.name] {
-				continue // a way back to the top's name: "source-cycle"
 			}
 			top := set.source + "::" + set.name
 			for _, sources := range []string{"RIPE,RADB", "RADB", "RIPE"} {
@@ -347,12 +336,19 @@ func TestRpslqSourceDivergences(t *testing.T) {
 		args       []string
 		rpslq, bgp string
 	}{
-		// RIPE's AS-TOP lists AS-TOP: a cycle to the engine; to bgpq4, which
-		// has not marked the top as seen, a set to look up in the default
-		// sources — RADB's AS-TOP.
-		{"source-cycle", []string{"-tj", "RIPE::AS-TOP"}, `{"NN": [ 65001 ]}`, `{"NN": [ 65001,65002 ]}`},
-		// With -L (or EXCEPT), bgpq4 looks the top up in the default sources.
-		{"source-with-depth", []string{"-L", "8", "-tj", "RIPE::AS-TOP"}, `{"NN": [ 65001 ]}`, `{"NN": [ 65002 ]}`},
+		// RIPE's AS-TOP lists AS-TOP: the scope never cascades (a node's
+		// nested references come from its own object, resolve/scoped_test.go's
+		// TestScopedFilterSetDoesNotCascade), so the unscoped self-reference is
+		// a node of its own, resolved like any other unscoped set — RADB's
+		// AS-TOP, by -S. bgpq4 reaches the same answer because it has not
+		// marked the top as seen either; no longer a divergence, but pinned so
+		// a regression on either side still fails here.
+		{"source-cycle", []string{"-tj", "RIPE::AS-TOP"}, `{"NN": [ 65001,65002 ]}`, `{"NN": [ 65001,65002 ]}`},
+		// With -L (or EXCEPT), bgpq4 ignores SOURCE:: for the top itself and
+		// looks it up in the default sources alone (RADB's AS-TOP). rpslq still
+		// honors SOURCE:: for the top, and — the scope not cascading — also
+		// reaches AS-TOP's own unscoped self-reference through -S.
+		{"source-with-depth", []string{"-L", "8", "-tj", "RIPE::AS-TOP"}, `{"NN": [ 65001,65002 ]}`, `{"NN": [ 65002 ]}`},
 		// Once SOURCE:: is used, bgpq4 asks for every route-set with "!i"
 		// rather than "!i…,1", and keeps only its prefix members.
 		{"source-route-set", []string{"-F", `%n/%l\n`, "RS-X"}, "192.0.2.0/24 198.51.100.0/24", "192.0.2.0/24 198.51.100.0/24"},

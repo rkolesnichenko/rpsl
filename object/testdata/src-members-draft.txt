@@ -1,0 +1,42 @@
+=== figure-1
+route-set: RS-FIRST
+members: RS-SECOND
+mp-members: RS-LEGACY
+src-members: RIPE::RS-SECOND
+source: EXAMPLE
+
+route-set: RS-SECOND
+members: RS-THIRD
+source: RIPE
+
+route-set: RS-SECOND
+members: AS65002
+source: OTHER
+
+route-set: RS-THIRD
+members: AS65000
+source: OTHER
+
+route-set: RS-LEGACY
+members: AS65001
+source: OTHER
+=== figure-2
+route-set: RS-EXAMPLE
+members: 192.0.2.0/24
+mp-members: 2001:db8::/32
+mp-members: RS-OTHER
+src-members: 192.0.2.0/24, RIPE::RS-OTHER, 2001:db8::/32
+source: EXAMPLE
+=== figure-3
+route-set: RS-EXAMPLE
+members: 192.0.2.0/24
+mp-members: 2001:db8::/36
+mp-members: RS-OTHER, RS-MPMBRONLY
+src-members: 192.0.2.0/24, RIPE::RS-OTHER
+src-members: NTTCOM::RS-SRCMBRONLY, 2001:db8::/32
+source: EXAMPLE
+=== figure-4
+as-set: AS-EXAMPLE
+members: AS-OTHER
+src-members: RIPE::AS-OTHER, ARIN::AS-OTHER
+source: EXAMPLE

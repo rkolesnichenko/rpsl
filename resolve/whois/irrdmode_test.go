@@ -120,7 +120,7 @@ func TestWhoisOverIRRdQueryParser(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(routes, want) {
 		t.Errorf("OriginatedRoutes(AS3333) = %v, %v; want %v", routes, err, want)
 	}
-	asns, err := (&resolve.Expander{Src: src}).ExpandAS(ctx, mustSet(t, "AS-FOO"))
+	asns, err := (&resolve.Expander{Src: src}).ExpandAS(ctx, types.Ref(mustSet(t, "AS-FOO")))
 	if err != nil || !reflect.DeepEqual(asns.List(), []types.ASN{1, 65001}) {
 		t.Errorf("ExpandAS(AS-FOO) = %v, %v; want [AS1 AS65001]", asns.List(), err)
 	}
@@ -138,9 +138,9 @@ func TestWhoisIRRdErrorIsReported(t *testing.T) {
 	})
 	src := &Source{Addr: fw.addr(), Sources: []string{"BOGUS"}, Timeout: 2 * time.Second}
 	ctx := context.Background()
-	_, err1 := src.GetSet(ctx, mustSet(t, "AS-FOO"))
+	_, err1 := src.GetSet(ctx, types.Ref(mustSet(t, "AS-FOO")))
 	_, err2 := src.OriginatedRoutes(ctx, 10, types.AFIAny)
-	_, err3 := src.MembersByRef(ctx, refSet(t, "RS-REF", "TEST", "ANY"))
+	_, err3 := src.MembersByRef(ctx, refSet(t, "RS-REF", "BOGUS", "ANY"))
 	for i, err := range []error{err1, err2, err3} {
 		var se *ServerError
 		if !errors.As(err, &se) || se.Message != "One or more selected sources are unavailable." ||

@@ -56,17 +56,17 @@ func TestBackendsExpandEverySetClass(t *testing.T) {
 		e := &resolve.Expander{Src: src}
 		switch n := name(set); n.Class() {
 		case types.ClassRtrSet:
-			got, err := e.ExpandRouters(ctx, n)
+			got, err := e.ExpandRouters(ctx, types.Ref(n))
 			var rs []string
 			for _, r := range got.List() {
 				rs = append(rs, r.String())
 			}
 			return strings.Join(rs, " "), err
 		case types.ClassPeeringSet:
-			got, err := e.ExpandPeerings(ctx, n)
+			got, err := e.ExpandPeerings(ctx, types.Ref(n))
 			return strings.Join(got.Strings(), " | "), err
 		default:
-			got, err := e.ExpandFilterSet(ctx, n)
+			got, err := e.ExpandFilterSet(ctx, types.Ref(n))
 			return fmt.Sprint(got.List()), err
 		}
 	}
@@ -92,7 +92,7 @@ func TestBackendsExpandEverySetClass(t *testing.T) {
 	}
 	// Missing sets of these classes are not found, over both.
 	for label, src := range map[string]resolve.Source{"irrd": ir, "whois": wh} {
-		if _, err := src.GetSet(ctx, name("FLTR-GONE")); !errors.Is(err, resolve.ErrNotFound) {
+		if _, err := src.GetSet(ctx, types.Ref(name("FLTR-GONE"))); !errors.Is(err, resolve.ErrNotFound) {
 			t.Errorf("%s: GetSet(FLTR-GONE) = %v, want ErrNotFound", label, err)
 		}
 	}

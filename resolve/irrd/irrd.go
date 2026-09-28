@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -52,7 +53,10 @@ import (
 //
 // Sources lists IRR source names in priority order ("!s"): a set defined in
 // several of them is taken from the first, while routes are the union of all.
-// Each name must be letters, digits, '-' or '_'.
+// Each name must be letters, digits, '-' or '_'. A scoped lookup (RIPE::AS-FOO,
+// AutNum or InetRtr with a source) goes to the server's registry of that name
+// whatever Sources says; the server's registries are learned once ("!j-*")
+// and kept until Close.
 type Source struct {
 	Addr        string                                      // "whois.radb.net:43"
 	Sources     []string                                    // optional "!s" priority, e.g. {"RADB", "RIPE"}
@@ -71,11 +75,31 @@ type Source struct {
 	// KeepAlive is implied. Zero sends one query at a time per connection.
 	Pipeline int
 
-	mu     sync.Mutex
-	idle   []*pconn
-	pipes  []*pipe       // pipelined connections (Pipeline > 0)
-	slots  chan struct{} // semaphore of MaxConns, created on first use
-	closed bool
+	// SrcMembers, when set, also fetches each as-set and route-set whole
+	// ("!m") to read its src-members: (draft-ietf-grow-rpsl-registry-scoped-
+	// members) and source:. Members still come from "!i", which folds in
+	// indirect members. Off by default: IRRd does not implement the draft,
+	// and it doubles the queries for sets.
+	SrcMembers bool
+
+	mu      sync.Mutex
+	idle    []*pconn
+	pipes   []*pipe       // pipelined connections (Pipeline > 0)
+	slots   chan struct{} // semaphore of MaxConns, created on first use; shared with sub-sources, never closed
+	closed  bool
+	scoped  map[string]*Source  // registry -> sub-source restricted to it, made on first use (under mu)
+	parent  *Source             // for a sub-source: the Source whose MaxConns budget it shares
+	regs    *registryList       // root: the server's registries ("!j-*"), learned once (under mu)
+	refused map[string]struct{} // root: registries the server refused, at most maxRefused (under mu)
+
+	unknown atomic.Bool // sub-source: the server refused its registry; it has left scoped
+
+	// Reclaiming slots between the Sources of a family (pipeline.go). The
+	// root's reclaimMu serialises retirePipe and guards the root's retiring
+	// and every family member's waiting.
+	reclaimMu sync.Mutex
+	retiring  []*pipe // root: pipes retired and not yet closed, for Close
+	waiting   int     // calls of this Source waiting for a retired pipe's slot
 }
 
 var _ resolve.Source = (*Source)(nil)
@@ -100,6 +124,10 @@ var errQuery = errors.New("irrd: query error")
 // ErrQueryRefused is returned when the server refuses a query outright ('F'),
 // as a server without IRRd 4's "!a" does for ASSetPrefixes.
 var ErrQueryRefused = errQuery
+
+// errUnknownSource marks a server's refusal of a "!s" source list: IRRd
+// answers "F One or more selected sources are unavailable."
+var errUnknownSource = errors.New("irrd: unknown source")
 
 // ErrClosed is returned by queries on a Source after Close.
 var ErrClosed = errors.New("irrd: source closed")
@@ -145,46 +173,259 @@ func (s *Source) maxResponse() int64 {
 func (s *Source) sourceList() (string, error) {
 	names := make([]string, len(s.Sources))
 	for i, n := range s.Sources {
-		if !validSourceName(n) {
+		canon, err := types.ParseSourceName(n)
+		if err != nil {
 			return "", fmt.Errorf("irrd: invalid source name %q", n)
 		}
-		names[i] = strings.ToUpper(n)
+		names[i] = canon
 	}
 	return strings.Join(names, ","), nil
 }
 
-// validSourceName reports whether n is a plain IRR source name: letters,
-// digits, '-' and '_' only, so it cannot carry another command or argument.
-func validSourceName(n string) bool {
-	if n == "" {
+// in returns the sub-source restricted to registry: the same server, limits
+// and pipelining, on connections of its own that select only that registry
+// ("!s" is per connection, and switching it on a shared pipelined connection
+// would race with the queries in flight). It shares s's MaxConns budget, and
+// Close closes it. The registry "" is the lister: connections that select no
+// source, for learning the server's registries.
+func (s *Source) in(registry string) *Source {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sub, ok := s.scoped[registry]; ok {
+		return sub
+	}
+	if s.slots == nil && s.MaxConns >= 0 {
+		s.slots = make(chan struct{}, s.maxConns())
+	}
+	sub := &Source{
+		Addr: s.Addr, Timeout: s.Timeout, MaxResponse: s.MaxResponse,
+		Dial: s.Dial, KeepAlive: s.KeepAlive, MaxConns: s.MaxConns, Pipeline: s.Pipeline,
+		SrcMembers: s.SrcMembers, parent: s, slots: s.slots,
+	}
+	if registry != "" {
+		sub.Sources = []string{registry}
+	}
+	if s.closed {
+		sub.closed = true // queries on it return ErrClosed; nothing to keep
+		return sub
+	}
+	if s.scoped == nil {
+		s.scoped = map[string]*Source{}
+	}
+	s.scoped[registry] = sub
+	return sub
+}
+
+// maxRefused bounds the registries a Source remembers the server refused,
+// when it could not learn the server's registries ("!j-*"): data can name
+// any number of them. Past it a refused registry is still answered, by asking
+// the server again.
+var maxRefused = 1024
+
+// registryList is the answer to "!j-*", learned once per Source: known holds
+// the server's registries, or is nil when the server would not list them
+// (the Source then asks for each registry with "!s" instead). done is closed
+// once it is filled; err is a failure to learn it, which is not kept.
+type registryList struct {
+	done  chan struct{}
+	known map[string]bool
+	err   error
+}
+
+// registries returns the server's registries, learning them on first use,
+// or nil when the server does not list them. Concurrent callers wait for one
+// query; a failure (the transport, the first caller's context) is not kept,
+// so the next caller asks again.
+func (s *Source) registries(ctx context.Context) (map[string]bool, error) {
+	for {
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			return nil, ErrClosed
+		}
+		r, leader := s.regs, s.regs == nil
+		if leader {
+			r = &registryList{done: make(chan struct{})}
+			s.regs = r
+		}
+		s.mu.Unlock()
+		if leader {
+			r.known, r.err = s.learnRegistries(ctx)
+			if r.err != nil {
+				s.mu.Lock()
+				if s.regs == r {
+					s.regs = nil
+				}
+				s.mu.Unlock()
+			}
+			close(r.done)
+			return r.known, r.err
+		}
+		select {
+		case <-r.done:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		if r.err == nil {
+			return r.known, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		// The leader failed with its own error; try again, perhaps as leader.
+	}
+}
+
+// learnRegistries asks the server for its registries with IRRd's "!j-*" —
+// every source it has, each with its serial range, "RIPE:N:0-66028019" —
+// on a connection of the lister, which selects no source, so a default
+// Sources list the server refuses does not stand in the way. A server that
+// refuses "!j" or answers it in another form is not an error: the result is
+// nil, and scoped lookups probe each registry instead. IRRd lists its real
+// sources, not its source aliases, and a scoped reference names a registry.
+func (s *Source) learnRegistries(ctx context.Context) (map[string]bool, error) {
+	lister := s.in("")
+	payload, err := lister.do(ctx, "!j-*")
+	s.mu.Lock()
+	if s.scoped[""] == lister {
+		delete(s.scoped, "")
+	}
+	s.mu.Unlock()
+	lister.Close() // one query: its connection and slot are not kept
+	switch {
+	case err == nil:
+		return parseRegistries(payload), nil
+	case errors.Is(err, errQuery), errors.Is(err, errNotFound):
+		return nil, nil
+	}
+	return nil, err
+}
+
+// parseRegistries reads a "!j-*" answer: one "NAME:<journal>:<serials>[:<last
+// export>]" line per registry, "NAME:X:Database unknown" for one the server
+// lacks. It returns nil for an answer it cannot read whole, or an empty one.
+func parseRegistries(payload []byte) map[string]bool {
+	known := map[string]bool{}
+	for _, line := range strings.Split(string(payload), "\n") {
+		line = strings.TrimRight(line, "\r")
+		if line == "" {
+			continue
+		}
+		name, rest, ok := strings.Cut(line, ":")
+		if !ok {
+			return nil
+		}
+		canon, err := types.ParseSourceName(name)
+		if err != nil {
+			return nil
+		}
+		if strings.HasPrefix(rest, "X:") {
+			continue // "Database unknown"
+		}
+		known[canon] = true
+	}
+	if len(known) == 0 {
+		return nil
+	}
+	return known
+}
+
+// scope returns the sub-source for a lookup in registry, or resolve.ErrNotFound
+// for a registry the server does not have: absent from its "!j-*" list, or
+// refused before. Neither costs a sub-source or a connection.
+func (s *Source) scope(ctx context.Context, registry string) (*Source, error) {
+	known, err := s.registries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if known != nil && !known[registry] {
+		return nil, resolve.ErrNotFound
+	}
+	s.mu.Lock()
+	_, refused := s.refused[registry]
+	s.mu.Unlock()
+	if refused {
+		return nil, resolve.ErrNotFound
+	}
+	return s.in(registry), nil
+}
+
+// refusedBy reports whether err from sub means the server refused sub's
+// registry; the first such refusal drops sub (it holds no connection the
+// server accepted) and remembers the registry, up to maxRefused of them. A
+// query that was running on sub when another dropped it fails with ErrClosed,
+// and is the same refusal.
+func (s *Source) refusedBy(sub *Source, err error) bool {
+	if errors.Is(err, ErrClosed) && sub.unknown.Load() {
+		return true // set before sub was closed
+	}
+	if !errors.Is(err, errUnknownSource) {
 		return false
 	}
-	for i := 0; i < len(n); i++ {
-		c := n[i]
-		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '-' || c == '_') {
-			return false
-		}
+	if sub.unknown.Swap(true) {
+		return true
 	}
+	registry := sub.Sources[0]
+	s.mu.Lock()
+	if s.scoped[registry] == sub {
+		delete(s.scoped, registry)
+	}
+	if !s.closed && len(s.refused) < maxRefused {
+		if s.refused == nil {
+			s.refused = map[string]struct{}{}
+		}
+		s.refused[registry] = struct{}{}
+	}
+	s.mu.Unlock()
+	sub.Close()
 	return true
 }
 
-// GetSet fetches a set. For an as-set or route-set it asks for the one-level
-// membership via "!i" and synthesizes a typed set object. IRRd answers "!i"
-// alike for a missing set and for one with no members, so on that answer
-// GetSet asks for the object itself ("!m"): a set that exists is returned
-// empty, and a missing one maps to resolve.ErrNotFound. A set of any other
-// class is fetched with "!m" and decoded.
-func (s *Source) GetSet(ctx context.Context, name types.SetName) (object.NamedSet, error) {
-	if name.IsZero() {
+// GetSet fetches a set. An unscoped ref is looked up in Sources' priority; a
+// scoped ref (RIPE::AS-FOO) in that registry alone, through a connection that
+// selects only it. A registry the server does not have is resolve.ErrNotFound
+// without a query: the first scoped lookup learns the server's registries
+// with IRRd's "!j-*", kept until Close, so data naming any number of unknown
+// registries costs that one query. A server that refuses "!j" is asked for
+// each registry ("!s") instead, and up to 1,024 refusals are remembered until
+// Close. For an as-set or route-set it asks for
+// the one-level membership via "!i" and synthesizes a typed set object (with
+// SrcMembers set, it also fetches the object, "!m", for its src-members: and
+// source:). IRRd answers "!i" alike for a missing set and for one with no
+// members, so on that answer GetSet asks for the object itself: a set that
+// exists is returned empty, and a missing one maps to resolve.ErrNotFound. A
+// set of any other class is fetched with "!m" and decoded.
+func (s *Source) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error) {
+	if ref.IsZero() {
 		return nil, errors.New("irrd: empty set name")
 	}
+	if !ref.IsScoped() {
+		return s.getSet(ctx, ref.Name(), "")
+	}
+	sub, err := s.scope(ctx, ref.Source())
+	if err != nil {
+		return nil, err
+	}
+	set, err := sub.getSet(ctx, ref.Name(), ref.Source())
+	if s.refusedBy(sub, err) {
+		return nil, resolve.ErrNotFound
+	}
+	return set, err
+}
+
+// getSet is GetSet on this Source's own sources; source, when set, is the
+// registry they are (a scoped lookup), which a synthesized set carries.
+func (s *Source) getSet(ctx context.Context, name types.SetName, source string) (object.NamedSet, error) {
 	if c := name.Class(); c != types.ClassAsSet && c != types.ClassRouteSet {
 		return s.fetchSet(ctx, name)
 	}
+	whole := "!m" + name.Class().String() + "," + name.String()
 	payload, err := s.do(ctx, "!i"+name.String())
+	var obj []byte
+	haveObj := false
 	if errors.Is(err, errNotFound) {
-		_, err = s.do(ctx, "!m"+name.Class().String()+","+name.String())
-		payload = nil
+		obj, err = s.do(ctx, whole)
+		payload, haveObj = nil, true
 	}
 	if err != nil {
 		if errors.Is(err, errNotFound) {
@@ -192,11 +433,34 @@ func (s *Source) GetSet(ctx context.Context, name types.SetName) (object.NamedSe
 		}
 		return nil, err
 	}
-	members := parseMembers(string(payload), name.Class())
-	if name.Class() == types.ClassAsSet {
-		return object.AsSet{Name: name, Members: members}, nil
+	var src []object.SetMember
+	if s.SrcMembers {
+		if !haveObj {
+			if obj, err = s.do(ctx, whole); err != nil && !errors.Is(err, errNotFound) {
+				return nil, err
+			}
+		}
+		if len(obj) > 0 {
+			raw, _ := rpsl.ParseObject(string(obj))
+			if o, _ := object.Decode(raw); o != nil {
+				if full, ok := o.(object.Set); ok && full.SetName() == name {
+					src = full.SetSrcMembers()
+					if source == "" {
+						source = strings.TrimSpace(full.SetSource())
+						if canon, err := types.ParseSourceName(source); err == nil {
+							source = canon // as a scoped lookup's registry is
+						}
+					}
+				}
+			}
+		}
 	}
-	return object.RouteSet{Name: name, Members: members}, nil
+	members := parseMembers(string(payload), name.Class())
+	common := object.Common{Source: source}
+	if name.Class() == types.ClassAsSet {
+		return object.AsSet{Common: common, Name: name, Members: members, SrcMembers: src}, nil
+	}
+	return object.RouteSet{Common: common, Name: name, Members: members, SrcMembers: src}, nil
 }
 
 // fetchSet fetches a set whole ("!m") and decodes it, refusing an answer that
@@ -217,6 +481,83 @@ func (s *Source) fetchSet(ctx context.Context, name types.SetName) (object.Named
 	}
 	return set, nil
 }
+
+// AutNum fetches the aut-num of as ("!maut-num,AS1"), in source alone when it
+// is set; a registry the server does not have is resolve.ErrNotFound, known
+// as GetSet knows it (from "!j-*", without a query of its own).
+func (s *Source) AutNum(ctx context.Context, as types.ASN, source string) (object.AutNum, error) {
+	o, err := s.fetchObject(ctx, "aut-num", as.String(), source)
+	if err != nil {
+		return object.AutNum{}, err
+	}
+	an, ok := o.(object.AutNum)
+	if !ok || an.AS != as {
+		return object.AutNum{}, fmt.Errorf("irrd: !maut-num,%s answered with another object", as)
+	}
+	return an, nil
+}
+
+// InetRtr fetches the inet-rtr named name ("!minet-rtr,<name>"), in source
+// alone when it is set. The name must be a DNS name.
+func (s *Source) InetRtr(ctx context.Context, name, source string) (object.InetRtr, error) {
+	if !dnsName(name) {
+		return object.InetRtr{}, fmt.Errorf("irrd: invalid inet-rtr name %q", name)
+	}
+	o, err := s.fetchObject(ctx, "inet-rtr", name, source)
+	if err != nil {
+		return object.InetRtr{}, err
+	}
+	ir, ok := o.(object.InetRtr)
+	if !ok || !strings.EqualFold(strings.TrimSpace(ir.Name), name) {
+		return object.InetRtr{}, fmt.Errorf("irrd: !minet-rtr,%s answered with another object", name)
+	}
+	return ir, nil
+}
+
+// fetchObject fetches and decodes one object with "!m", through the sub-source
+// of source when it is set.
+func (s *Source) fetchObject(ctx context.Context, class, key, source string) (object.Object, error) {
+	q := s
+	if source != "" {
+		reg, err := types.ParseSourceName(source)
+		if err != nil {
+			return nil, err
+		}
+		if q, err = s.scope(ctx, reg); err != nil {
+			return nil, err
+		}
+	}
+	payload, err := q.do(ctx, "!m"+class+","+key)
+	if q != s && s.refusedBy(q, err) {
+		return nil, resolve.ErrNotFound
+	}
+	if errors.Is(err, errNotFound) {
+		return nil, resolve.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	raw, _ := rpsl.ParseObject(string(payload))
+	o, _ := object.Decode(raw)
+	return o, nil
+}
+
+// dnsName reports whether n is letters, digits, '-' and '.' only, so it
+// cannot carry another command.
+func dnsName(n string) bool {
+	if n == "" || len(n) > 253 {
+		return false
+	}
+	for i := 0; i < len(n); i++ {
+		c := n[i]
+		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '-' || c == '.') {
+			return false
+		}
+	}
+	return true
+}
+
+var _ resolve.PolicySource = (*Source)(nil)
 
 // OriginatedRoutes fetches prefixes originated by as via "!g" (IPv4) and "!6"
 // (IPv6), as constrained by afi. A "no routes" (D) response is an empty result,
@@ -454,6 +795,9 @@ func (s *Source) selectSources(conn net.Conn, br *bufio.Reader) error {
 		if errors.Is(err, errNotFound) {
 			return fmt.Errorf("irrd: server rejected source list %q", list)
 		}
+		if errors.Is(err, errQuery) {
+			return fmt.Errorf("irrd: selecting sources %q: %w: %w", list, errUnknownSource, err)
+		}
 		return fmt.Errorf("irrd: selecting sources %q: %w", list, err)
 	}
 	return nil
@@ -513,14 +857,28 @@ func (s *Source) releaseSlot() {
 	<-slots
 }
 
-// Close releases all pooled connections; later queries return ErrClosed, and
-// queries already running finish without returning their connections to the
-// pool. It may be called more than once, and on a Source that never pooled.
+// Close releases all pooled connections, its scoped lookups' too; later
+// queries return ErrClosed, and queries already running finish without
+// returning their connections to the pool. It may be called more than once,
+// and on a Source that never pooled.
 func (s *Source) Close() error {
 	s.mu.Lock()
-	conns, pipes := s.idle, s.pipes
-	s.idle, s.pipes, s.closed = nil, nil, true
+	conns, pipes, subs := s.idle, s.pipes, s.scoped
+	s.idle, s.pipes, s.scoped, s.closed = nil, nil, nil, true
+	s.regs, s.refused = nil, nil // what was learned of the server's registries
 	s.mu.Unlock()
+	for _, sub := range subs {
+		sub.Close() // closes its connections, never the semaphore it shares with s
+	}
+	if s.parent == nil {
+		s.reclaimMu.Lock()
+		retiring := s.retiring
+		s.retiring = nil
+		s.reclaimMu.Unlock()
+		for _, p := range retiring {
+			p.shut(ErrClosed)
+		}
+	}
 	for _, p := range pipes {
 		p.shut(ErrClosed)
 	}

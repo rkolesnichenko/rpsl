@@ -17,7 +17,7 @@ func TestRangeSetIsCanonical(t *testing.T) {
 	src := corpus(t, routeSet("RS-A",
 		"192.0.2.0/24, 192.0.2.0/24^24, 192.0.2.0/24^24-24, 192.0.2.1/24",
 		"10.0.0.0/8^8-32, 10.0.0.0/8^+, 198.51.100.1/32^-"))
-	got, err := (&Expander{Src: src, MaxPrefixes: 2}).ExpandPrefixRanges(context.Background(), mustSet(t, "RS-A"))
+	got, err := (&Expander{Src: src, MaxPrefixes: 2}).ExpandPrefixRanges(context.Background(), types.Ref(mustSet(t, "RS-A")))
 	if want := []string{"10.0.0.0/8^+", "192.0.2.0/24"}; err != nil || !reflect.DeepEqual(rangeList(got), want) {
 		t.Errorf("ExpandPrefixRanges = %v, %v; want %v", rangeList(got), err, want)
 	}
@@ -34,7 +34,7 @@ func TestRangeSetCanonicalizesSourceRanges(t *testing.T) {
 		{Kind: object.MemberPrefixRange, Range: withHostBits, Raw: "10.0.0.1/8^8-32"},
 		{Kind: object.MemberPrefixRange, Range: plain, Raw: "10.0.0.0/8^+"},
 	}}}
-	got, err := (&Expander{Src: src}).ExpandPrefixRanges(context.Background(), name)
+	got, err := (&Expander{Src: src}).ExpandPrefixRanges(context.Background(), types.Ref(name))
 	if want := []string{"10.0.0.0/8^+"}; err != nil || !reflect.DeepEqual(rangeList(got), want) {
 		t.Errorf("ExpandPrefixRanges = %v, %v; want %v", rangeList(got), err, want)
 	}
@@ -46,8 +46,8 @@ func TestRangeSetCanonicalizesSourceRanges(t *testing.T) {
 // staticSource serves literal typed sets, as a custom backend might build them.
 type staticSource map[string]object.Set
 
-func (s staticSource) GetSet(_ context.Context, n types.SetName) (object.NamedSet, error) {
-	if set, ok := s[n.String()]; ok {
+func (s staticSource) GetSet(_ context.Context, ref types.SetRef) (object.NamedSet, error) {
+	if set, ok := s[ref.Name().String()]; ok {
 		return set, nil
 	}
 	return nil, ErrNotFound

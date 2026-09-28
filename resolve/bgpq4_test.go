@@ -139,7 +139,7 @@ func engineResults(t *testing.T, src resolve.Source, set string) (asns, v4, v6 [
 	t.Helper()
 	ctx, n := context.Background(), mustSet(t, set)
 	if n.Class() == types.ClassAsSet {
-		got, err := (&resolve.Expander{Src: src}).ExpandAS(ctx, n)
+		got, err := (&resolve.Expander{Src: src}).ExpandAS(ctx, types.Ref(n))
 		if err != nil {
 			t.Fatalf("ExpandAS(%s): %v", set, err)
 		}
@@ -149,7 +149,7 @@ func engineResults(t *testing.T, src resolve.Source, set string) (asns, v4, v6 [
 		sort.Strings(asns)
 	}
 	for _, afi := range []types.AFI{types.AFIv4, types.AFIv6} {
-		got, err := (&resolve.Expander{Src: src, AFI: afi}).ExpandPrefixes(ctx, n)
+		got, err := (&resolve.Expander{Src: src, AFI: afi}).ExpandPrefixes(ctx, types.Ref(n))
 		if err != nil {
 			t.Fatalf("ExpandPrefixes(%s, %v): %v", set, afi, err)
 		}
@@ -234,6 +234,15 @@ func TestBgpq4KnownDivergences(t *testing.T) {
 			objects: []string{"as-set: AS-X\nmembers: AS65001, RS-Y\nsource: RIPE\n", "route-set: RS-Y\nmembers: AS65002\nsource: RIPE\n"},
 			set:     "AS-X", ours: "AS65001", bgp4: "AS65001 AS65002",
 		},
+		{
+			id: "src-members",
+			objects: []string{
+				"as-set: AS-SRC\nmembers: AS-DUP\nsrc-members: RADB::AS-DUP\nsource: RIPE\n",
+				"as-set: AS-DUP\nmembers: AS64601\nsource: RIPE\n",
+				"as-set: AS-DUP\nmembers: AS64602\nsource: RADB\n",
+			},
+			set: "AS-SRC", ours: "AS64602", bgp4: "AS64601",
+		},
 	} {
 		texts := append(append([]string{}, common...), c.objects...)
 		addr := irrtest.New(texts...).WithSources("RIPE", "RADB").IRRd(t)
@@ -251,7 +260,7 @@ func TestBgpq4KnownDivergences(t *testing.T) {
 	// set and expands the rest.
 	texts := append(append([]string{}, common...), "as-set: AS-X\nmembers: AS65001, AS-ANY\nsource: RIPE\n")
 	src := resolve.NewMemSource(decodeAll(t, texts), "RIPE")
-	if _, err := (&resolve.Expander{Src: src}).ExpandAS(context.Background(), mustSet(t, "AS-X")); err == nil {
+	if _, err := (&resolve.Expander{Src: src}).ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-X"))); err == nil {
 		t.Error("as-any: the engine expanded AS-ANY")
 	}
 	if b := bgpq4ASNs(t, irrtest.New(texts...).WithSources("RIPE", "RADB").IRRd(t), modelSources, "AS-X"); fmt.Sprint(b) != "[AS65001]" {

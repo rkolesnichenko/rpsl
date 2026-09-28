@@ -78,7 +78,7 @@ func TestWhoisGetSet(t *testing.T) {
 		"-r -T as-set AS-FOO": "as-set: AS-FOO\nmembers: AS1\nmembers: AS-BAR\nsource: TEST\n",
 	})
 	src := &Source{Addr: fw.addr(), Timeout: 2 * time.Second}
-	set, err := src.GetSet(context.Background(), mustSet(t, "AS-FOO"))
+	set, err := src.GetSet(context.Background(), types.Ref(mustSet(t, "AS-FOO")))
 	if err != nil {
 		t.Fatalf("GetSet: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestWhoisGetSet(t *testing.T) {
 func TestWhoisGetSetNotFound(t *testing.T) {
 	fw := newFakeWhois(t, map[string]string{})
 	src := &Source{Addr: fw.addr(), Timeout: 2 * time.Second}
-	if _, err := src.GetSet(context.Background(), mustSet(t, "AS-MISSING")); err != resolve.ErrNotFound {
+	if _, err := src.GetSet(context.Background(), types.Ref(mustSet(t, "AS-MISSING"))); err != resolve.ErrNotFound {
 		t.Errorf("err = %v, want resolve.ErrNotFound", err)
 	}
 }
@@ -117,7 +117,7 @@ func TestWhoisMembersByRefMntnerCheck(t *testing.T) {
 	resp := "route: 198.51.100.0/24\norigin: AS10\nmember-of: RS-REF\nmnt-by: MAINT-GOOD\nsource: TEST\n\n" +
 		"route: 203.0.113.0/24\norigin: AS20\nmember-of: RS-REF\nmnt-by: MAINT-EVIL\nsource: TEST\n"
 	fw := newFakeWhois(t, map[string]string{
-		"-r -T route,route6 -i member-of RS-REF": resp,
+		"-s TEST -r -T route,route6 -i member-of RS-REF": resp,
 	})
 	src := &Source{Addr: fw.addr(), Timeout: 2 * time.Second}
 	got, err := src.MembersByRef(context.Background(), refSet(t, "RS-REF", "TEST", "MAINT-GOOD"))
@@ -136,12 +136,12 @@ func TestWhoisMembersByRefMntnerCheck(t *testing.T) {
 func TestEngineExpandPrefixesOverWhois(t *testing.T) {
 	fw := newFakeWhois(t, map[string]string{
 		"-r -T route-set RS-REF": "route-set: RS-REF\nmbrs-by-ref: MAINT-GOOD\nsource: TEST\n",
-		"-r -T route,route6 -i member-of RS-REF": "route: 198.51.100.0/24\norigin: AS10\nmember-of: RS-REF\nmnt-by: MAINT-GOOD\nsource: TEST\n\n" +
+		"-s TEST -r -T route,route6 -i member-of RS-REF": "route: 198.51.100.0/24\norigin: AS10\nmember-of: RS-REF\nmnt-by: MAINT-GOOD\nsource: TEST\n\n" +
 			"route: 203.0.113.0/24\norigin: AS20\nmember-of: RS-REF\nmnt-by: MAINT-EVIL\nsource: TEST\n",
 	})
 	src := &Source{Addr: fw.addr(), Timeout: 2 * time.Second}
 	e := &resolve.Expander{Src: src}
-	got, err := e.ExpandPrefixes(context.Background(), mustSet(t, "RS-REF"))
+	got, err := e.ExpandPrefixes(context.Background(), types.Ref(mustSet(t, "RS-REF")))
 	if err != nil {
 		t.Fatalf("ExpandPrefixes: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestWhoisGetSetFollowsSourcePriority(t *testing.T) {
 		want    string
 	}{{[]string{"ripe", "RADB"}, "RIPE"}, {[]string{"RADB", "RIPE"}, "RADB"}, {nil, "RADB"}} {
 		src := &Source{Addr: fw.addr(), Sources: c.sources, Timeout: 2 * time.Second}
-		set, err := src.GetSet(context.Background(), mustSet(t, "AS-FOO"))
+		set, err := src.GetSet(context.Background(), types.Ref(mustSet(t, "AS-FOO")))
 		if err != nil || set.SetSource() != c.want {
 			t.Errorf("Sources %v: GetSet = %+v, %v; want the %s set", c.sources, set, err, c.want)
 		}

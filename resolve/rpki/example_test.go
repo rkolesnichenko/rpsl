@@ -45,7 +45,7 @@ source:  TEST
 	}
 	e := &resolve.Expander{Src: &rpki.Filter{Src: l.Source(), VRPs: vrps}}
 	name, _ := types.ParseSetName("AS-CONE")
-	ps, err := e.ExpandPrefixes(context.Background(), name)
+	ps, err := e.ExpandPrefixes(context.Background(), types.Ref(name))
 	if err != nil {
 		panic(err)
 	}

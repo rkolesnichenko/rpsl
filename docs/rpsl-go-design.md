@@ -155,6 +155,28 @@ type SetName struct {            // hierarchical: AS1:AS-CUSTOMERS
 type SetClass uint8 // ClassAsSet ("as-"), ClassRouteSet ("rs-"), ClassRtrSet
                     // ("rtrs-"), ClassFilterSet ("fltr-"), ClassPeeringSet ("prng-")
 
+type SetRef struct {             // a set reference, optionally scoped to one
+    source string                 // registry (draft-ietf-grow-rpsl-registry-
+    name   SetName                // scoped-members: "RIPE::AS-FOO")
+}
+// Ref returns the unscoped reference to name; NewSetRef scopes name to source
+// (validated by ParseSourceName, "" giving the unscoped reference); ParseSetRef
+// parses "AS-FOO" or "RIPE::AS-FOO" (whitespace around "::" is an error). It is
+// opaque and canonical, as SetName is: the source is upper-cased, so every
+// spelling of a reference is == and one map key. Source(), Name(), IsScoped(),
+// IsZero() and String() read it; an unscoped ref leaves the choice of registry
+// to the Source's precedence.
+func Ref(name SetName) SetRef
+func NewSetRef(source string, name SetName) (SetRef, error)
+func ParseSetRef(s string) (SetRef, error)
+
+// ParseSourceName validates and canonicalizes an IRR source name — a source:
+// value, or a reference's registry: ASCII letters, digits, '-' and '_',
+// upper-cased, so it is safe in an IRRd "!s" or a whois "-s" query. Case
+// folding is done in place: no offset found in the upper-cased copy is ever
+// used to slice the original (the v0.19.0 "ɐ" panic).
+func ParseSourceName(s string) (string, error)
+
 type PrefixRange struct {        // 192.0.2.0/24^+  /  ^-  /  ^24  /  ^24-28
     prefix netip.Prefix          // opaque and canonical: host bits cleared
     lo, hi uint8                 // the window of lengths it denotes
@@ -233,21 +255,23 @@ type AutNum struct {
 type AsSet struct {
     Common
     Registry
-    Name      types.SetName
-    Members   []SetMember // ASNs and nested set names (raw, unexpanded)
-    MpMembers []SetMember // mp-members: some IRRs accept it on as-sets; RFC 4012 and RIPE do not
-    MbrsByRef []string    // mntner names enabling indirect membership
-    raw       *ast.Object
+    Name       types.SetName
+    Members    []SetMember // ASNs and nested set names (raw, unexpanded)
+    MpMembers  []SetMember // mp-members: some IRRs accept it on as-sets; RFC 4012 and RIPE do not
+    SrcMembers []SetMember // src-members: (draft-ietf-grow-rpsl-registry-scoped-members), opt-in profile
+    MbrsByRef  []string    // mntner names enabling indirect membership
+    raw        *ast.Object
 }
 
 type RouteSet struct {
     Common
     Registry
-    Name      types.SetName
-    Members   []SetMember // prefix-ranges, set names, or AS numbers (with ^op)
-    MpMembers []SetMember // RFC 4012 mp-members (may carry IPv6)
-    MbrsByRef []string
-    raw       *ast.Object
+    Name       types.SetName
+    Members    []SetMember // prefix-ranges, set names, or AS numbers (with ^op)
+    MpMembers  []SetMember // RFC 4012 mp-members (may carry IPv6)
+    SrcMembers []SetMember // src-members:, as for AsSet
+    MbrsByRef  []string
+    raw        *ast.Object
 }
 
 type Route struct {             // Route6 has the same shape
@@ -261,6 +285,20 @@ type Route struct {             // Route6 has the same shape
     raw      *ast.Object
 }
 ```
+
+`AsSet` and `RouteSet` implement `Set` (`NamedSet` plus `SetMembers() []SetMember`,
+`members:` and `mp-members:` as written, and `SetSrcMembers() []SetMember`,
+`src-members:` as written — named `SetSrcMembers`, not `SrcMembers`, so the
+method does not clash with the field). `object.DirectMembers(s Set)` is the one
+place draft-ietf-grow-rpsl-registry-scoped-members §2.3 steps 1-2 live: every
+`src-members:` member, then each `members:`/`mp-members:` member whose key —
+its set name, ASN, or prefix range, registry and operator stripped — no
+`src-members:` member already has. It reads one object and does no I/O; the
+engine's discovery calls it instead of `SetMembers` for these two classes.
+`WithSrcMembers(p Profile) Profile` returns p with `src-members:` (optional,
+multi-valued) also admitted on as-set and route-set; the RIPE, IRRd and ARIN
+profiles stay as their fixtures pin them until a registry deploys the
+attribute.
 
 Decoding into a typed object is fallible *per attribute*: `DecodeAutNum` returns the `AutNum` it could build plus a `[]Diagnostic` for the lines it couldn't, rather than failing whole-object. This is the resilience principle made concrete.
 
@@ -408,13 +446,19 @@ This is the feature nobody ships in Go. Expanding `as-set AS-FOO` or `route-set 
 package resolve
 
 type Source interface {
-    // GetSet fetches a set object by name. May consult multiple IRRs;
-    // ordering/trust is the Source's concern. Returns ErrNotFound cleanly.
-    GetSet(ctx context.Context, name types.SetName) (object.NamedSet, error)
+    // GetSet fetches the set ref names. An unscoped ref is resolved by the
+    // Source's precedence; a scoped ref (draft-ietf-grow-rpsl-registry-scoped-
+    // members) only in that registry — any registry the Source holds, even
+    // one its default list leaves out — and a registry it does not know is
+    // ErrNotFound. For a scoped ref the returned set's source must be the
+    // ref's.
+    GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error)
 
     // OriginatedRoutes returns the prefixes a given AS originates,
     // from route/route6 objects. Needed because an as-set or route-set
-    // member that is a bare ASN expands to that AS's routes.
+    // member that is a bare ASN expands to that AS's routes. Never scoped:
+    // a member AS's routes come from the default precedence, since a scope
+    // does not cascade (§8.2).
     OriginatedRoutes(ctx context.Context, as types.ASN, afi types.AFI) ([]netip.Prefix, error)
 
     // MembersByRef supports the mbrs-by-ref / member-of indirect mechanism:
@@ -422,11 +466,24 @@ type Source interface {
     // mntners, that claim member-of this set (filtered with ClaimAllowed).
     MembersByRef(ctx context.Context, set object.NamedSet) ([]object.Object, error)
 }
+
+// PolicySource is a Source that also serves the objects routing policy names
+// outside sets: aut-nums, whose import/export/default policies a policy
+// evaluator reads, and inet-rtrs, which router expressions and peerings name.
+// source scopes a lookup as a SetRef does. Shaped for a peval/RtConfig-style
+// evaluator, the next milestone; it has no consumer yet.
+type PolicySource interface {
+    Source
+    AutNum(ctx context.Context, as types.ASN, source string) (object.AutNum, error)
+    InetRtr(ctx context.Context, name, source string) (object.InetRtr, error)
+}
 ```
 
-Backends shipped: an in-memory `Source` (for tests and for loading an IRRd snapshot/`.db` dump), a caching `Source`, a WHOIS `Source`, and a `Source` over an IRRd query port. RDAP serves registration data, not IRR sets, so `resolve/rdap` is a client, not a `Source`. The engine never opens a socket itself.
+Backends shipped: an in-memory `Source` (for tests and for loading an IRRd snapshot/`.db` dump), a caching `Source`, a WHOIS `Source`, and a `Source` over an IRRd query port. RDAP serves registration data, not IRR sets, so `resolve/rdap` is a client, not a `Source`. The engine never opens a socket itself. `MemSource`, `irrd.Source`, `whois.Source`, `Cache` and `rpki.Filter` also implement `PolicySource`; a wrapper (`Cache`, `rpki.Filter`) whose inner `Source` does not returns `ErrNoPolicy`, and so does a `MemSource` built from a `Corpus` without `KeepPolicy` (§8.9), which holds only the aut-nums and inet-rtrs that claim membership of a set — a partial answer it will not pass off as a whole one.
 
-The engine does not take a `Source`'s answer on trust: a set whose name is not the one asked for is an error, and one whose class is not its name's (`route-set: AS-EVIL`) is invalid data, treated as missing — expanded under its name's rules it would let an as-set pull in prefixes, or claims, its class does not allow. Every indirect claim is re-checked with `ClaimAllowed`.
+`irrd.Source` resolves a scoped lookup — `GetSet` of `RIPE::AS-FOO`, or `AutNum`/`InetRtr` with a source — on connections of a sub-source that select only that registry (`!s` is per connection). Data can name any registry, so the Source learns the server's registries once, with IRRd's `!j-*` (every source it has, with its serial range: `RIPE:N:0-66028019`), on a connection that selects none, and keeps the list until `Close`: a registry not on it is `ErrNotFound` without a query, a sub-source or a connection, and there are only ever as many sub-sources as the server has registries. A server that refuses `!j` is asked for each registry instead; a refused registry's sub-source is dropped, and up to 1,024 refused names are remembered.
+
+The engine does not take a `Source`'s answer on trust: a set whose name is not the one asked for is an error, one whose class is not its name's (`route-set: AS-EVIL`) is invalid data, treated as missing, and — for a scoped `GetSet` — one whose source is not the ref's registry fails the same way, since a `Source` that ignores scoping cannot quietly answer by precedence. Expanded under its name's rules a mismatched set would let an as-set pull in prefixes, or claims, its class does not allow. Every indirect claim is re-checked with `ClaimAllowed`.
 
 ### 8.2 Dual membership
 
@@ -436,6 +493,20 @@ A set's members come from **two** places and the engine must union them:
 2. **Indirect** — other objects assert `member-of:` *this* set. Per RFC 2622 this is only honored when the set carries `mbrs-by-ref:` and the asserting object is maintained by one of the listed mntners (or `mbrs-by-ref: ANY`). Skipping the mntner check is a common correctness bug; the engine enforces it via `Source.MembersByRef` and re-checks every claim with `ClaimAllowed`.
 
    The claim must also come from the set's own `source:`. Maintainer names are unique only within one registry, so without this rule anyone who registers a same-named mntner in a permissive IRR (RADB) could add members to a RIPE set once several IRRs are loaded together. IRRd applies the same rule (its mbrs-by-ref index is keyed by source and set), so `RIPE-NONAUTH` does not claim into `RIPE`. An absent source matches only an absent source.
+
+**Registry-scoped members.** draft-ietf-grow-rpsl-registry-scoped-members-00
+lets an as-set or route-set name each nested set together with the registry it
+lives in (`src-members: RIPE::RS-SECOND`), and a resolver must fetch it from
+that registry only. Its §2.3 resolution is two steps: include every
+`src-members:` member (a scoped set matched on registry and primary key, a
+registry unknown to the resolver matching no set), then include each
+`members:`/`mp-members:` member whose primary key is not already in
+`src-members:`. The scope selects only where the referenced object is fetched:
+its own nested references resolve from its own `src-members:`, or by the
+default source selection — the restriction does not cascade. A scoped miss
+never falls back to precedence, and a name listed under two registries in
+`src-members:` (a conflict the draft forbids) falls back to `members:` for
+that name, as if `src-members:` had not named it.
 
 ### 8.3 Traversal, cycles, and limits
 
@@ -449,27 +520,29 @@ type Expander struct {
     Exclude     Exclusion // sets and AS numbers left out (bgpq4's EXCEPT)
 }
 
-// ExpandAS returns the ASNs of every as-set reachable from n, plus indirect aut-num members.
-func (e *Expander) ExpandAS(ctx context.Context, n types.SetName) (ASNSet, error)
+// ExpandAS returns the ASNs of every as-set reachable from ref, plus indirect
+// aut-num members. An unscoped caller writes types.Ref(n); a scoped ref is
+// §2.3.2's query parameter and does not cascade.
+func (e *Expander) ExpandAS(ctx context.Context, ref types.SetRef) (ASNSet, error)
 
 // ExpandPrefixRanges returns the prefix ranges of a route-set or as-set (routes
 // of member ASes), with member range operators composed — bgpq4's le/ge form.
-func (e *Expander) ExpandPrefixRanges(ctx context.Context, n types.SetName) (RangeSet, error)
+func (e *Expander) ExpandPrefixRanges(ctx context.Context, ref types.SetRef) (RangeSet, error)
 
 // ExpandPrefixes is ExpandPrefixRanges, materialized under MaxPrefixes.
-func (e *Expander) ExpandPrefixes(ctx context.Context, n types.SetName) (PrefixSet, error)
+func (e *Expander) ExpandPrefixes(ctx context.Context, ref types.SetRef) (PrefixSet, error)
 ```
 
-(A bare AS is not a SetName; its prefixes come straight from `Source.OriginatedRoutes`.)
+(A bare AS is not a SetName or a SetRef; its prefixes come straight from `Source.OriginatedRoutes`. `ExpandRouters`, `ExpandPeerings` and `ExpandFilterSet` take a `types.SetRef` the same way; `EvalFilter` is unchanged, since a set reference inside a filter has no registry syntax and becomes an unscoped ref.)
 
 Engine mechanics that matter:
 
 - **Two phases.** *Discovery* walks the set graph breadth-first from the named set, fetching every reachable set once — so a set's depth is its shortest nesting distance and the result never depends on member order — together with its indirect members and, for prefix expansions, each member AS's routes (once per AS per call). *Evaluation* builds the result from that graph with no further I/O. Caching *across* calls belongs to the `Source`, because freshness policy varies.
 - **Class rules.** Discovery and evaluation follow only the nestings RFC 2622 §5.1-5.2 allows: an as-set lists as-sets; a route-set lists route-sets and as-sets. A route-set listed inside an as-set is invalid data and is not followed — otherwise any nested as-set could inject prefixes that no route object backs. `ExpandAS` takes an as-set and the prefix expansions an as-set or route-set; any other class returns `ErrSetClass`.
-- **Cycle detection.** as-sets reference each other, sometimes cyclically (`AS-A` includes `AS-B` includes `AS-A`). A revisit is skipped, not an error (matches `bgpq4` behavior). With range operators, evaluation states are (set, operator stack) pairs, and a stack is identified by what it does — for each family, the lower bound it maps each inner lower bound to (or deletion) and the upper bound the outermost operator sets — so `^+^+` and `^+` are one state. The states are finite: every reachable one is walked once, and cycles through operators (`RS-A` lists `RS-B^+`, `RS-B` lists `RS-A`) terminate at the RFC's least fixpoint rather than being refused. `MaxVisited` bounds the states walked.
+- **Cycle detection.** as-sets reference each other, sometimes cyclically (`AS-A` includes `AS-B` includes `AS-A`). The discovery graph is keyed by `types.SetRef`, not by name, so one name reached both scoped and unscoped — or under two registries — is two nodes, fetched and counted against `MaxVisited` separately, even where precedence would pick the same copy anyway. A revisit of the same ref is skipped, not an error (matches `bgpq4` behavior). With range operators, evaluation states are (ref, operator stack) pairs, and a stack is identified by what it does — for each family, the lower bound it maps each inner lower bound to (or deletion) and the upper bound the outermost operator sets — so `^+^+` and `^+` are one state. The states are finite (registries are finite too): every reachable one is walked once, and cycles through operators (`RS-A` lists `RS-B^+`, `RS-B` lists `RS-A`) terminate at the RFC's least fixpoint rather than being refused. `MaxVisited` bounds the states walked.
 - **Range operators on members.** `RS-FOO^+` applies to each range of RS-FOO and `AS1^24` to each route AS1 originates, composing along the path with `types.RangeOperator.Apply` (RFC 2622 §5.2).
-- **Fan-out guards (three of them).** Real as-sets (e.g. some tier-1 customer cones) expand to *hundreds of thousands* of prefixes. `MaxPrefixes` bounds distinct output, `MaxVisited` (default `1<<17` = 131,072) bounds the sets fetched, and `MaxDepth` (default 32) bounds the shortest nesting distance. Each returns a `*SetTooLargeError{Name, Limit, Max, Count}` naming the cap — the caller decides whether to chunk or reject; none truncates a result silently.
-- **Missing and unexpandable sets.** A missing top-level set is an error wrapping `ErrNotFound`; missing nested sets expand to nothing, as in bgpq4, and are listed by the result's `Missing()`. An existing set with no members is empty, not missing, in every backend: IRRd answers `!i` alike for both, so the irrd `Source` checks with `!m`. `AS-ANY`/`RS-ANY` denote the whole IRR and return `AnySetError`.
+- **Fan-out guards (three of them).** Real as-sets (e.g. some tier-1 customer cones) expand to *hundreds of thousands* of prefixes. `MaxPrefixes` bounds distinct output, `MaxVisited` (default `1<<17` = 131,072) bounds the sets fetched, and `MaxDepth` (default 32) bounds the shortest nesting distance. Each returns a `*SetTooLargeError{Name, Limit, Max, Count}` (`Name` a `types.SetRef`) naming the cap — the caller decides whether to chunk or reject; none truncates a result silently.
+- **Missing and unexpandable sets.** A missing top-level set is an error wrapping `ErrNotFound`; missing nested sets expand to nothing, as in bgpq4, and are listed by the result's `Missing()`, which returns `[]types.SetRef`. A registry a scoped reference names that the `Source` does not know is missing the same way — never a fallback to another registry. An existing set with no members is empty, not missing, in every backend: IRRd answers `!i` alike for both, so the irrd `Source` checks with `!m`. `AS-ANY`/`RS-ANY` denote the whole IRR (in any registry) and return `AnySetError`, which keeps a `types.SetName`.
 - **Indirect membership.** Per RFC 2622 §5.1-5.2, an as-set's indirect members are aut-nums and a route-set's are routes; each claim must pass `ClaimAllowed` (member-of + mbrs-by-ref mntner check), which the engine re-applies to whatever the `Source` returns.
 - **AFI constraint.** A v4 expansion must drop `route6`-only members and `mp-members` IPv6 entries, and vice versa. The `afi` dictionary from RFC 4012 makes this explicit; `any` means both. A *SAFI* has no role here: no RPSL set member carries one and there is no multicast route class, so `Expander.AFI` is an `AFI`, and the sub-family matters only where RFC 4012 puts it — in `policy.Import`/`Export`/`Default.AppliesTo`.
 - **The other set classes.** `ExpandRouters` walks an `rtr-set` to routers (`types.RouterID`), `ExpandPeerings` a `peering-set` to the peerings it denotes with nested references replaced, and `ExpandFilterSet`/`EvalFilter` a `filter-set`'s expression to prefix ranges. Discovery is the same breadth-first traversal for all of them; only what counts as a nested name, and which indirect claims are honored, differs by class.
@@ -658,6 +731,22 @@ dumps now load into 460 MB of heap instead of 3.7 GB. The one change in
 meaning: two objects with one identity in one source — which a registry
 cannot have, its primary keys being unique — are one object, the later.
 
+`Corpus.KeepPolicy`, set before the first `Put`, adds aut-nums and inet-rtrs to
+what a `Corpus` keeps, for `PolicySource`. They are kept as text, source
+interned, under the same primary key `Delete` and NRTM replacement already use
+— never decoded in memory. Measured on RIPE's 39,918 aut-nums: 95 MB as text
+against 707 MB decoded (18.2 KB per `object.AutNum`, more than the whole
+`Corpus` without them). A `MemSource` built from a `Corpus` decodes a
+text-kept entry on every `AutNum`/`InetRtr` call — `rpsl.ParseObject` then
+`object.Decode`, its diagnostics dropped since the loader already reported
+them — so the `MemSource` stays immutable and safe to share; wrap it in
+`Cache` for repeated lookups. An aut-num that claims `member-of:` is already
+kept decoded (it answers `MembersByRef` directly) and needs no re-decoding.
+Without `KeepPolicy` a `MemSource` built from the `Corpus` answers `AutNum` and
+`InetRtr` with `ErrNoPolicy`: the claimants it holds are not the registry's
+aut-nums, and serving them alone would be a partial answer. `NewMemSource`
+serves every aut-num and inet-rtr it is given.
+
 ## 9. Top-level façade
 
 ```go
@@ -739,6 +828,7 @@ A spec-pure parser dies on real data. Budget explicitly for:
 - **Abbreviated IPv4 prefixes** (`191.243.44/22`, in RADB route-sets). IRRd reads them with the missing octets zero (Python's IPy does), so `types.ParsePrefix` does too, with a Warning (`object/<class>-abbreviated-prefix`, `policy/abbreviated-prefix`). Only prefixes: a short bare address is ambiguous (`inet_aton` reads `10.1` as `10.0.0.1`, IPy as `10.1.0.0`), so it stays an error.
 - **Route-set members without a length** (`206.197.238.0`, in ARIN's and RADB's route-sets). IRRd stores such a member as the host prefix (`!i` answers `206.197.238.0/32`) and bgpq4 reads it so too, so `object.ParseSetMember` does, with a Warning (`object/<class>-members-no-length`). Only set members: `types.ParsePrefix` still requires a length, and so does a policy prefix list (RFC 2622 §5.4 asks for an address-prefix, and no reference tool reads policies).
 - **AS-path regexps with nested braces** `{m,n}` repetition vs. the `{...}` prefix-list braces — the lexer must disambiguate by context (inside `<...>` it's a regexp).
+- **Same-named sets in several registries.** Ambiguity among same-named sets in `members:` with no scope is undefined, as it always was; `src-members:` (draft-ietf-grow-rpsl-registry-scoped-members) resolves it where written, naming the registry each nested set comes from. Neither bgpq4 nor IRRd implements the draft, so on data carrying `src-members:` the engine's answer differs from theirs by design — pinned as a divergence in `resolve/testdata/bgpq4/divergences.md`, since no registry deploys the attribute yet.
 
 ---
 
@@ -750,7 +840,7 @@ The correctness bar is "matches the tools operators already trust," so testing i
 2. **Policy tests from the RFCs.** Table tests for the grammar's forms, and every routing-policy example in RFC 2622, 2650 and 4012 kept verbatim in `policy/testdata/rfc-examples.txt`: each must parse clean, except the one the parser rejects on purpose (RFC 2622's `NOT` in a peering).
 3. **A model of the engine.** Random IRRs — as-sets and route-sets in two sources, range operators on every kind of member, indirect members honored and rejected, cycles, missing and invalid members, `AS-ANY` — are expanded by the engine and by a brute-force oracle that evaluates RFC 2622 straight from the generator's model, never from parsed text. They must agree on AS numbers, prefixes of each family, `Missing()`, and on `MaxDepth`/`MaxPrefixes` holding exactly at the true depth and size. The same IRRs are served by `resolve/internal/irrtest`, an in-process server that answers the IRRd and whois protocols as IRRd does, so `irrd.Source`, `whois.Source` and `MemSource` are held to the same oracle. With random ROAs added, the oracle also applies RFC 6811 from the model: `rpki.Filter` over `MemSource` (with and without `WriteRPSL`'s pseudo objects), the backends against `irrtest` in IRRd's RPKI-aware mode (its own port of IRRd's validator and pseudo-object rendering), and `Filter` over a server that is not RPKI-aware must all agree with it. The NRTMv4 client is held to `resolve/internal/nrtmtest`, an independent server that follows the draft: random histories of changes, snapshots, expiring deltas and new sessions, with clients joining late, after each of which the mirror must equal the server's database object for object and in every expansion; and each way a server can misbehave — a corrupt or rewritten file, a key it was never given, a gap in the deltas, an older notification file — must leave the mirror where it was.
 4. **Differential expansion vs. `bgpq4`.** A real `bgpq4` binary queries `irrtest` serving the same objects the engine expands (bgpq4 recurses through as-sets itself with `-L`; route-sets it asks the server to resolve with `!i…,1`, which `irrtest` implements as IRRd does). Random IRRs must expand identically, AS numbers and both families' prefixes; the golden expansions of the snapshot in `resolve/testdata` are bgpq4's own output, re-checked whenever bgpq4 is installed (CI installs it). Where the two knowingly differ — bgpq4 drops the single-length `^n` form (a bgpq4 bug), neither IRRd nor bgpq4 applies range operators on set and AS members, bgpq4 follows route-sets listed in as-sets — the difference is pinned in `resolve/testdata/bgpq4/divergences.md` and a test, so a change on either side fails. `rpslq` is held to the binary the same way, over every vendor, kind of list and shape (`-A`, `-R`, `-r`, `-s`, `-W`, `-w`, …) and `EXCEPT`, with its own divergences pinned alongside. An opt-in run (`RPSL_REALDATA`) does the same for the largest and a random sample of real RIPE sets. `rpslq --dump --rpki` is held to bgpq4 against an RPKI-aware `irrtest` holding the same objects and ROAs, with bgpq4 recursing itself and letting the server expand, with the pseudo source selected and not. An older opt-in diff against bgpq4 on a live IRR runs when `RPSL_BGPQ4_SERVER`/`RPSL_BGPQ4_SET` are set.
-5. **Fuzzing** (`go test -fuzz`) of every parser that takes untrusted text — lexer, attribute lists, set names, range operators, prefix ranges, the stream, decoding, editing, the policy parser (import, filter, peering, AS-path regexp), what the network backends read from a server (the IRRd frame reader and member list, the whois response scanner), the NRTMv4 notification file and delta reader (what is accepted holds the §6.3 rules), the VRP export and SLURM readers (what they accept is well-formed and its pseudo objects load back one per VRP; a SLURM file only drops VRPs it may and adds those it asserts), and rpslq's port of bgpq4's aggregation (any prefix set, aggregated and refined, without a panic — bgpq4 aborts on an "unreachable point" — and aggregation losing and adding nothing) — for properties, not only for panics:
+5. **Fuzzing** (`go test -fuzz`) of every parser that takes untrusted text — lexer, attribute lists, set names, set references (`FuzzParseSetRef`: what it accepts, `String()` parses back to an equal ref, and its source matches `[A-Z0-9_-]+`), range operators, prefix ranges, the stream, decoding, editing, src-members items (`FuzzParseSrcMember`: an accepted member's `Ref()` round-trips), the policy parser (import, filter, peering, AS-path regexp), what the network backends read from a server (the IRRd frame reader and member list, the whois response scanner), the NRTMv4 notification file and delta reader (what is accepted holds the §6.3 rules), the VRP export and SLURM readers (what they accept is well-formed and its pseudo objects load back one per VRP; a SLURM file only drops VRPs it may and adds those it asserts), and rpslq's port of bgpq4's aggregation (any prefix set, aggregated and refined, without a panic — bgpq4 aborts on an "unreachable point" — and aggregation losing and adding nothing) — for properties, not only for panics:
    - every token's span and segments point at its bytes, and its kind follows the line rules the stream shares;
    - the stream is lossless, splits objects where the lexer sees them end, yields each object exactly as `ParseObject` reads its text (positions shifted), resumes after a break, and under caps drops only whole, diagnosed objects;
    - `Append`/`Set` produce text that parses back to exactly the edit, other attributes' bytes untouched;

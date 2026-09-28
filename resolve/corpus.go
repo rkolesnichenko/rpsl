@@ -25,6 +25,14 @@ import (
 // concurrent mutation; a MemSource built from it (Source, SourceOf) is
 // immutable and unaffected by later changes.
 type Corpus struct {
+	// KeepPolicy keeps every aut-num and inet-rtr, as its text, so that a
+	// MemSource built from the corpus is a PolicySource that serves them (an
+	// aut-num costs 2.5 KB as text, 18 KB decoded: RIPE's 39,918 take 95 MB).
+	// Set it before the first Put. Without it only those that claim membership
+	// of a set are kept, and a MemSource built from the corpus answers AutNum
+	// and InetRtr with ErrNoPolicy rather than serve that partial subset.
+	KeepPolicy bool
+
 	whole   map[wholeKey]held
 	routes  map[routeKey]struct{}
 	sources map[string]string // upper-case source name -> the one copy kept
@@ -43,9 +51,10 @@ type routeKey struct {
 }
 
 type held struct {
-	obj object.Object
-	key wholeKey
-	seq uint64 // load order: MemSource's ties go to the object loaded first
+	obj  object.Object
+	text string // an aut-num or inet-rtr kept as text (KeepPolicy); obj is nil then
+	key  wholeKey
+	seq  uint64 // load order: MemSource's ties go to the object loaded first
 }
 
 // Put keeps what the engine needs of o, replacing any object with its class,
@@ -102,6 +111,14 @@ func (c *Corpus) Put(o object.Object) bool {
 		c.putWhole(k, o)
 		return true
 	}
+	if c.KeepPolicy && (class == "aut-num" || class == "inet-rtr") {
+		if raw := o.Raw(); raw != nil {
+			c.putText(k, raw.String())
+		} else {
+			c.putWhole(k, o) // built by hand: no text to keep
+		}
+		return true
+	}
 	delete(c.whole, k)
 	if route {
 		c.routes[rk] = struct{}{}
@@ -138,11 +155,21 @@ func (c *Corpus) init() {
 // by which MemSource breaks ties between sources: an update is not a new load.
 func (c *Corpus) putWhole(k wholeKey, o object.Object) {
 	if h, ok := c.whole[k]; ok {
-		c.whole[k] = held{o, k, h.seq}
+		c.whole[k] = held{obj: o, key: k, seq: h.seq}
 		return
 	}
 	c.seq++
-	c.whole[k] = held{o, k, c.seq}
+	c.whole[k] = held{obj: o, key: k, seq: c.seq}
+}
+
+// putText is putWhole for an object kept as its text.
+func (c *Corpus) putText(k wholeKey, text string) {
+	if h, ok := c.whole[k]; ok {
+		c.whole[k] = held{text: text, key: k, seq: h.seq}
+		return
+	}
+	c.seq++
+	c.whole[k] = held{text: text, key: k, seq: c.seq}
 }
 
 // intern returns the one copy of a source name the corpus keeps, upper-case:
@@ -246,7 +273,22 @@ func (c *Corpus) Merge(other *Corpus) {
 	}
 	c.init()
 	for _, h := range other.ordered(nil) {
-		c.Put(h.obj) // re-derived, so a whole route replaces a reduced one here
+		if h.obj != nil {
+			c.Put(h.obj) // re-derived, so a whole route replaces a reduced one here
+			continue
+		}
+		// A policy entry kept as text (KeepPolicy): no object to re-derive from,
+		// so its held value is copied as it is — but only when this corpus
+		// itself keeps policy text; otherwise it is what Put would do with the
+		// non-claiming aut-num or inet-rtr the text represents: dropped, and
+		// any earlier object of its identity removed.
+		k := h.key
+		k.source = c.intern(k.source)
+		if c.KeepPolicy {
+			c.putText(k, h.text)
+		} else {
+			delete(c.whole, k)
+		}
 	}
 	for rk := range other.routes {
 		rk.source = c.intern(rk.source)
@@ -284,9 +326,12 @@ func (c *Corpus) Source(sourcePrecedence ...string) *MemSource {
 	return c.build(nil, sourcePrecedence)
 }
 
-// SourceOf builds a MemSource over the objects of the given sources only
-// (compared without regard to case), in the precedence given; an object
-// without a source: is left out. It is DumpLoader.SourceOf's meaning.
+// SourceOf builds a MemSource whose unscoped lookups and routes see only the
+// objects of the given sources (compared without regard to case), in the
+// precedence given; an object without a source: is left out of them. A scoped
+// lookup (RIPE::AS-FOO) and the claims of a set it finds see every source the
+// corpus holds, as bgpq4's -S list does not limit a SOURCE:: object. It is
+// DumpLoader.SourceOf's meaning.
 func (c *Corpus) SourceOf(sources ...string) *MemSource {
 	want := map[string]bool{}
 	for _, s := range sources {
@@ -295,15 +340,34 @@ func (c *Corpus) SourceOf(sources ...string) *MemSource {
 	return c.build(func(s string) bool { return s != "" && want[s] }, sources)
 }
 
-func (c *Corpus) build(keep func(string) bool, precedence []string) *MemSource {
-	hs := c.ordered(keep)
-	objs := make([]object.Object, len(hs))
-	for i, h := range hs {
-		objs[i] = h.obj
+func (c *Corpus) build(dflt func(string) bool, precedence []string) *MemSource {
+	hs := c.ordered(nil) // every source: scoped lookups and claims see them all
+	objs := make([]object.Object, 0, len(hs))
+	for _, h := range hs {
+		if h.obj != nil {
+			objs = append(objs, h.obj)
+		}
 	}
-	s := NewMemSource(objs, precedence...)
+	s := newMemSource(objs, precedence, dflt)
+	// Policy entries (aut-num, inet-rtr) tie-break by this corpus's own load
+	// order across whole and text-kept copies alike — never whole-before-text,
+	// which newMemSource's own pass over the whole-only objs would give — so
+	// rebuild them from every held entry, in seq order. Every entry that
+	// reaches c.whole under the aut-num or inet-rtr class already has a valid
+	// key (Put's own gating), so no further check is needed here; addPolicy
+	// ignores every other class.
+	s.autnums = map[types.ASN][]policyEntry{}
+	s.rtrs = map[string][]policyEntry{}
+	// Without KeepPolicy the corpus holds only the aut-nums and inet-rtrs that
+	// claim membership of a set: a policy lookup over them would be a partial
+	// answer posing as a whole one, so the MemSource serves none (ErrNoPolicy).
+	s.policy = c.KeepPolicy
+	for _, h := range hs {
+		s.addPolicy(h.key.class, h.key.pk, h.key.source, h.obj, h.text)
+	}
+	s.finish()
 	for rk := range c.routes {
-		if keep == nil || keep(rk.source) {
+		if dflt == nil || dflt(rk.source) {
 			s.routes[rk.origin] = append(s.routes[rk.origin], rk.prefix)
 		}
 	}

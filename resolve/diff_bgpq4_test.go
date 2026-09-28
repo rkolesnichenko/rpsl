@@ -10,6 +10,7 @@ import (
 
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/irrd"
+	"github.com/rkolesnichenko/rpsl/types"
 )
 
 // TestDiffBgpq4Live is the live differential-correctness harness against bgpq4
@@ -47,7 +48,7 @@ func TestDiffBgpq4Live(t *testing.T) {
 	collectASNs(parsed, bgpq4)
 
 	src := &irrd.Source{Addr: server}
-	got, err := (&resolve.Expander{Src: src}).ExpandAS(context.Background(), mustSet(t, setName))
+	got, err := (&resolve.Expander{Src: src}).ExpandAS(context.Background(), types.Ref(mustSet(t, setName)))
 	if err != nil {
 		t.Fatalf("ExpandAS: %v", err)
 	}

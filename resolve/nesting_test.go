@@ -19,7 +19,7 @@ func TestAsSetDoesNotFollowRouteSets(t *testing.T) {
 		routeSet("RS-EVIL", "0.0.0.0/0^+"),
 		"route: 192.0.2.0/24\norigin: AS1\nsource: TEST\n",
 	)
-	got, err := (&Expander{Src: src}).ExpandPrefixRanges(context.Background(), mustSet(t, "AS-CUST"))
+	got, err := (&Expander{Src: src}).ExpandPrefixRanges(context.Background(), types.Ref(mustSet(t, "AS-CUST")))
 	if want := []string{"192.0.2.0/24"}; err != nil || !reflect.DeepEqual(rangeList(got), want) {
 		t.Errorf("ExpandPrefixRanges(AS-CUST) = %v, %v; want %v", rangeList(got), err, want)
 	}
@@ -34,7 +34,7 @@ func TestRouteSetIsNotEnteredFromAnAsSet(t *testing.T) {
 		asSet("AS-CUST", "RS-EVIL"),
 		routeSet("RS-EVIL", "10.0.0.0/8"),
 	)
-	got, err := (&Expander{Src: src}).ExpandPrefixRanges(context.Background(), mustSet(t, "RS-TOP"))
+	got, err := (&Expander{Src: src}).ExpandPrefixRanges(context.Background(), types.Ref(mustSet(t, "RS-TOP")))
 	if want := []string{"10.0.0.0/8"}; err != nil || !reflect.DeepEqual(rangeList(got), want) {
 		t.Errorf("ExpandPrefixRanges(RS-TOP) = %v, %v; want %v", rangeList(got), err, want)
 	}
@@ -47,14 +47,14 @@ func TestExpansionsCheckTheSetClass(t *testing.T) {
 	ctx := context.Background()
 	src := corpus(t, routeSet("RS-X", "AS1, AS-Y"), asSet("AS-Y", "AS2"))
 	e := &Expander{Src: src}
-	if got, err := e.ExpandAS(ctx, mustSet(t, "RS-X")); !errors.Is(err, ErrSetClass) {
+	if got, err := e.ExpandAS(ctx, types.Ref(mustSet(t, "RS-X"))); !errors.Is(err, ErrSetClass) {
 		t.Errorf("ExpandAS(RS-X) = %v, %v; want ErrSetClass", got, err)
 	}
 	for _, name := range []string{"FLTR-X", "RTRS-X", "PRNG-X"} {
-		if got, err := e.ExpandPrefixRanges(ctx, mustSet(t, name)); !errors.Is(err, ErrSetClass) {
+		if got, err := e.ExpandPrefixRanges(ctx, types.Ref(mustSet(t, name))); !errors.Is(err, ErrSetClass) {
 			t.Errorf("ExpandPrefixRanges(%s) = %v, %v; want ErrSetClass", name, got, err)
 		}
-		if got, err := e.ExpandPrefixes(ctx, mustSet(t, name)); !errors.Is(err, ErrSetClass) {
+		if got, err := e.ExpandPrefixes(ctx, types.Ref(mustSet(t, name))); !errors.Is(err, ErrSetClass) {
 			t.Errorf("ExpandPrefixes(%s) = %v, %v; want ErrSetClass", name, got, err)
 		}
 	}
@@ -72,7 +72,7 @@ func TestClassConfusedSetNotFollowed(t *testing.T) {
 		"route: 203.0.113.0/24\norigin: AS2\nmember-of: AS-EVIL\nsource: TEST\n",
 	)
 	e := &Expander{Src: src}
-	got, err := e.ExpandPrefixRanges(context.Background(), mustSet(t, "AS-TOP"))
+	got, err := e.ExpandPrefixRanges(context.Background(), types.Ref(mustSet(t, "AS-TOP")))
 	if want := []string{"10.0.0.0/8"}; err != nil || !reflect.DeepEqual(rangeList(got), want) {
 		t.Errorf("ExpandPrefixRanges(AS-TOP) = %v, %v; want %v", rangeList(got), err, want)
 	}
@@ -80,7 +80,7 @@ func TestClassConfusedSetNotFollowed(t *testing.T) {
 		t.Errorf("Missing = %v, want %v", canonList(got.Missing()), want)
 	}
 	// At the top it is not found at all.
-	if _, err := e.ExpandAS(context.Background(), mustSet(t, "AS-EVIL")); !errors.Is(err, ErrNotFound) {
+	if _, err := e.ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-EVIL"))); !errors.Is(err, ErrNotFound) {
 		t.Errorf("ExpandAS(AS-EVIL) error = %v, want ErrNotFound", err)
 	}
 }
@@ -91,15 +91,15 @@ type renamingSource struct {
 	to types.SetName
 }
 
-func (r renamingSource) GetSet(ctx context.Context, _ types.SetName) (object.NamedSet, error) {
-	return r.MemSource.GetSet(ctx, r.to)
+func (r renamingSource) GetSet(ctx context.Context, _ types.SetRef) (object.NamedSet, error) {
+	return r.MemSource.GetSet(ctx, types.Ref(r.to))
 }
 
 // A Source that answers with a set of another name has confused its
 // responses: that is an error, not a missing set or, worse, a substitute.
 func TestSourceReturningWrongNameIsError(t *testing.T) {
 	src := renamingSource{corpus(t, asSet("AS-OTHER", "AS666")), mustSet(t, "AS-OTHER")}
-	_, err := (&Expander{Src: src}).ExpandAS(context.Background(), mustSet(t, "AS-WANTED"))
+	_, err := (&Expander{Src: src}).ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-WANTED")))
 	if err == nil || errors.Is(err, ErrNotFound) {
 		t.Errorf("ExpandAS(AS-WANTED) error = %v, want a Source fault", err)
 	}

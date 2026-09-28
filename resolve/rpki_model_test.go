@@ -164,7 +164,7 @@ func TestModelRPKIBackends(t *testing.T) {
 		label := fmt.Sprintf("seed %d, ROAs %v", seed, roas)
 		for _, srcs := range [][]string{{"RIPE", "RADB", "RPKI"}, {"RIPE", "RADB"}} {
 			oo := o.withRPKI(roas, len(srcs) == 3)
-			ir := &irrd.Source{Addr: aware.IRRd(t), Sources: srcs, Pipeline: 4, Timeout: 5 * time.Second}
+			ir := &irrd.Source{Addr: aware.IRRd(t), Sources: srcs, Pipeline: 4, SrcMembers: true, Timeout: 5 * time.Second}
 			checkModel(t, fmt.Sprintf("irrd %s %v", label, srcs), oo, texts, ir, false)
 			ir.Close()
 			wh := &whois.Source{Addr: aware.Whois(t), Sources: srcs, Timeout: 5 * time.Second}
@@ -175,7 +175,7 @@ func TestModelRPKIBackends(t *testing.T) {
 		// prefixes Filter cannot tell from the members: the set lists.
 		folded := o.withRPKI(roas, false)
 		folded.folded = true
-		ir := &irrd.Source{Addr: plain.IRRd(t), Sources: []string{"RIPE", "RADB"}, Pipeline: 4, Timeout: 5 * time.Second}
+		ir := &irrd.Source{Addr: plain.IRRd(t), Sources: []string{"RIPE", "RADB"}, Pipeline: 4, SrcMembers: true, Timeout: 5 * time.Second}
 		checkModel(t, "filtered irrd "+label, folded, texts, &rpki.Filter{Src: ir, VRPs: v}, false)
 		ir.Close()
 		wh := &whois.Source{Addr: plain.Whois(t), Sources: []string{"RIPE", "RADB"}, Timeout: 5 * time.Second}

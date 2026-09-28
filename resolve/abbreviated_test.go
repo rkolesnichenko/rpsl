@@ -32,7 +32,7 @@ func TestAbbreviatedPrefixMembers(t *testing.T) {
 	defer ir.Close()
 	name, _ := types.ParseSetName("RS-S")
 	for label, src := range map[string]resolve.Source{"memory": resolve.NewMemSource(objs), "irrd": ir} {
-		got, err := (&resolve.Expander{Src: src}).ExpandPrefixes(context.Background(), name)
+		got, err := (&resolve.Expander{Src: src}).ExpandPrefixes(context.Background(), types.Ref(name))
 		if err != nil || fmt.Sprint(got.List()) != "[143.208.148.0/22 191.243.44.0/22]" {
 			t.Errorf("%s: ExpandPrefixes(RS-S) = %v, %v; want [143.208.148.0/22 191.243.44.0/22]", label, got.List(), err)
 		}

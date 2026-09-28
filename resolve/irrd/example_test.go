@@ -28,7 +28,7 @@ func ExampleSource() {
 		log.Fatal(err)
 	}
 	e := &resolve.Expander{Src: src, AFI: types.AFIv4}
-	prefixes, err := e.ExpandPrefixes(context.Background(), set)
+	prefixes, err := e.ExpandPrefixes(context.Background(), types.Ref(set))
 	if err != nil {
 		log.Fatal(err)
 	}

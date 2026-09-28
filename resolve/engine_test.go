@@ -30,7 +30,7 @@ func TestExpansionIndependentOfMemberOrder(t *testing.T) {
 			asSet("AS-X", "AS-Y"),
 			asSet("AS-Y", "AS100"),
 		)
-		got, err := (&Expander{Src: src, MaxDepth: 3}).ExpandAS(context.Background(), mustSet(t, "AS-TOP"))
+		got, err := (&Expander{Src: src, MaxDepth: 3}).ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-TOP")))
 		if err != nil || !reflect.DeepEqual(asnList(got), []uint32{100}) {
 			t.Errorf("order %v: ExpandAS = %v, %v; want [100]", order, asnList(got), err)
 		}
@@ -40,40 +40,55 @@ func TestExpansionIndependentOfMemberOrder(t *testing.T) {
 // graph is a random as-set graph plus the independent BFS oracle used to check
 // the engine against.
 type graph struct {
-	asns  [][]uint32 // set i's direct ASN members
-	edges [][]int    // set i's nested set members
+	asns   [][]uint32 // set i's direct ASN members
+	edges  [][]int    // set i's nested set members
+	scoped [][]bool   // whether edges[i][k] is also in src-members:, as RIPE::AS-S<j>
 }
 
 func randomGraph(r *rand.Rand, n int) graph {
-	g := graph{asns: make([][]uint32, n), edges: make([][]int, n)}
+	g := graph{asns: make([][]uint32, n), edges: make([][]int, n), scoped: make([][]bool, n)}
 	for i := 0; i < n; i++ {
 		for k := r.IntN(3); k > 0; k-- {
 			g.asns[i] = append(g.asns[i], uint32(1000+r.IntN(4*n)))
 		}
 		for k := r.IntN(4); k > 0; k-- {
 			g.edges[i] = append(g.edges[i], r.IntN(n)) // cycles and self-loops allowed
+			g.scoped[i] = append(g.scoped[i], r.IntN(3) == 0)
 		}
 	}
 	return g
 }
 
 // oracle returns the ASNs reachable from set 0 and the largest shortest-path
-// distance of any reachable set.
+// distance of any reachable reference. RIPE::AS-S<j> and AS-S<j> are one
+// object but two references, each at its own distance (draft §2.3): a set
+// follows AS-S<j> only when its src-members: lacks RIPE::AS-S<j>, which then
+// replaces it.
 func (g graph) oracle() (asns []uint32, maxDist int) {
-	dist := map[int]int{0: 0}
-	queue := []int{0}
+	type ref struct {
+		set    int
+		scoped bool
+	}
+	dist := map[ref]int{{0, false}: 0}
+	queue := []ref{{0, false}}
 	seen := map[uint32]bool{}
 	for len(queue) > 0 {
-		i := queue[0]
+		n := queue[0]
 		queue = queue[1:]
-		maxDist = max(maxDist, dist[i])
+		i := n.set
+		maxDist = max(maxDist, dist[n])
 		for _, a := range g.asns[i] {
 			seen[a] = true
 		}
+		inSrc := map[int]bool{}
+		for k, j := range g.edges[i] {
+			inSrc[j] = inSrc[j] || g.scoped[i][k]
+		}
 		for _, j := range g.edges[i] {
-			if _, ok := dist[j]; !ok {
-				dist[j] = dist[i] + 1
-				queue = append(queue, j)
+			next := ref{j, inSrc[j]}
+			if _, ok := dist[next]; !ok {
+				dist[next] = dist[n] + 1
+				queue = append(queue, next)
 			}
 		}
 	}
@@ -85,20 +100,34 @@ func (g graph) oracle() (asns []uint32, maxDist int) {
 	return asns, maxDist
 }
 
-// corpus builds the graph as RPSL, listing each set's members in the order
-// chosen by perm (so the same graph can be presented in different orders).
+// corpus builds the graph as RPSL, listing each set's members in an order
+// drawn from r (so the same graph can be presented in different orders). Every
+// set is in RIPE, and a scoped edge is in src-members: as well as members:.
 func (g graph) corpus(t *testing.T, r *rand.Rand) *MemSource {
 	var texts []string
 	for i := range g.asns {
-		var members []string
+		var members, src []string
 		for _, a := range g.asns[i] {
 			members = append(members, fmt.Sprintf("AS%d", a))
 		}
-		for _, j := range g.edges[i] {
+		for k, j := range g.edges[i] {
 			members = append(members, fmt.Sprintf("AS-S%d", j))
+			if g.scoped[i][k] {
+				src = append(src, fmt.Sprintf("RIPE::AS-S%d", j))
+			}
 		}
 		r.Shuffle(len(members), func(a, b int) { members[a], members[b] = members[b], members[a] })
-		texts = append(texts, asSet(fmt.Sprintf("AS-S%d", i), members...))
+		r.Shuffle(len(src), func(a, b int) { src[a], src[b] = src[b], src[a] })
+		var b strings.Builder
+		fmt.Fprintf(&b, "as-set: AS-S%d\n", i)
+		for _, m := range members {
+			fmt.Fprintf(&b, "members: %s\n", m)
+		}
+		for _, m := range src {
+			fmt.Fprintf(&b, "src-members: %s\n", m)
+		}
+		b.WriteString("source: RIPE\n")
+		texts = append(texts, b.String())
 	}
 	return corpus(t, texts...)
 }
@@ -115,7 +144,7 @@ func TestPropertyExpansionMatchesOracle(t *testing.T) {
 			}
 			for attempt := 0; attempt < 2; attempt++ { // two member orders
 				e := &Expander{Src: g.corpus(t, r), MaxDepth: maxDepth}
-				got, err := e.ExpandAS(context.Background(), mustSet(t, "AS-S0"))
+				got, err := e.ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-S0")))
 				if maxDist > limit {
 					var tl *SetTooLargeError
 					if !errors.As(err, &tl) || tl.Limit != LimitDepth {
@@ -149,7 +178,7 @@ func TestExpandPrefixRangesMemberOperators(t *testing.T) {
 		"route: 203.0.112.0/22\norigin: AS5\nsource: TEST\n",
 	)
 	e := &Expander{Src: src}
-	ranges, err := e.ExpandPrefixRanges(context.Background(), mustSet(t, "RS-A"))
+	ranges, err := e.ExpandPrefixRanges(context.Background(), types.Ref(mustSet(t, "RS-A")))
 	want := []string{
 		"10.0.0.0/30^-",     // {…^31}^+ = ^31-32 = ^- on a /30
 		"192.0.2.0/24",      // plain member
@@ -159,7 +188,7 @@ func TestExpandPrefixRangesMemberOperators(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(rangeList(ranges), want) {
 		t.Fatalf("ExpandPrefixRanges = %v, %v; want %v", rangeList(ranges), err, want)
 	}
-	pfx, err := e.ExpandPrefixes(context.Background(), mustSet(t, "RS-A"))
+	pfx, err := e.ExpandPrefixes(context.Background(), types.Ref(mustSet(t, "RS-A")))
 	if err != nil || pfx.Len() != 6+1+7+4 {
 		t.Errorf("ExpandPrefixes = %d prefixes, %v; want 18", pfx.Len(), err)
 	}
@@ -167,7 +196,7 @@ func TestExpandPrefixRangesMemberOperators(t *testing.T) {
 
 func TestOperatorsComposeAlongPath(t *testing.T) {
 	src := corpus(t, routeSet("RS-TOP", "RS-MID^-"), routeSet("RS-MID", "192.0.2.0/24^+"))
-	got, err := (&Expander{Src: src}).ExpandPrefixRanges(context.Background(), mustSet(t, "RS-TOP"))
+	got, err := (&Expander{Src: src}).ExpandPrefixRanges(context.Background(), types.Ref(mustSet(t, "RS-TOP")))
 	if err != nil || !reflect.DeepEqual(rangeList(got), []string{"192.0.2.0/24^-"}) {
 		t.Errorf("{{192.0.2.0/24^+}}^- = %v, %v; want [192.0.2.0/24^-]", rangeList(got), err)
 	}
@@ -176,7 +205,7 @@ func TestOperatorsComposeAlongPath(t *testing.T) {
 // A set reached once plainly and once through an operator contributes both.
 func TestSameSetThroughTwoPaths(t *testing.T) {
 	src := corpus(t, routeSet("RS-TOP", "RS-X, RS-Y"), routeSet("RS-Y", "RS-X^+"), routeSet("RS-X", "192.0.2.0/24"))
-	got, err := (&Expander{Src: src}).ExpandPrefixRanges(context.Background(), mustSet(t, "RS-TOP"))
+	got, err := (&Expander{Src: src}).ExpandPrefixRanges(context.Background(), types.Ref(mustSet(t, "RS-TOP")))
 	if err != nil || !reflect.DeepEqual(rangeList(got), []string{"192.0.2.0/24", "192.0.2.0/24^+"}) {
 		t.Errorf("ranges = %v, %v; want [192.0.2.0/24 192.0.2.0/24^+]", rangeList(got), err)
 	}
@@ -186,13 +215,13 @@ func TestCyclesAndOperators(t *testing.T) {
 	ctx := context.Background()
 	// An operator-free cycle is skipped exactly.
 	plain := corpus(t, routeSet("RS-A", "RS-B, 192.0.2.0/24"), routeSet("RS-B", "RS-A, 198.51.100.0/24"))
-	if got, err := (&Expander{Src: plain}).ExpandPrefixRanges(ctx, mustSet(t, "RS-A")); err != nil ||
+	if got, err := (&Expander{Src: plain}).ExpandPrefixRanges(ctx, types.Ref(mustSet(t, "RS-A"))); err != nil ||
 		!reflect.DeepEqual(rangeList(got), []string{"192.0.2.0/24", "198.51.100.0/24"}) {
 		t.Errorf("plain cycle = %v, %v", rangeList(got), err)
 	}
 	// A cycle re-entered under the same operators is also exact.
 	same := corpus(t, routeSet("RS-A", "RS-B^+"), routeSet("RS-B", "RS-C"), routeSet("RS-C", "RS-B, 10.0.0.0/30"))
-	if got, err := (&Expander{Src: same}).ExpandPrefixRanges(ctx, mustSet(t, "RS-A")); err != nil ||
+	if got, err := (&Expander{Src: same}).ExpandPrefixRanges(ctx, types.Ref(mustSet(t, "RS-A"))); err != nil ||
 		!reflect.DeepEqual(rangeList(got), []string{"10.0.0.0/30^+"}) {
 		t.Errorf("same-operator cycle = %v, %v; want [10.0.0.0/30^+]", rangeList(got), err)
 	}
@@ -203,7 +232,7 @@ func TestCyclesAndOperators(t *testing.T) {
 
 func TestExpandPrefixesDuplicatesAreFree(t *testing.T) {
 	src := corpus(t, routeSet("RS-A", "10.0.0.0/25, 10.0.0.0/25, 10.0.0.0/24^25"))
-	got, err := (&Expander{Src: src, MaxPrefixes: 2}).ExpandPrefixes(context.Background(), mustSet(t, "RS-A"))
+	got, err := (&Expander{Src: src, MaxPrefixes: 2}).ExpandPrefixes(context.Background(), types.Ref(mustSet(t, "RS-A")))
 	if err != nil || got.Len() != 2 {
 		t.Errorf("ExpandPrefixes = %v, %v; want the 2 distinct /25s", got.List(), err)
 	}
@@ -213,11 +242,11 @@ func TestExpandPrefixesDuplicatesAreFree(t *testing.T) {
 // prefixes fit a MaxPrefixes of 3 (found by the model oracle).
 func TestExpandPrefixesOverlappingRangesAreFree(t *testing.T) {
 	src := corpus(t, routeSet("RS-A", "10.0.0.0/31, 10.0.0.0/31^+, 10.0.0.0/31^-, 10.0.0.0/32"))
-	got, err := (&Expander{Src: src, MaxPrefixes: 3}).ExpandPrefixes(context.Background(), mustSet(t, "RS-A"))
+	got, err := (&Expander{Src: src, MaxPrefixes: 3}).ExpandPrefixes(context.Background(), types.Ref(mustSet(t, "RS-A")))
 	if err != nil || got.Len() != 3 {
 		t.Errorf("ExpandPrefixes = %v, %v; want the 3 distinct prefixes", got.List(), err)
 	}
-	ranges, err := (&Expander{Src: src, MaxPrefixes: 3}).ExpandPrefixRanges(context.Background(), mustSet(t, "RS-A"))
+	ranges, err := (&Expander{Src: src, MaxPrefixes: 3}).ExpandPrefixRanges(context.Background(), types.Ref(mustSet(t, "RS-A")))
 	if tl := (*SetTooLargeError)(nil); !errors.As(err, &tl) || tl.Limit != LimitPrefixes {
 		t.Errorf("ExpandPrefixRanges = %v, %v; want the 4 ranges over a cap of 3", ranges.List(), err)
 	}
@@ -225,7 +254,7 @@ func TestExpandPrefixesOverlappingRangesAreFree(t *testing.T) {
 
 func TestMaxPrefixesMaxInt(t *testing.T) {
 	src := corpus(t, routeSet("RS-A", "192.0.2.0/24"))
-	got, err := (&Expander{Src: src, MaxPrefixes: math.MaxInt}).ExpandPrefixes(context.Background(), mustSet(t, "RS-A"))
+	got, err := (&Expander{Src: src, MaxPrefixes: math.MaxInt}).ExpandPrefixes(context.Background(), types.Ref(mustSet(t, "RS-A")))
 	if err != nil || got.Len() != 1 {
 		t.Errorf("ExpandPrefixes = %v, %v; want [192.0.2.0/24]", got.List(), err)
 	}
@@ -250,19 +279,19 @@ func TestErrSetTooLargeNamesItsLimit(t *testing.T) {
 		word  string
 	}{
 		{"prefixes", func() error {
-			_, err := (&Expander{Src: src, MaxPrefixes: 10}).ExpandPrefixes(ctx, mustSet(t, "RS-BIG"))
+			_, err := (&Expander{Src: src, MaxPrefixes: 10}).ExpandPrefixes(ctx, types.Ref(mustSet(t, "RS-BIG")))
 			return err
 		}, LimitPrefixes, "MaxPrefixes"},
 		{"ranges", func() error {
-			_, err := (&Expander{Src: src, MaxPrefixes: 5}).ExpandPrefixRanges(ctx, mustSet(t, "RS-SIX"))
+			_, err := (&Expander{Src: src, MaxPrefixes: 5}).ExpandPrefixRanges(ctx, types.Ref(mustSet(t, "RS-SIX")))
 			return err
 		}, LimitPrefixes, "MaxPrefixes"},
 		{"visited", func() error {
-			_, err := (&Expander{Src: src, MaxVisited: 5}).ExpandAS(ctx, mustSet(t, "AS-WIDE"))
+			_, err := (&Expander{Src: src, MaxVisited: 5}).ExpandAS(ctx, types.Ref(mustSet(t, "AS-WIDE")))
 			return err
 		}, LimitVisited, "MaxVisited"},
 		{"depth", func() error {
-			_, err := (&Expander{Src: src, MaxDepth: 1}).ExpandAS(ctx, mustSet(t, "AS-A"))
+			_, err := (&Expander{Src: src, MaxDepth: 1}).ExpandAS(ctx, types.Ref(mustSet(t, "AS-A")))
 			return err
 		}, LimitDepth, "MaxDepth"},
 	}
@@ -274,7 +303,7 @@ func TestErrSetTooLargeNamesItsLimit(t *testing.T) {
 		}
 	}
 	// Within the limit the same chain expands completely.
-	if got, err := (&Expander{Src: src, MaxDepth: 2}).ExpandAS(ctx, mustSet(t, "AS-A")); err != nil ||
+	if got, err := (&Expander{Src: src, MaxDepth: 2}).ExpandAS(ctx, types.Ref(mustSet(t, "AS-A"))); err != nil ||
 		!reflect.DeepEqual(asnList(got), []uint32{1}) {
 		t.Errorf("MaxDepth 2 = %v, %v; want [1]", asnList(got), err)
 	}
@@ -285,9 +314,9 @@ func TestErrSetTooLargeNamesItsLimit(t *testing.T) {
 func TestTopLevelNotFound(t *testing.T) {
 	e := &Expander{Src: corpus(t, asSet("AS-OTHER", "AS1"))}
 	ctx, n := context.Background(), mustSet(t, "AS-MISSING")
-	_, err1 := e.ExpandAS(ctx, n)
-	_, err2 := e.ExpandPrefixes(ctx, n)
-	_, err3 := e.ExpandPrefixRanges(ctx, n)
+	_, err1 := e.ExpandAS(ctx, types.Ref(n))
+	_, err2 := e.ExpandPrefixes(ctx, types.Ref(n))
+	_, err3 := e.ExpandPrefixRanges(ctx, types.Ref(n))
 	for i, err := range []error{err1, err2, err3} {
 		if !errors.Is(err, ErrNotFound) {
 			t.Errorf("call %d: err = %v, want ErrNotFound", i, err)
@@ -299,19 +328,19 @@ func TestMissingNestedSetsAreReported(t *testing.T) {
 	src := corpus(t, asSet("AS-TOP", "AS1, AS-GONE, as-lost"), "route: 192.0.2.0/24\norigin: AS1\nsource: TEST\n")
 	e := &Expander{Src: src}
 	ctx, n := context.Background(), mustSet(t, "AS-TOP")
-	asns, err := e.ExpandAS(ctx, n)
+	asns, err := e.ExpandAS(ctx, types.Ref(n))
 	want := []string{"AS-GONE", "AS-LOST"}
 	if err != nil || !reflect.DeepEqual(asnList(asns), []uint32{1}) || !reflect.DeepEqual(canonList(asns.Missing()), want) {
 		t.Errorf("ExpandAS = %v missing %v, %v", asnList(asns), canonList(asns.Missing()), err)
 	}
-	pfx, _ := e.ExpandPrefixes(ctx, n)
-	ranges, _ := e.ExpandPrefixRanges(ctx, n)
+	pfx, _ := e.ExpandPrefixes(ctx, types.Ref(n))
+	ranges, _ := e.ExpandPrefixRanges(ctx, types.Ref(n))
 	if !reflect.DeepEqual(canonList(pfx.Missing()), want) || !reflect.DeepEqual(canonList(ranges.Missing()), want) {
 		t.Errorf("Missing: prefixes %v, ranges %v; want %v", canonList(pfx.Missing()), canonList(ranges.Missing()), want)
 	}
 }
 
-func canonList(ns []types.SetName) []string {
+func canonList(ns []types.SetRef) []string {
 	var out []string
 	for _, n := range ns {
 		out = append(out, n.String())
@@ -324,9 +353,9 @@ func TestAnySetIsNotExpandable(t *testing.T) {
 	ctx := context.Background()
 	e := &Expander{Src: src}
 	for _, run := range []func() error{
-		func() error { _, err := e.ExpandAS(ctx, mustSet(t, "AS-ANY")); return err },
-		func() error { _, err := e.ExpandAS(ctx, mustSet(t, "AS-X")); return err },
-		func() error { _, err := e.ExpandPrefixes(ctx, mustSet(t, "RS-X")); return err },
+		func() error { _, err := e.ExpandAS(ctx, types.Ref(mustSet(t, "AS-ANY"))); return err },
+		func() error { _, err := e.ExpandAS(ctx, types.Ref(mustSet(t, "AS-X"))); return err },
+		func() error { _, err := e.ExpandPrefixes(ctx, types.Ref(mustSet(t, "RS-X"))); return err },
 	} {
 		var anyErr *AnySetError
 		if err := run(); !errors.As(err, &anyErr) {
@@ -350,11 +379,11 @@ func TestIndirectMembershipClassRules(t *testing.T) {
 	)
 	e := &Expander{Src: src}
 	ctx := context.Background()
-	asPfx, err := e.ExpandPrefixes(ctx, mustSet(t, "AS-FOO"))
+	asPfx, err := e.ExpandPrefixes(ctx, types.Ref(mustSet(t, "AS-FOO")))
 	if err != nil || !reflect.DeepEqual(asPfx.List(), []netip.Prefix{netipMust("198.51.100.0/24")}) {
 		t.Errorf("AS-FOO prefixes = %v, %v; want only AS7's route", asPfx.List(), err)
 	}
-	rsPfx, err := e.ExpandPrefixes(ctx, mustSet(t, "RS-FOO"))
+	rsPfx, err := e.ExpandPrefixes(ctx, types.Ref(mustSet(t, "RS-FOO")))
 	if err != nil || !reflect.DeepEqual(rsPfx.List(), []netip.Prefix{netipMust("192.0.2.0/24")}) {
 		t.Errorf("RS-FOO prefixes = %v, %v; want only the claiming route", rsPfx.List(), err)
 	}
@@ -380,7 +409,7 @@ func TestOriginatedRoutesFetchedOncePerAS(t *testing.T) {
 		"route: 192.0.2.0/24\norigin: AS1\nsource: TEST\n",
 		"route: 198.51.100.0/24\norigin: AS2\nsource: TEST\n",
 	), calls: map[types.ASN]int{}}
-	got, err := (&Expander{Src: src}).ExpandPrefixes(context.Background(), mustSet(t, "AS-TOP"))
+	got, err := (&Expander{Src: src}).ExpandPrefixes(context.Background(), types.Ref(mustSet(t, "AS-TOP")))
 	if err != nil || got.Len() != 2 {
 		t.Fatalf("ExpandPrefixes = %v, %v", got.List(), err)
 	}
@@ -399,7 +428,7 @@ func TestConcurrentExpansions(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			got, err := e.ExpandPrefixRanges(context.Background(), mustSet(t, "RS-A"))
+			got, err := e.ExpandPrefixRanges(context.Background(), types.Ref(mustSet(t, "RS-A")))
 			if err != nil || got.Len() != 2 {
 				t.Errorf("concurrent expansion = %v, %v", rangeList(got), err)
 			}

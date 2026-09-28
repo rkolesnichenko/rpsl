@@ -154,7 +154,7 @@ func TestPropertyOperatorFixpoint(t *testing.T) {
 		want := g.oracle()
 		src := g.corpus(t)
 		for i := range g.sets {
-			got, err := (&Expander{Src: src}).ExpandPrefixes(context.Background(), mustSet(t, fmt.Sprintf("RS-S%d", i)))
+			got, err := (&Expander{Src: src}).ExpandPrefixes(context.Background(), types.Ref(mustSet(t, fmt.Sprintf("RS-S%d", i))))
 			if err != nil {
 				t.Fatalf("seed %d RS-S%d: %v\n%+v", seed, i, err, g)
 			}
@@ -183,12 +183,12 @@ func TestOperatorCyclesReachAFixpoint(t *testing.T) {
 	// RS-A = 192.0.2.0/24 ∪ RS-B^+, RS-B = 198.51.100.0/24 ∪ RS-A: the operator
 	// applies to everything RS-B denotes, including RS-A itself.
 	cyc := corpus(t, routeSet("RS-A", "RS-B^+, 192.0.2.0/24"), routeSet("RS-B", "RS-A, 198.51.100.0/24"))
-	got, err := (&Expander{Src: cyc}).ExpandPrefixRanges(ctx, mustSet(t, "RS-A"))
+	got, err := (&Expander{Src: cyc}).ExpandPrefixRanges(ctx, types.Ref(mustSet(t, "RS-A")))
 	if want := []string{"192.0.2.0/24", "192.0.2.0/24^+", "198.51.100.0/24^+"}; err != nil || !reflect.DeepEqual(rangeList(got), want) {
 		t.Errorf("operator cycle = %v, %v; want %v", rangeList(got), err, want)
 	}
 	self := corpus(t, routeSet("RS-O", "RS-O^+, 192.0.2.0/24"))
-	got, err = (&Expander{Src: self}).ExpandPrefixRanges(ctx, mustSet(t, "RS-O"))
+	got, err = (&Expander{Src: self}).ExpandPrefixRanges(ctx, types.Ref(mustSet(t, "RS-O")))
 	if want := []string{"192.0.2.0/24", "192.0.2.0/24^+"}; err != nil || !reflect.DeepEqual(rangeList(got), want) {
 		t.Errorf("self-reference = %v, %v; want %v", rangeList(got), err, want)
 	}
@@ -205,7 +205,7 @@ func TestOperatorStacksDoNotMultiply(t *testing.T) {
 	}
 	texts = append(texts, routeSet(fmt.Sprintf("RS-L%d", k), "192.0.2.0/24"))
 	start := time.Now()
-	got, err := (&Expander{Src: corpus(t, texts...)}).ExpandPrefixRanges(context.Background(), mustSet(t, "RS-L0"))
+	got, err := (&Expander{Src: corpus(t, texts...)}).ExpandPrefixRanges(context.Background(), types.Ref(mustSet(t, "RS-L0")))
 	want := []string{"192.0.2.0/24^+", "192.0.2.0/24^-"}
 	for k := 26; k < 32; k++ {
 		want = append(want, fmt.Sprintf("192.0.2.0/24^%d-32", k))
@@ -226,7 +226,7 @@ func TestExpandPrefixesHonorsContextWithinARange(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	_, err := (&Expander{Src: src, MaxPrefixes: math.MaxInt}).ExpandPrefixes(ctx, mustSet(t, "RS-BIG"))
+	_, err := (&Expander{Src: src, MaxPrefixes: math.MaxInt}).ExpandPrefixes(ctx, types.Ref(mustSet(t, "RS-BIG")))
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("err = %v, want context.DeadlineExceeded", err)
 	}

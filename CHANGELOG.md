@@ -9,6 +9,37 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+Targets v0.20.0.
+
+### Added
+
+- `src-members:` (draft-ietf-grow-rpsl-registry-scoped-members-00): decoded on as-set and route-set,
+  validated (three diagnostics per class), resolved by every backend; `types.SetRef`, `object.DirectMembers`,
+  `object.WithSrcMembers`, `irrd.Source.SrcMembers`, rpslq `--src-members`.
+- `resolve.PolicySource` (aut-nums and inet-rtrs) over MemSource, Corpus (`KeepPolicy`), DumpLoader,
+  nrtm4.Client, irrd, whois, Cache and rpki.Filter.
+
+### Changed
+
+- rpslq `SOURCE::SET` where the set lists its own name: the inner mention now resolves in the `-S` sources, as bgpq4 does.
+- rpslq `-L` with `SOURCE::` (source-with-depth): the top's own unscoped mentions resolve in the `-S` sources.
+- `whois.Source.MembersByRef` queries `-s <the set's source>` (the claims `ClaimAllowed` keeps), not `Sources`.
+- irrd's error for a refused default source list now wraps an "unknown source" error; its message text changes.
+- `irrd.Source` learns the server's registries once via `!j-*` for scoped lookups (kept until `Close`).
+- A `MemSource` from a `Corpus`, `DumpLoader` or `nrtm4.Client` without `KeepPolicy` answers `AutNum`/`InetRtr` with `ErrNoPolicy`.
+- `object.SetMember` gains a `Source` field: unkeyed struct literals break.
+
+### Breaking
+
+- `Source.GetSet` takes a `types.SetRef`: implementers change the parameter and use `ref.Name()`;
+  honour `ref.Source()` or return an error for a scoped ref.
+- `Expander.Expand*` take a `types.SetRef`: wrap names with `types.Ref(name)`.
+- `Missing()` returns `[]types.SetRef`: `String()` prints unscoped refs as before.
+- `SetTooLargeError.Name` is a `types.SetRef`.
+- `object.Set` gains `SetSrcMembers()`: add it (return nil) to a custom set type.
+- `Corpus.SourceOf`/`DumpLoader.SourceOf`: scoped lookups and claims reach every held source.
+- `ErrNotFound`'s message is "resolve: not found" (same value).
+
 ## [0.19.1] - 2026-09-28
 
 ### Added

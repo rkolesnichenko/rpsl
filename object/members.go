@@ -38,14 +38,28 @@ func (k MemberKind) String() string {
 // union: exactly one of AS/Set/Range is meaningful per Kind, and Op may qualify
 // an AS or Set member of a route-set ("AS1^24", "RS-FOO^+"; RFC 2622 §5.2). Raw
 // preserves the item's text regardless, so a member of unexpected shape is
-// still kept.
+// still kept. Source is set only on a set member from src-members: (draft-ietf-grow-rpsl-registry-scoped-members).
 type SetMember struct {
-	Kind  MemberKind
-	AS    types.ASN
-	Set   types.SetName
-	Range types.PrefixRange
-	Op    types.RangeOperator
-	Raw   string
+	Kind   MemberKind
+	AS     types.ASN
+	Set    types.SetName
+	Source string // the registry of a MemberSet from src-members: ("RIPE"); "" from members:/mp-members:
+	Range  types.PrefixRange
+	Op     types.RangeOperator
+	Raw    string
+}
+
+// Ref returns the reference a MemberSet names, scoped to Source when it has
+// one, and the zero SetRef for a member of any other kind.
+func (m SetMember) Ref() types.SetRef {
+	if m.Kind != MemberSet {
+		return types.SetRef{}
+	}
+	r, err := types.NewSetRef(m.Source, m.Set)
+	if err != nil { // a hand-built member with a bad Source
+		return types.SetRef{}
+	}
+	return r
 }
 
 // ParseSetMember parses one list item of a members:/mp-members: value for a

@@ -19,7 +19,7 @@ func TestExpandCommaSeparatedMembership(t *testing.T) {
 		asSet("AS-BAR", "AS3"),
 		"aut-num: AS9\nas-name: NINE\nmember-of: AS-OTHER, AS-FOO\nmnt-by: MNT-X, MNT-B\nsource: TEST\n",
 	)
-	got, err := (&Expander{Src: src}).ExpandAS(context.Background(), mustSet(t, "AS-FOO"))
+	got, err := (&Expander{Src: src}).ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-FOO")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,11 +37,11 @@ func TestInvalidMembersAreSkipped(t *testing.T) {
 		"route: 198.51.100.0/24\norigin: AS0\nsource: TEST\n",
 	)
 	e := &Expander{Src: src}
-	asns, err := e.ExpandAS(context.Background(), mustSet(t, "AS-X"))
+	asns, err := e.ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-X")))
 	if err != nil || !reflect.DeepEqual(asnList(asns), []uint32{1}) {
 		t.Errorf("ExpandAS(AS-X) = %v, %v; want [1]", asnList(asns), err)
 	}
-	pfx, err := e.ExpandPrefixes(context.Background(), mustSet(t, "RS-X"))
+	pfx, err := e.ExpandPrefixes(context.Background(), types.Ref(mustSet(t, "RS-X")))
 	if err != nil || !reflect.DeepEqual(pfx.List(), []netip.Prefix{netipMust("192.0.2.0/24")}) {
 		t.Errorf("ExpandPrefixes(RS-X) = %v, %v; want [192.0.2.0/24]", pfx.List(), err)
 	}
@@ -110,11 +110,11 @@ func TestEngineRechecksIndirectClaims(t *testing.T) {
 		decode(t, "route: 233.252.0.0/24\norigin: AS1\nmember-of: RS-FOO\nmnt-by: MNT-A\nsource: RADB\n"),
 	}}
 	e := &Expander{Src: src}
-	asns, err := e.ExpandAS(context.Background(), mustSet(t, "AS-FOO"))
+	asns, err := e.ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-FOO")))
 	if err != nil || !reflect.DeepEqual(asnList(asns), []uint32{1, 2}) {
 		t.Errorf("ExpandAS(AS-FOO) = %v, %v; want [1 2]", asnList(asns), err)
 	}
-	pfx, err := e.ExpandPrefixes(context.Background(), mustSet(t, "RS-FOO"))
+	pfx, err := e.ExpandPrefixes(context.Background(), types.Ref(mustSet(t, "RS-FOO")))
 	want := []netip.Prefix{netipMust("192.0.2.0/24"), netipMust("198.51.100.0/24")}
 	if err != nil || !reflect.DeepEqual(pfx.List(), want) {
 		t.Errorf("ExpandPrefixes(RS-FOO) = %v, %v; want %v", pfx.List(), err, want)
@@ -127,9 +127,9 @@ func TestResultSetsString(t *testing.T) {
 		"route: 198.51.100.0/24\norigin: AS1\nsource: TEST\n")
 	e := &Expander{Src: src, MaxPrefixes: 1000}
 	ctx := context.Background()
-	asns, _ := e.ExpandAS(ctx, mustSet(t, "AS-X"))
-	pfx, _ := e.ExpandPrefixes(ctx, mustSet(t, "AS-X"))
-	ranges, _ := e.ExpandPrefixRanges(ctx, mustSet(t, "RS-X"))
+	asns, _ := e.ExpandAS(ctx, types.Ref(mustSet(t, "AS-X")))
+	pfx, _ := e.ExpandPrefixes(ctx, types.Ref(mustSet(t, "AS-X")))
+	ranges, _ := e.ExpandPrefixRanges(ctx, types.Ref(mustSet(t, "RS-X")))
 	for got, want := range map[string]string{
 		asns.String():          "[AS1 AS2]",
 		pfx.String():           "[198.51.100.0/24]",
@@ -151,7 +151,7 @@ func TestRouteWithBlankContinuationExpands(t *testing.T) {
 		"route:   91.207.181.0/24\n+\n+\norigin:  AS48275\nsource:  RIPE\n",
 		asSet("AS-X", "AS48275"),
 	)
-	got, err := (&Expander{Src: src}).ExpandPrefixes(context.Background(), mustSet(t, "AS-X"))
+	got, err := (&Expander{Src: src}).ExpandPrefixes(context.Background(), types.Ref(mustSet(t, "AS-X")))
 	if want := []netip.Prefix{netipMust("91.207.181.0/24")}; err != nil || !reflect.DeepEqual(got.List(), want) {
 		t.Errorf("ExpandPrefixes(AS-X) = %v, %v; want %v", got.List(), err, want)
 	}
@@ -177,13 +177,13 @@ func TestClaimsRequireSameSource(t *testing.T) {
 	)
 	ctx := context.Background()
 	e := &Expander{Src: src}
-	pfx, err := e.ExpandPrefixes(ctx, mustSet(t, "RS-FOO"))
+	pfx, err := e.ExpandPrefixes(ctx, types.Ref(mustSet(t, "RS-FOO")))
 	if want := []netip.Prefix{netipMust("192.0.2.0/24"), netipMust("198.51.100.0/24")}; err != nil ||
 		!reflect.DeepEqual(pfx.List(), want) {
 		t.Errorf("ExpandPrefixes(RS-FOO) = %v, %v; want %v", pfx.List(), err, want)
 	}
 	for set, want := range map[string][]uint32{"AS-FOO": {1, 2}, "AS-NOSRC": {1, 3}} {
-		asns, err := e.ExpandAS(ctx, mustSet(t, set))
+		asns, err := e.ExpandAS(ctx, types.Ref(mustSet(t, set)))
 		if err != nil || !reflect.DeepEqual(asnList(asns), want) {
 			t.Errorf("ExpandAS(%s) = %v, %v; want %v", set, asnList(asns), err, want)
 		}
@@ -223,7 +223,7 @@ func TestUndecodableKeysDoNotClaim(t *testing.T) {
 		"route: 203.0.113.0/24\norigin: AS0\nsource: OTHER\n",
 	)
 	e := &Expander{Src: src}
-	got, err := e.ExpandAS(context.Background(), mustSet(t, "AS-TOP"))
+	got, err := e.ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-TOP")))
 	if err != nil || fmt.Sprint(asnList(got)) != "[1]" {
 		t.Errorf("ExpandAS(AS-TOP) = %v, %v; want [1]", asnList(got), err)
 	}

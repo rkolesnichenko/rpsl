@@ -3,6 +3,7 @@ package resolve
 import (
 	"context"
 	"net/netip"
+	"sort"
 	"strings"
 
 	"github.com/rkolesnichenko/rpsl/object"
@@ -15,9 +16,20 @@ import (
 // read generically from each object's lossless attributes, so MembersByRef can
 // enforce the mbrs-by-ref mntner check without a typed field on every class.
 type MemSource struct {
-	sets   map[string]object.NamedSet   // canonical set name -> set
-	routes map[types.ASN][]netip.Prefix // origin AS -> originated prefixes
-	claims map[string][]object.Object   // canonical set name -> member-of claimants
+	sets    map[types.SetName][]memSet   // every held copy, precedence order (winner first)
+	dflt    func(source string) bool     // the sources unscoped lookups and routes see; nil: all
+	routes  map[types.ASN][]netip.Prefix // origin AS -> originated prefixes, default sources only
+	claims  map[string][]object.Object   // canonical set name -> member-of claimants, every source
+	autnums map[types.ASN][]policyEntry  // AS -> aut-num copies, precedence order
+	rtrs    map[string][]policyEntry     // upper-case inet-rtr name -> copies, precedence order
+	rank    func(source string) int      // precedence rank; lower wins, ties keep load order
+	policy  bool                         // serves aut-nums and inet-rtrs (else AutNum/InetRtr are ErrNoPolicy)
+}
+
+// memSet is one copy of a set and its upper-case source.
+type memSet struct {
+	set    object.NamedSet
+	source string
 }
 
 // NewMemSource indexes a corpus of objects — decoded, or built by the caller,
@@ -25,43 +37,85 @@ type MemSource struct {
 // origin AS, and aut-num/route/route6 member-of claims by each named set.
 //
 // When the same set name appears more than once (e.g. dumps from several IRRs),
-// sourcePrecedence decides which object is used, like IRRd's !s: the set whose
-// source: is listed earliest wins (case-insensitive), sources not listed rank
-// after all listed ones, and ties go to the object loaded first. Routes are
-// unioned across sources.
+// sourcePrecedence decides which object an unscoped lookup returns, like
+// IRRd's !s: the set whose source: is listed earliest wins (case-insensitive),
+// sources not listed rank after all listed ones, and ties go to the object
+// loaded first. Routes are unioned across sources. A scoped reference
+// (RIPE::AS-FOO) finds the copy whose source: is that registry, whatever the
+// precedence; one no object's source: names is ErrNotFound.
+//
+// It is a PolicySource that serves every aut-num and inet-rtr in objs.
 //
 // Corpus.Source builds with it too, so that the two cannot answer differently.
 func NewMemSource(objs []object.Object, sourcePrecedence ...string) *MemSource {
+	return newMemSource(objs, sourcePrecedence, nil)
+}
+
+// newMemSource is NewMemSource whose unscoped lookups and routes see only the
+// sources dflt admits (nil: all). Scoped lookups and claims see every source.
+func newMemSource(objs []object.Object, sourcePrecedence []string, dflt func(string) bool) *MemSource {
 	s := &MemSource{
-		sets:   map[string]object.NamedSet{},
-		routes: map[types.ASN][]netip.Prefix{},
-		claims: map[string][]object.Object{},
+		sets:    map[types.SetName][]memSet{},
+		dflt:    dflt,
+		routes:  map[types.ASN][]netip.Prefix{},
+		claims:  map[string][]object.Object{},
+		autnums: map[types.ASN][]policyEntry{},
+		rtrs:    map[string][]policyEntry{},
+		policy:  true, // it indexes every aut-num and inet-rtr it is given
 	}
-	rank := func(source string) int {
+	s.rank = func(source string) int {
 		for i, src := range sourcePrecedence {
-			if equalFoldASCII(strings.TrimSpace(source), src) {
+			if equalFoldASCII(source, strings.TrimSpace(src)) {
 				return i
 			}
 		}
 		return len(sourcePrecedence)
 	}
-	setRank := map[string]int{}
 	for _, o := range objs {
 		if o = value(o); o == nil {
 			continue
 		}
 		if set, ok := o.(object.NamedSet); ok {
-			key, r := set.SetName().String(), rank(set.SetSource())
-			if prev, dup := setRank[key]; !dup || r < prev {
-				s.sets[key], setRank[key] = set, r
-			}
+			n := set.SetName()
+			s.sets[n] = append(s.sets[n], memSet{set, strings.ToUpper(strings.TrimSpace(set.SetSource()))})
 		}
-		if p, origin, ok := routeOf(o); ok {
+		if p, origin, ok := routeOf(o); ok && s.admits(sourceOf(o)) {
 			s.routes[origin] = append(s.routes[origin], p)
 		}
 		s.indexClaims(o)
+		switch t := o.(type) {
+		case object.AutNum:
+			// An aut-num whose key did not decode is no AS (claimant agrees):
+			// addPolicy would otherwise index it under the AS0 it defaults to.
+			if _, _, _, ok := claimant(t); ok {
+				s.addPolicy("aut-num", t.AS.String(), t.Source, t, "")
+			}
+		case object.InetRtr:
+			if rtrKey(t.Name) != "" {
+				s.addPolicy("inet-rtr", t.Name, t.Source, t, "")
+			}
+		}
 	}
+	s.finish()
 	return s
+}
+
+// finish orders every copy of a set, aut-num and inet-rtr by precedence;
+// ties keep load order, so the object loaded first wins.
+func (s *MemSource) finish() {
+	for _, copies := range s.sets {
+		sort.SliceStable(copies, func(i, j int) bool { return s.rank(copies[i].source) < s.rank(copies[j].source) })
+	}
+	for _, es := range s.autnums {
+		sort.SliceStable(es, func(i, j int) bool { return s.rank(es[i].source) < s.rank(es[j].source) })
+	}
+	for _, es := range s.rtrs {
+		sort.SliceStable(es, func(i, j int) bool { return s.rank(es[i].source) < s.rank(es[j].source) })
+	}
+}
+
+func (s *MemSource) admits(source string) bool {
+	return s.dflt == nil || s.dflt(strings.ToUpper(strings.TrimSpace(source)))
 }
 
 // indexClaims records a claimant under every set its member-of names. Whether a
@@ -80,10 +134,18 @@ func (s *MemSource) indexClaims(o object.Object) {
 	}
 }
 
-// GetSet returns the named set or ErrNotFound.
-func (s *MemSource) GetSet(_ context.Context, name types.SetName) (object.NamedSet, error) {
-	if set, ok := s.sets[name.String()]; ok {
-		return set, nil
+// GetSet returns the set ref names or ErrNotFound: for an unscoped ref the
+// copy the precedence puts first among the default sources, for a scoped one
+// the copy of that registry.
+func (s *MemSource) GetSet(_ context.Context, ref types.SetRef) (object.NamedSet, error) {
+	for _, c := range s.sets[ref.Name()] {
+		if ref.IsScoped() {
+			if c.source == ref.Source() {
+				return c.set, nil
+			}
+		} else if s.admits(c.source) {
+			return c.set, nil
+		}
 	}
 	return nil, ErrNotFound
 }

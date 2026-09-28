@@ -50,6 +50,12 @@ attribute of it.
 | `object/<class>-holes-outside` | Warning | A `holes:` prefix outside the route. |
 | `object/<class>-auth` | Warning | An `auth:` line naming a scheme this library does not know, or carrying no credential; it is kept whole and nothing is dropped. |
 | `object/<class>-changed`, `object/<class>-created`, `object/<class>-last-modified` | Warning | A `created:`/`last-modified:` that is not RFC 3339, or a `changed:` date that is not `YYYYMMDD`; the text is kept as written. |
+| `object/as-set-src-members` | Error | A src-members: item that does not parse: a set without a registry, an operator, a prefix |
+| `object/as-set-src-members-unlisted` | Warning | A src-members: item not in members:/mp-members: (draft §3.1); still resolved |
+| `object/as-set-src-members-conflict` | Error | One set name under two registries (draft §3.3); both left out |
+| `object/route-set-src-members` | Error | As for as-set; an operator is allowed only on a prefix range and a scoped route-set |
+| `object/route-set-src-members-unlisted` | Warning | As for as-set |
+| `object/route-set-src-members-conflict` | Error | As for as-set |
 
 ## `policy/` — routing policy (`import`, `export`, `default`, `filter`, `peering`, and `mp-` forms)
 

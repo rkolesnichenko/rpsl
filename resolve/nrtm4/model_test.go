@@ -93,13 +93,13 @@ func checkMirror(t *testing.T, label string, c *Client, s *nrtmtest.Server) {
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
 		n, _ := types.ParseSetName(fmt.Sprintf("AS-S%d", i))
-		gs, _ := got.GetSet(ctx, n)
-		ws, _ := want.GetSet(ctx, n)
+		gs, _ := got.GetSet(ctx, types.Ref(n))
+		ws, _ := want.GetSet(ctx, types.Ref(n))
 		if (gs == nil) != (ws == nil) || gs != nil && gs.Raw().String() != ws.Raw().String() {
 			t.Fatalf("%s: GetSet(%s) = %v, want %v", label, n, gs, ws)
 		}
-		gp, gerr := (&resolve.Expander{Src: got}).ExpandPrefixes(ctx, n)
-		wp, werr := (&resolve.Expander{Src: want}).ExpandPrefixes(ctx, n)
+		gp, gerr := (&resolve.Expander{Src: got}).ExpandPrefixes(ctx, types.Ref(n))
+		wp, werr := (&resolve.Expander{Src: want}).ExpandPrefixes(ctx, types.Ref(n))
 		if (gerr == nil) != (werr == nil) || gerr == nil && !slices.Equal(gp.List(), wp.List()) {
 			t.Fatalf("%s: %s = %v, %v; want %v, %v", label, n, gp.List(), gerr, wp.List(), werr)
 		}
@@ -181,8 +181,8 @@ func TestSyncDuringExpansions(t *testing.T) {
 				default:
 				}
 				src := c.Source()
-				a, _ := (&resolve.Expander{Src: src}).ExpandPrefixes(context.Background(), n)
-				b, _ := (&resolve.Expander{Src: src}).ExpandPrefixes(context.Background(), n)
+				a, _ := (&resolve.Expander{Src: src}).ExpandPrefixes(context.Background(), types.Ref(n))
+				b, _ := (&resolve.Expander{Src: src}).ExpandPrefixes(context.Background(), types.Ref(n))
 				if !slices.Equal(a.List(), b.List()) {
 					t.Error("one view expanded two ways")
 					return

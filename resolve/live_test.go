@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,7 +46,7 @@ func TestLiveSmoke(t *testing.T) {
 			if err != nil || !slices.Contains(routes, ncc) {
 				t.Errorf("OriginatedRoutes(AS3333) = %v, %v; want it to include %s", routes, err, ncc)
 			}
-			asns, err := (&resolve.Expander{Src: src}).ExpandAS(ctx, set)
+			asns, err := (&resolve.Expander{Src: src}).ExpandAS(ctx, types.Ref(set))
 			if err != nil || asns.Len() == 0 {
 				t.Errorf("ExpandAS(AS-RIPENCC) = %v, %v; want a non-empty set", asns, err)
 			}
@@ -60,7 +61,7 @@ func TestLiveSmoke(t *testing.T) {
 			t.Fatal(err)
 		}
 		src := &irrd.Source{Addr: "whois.radb.net:43"}
-		if _, err := src.GetSet(ctx, missing); !errors.Is(err, resolve.ErrNotFound) {
+		if _, err := src.GetSet(ctx, types.Ref(missing)); !errors.Is(err, resolve.ErrNotFound) {
 			t.Errorf("GetSet(%s) err = %v, want ErrNotFound", missing, err)
 		}
 	})
@@ -72,4 +73,34 @@ func TestLiveSmoke(t *testing.T) {
 			t.Logf("AS3333: %s (%s)", a.Name, a.Handle)
 		}
 	})
+}
+
+// TestLiveScoped is an opt-in check (RPSL_LIVE=1) of scoped set and policy
+// lookups over the real irrd and whois backends: irrd against RADB (!s RIPE),
+// whois against RIPE's own server. It asserts RIPE::AS-RIPENCC resolves to a
+// set sourced from RIPE and that an unknown registry is ErrNotFound, and that
+// AS3333's aut-num is servable from RIPE via PolicySource.
+func TestLiveScoped(t *testing.T) {
+	if os.Getenv("RPSL_LIVE") == "" {
+		t.Skip("set RPSL_LIVE=1 to query whois.radb.net and whois.ripe.net")
+	}
+	ctx := context.Background()
+	ir := &irrd.Source{Addr: "whois.radb.net:43", Sources: []string{"RADB"}, Timeout: 30 * time.Second}
+	defer ir.Close()
+	wh := &whois.Source{Addr: "whois.ripe.net:43", Timeout: 30 * time.Second}
+	ref, _ := types.ParseSetRef("RIPE::AS-RIPENCC") // the stable as-set TestLiveSmoke relies on
+	for name, src := range map[string]resolve.Source{"radb !sRIPE": ir, "ripe whois": wh} {
+		if set, err := src.GetSet(ctx, ref); err != nil || !strings.EqualFold(set.SetSource(), "RIPE") {
+			t.Errorf("%s: %s = %v, %v", name, ref, set, err)
+		}
+		bogus, _ := types.ParseSetRef("NOSUCHREGISTRY::AS-TEST")
+		if _, err := src.GetSet(ctx, bogus); !errors.Is(err, resolve.ErrNotFound) {
+			t.Errorf("%s: unknown registry: err = %v, want ErrNotFound", name, err)
+		}
+	}
+	for name, ps := range map[string]resolve.PolicySource{"radb": ir, "ripe whois": wh} {
+		if an, err := ps.AutNum(ctx, 3333, "RIPE"); err != nil || an.AS != 3333 {
+			t.Errorf("%s: AS3333 from RIPE = %v, %v", name, an.AS, err)
+		}
+	}
 }

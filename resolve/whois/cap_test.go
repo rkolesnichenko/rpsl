@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rkolesnichenko/rpsl/types"
 )
 
 // A response larger than the cap is rejected rather than read unbounded into
@@ -15,7 +17,7 @@ func TestWhoisResponseCap(t *testing.T) {
 		"-r -T as-set AS-BIG": strings.Repeat("x", 100),
 	})
 	src := &Source{Addr: fw.addr(), Timeout: 2 * time.Second, MaxResponse: 10}
-	_, err := src.GetSet(context.Background(), mustSet(t, "AS-BIG"))
+	_, err := src.GetSet(context.Background(), types.Ref(mustSet(t, "AS-BIG")))
 	if err == nil {
 		t.Fatal("expected response-cap error, got nil")
 	}

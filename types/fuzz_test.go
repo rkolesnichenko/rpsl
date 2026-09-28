@@ -113,3 +113,30 @@ func FuzzParsePrefixRange(f *testing.F) {
 		}
 	})
 }
+
+// FuzzParseSetRef: never panics; what it accepts round-trips through String
+// to an equal ref, and its source is safe to put in a query.
+func FuzzParseSetRef(f *testing.F) {
+	for _, s := range []string{
+		"AS-FOO", "RIPE::AS-FOO", "ripe::as1:rs-x^+", "RIPE :: AS-FOO", "::", "ɐ::AS-X",
+		"RIPE::ɐ", "ＲＩＰＥ::AS-FOO", "2001:db8::/32", "A::B::C",
+	} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		r, err := ParseSetRef(s)
+		if err != nil {
+			return
+		}
+		back, err := ParseSetRef(r.String())
+		if err != nil || back != r {
+			t.Fatalf("ParseSetRef(%q) = %q, which parses back to %q, %v", s, r, back, err)
+		}
+		for i := 0; i < len(r.Source()); i++ {
+			c := r.Source()[i]
+			if !('A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '-' || c == '_') {
+				t.Fatalf("ParseSetRef(%q) source %q has byte %q", s, r.Source(), c)
+			}
+		}
+	})
+}

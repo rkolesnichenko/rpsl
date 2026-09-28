@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/ecdsa"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -44,7 +45,7 @@ func expand(t *testing.T, c *Client, set string) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ps, err := (&resolve.Expander{Src: c.Source()}).ExpandPrefixes(context.Background(), n)
+	ps, err := (&resolve.Expander{Src: c.Source()}).ExpandPrefixes(context.Background(), types.Ref(n))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +406,7 @@ func TestClientCopyTo(t *testing.T) {
 		t.Fatalf("merged %d objects, want 2", all.Len())
 	}
 	n, _ := types.ParseSetName("AS-X")
-	ps, err := (&resolve.Expander{Src: all.Source("RIPE", "RIPE-NONAUTH")}).ExpandPrefixes(context.Background(), n)
+	ps, err := (&resolve.Expander{Src: all.Source("RIPE", "RIPE-NONAUTH")}).ExpandPrefixes(context.Background(), types.Ref(n))
 	if err != nil || ps.Len() != 1 {
 		t.Errorf("AS-X over both mirrors: %v, %v", ps.List(), err)
 	}
@@ -614,5 +615,30 @@ func TestRunWaits(t *testing.T) {
 				t.Errorf("runWait(%d, %v) = %v: outside [%v, %v]", failures, interval, w, minInterval, interval)
 			}
 		}
+	}
+}
+
+func TestClientKeepsPolicy(t *testing.T) {
+	s := nrtmtest.New(t, "TEST")
+	s.Publish(nrtmtest.Change{Class: "aut-num", PK: "AS1",
+		Text: "aut-num: AS1\nas-name: ONE\nimport: from AS2 accept ANY\nsource: TEST\n"})
+	s.Snapshot()
+	c := newClient(s, "TEST")
+	c.KeepPolicy = true
+	mustSync(t, c)
+	an, err := c.Source().AutNum(context.Background(), 1, "")
+	if err != nil || an.AsName != "ONE" {
+		t.Fatalf("AutNum = %q, %v", an.AsName, err)
+	}
+	s.Publish(nrtmtest.Change{Delete: true, Class: "aut-num", PK: "AS1"})
+	mustSync(t, c)
+	if _, err := c.Source().AutNum(context.Background(), 1, ""); !errors.Is(err, resolve.ErrNotFound) {
+		t.Errorf("after the delta's delete: %v", err)
+	}
+	// Without KeepPolicy the mirror's Source serves no policy objects.
+	plain := newClient(s, "TEST")
+	mustSync(t, plain)
+	if _, err := plain.Source().AutNum(context.Background(), 1, ""); !errors.Is(err, resolve.ErrNoPolicy) {
+		t.Errorf("a mirror without KeepPolicy: AutNum = %v; want ErrNoPolicy", err)
 	}
 }

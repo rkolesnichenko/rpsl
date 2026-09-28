@@ -337,3 +337,23 @@ func irrdClasses() map[string]ClassSpec {
 		opt("last-modified"))
 	return c
 }
+
+// WithSrcMembers returns p that also admits src-members: (optional,
+// multi-valued) on as-set and route-set, named p.Name()+"+src-members".
+// draft-ietf-grow-rpsl-registry-scoped-members adds the attribute; no registry
+// has deployed it yet, so the built-in profiles, each pinned to what its
+// registry runs, leave it out.
+func WithSrcMembers(p Profile) Profile {
+	classes := make(map[string]ClassSpec, len(p.classes))
+	for class, spec := range p.classes {
+		c := spec.clone()
+		if class == "as-set" || class == "route-set" {
+			if c.Attrs == nil {
+				c.Attrs = map[string]AttrSpec{}
+			}
+			c.Attrs["src-members"] = AttrSpec{}
+		}
+		classes[class] = c
+	}
+	return Profile{name: p.name + "+src-members", classes: classes}
+}

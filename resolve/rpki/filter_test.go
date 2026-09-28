@@ -80,7 +80,7 @@ func TestFilterSource(t *testing.T) {
 	}
 
 	name, _ := types.ParseSetName("RS-REF")
-	set, err := f.GetSet(ctx, name)
+	set, err := f.GetSet(ctx, types.Ref(name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestFilterExpands(t *testing.T) {
 			src  resolve.Source
 			want []string
 		}{{src, tc.raw}, {&Filter{Src: src, VRPs: v}, tc.clean}, {&Filter{Src: src}, tc.raw}} {
-			ps, err := (&resolve.Expander{Src: run.src}).ExpandPrefixes(ctx, name)
+			ps, err := (&resolve.Expander{Src: run.src}).ExpandPrefixes(ctx, types.Ref(name))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -155,7 +155,7 @@ func TestFilterPassesErrors(t *testing.T) {
 		t.Errorf("MembersByRef error %v", err)
 	}
 	name, _ := types.ParseSetName("AS-NONE")
-	if _, err := f.GetSet(ctx, name); !errors.Is(err, resolve.ErrNotFound) {
+	if _, err := f.GetSet(ctx, types.Ref(name)); !errors.Is(err, resolve.ErrNotFound) {
 		t.Errorf("GetSet error %v", err)
 	}
 }

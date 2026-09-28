@@ -22,13 +22,13 @@ import (
 func TestWhoisServerErrorsAreReported(t *testing.T) {
 	denied := "% This is the RIPE Database query service.\n\n%ERROR:201: access denied for 192.0.2.1\n%\n% Sorry.\n"
 	fw := newFakeWhois(t, map[string]string{
-		"-r -T as-set AS-FOO":                    denied,
-		"-r -T route,route6 -i origin AS10":      denied,
-		"-r -T route,route6 -i member-of RS-REF": denied,
+		"-r -T as-set AS-FOO":                            denied,
+		"-r -T route,route6 -i origin AS10":              denied,
+		"-s TEST -r -T route,route6 -i member-of RS-REF": denied,
 	})
 	src := &Source{Addr: fw.addr()}
 	ctx := context.Background()
-	_, err1 := src.GetSet(ctx, mustSet(t, "AS-FOO"))
+	_, err1 := src.GetSet(ctx, types.Ref(mustSet(t, "AS-FOO")))
 	_, err2 := src.OriginatedRoutes(ctx, 10, types.AFIAny)
 	_, err3 := src.MembersByRef(ctx, refSet(t, "RS-REF", "TEST", "ANY"))
 	for i, err := range []error{err1, err2, err3} {
@@ -48,13 +48,13 @@ func TestWhoisNoEntriesIsNotFound(t *testing.T) {
 	})
 	src := &Source{Addr: fw.addr()}
 	ctx := context.Background()
-	if _, err := src.GetSet(ctx, mustSet(t, "AS-FOO")); !errors.Is(err, resolve.ErrNotFound) {
+	if _, err := src.GetSet(ctx, types.Ref(mustSet(t, "AS-FOO"))); !errors.Is(err, resolve.ErrNotFound) {
 		t.Errorf("GetSet err = %v, want ErrNotFound", err)
 	}
 	if routes, err := src.OriginatedRoutes(ctx, 10, types.AFIAny); err != nil || len(routes) != 0 {
 		t.Errorf("OriginatedRoutes = %v, %v; want empty, nil", routes, err)
 	}
-	if set, err := src.GetSet(ctx, mustSet(t, "AS-BAR")); err != nil || len(set.(object.Set).SetMembers()) != 1 {
+	if set, err := src.GetSet(ctx, types.Ref(mustSet(t, "AS-BAR"))); err != nil || len(set.(object.Set).SetMembers()) != 1 {
 		t.Errorf("a %%WARNING line broke GetSet: %v, %v", set, err)
 	}
 }
@@ -79,7 +79,7 @@ func TestWhoisContextCancelsStalledQuery(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(50*time.Millisecond, cancel)
 	start := time.Now()
-	if _, err := src.GetSet(ctx, mustSet(t, "AS-FOO")); time.Since(start) > time.Second || !errors.Is(err, context.Canceled) {
+	if _, err := src.GetSet(ctx, types.Ref(mustSet(t, "AS-FOO"))); time.Since(start) > time.Second || !errors.Is(err, context.Canceled) {
 		t.Errorf("GetSet = %v after %v; want context.Canceled promptly", err, time.Since(start))
 	}
 }
@@ -119,7 +119,7 @@ func TestWhoisTimeoutCoversTheWholeQuery(t *testing.T) {
 	}
 	src := &Source{Dial: slowDial, Timeout: time.Second}
 	start := time.Now()
-	if _, err := src.GetSet(context.Background(), mustSet(t, "AS-FOO")); !errors.Is(err, context.DeadlineExceeded) ||
+	if _, err := src.GetSet(context.Background(), types.Ref(mustSet(t, "AS-FOO"))); !errors.Is(err, context.DeadlineExceeded) ||
 		time.Since(start) > 1400*time.Millisecond {
 		t.Errorf("GetSet = %v after %v; want context.DeadlineExceeded after ~1s", err, time.Since(start))
 	}
@@ -134,7 +134,7 @@ func TestWhoisSourcesAreValidated(t *testing.T) {
 			t.Errorf("dialed with Sources %q", bad)
 			return nil, errors.New("unreachable")
 		}}
-		if _, err := src.GetSet(context.Background(), mustSet(t, "AS-FOO")); err == nil {
+		if _, err := src.GetSet(context.Background(), types.Ref(mustSet(t, "AS-FOO"))); err == nil {
 			t.Errorf("Sources %q accepted", bad)
 		}
 	}
@@ -142,7 +142,7 @@ func TestWhoisSourcesAreValidated(t *testing.T) {
 		"-s RIPE,RADB -r -T as-set AS-FOO": "as-set: AS-FOO\nmembers: AS1\nsource: RIPE\n",
 	})
 	src := &Source{Addr: fw.addr(), Sources: []string{"ripe", "RADB"}, Timeout: 2 * time.Second}
-	if _, err := src.GetSet(context.Background(), mustSet(t, "AS-FOO")); err != nil {
+	if _, err := src.GetSet(context.Background(), types.Ref(mustSet(t, "AS-FOO"))); err != nil {
 		t.Errorf("GetSet with Sources {ripe RADB}: %v", err)
 	}
 	if (&Source{MaxResponse: -1}).maxResponse() != math.MaxInt64 || (&Source{}).maxResponse() != maxResponse {
@@ -181,7 +181,7 @@ func TestOversizedObjectIsAnError(t *testing.T) {
 	b.WriteString("source: TEST\n")
 	fw := newFakeWhois(t, map[string]string{"-r -T as-set AS-HUGE": b.String()})
 	src := &Source{Addr: fw.addr(), Timeout: 10 * time.Second}
-	_, err := src.GetSet(context.Background(), mustSet(t, "AS-HUGE"))
+	_, err := src.GetSet(context.Background(), types.Ref(mustSet(t, "AS-HUGE")))
 	if err == nil || errors.Is(err, resolve.ErrNotFound) {
 		t.Errorf("GetSet of an object over the size cap: %v, want an error other than ErrNotFound", err)
 	}

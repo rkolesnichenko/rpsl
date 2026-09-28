@@ -16,18 +16,30 @@ in production. (Core `resolve` imports only `net/netip`, never `net`;
 
 ```go
 type Source interface {
-	GetSet(ctx context.Context, name types.SetName) (object.NamedSet, error)
+	GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error)
 	OriginatedRoutes(ctx context.Context, as types.ASN, afi types.AFI) ([]netip.Prefix, error)
 	MembersByRef(ctx context.Context, set object.NamedSet) ([]object.Object, error)
 }
 ```
 
-`GetSet` returns `ErrNotFound` for a missing set: a missing *nested* set expands to
-nothing and is listed by the result's `Missing()`, while a missing top-level set is
-an error. `MembersByRef` backs the indirect `mbrs-by-ref` membership mechanism;
-implementations should filter with `resolve.ClaimAllowed(obj, set)`, and the engine
-re-checks every returned claim anyway. `NewMemSource(objs, "RIPE", "RADB")` takes an optional
-source precedence for set names defined in several IRRs.
+`GetSet` takes a `types.SetRef`: unscoped (`types.Ref(name)`) is resolved by the
+`Source`'s precedence, scoped (`RIPE::AS-FOO`, draft-ietf-grow-rpsl-registry-scoped-members)
+only in that registry, and a registry the `Source` does not know is `ErrNotFound`.
+It returns `ErrNotFound` for a missing set: a missing *nested* set expands to
+nothing and is listed by the result's `Missing()` (`[]types.SetRef`), while a missing
+top-level set is an error. `MembersByRef` backs the indirect `mbrs-by-ref` membership
+mechanism; implementations should filter with `resolve.ClaimAllowed(obj, set)`, and the
+engine re-checks every returned claim anyway. `NewMemSource(objs, "RIPE", "RADB")` takes
+an optional source precedence for set names defined in several IRRs.
+
+`PolicySource` is a sibling interface — `Source` plus `AutNum(ctx, as, source)` and
+`InetRtr(ctx, name, source)` — for the objects routing policy names outside sets, with
+the same registry scoping as `GetSet`. `MemSource`, `irrd.Source`, `whois.Source`,
+`Cache` and `rpki.Filter` implement it; `Corpus.KeepPolicy` (and `DumpLoader`'s and
+`nrtm4.Client`'s) feeds a `MemSource` built from a `Corpus`, and one built without it
+returns `ErrNoPolicy` rather than the few aut-nums and inet-rtrs it keeps as claimants.
+A wrapper (`Cache`, `rpki.Filter`) over a `Source` that is not a `PolicySource` returns
+`ErrNoPolicy` too.
 
 ## The `Expander`
 
@@ -40,14 +52,20 @@ type Expander struct {
 	AFI         types.AFI // address-family constraint; Unspecified/Any = both
 }
 
-func (e *Expander) ExpandAS(ctx context.Context, n types.SetName) (ASNSet, error)
-func (e *Expander) ExpandPrefixes(ctx context.Context, n types.SetName) (PrefixSet, error)
-func (e *Expander) ExpandPrefixRanges(ctx context.Context, n types.SetName) (RangeSet, error)
-func (e *Expander) ExpandRouters(ctx context.Context, n types.SetName) (RouterSet, error)
-func (e *Expander) ExpandPeerings(ctx context.Context, n types.SetName) (PeeringSet, error)
-func (e *Expander) ExpandFilterSet(ctx context.Context, n types.SetName) (RangeSet, error)
+func (e *Expander) ExpandAS(ctx context.Context, ref types.SetRef) (ASNSet, error)
+func (e *Expander) ExpandPrefixes(ctx context.Context, ref types.SetRef) (PrefixSet, error)
+func (e *Expander) ExpandPrefixRanges(ctx context.Context, ref types.SetRef) (RangeSet, error)
+func (e *Expander) ExpandRouters(ctx context.Context, ref types.SetRef) (RouterSet, error)
+func (e *Expander) ExpandPeerings(ctx context.Context, ref types.SetRef) (PeeringSet, error)
+func (e *Expander) ExpandFilterSet(ctx context.Context, ref types.SetRef) (RangeSet, error)
 func (e *Expander) EvalFilter(ctx context.Context, f policy.Filter) (RangeSet, error)
 ```
+
+Every `Expand*` call takes a `types.SetRef`; an unscoped caller writes
+`types.Ref(name)`. A scoped top ref is bgpq4's `SOURCE::SET`: it looks the set
+up in that one registry, and the scope does not cascade to what it nests.
+`EvalFilter` is unchanged — a set reference inside a filter has no registry
+syntax, so it is always unscoped.
 
 `ASNSet`/`PrefixSet`/`RangeSet` are deduplicated sets with `Has`, `Len`, a sorted
 `List`, and `Missing` (nested sets that were referenced but not found).
@@ -99,8 +117,8 @@ src := resolve.NewMemSource([]object.Object{
 e := &resolve.Expander{Src: src, AFI: types.AFIv4}
 name, _ := types.ParseSetName("AS-CONE")
 
-asns, _ := e.ExpandAS(context.Background(), name)        // [AS1 AS2]
-prefixes, _ := e.ExpandPrefixes(context.Background(), name) // 10.0.0.0/8, 192.0.2.0/24
+asns, _ := e.ExpandAS(context.Background(), types.Ref(name))        // [AS1 AS2]
+prefixes, _ := e.ExpandPrefixes(context.Background(), types.Ref(name)) // 10.0.0.0/8, 192.0.2.0/24
 ```
 
 This is copied from a runnable `Example` test
@@ -129,7 +147,7 @@ irr := &irrd.Source{
 defer irr.Close()
 
 e := &resolve.Expander{Src: irr, AFI: types.AFIv4}
-asns, err := e.ExpandAS(ctx, name)
+asns, err := e.ExpandAS(ctx, types.Ref(name))
 ```
 
 Every `irrd` and `whois` query honours its context: cancelling it (or its deadline
@@ -139,7 +157,11 @@ one deadline covering the wait for a `MaxConns` slot, the dial, the I/O and any
 retry. `rdap.Client.Timeout` bounds each RDAP request the same way.
 `irrd.MaxConns` (default 4) bounds concurrent connections; with `KeepAlive`, a
 pooled connection the server has closed is retried once on a fresh one, and a
-refused `!s` source list is an error rather than "not found". IRRd answers
+refused `!s` source list is an error rather than "not found". For scoped lookups
+`irrd` learns the server's registries once, with IRRd's `!j-*`, and kept until
+`Close`: a registry not listed is `ErrNotFound` without a query, so data naming
+any number of made-up registries costs nothing more (a server that refuses `!j`
+is asked per registry, with up to 1,024 refusals remembered). IRRd answers
 `!i` for an existing set with no members as for a missing one, so `irrd`
 confirms with `!m` and returns such a set empty (not in `Missing()`). Like
 `irrd`, `whois` takes a set defined in several sources from the first in
@@ -182,8 +204,8 @@ See the [root README](../README.md) and
 cycles skipped, missing nested sets reported rather than fatal:
 
 ```go
-routers, _ := e.ExpandRouters(ctx, mustSet("RTRS-EXAMPLE"))   // addresses and inet-rtr names
-peerings, _ := e.ExpandPeerings(ctx, mustSet("PRNG-EXAMPLE")) // nested references replaced
+routers, _ := e.ExpandRouters(ctx, types.Ref(mustSet("RTRS-EXAMPLE")))   // addresses and inet-rtr names
+peerings, _ := e.ExpandPeerings(ctx, types.Ref(mustSet("PRNG-EXAMPLE"))) // nested references replaced
 ```
 
 A `filter-set` is different in kind: it holds an expression, not a member list.

@@ -27,7 +27,8 @@ type NamedSet interface {
 // or a route-set (RFC 2622 §5.1, §5.2).
 type Set interface {
 	NamedSet
-	SetMembers() []SetMember // direct members: members: plus mp-members:
+	SetMembers() []SetMember    // direct members: members: plus mp-members:
+	SetSrcMembers() []SetMember // src-members:, as written (draft-ietf-grow-rpsl-registry-scoped-members)
 }
 
 // RouterSet is a rtr-set: its members are routers and nested rtr-sets
@@ -65,6 +66,9 @@ func (s AsSet) SetMembers() []SetMember {
 	return out
 }
 
+// SetSrcMembers returns the as-set's src-members:, as written.
+func (s AsSet) SetSrcMembers() []SetMember { return append([]SetMember(nil), s.SrcMembers...) }
+
 // RefMntners returns the mbrs-by-ref maintainers.
 func (s AsSet) RefMntners() []string { return s.MbrsByRef }
 
@@ -80,6 +84,9 @@ func (s RouteSet) SetMembers() []SetMember {
 	out = append(out, s.MpMembers...)
 	return out
 }
+
+// SetSrcMembers returns the route-set's src-members:, as written.
+func (s RouteSet) SetSrcMembers() []SetMember { return append([]SetMember(nil), s.SrcMembers...) }
 
 // RefMntners returns the mbrs-by-ref maintainers.
 func (s RouteSet) RefMntners() []string { return s.MbrsByRef }

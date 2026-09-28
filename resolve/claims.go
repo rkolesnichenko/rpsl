@@ -89,6 +89,24 @@ func claimant(o object.Object) (memberOf []types.SetName, mntBy []string, source
 	return nil, nil, "", false
 }
 
+// sourceOf returns o's source: attribute ("" for a class without Common).
+func sourceOf(o object.Object) string {
+	switch t := value(o).(type) {
+	case object.Route:
+		return t.Source
+	case object.Route6:
+		return t.Source
+	case object.AutNum:
+		return t.Source
+	case object.InetRtr:
+		return t.Source
+	}
+	if set, ok := o.(object.NamedSet); ok {
+		return set.SetSource()
+	}
+	return ""
+}
+
 // routeOf returns what the engine indexes of a route or route6: its prefix
 // and origin, when the prefix is valid and the origin decoded — a route whose
 // origin did not decode is no AS's, not AS0's. ok is false for anything else.

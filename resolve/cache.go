@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 
@@ -63,13 +64,16 @@ const (
 	kindSet cacheKind = iota
 	kindRoutes
 	kindClaims
+	kindAutNum
+	kindInetRtr
 )
 
 type cacheKey struct {
 	kind cacheKind
-	name string    // the canonical set name, or "" for a route lookup
-	as   types.ASN // the AS, for a route lookup
+	name string    // the set reference, or (set source, set name) for claims; the inet-rtr name for kindInetRtr; "" for a route or aut-num lookup
+	as   types.ASN // the AS, for a route or aut-num lookup
 	afi  types.AFI
+	src  string // upper-case source scope, for kindAutNum and kindInetRtr ("" is the precedence); a separate field, not concatenated into name, so ("A", "B::C") and ("A::B", "C") cannot collide
 }
 
 type cacheEntry struct {
@@ -80,6 +84,7 @@ type cacheEntry struct {
 	set    object.NamedSet
 	routes []netip.Prefix
 	claims []object.Object
+	obj    object.Object // AutNum or InetRtr
 	err    error
 }
 
@@ -91,10 +96,11 @@ func NewCache(src Source, ttl time.Duration) *Cache {
 
 var _ Source = (*Cache)(nil)
 
-// GetSet returns the named set, from the cache when it is there and fresh.
-func (c *Cache) GetSet(ctx context.Context, name types.SetName) (object.NamedSet, error) {
-	e, err := c.lookup(ctx, cacheKey{kind: kindSet, name: name.String()}, func(ctx context.Context, e *cacheEntry) {
-		e.set, e.err = c.Src.GetSet(ctx, name)
+// GetSet returns the set ref names, from the cache when it is there and fresh.
+// A scoped and an unscoped reference to one name are cached apart.
+func (c *Cache) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error) {
+	e, err := c.lookup(ctx, cacheKey{kind: kindSet, name: ref.String()}, func(ctx context.Context, e *cacheEntry) {
+		e.set, e.err = c.Src.GetSet(ctx, ref)
 	})
 	if err != nil {
 		return nil, err
@@ -124,7 +130,9 @@ func (c *Cache) MembersByRef(ctx context.Context, set object.NamedSet) ([]object
 	if set == nil {
 		return nil, nil
 	}
-	key := cacheKey{kind: kindClaims, name: set.SetName().String()}
+	// two same-named sets of two registries have different claimants; the
+	// source is folded as ClaimAllowed compares it (ASCII only)
+	key := cacheKey{kind: kindClaims, name: lowerASCII(strings.TrimSpace(set.SetSource())) + "::" + set.SetName().String()}
 	e, err := c.lookup(ctx, key, func(ctx context.Context, e *cacheEntry) {
 		e.claims, e.err = c.Src.MembersByRef(ctx, set)
 	})
@@ -135,6 +143,59 @@ func (c *Cache) MembersByRef(ctx context.Context, set object.NamedSet) ([]object
 		return nil, e.err
 	}
 	return append([]object.Object(nil), e.claims...), nil
+}
+
+// AutNum returns the aut-num of as, from the cache when it is there and fresh.
+func (c *Cache) AutNum(ctx context.Context, as types.ASN, source string) (object.AutNum, error) {
+	ps, ok := c.Src.(PolicySource)
+	if !ok {
+		return object.AutNum{}, ErrNoPolicy
+	}
+	e, err := c.lookup(ctx, cacheKey{kind: kindAutNum, as: as, src: policySourceKey(source)}, func(ctx context.Context, e *cacheEntry) {
+		an, err := ps.AutNum(ctx, as, source)
+		e.obj, e.err = an, err
+	})
+	if err != nil {
+		return object.AutNum{}, err
+	}
+	if e.err != nil {
+		return object.AutNum{}, e.err
+	}
+	return e.obj.(object.AutNum), nil
+}
+
+// InetRtr returns the inet-rtr named name, from the cache when it is there and fresh.
+func (c *Cache) InetRtr(ctx context.Context, name, source string) (object.InetRtr, error) {
+	ps, ok := c.Src.(PolicySource)
+	if !ok {
+		return object.InetRtr{}, ErrNoPolicy
+	}
+	key := cacheKey{kind: kindInetRtr, name: rtrKey(name), src: policySourceKey(source)}
+	e, err := c.lookup(ctx, key, func(ctx context.Context, e *cacheEntry) {
+		ir, err := ps.InetRtr(ctx, name, source)
+		e.obj, e.err = ir, err
+	})
+	if err != nil {
+		return object.InetRtr{}, err
+	}
+	if e.err != nil {
+		return object.InetRtr{}, e.err
+	}
+	return e.obj.(object.InetRtr), nil
+}
+
+var _ PolicySource = (*Cache)(nil)
+
+// policySourceKey is the cache key of a policy lookup's source: its canonical
+// form, as the lookups compare it (types.ParseSourceName), so every spelling
+// of one registry shares an entry; a name that is not a source name keeps its
+// raw text, which no canonical name equals (strings.ToUpper would fold
+// "ripeſ" into the valid "RIPES").
+func policySourceKey(source string) string {
+	if canon, err := types.ParseSourceName(source); err == nil {
+		return canon
+	}
+	return source
 }
 
 // lookup returns the entry for key, filling it with fill on a miss. Concurrent

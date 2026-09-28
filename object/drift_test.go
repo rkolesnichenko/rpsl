@@ -91,7 +91,7 @@ func marker(class, attr string, i int) (value, needle string) {
 			return "2001:db8::/48", "2001:db8::/48"
 		}
 		return "192.0.2.0/25", "192.0.2.0/25"
-	case "members", "mp-members":
+	case "members", "mp-members", "src-members":
 		if class == "rtr-set" {
 			return "rtr-drift" + n + ".example", "rtr-drift" + n + ".example"
 		}
@@ -162,7 +162,7 @@ func fields(v reflect.Value) (text map[string]string, own map[string]bool) {
 func TestEveryAttributeLandsInItsOwnField(t *testing.T) {
 	for class := range registry {
 		attrs := map[string]bool{}
-		for _, p := range []Profile{RIPE, RFCStrict, IRRd, ARIN} {
+		for _, p := range []Profile{RIPE, RFCStrict, IRRd, ARIN, WithSrcMembers(RFCStrict)} {
 			if spec, ok := p.Class(class); ok {
 				for a := range spec.Attrs {
 					attrs[a] = true

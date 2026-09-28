@@ -37,8 +37,8 @@ type Filter struct {
 }
 
 // GetSet returns Src's answer unchanged.
-func (f *Filter) GetSet(ctx context.Context, name types.SetName) (object.NamedSet, error) {
-	return f.Src.GetSet(ctx, name)
+func (f *Filter) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error) {
+	return f.Src.GetSet(ctx, ref)
 }
 
 // OriginatedRoutes returns Src's routes for as without those Invalid for as.
@@ -62,6 +62,26 @@ func (f *Filter) MembersByRef(ctx context.Context, set object.NamedSet) ([]objec
 		return !ok || !f.suppressed(p, origin)
 	}), nil
 }
+
+// AutNum returns Src's aut-num unchanged: RPKI suppresses route objects only.
+func (f *Filter) AutNum(ctx context.Context, as types.ASN, source string) (object.AutNum, error) {
+	ps, ok := f.Src.(resolve.PolicySource)
+	if !ok {
+		return object.AutNum{}, resolve.ErrNoPolicy
+	}
+	return ps.AutNum(ctx, as, source)
+}
+
+// InetRtr returns Src's inet-rtr unchanged.
+func (f *Filter) InetRtr(ctx context.Context, name, source string) (object.InetRtr, error) {
+	ps, ok := f.Src.(resolve.PolicySource)
+	if !ok {
+		return object.InetRtr{}, resolve.ErrNoPolicy
+	}
+	return ps.InetRtr(ctx, name, source)
+}
+
+var _ resolve.PolicySource = (*Filter)(nil)
 
 // keep returns the elements of xs that ok accepts: xs itself when it accepts
 // them all, as it usually does, and a copy only once one is left out.

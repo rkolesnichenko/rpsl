@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/rkolesnichenko/rpsl/object"
+	"github.com/rkolesnichenko/rpsl/types"
 )
 
 // When the same set exists in several sources, the source precedence decides
@@ -28,7 +29,7 @@ func TestMemSourcePrecedence(t *testing.T) {
 	}
 	for _, c := range cases {
 		src := NewMemSource(c.objs, c.prec...)
-		got, err := (&Expander{Src: src}).ExpandAS(context.Background(), mustSet(t, "AS-A"))
+		got, err := (&Expander{Src: src}).ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-A")))
 		if err != nil || !reflect.DeepEqual(asnList(got), c.want) {
 			t.Errorf("%s: ExpandAS = %v, %v; want %v", c.name, asnList(got), err, c.want)
 		}

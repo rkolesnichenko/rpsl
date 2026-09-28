@@ -285,8 +285,8 @@ func TestRpslqDebug(t *testing.T) {
 		t.Errorf("-d: exit %d, stdout %q; without -d %q", code, out, plain)
 	}
 	for _, want := range []string{
-		"rpslq: debug: GetSet AS-DUP [RIPE]: as-set, 2 members (1 nested set) in ",
-		"rpslq: debug: MembersByRef AS-DUP [RIPE]: 0 claimants in ",
+		"rpslq: debug: GetSet RIPE::AS-DUP: as-set, 2 members (1 nested set) in ",
+		"rpslq: debug: MembersByRef AS-DUP: 0 claimants in ",
 		"rpslq: debug: GetSet AS-NEST: as-set, 1 member (0 nested sets) in ",
 		"rpslq: debug: GetSet AS-GONE-X: ",
 		" queries in ",
@@ -305,5 +305,29 @@ func TestRpslqDebug(t *testing.T) {
 	code, _, errs = rpslq(t, "-d", "--server-expand", "-h", addr, "-S", "RADB", "-P", "AS-DUP")
 	if code != 0 || !strings.Contains(errs, "debug: ASSetPrefixes AS-DUP ipv4: 0 prefixes in ") {
 		t.Errorf("-d --server-expand: exit %d\n%s", code, errs)
+	}
+}
+
+// TestSrcMembersOption: over IRRd, --src-members makes rpslq follow
+// src-members:; without it, it sees what IRRd serves.
+func TestSrcMembersOption(t *testing.T) {
+	addr := irrtest.New(
+		"as-set: AS-SRC\nmembers: AS-DUP\nsrc-members: RADB::AS-DUP\nsource: RIPE\n",
+		"as-set: AS-DUP\nmembers: AS64601\nsource: RIPE\n",
+		"as-set: AS-DUP\nmembers: AS64602\nsource: RADB\n",
+	).IRRd(t)
+	// -p: AS64601/AS64602 fall in the 64496-65551 documentation/private range
+	// that rpslq (like bgpq4) drops by default; -p keeps them so the test can
+	// tell RIPE's AS-DUP from RADB's.
+	_, without, _ := rpslq(t, "-h", addr, "-S", "RIPE,RADB", "-p", "-f", "1", "AS-SRC")
+	_, with, _ := rpslq(t, "-h", addr, "-S", "RIPE,RADB", "--src-members", "-p", "-f", "1", "AS-SRC")
+	if !strings.Contains(without, "64601") || strings.Contains(without, "64602") {
+		t.Errorf("without --src-members: %q; want RIPE's AS-DUP (precedence)", without)
+	}
+	if !strings.Contains(with, "64602") || strings.Contains(with, "64601") {
+		t.Errorf("with --src-members: %q; want RADB's AS-DUP (src-members:)", with)
+	}
+	if code, _, errs := rpslq(t, "--whois", "-h", addr, "--src-members", "AS-SRC"); code == 0 || !strings.Contains(errs, "--src-members") {
+		t.Errorf("--src-members with --whois: exit %d, %q; want a usage error", code, errs)
 	}
 }

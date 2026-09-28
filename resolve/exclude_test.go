@@ -18,11 +18,11 @@ type fetchCounter struct {
 	calls map[string]int
 }
 
-func (c *fetchCounter) GetSet(ctx context.Context, n types.SetName) (object.NamedSet, error) {
+func (c *fetchCounter) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error) {
 	c.mu.Lock()
-	c.calls[n.String()]++
+	c.calls[ref.Name().String()]++
 	c.mu.Unlock()
-	return c.MemSource.GetSet(ctx, n)
+	return c.MemSource.GetSet(ctx, ref)
 }
 
 func excludeCorpus(t *testing.T) *fetchCounter {
@@ -59,7 +59,7 @@ func TestExcludeAS(t *testing.T) {
 		{"an indirect aut-num member", Exclusion{ASNs: []types.ASN{7}}, "AS-REF", "[6]"},
 	} {
 		src := excludeCorpus(t)
-		got, err := (&Expander{Src: src, Exclude: c.ex}).ExpandAS(ctx, mustSet(t, c.top))
+		got, err := (&Expander{Src: src, Exclude: c.ex}).ExpandAS(ctx, types.Ref(mustSet(t, c.top)))
 		if err != nil || fmt.Sprint(asnList(got)) != c.want {
 			t.Errorf("%s: ExpandAS(%s) = %v, %v; want %s", c.name, c.top, asnList(got), err, c.want)
 		}
@@ -74,7 +74,7 @@ func TestExcludeAS(t *testing.T) {
 	}
 	// An excluded set that does not exist is not reported missing either.
 	src := corpus(t, asSet("AS-TOP", "AS1, AS-GONE"))
-	got, err := (&Expander{Src: src, Exclude: Exclusion{Sets: []types.SetName{mustSet(t, "AS-GONE")}}}).ExpandAS(ctx, mustSet(t, "AS-TOP"))
+	got, err := (&Expander{Src: src, Exclude: Exclusion{Sets: []types.SetName{mustSet(t, "AS-GONE")}}}).ExpandAS(ctx, types.Ref(mustSet(t, "AS-TOP")))
 	if err != nil || len(got.Missing()) != 0 {
 		t.Errorf("ExpandAS = %v, missing %v, %v; want nothing missing", asnList(got), got.Missing(), err)
 	}
@@ -100,7 +100,7 @@ func TestExcludePrefixes(t *testing.T) {
 		{"a top listing itself", Exclusion{}, "RS-SELF", "192.0.2.0/24 192.0.2.0/25 192.0.2.128/25"},
 		{"an excluded top listing itself", Exclusion{Sets: []types.SetName{mustSet(t, "RS-SELF")}}, "RS-SELF", "192.0.2.0/24"},
 	} {
-		got, err := (&Expander{Src: excludeCorpus(t), Exclude: c.ex}).ExpandPrefixes(ctx, mustSet(t, c.top))
+		got, err := (&Expander{Src: excludeCorpus(t), Exclude: c.ex}).ExpandPrefixes(ctx, types.Ref(mustSet(t, c.top)))
 		var ps []string
 		for _, p := range got.List() {
 			ps = append(ps, p.String())
@@ -119,7 +119,7 @@ func TestExcludeFilterSet(t *testing.T) {
 	}}
 	// Inside FLTR-TOP, the excluded references denote nothing; AS-GOOD is
 	// expanded without AS4. The filter-set asked for is expanded regardless.
-	got, err := e.ExpandFilterSet(ctx, mustSet(t, "FLTR-TOP"))
+	got, err := e.ExpandFilterSet(ctx, types.Ref(mustSet(t, "FLTR-TOP")))
 	if want := "10.5.0.0/24 203.0.113.0/24"; err != nil || strings.Join(rangeList(got), " ") != want {
 		t.Errorf("ExpandFilterSet = %v, %v; want %s", rangeList(got), err, want)
 	}
