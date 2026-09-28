@@ -87,11 +87,13 @@ func (l *DumpLoader) Source() *MemSource {
 	return l.corpus.Source(l.Sources...)
 }
 
-// SourceOf builds a MemSource over the objects read so far whose source: is
-// one of sources (compared without regard to case), in the precedence given:
-// the dumps as if those registries alone had been loaded. It is how a caller
-// looks a set up in one registry — bgpq4's RIPE::AS-FOO — without reading the
-// dumps again. An object without a source: is left out.
+// SourceOf builds a MemSource whose unscoped lookups and routes see only the
+// objects read so far whose source: is one of sources (compared without
+// regard to case), in the precedence given: the dumps as if those registries
+// alone had been loaded. An object without a source: is left out of them. A
+// scoped lookup (RIPE::AS-FOO) and the claims of a set it finds see every
+// source the loader holds, as bgpq4's -S list does not limit a SOURCE::
+// object.
 func (l *DumpLoader) SourceOf(sources ...string) *MemSource {
 	return l.corpus.SourceOf(sources...)
 }

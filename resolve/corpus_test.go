@@ -19,9 +19,11 @@ import (
 )
 
 // sameAnswers holds a MemSource built from a Corpus to NewMemSource over the
-// same objects: every set looked up, every AS's routes in each family (as
-// sets: the engine deduplicates), every set's honored claimants.
-func sameAnswers(t *testing.T, label string, objs []object.Object, got, want *resolve.MemSource) {
+// same objects: every set looked up, unscoped and under each of scopes plus an
+// unknown registry ("NOSUCH"), every AS's routes in each family (as sets: the
+// engine deduplicates), and every set's honored claimants, unscoped and per
+// scope.
+func sameAnswers(t *testing.T, label string, objs []object.Object, got, want *resolve.MemSource, scopes []string) {
 	t.Helper()
 	ctx := context.Background()
 	names := map[string]types.SetName{}
@@ -41,19 +43,29 @@ func sameAnswers(t *testing.T, label string, objs []object.Object, got, want *re
 	}
 	missing, _ := types.ParseSetName("AS-NOT-THERE")
 	names[missing.String()] = missing
-	for _, n := range names {
-		gs, gerr := got.GetSet(ctx, types.Ref(n))
-		ws, werr := want.GetSet(ctx, types.Ref(n))
+	checkRef := func(refLabel string, ref types.SetRef) {
+		gs, gerr := got.GetSet(ctx, ref)
+		ws, werr := want.GetSet(ctx, ref)
 		if (gerr == nil) != (werr == nil) || !reflect.DeepEqual(gs, ws) {
-			t.Fatalf("%s: GetSet(%s) = %v, %v; want %v, %v", label, n, gs, gerr, ws, werr)
+			t.Fatalf("%s: GetSet(%s) = %v, %v; want %v, %v", label, refLabel, gs, gerr, ws, werr)
 		}
 		if ws == nil {
-			continue
+			return
 		}
 		gm, _ := got.MembersByRef(ctx, ws)
 		wm, _ := want.MembersByRef(ctx, ws)
 		if !slices.Equal(texts(gm), texts(wm)) {
-			t.Fatalf("%s: MembersByRef(%s) = %v; want %v", label, n, texts(gm), texts(wm))
+			t.Fatalf("%s: MembersByRef(%s) = %v; want %v", label, refLabel, texts(gm), texts(wm))
+		}
+	}
+	for _, n := range names {
+		checkRef(n.String(), types.Ref(n))
+		for _, scope := range append(append([]string{}, scopes...), "NOSUCH") {
+			ref, err := types.NewSetRef(scope, n)
+			if err != nil {
+				t.Fatalf("%s: NewSetRef(%s, %s): %v", label, scope, n, err)
+			}
+			checkRef(ref.String(), ref)
 		}
 	}
 	for as := range asns {
@@ -161,9 +173,9 @@ func TestCorpusMatchesMemSource(t *testing.T) {
 			"route: 10.0.0.4/30\norigin: ASY\nsource: RIPE\n",
 		}
 		odd := latest(append(append([]object.Object(nil), objs...), decodeAll(t, oddTexts)...))
-		sameAnswers(t, label+" with odd routes", odd, corpusOf(odd).Source("RIPE", "RADB"), resolve.NewMemSource(odd, "RIPE", "RADB"))
-		sameAnswers(t, label, objs, c.Source("RIPE", "RADB"), resolve.NewMemSource(objs, "RIPE", "RADB"))
-		sameAnswers(t, label+" without precedence", objs, c.Source(), resolve.NewMemSource(objs))
+		sameAnswers(t, label+" with odd routes", odd, corpusOf(odd).Source("RIPE", "RADB"), resolve.NewMemSource(odd, "RIPE", "RADB"), []string{"RIPE", "RADB"})
+		sameAnswers(t, label, objs, c.Source("RIPE", "RADB"), resolve.NewMemSource(objs, "RIPE", "RADB"), []string{"RIPE", "RADB"})
+		sameAnswers(t, label+" without precedence", objs, c.Source(), resolve.NewMemSource(objs), []string{"RIPE", "RADB"})
 		if seed%5 == 0 && len(objs) == len(decodeAll(t, texts)) { // the oracle reads every object
 			checkModel(t, label+" (corpus)", newOracle(m), texts, c.Source("RIPE", "RADB"), true)
 			checked++
@@ -175,7 +187,7 @@ func TestCorpusMatchesMemSource(t *testing.T) {
 				ripe = append(ripe, o)
 			}
 		}
-		sameAnswers(t, label+" SourceOf(RIPE)", ripe, c.SourceOf("ripe"), resolve.NewMemSource(ripe, "ripe"))
+		sameAnswers(t, label+" SourceOf(RIPE)", ripe, c.SourceOf("ripe"), resolve.NewMemSource(ripe, "ripe"), []string{"RIPE"})
 	}
 }
 

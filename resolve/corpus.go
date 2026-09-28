@@ -284,9 +284,12 @@ func (c *Corpus) Source(sourcePrecedence ...string) *MemSource {
 	return c.build(nil, sourcePrecedence)
 }
 
-// SourceOf builds a MemSource over the objects of the given sources only
-// (compared without regard to case), in the precedence given; an object
-// without a source: is left out. It is DumpLoader.SourceOf's meaning.
+// SourceOf builds a MemSource whose unscoped lookups and routes see only the
+// objects of the given sources (compared without regard to case), in the
+// precedence given; an object without a source: is left out of them. A scoped
+// lookup (RIPE::AS-FOO) and the claims of a set it finds see every source the
+// corpus holds, as bgpq4's -S list does not limit a SOURCE:: object. It is
+// DumpLoader.SourceOf's meaning.
 func (c *Corpus) SourceOf(sources ...string) *MemSource {
 	want := map[string]bool{}
 	for _, s := range sources {
@@ -295,15 +298,15 @@ func (c *Corpus) SourceOf(sources ...string) *MemSource {
 	return c.build(func(s string) bool { return s != "" && want[s] }, sources)
 }
 
-func (c *Corpus) build(keep func(string) bool, precedence []string) *MemSource {
-	hs := c.ordered(keep)
+func (c *Corpus) build(dflt func(string) bool, precedence []string) *MemSource {
+	hs := c.ordered(nil) // every source: scoped lookups and claims see them all
 	objs := make([]object.Object, len(hs))
 	for i, h := range hs {
 		objs[i] = h.obj
 	}
-	s := NewMemSource(objs, precedence...)
+	s := newMemSource(objs, precedence, dflt)
 	for rk := range c.routes {
-		if keep == nil || keep(rk.source) {
+		if dflt == nil || dflt(rk.source) {
 			s.routes[rk.origin] = append(s.routes[rk.origin], rk.prefix)
 		}
 	}
