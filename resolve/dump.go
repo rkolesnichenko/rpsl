@@ -36,6 +36,11 @@ type DumpLoader struct {
 	// set name appears in several registries, the earliest listed wins.
 	Sources []string
 
+	// KeepPolicy keeps every aut-num and inet-rtr (as Corpus.KeepPolicy does),
+	// so that Source and SourceOf are PolicySources that serve them. Set it
+	// before the first Read.
+	KeepPolicy bool
+
 	// OnDiagnostics, when set, is called for every object that raised
 	// diagnostics, with the object and its diagnostics. It is the hook for a
 	// caller that wants to report on a dump's quality; leaving it nil keeps
@@ -52,6 +57,7 @@ type DumpLoader struct {
 // classes, route and route6, aut-num and inet-rtr. Everything else is counted
 // and dropped. A read error stops the load and is returned.
 func (l *DumpLoader) Read(r io.Reader) error {
+	l.corpus.KeepPolicy = l.KeepPolicy
 	for o, ds := range rpsl.Parse(r) {
 		l.Stats.Objects++
 		if len(ds) > 0 {

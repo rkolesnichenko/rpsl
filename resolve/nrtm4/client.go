@@ -77,6 +77,10 @@ type Client struct {
 	// Now is the clock staleness is judged by (§5.6); nil is time.Now.
 	Now func() time.Time
 
+	// KeepPolicy keeps aut-nums and inet-rtrs, so Source() serves them
+	// (resolve.Corpus.KeepPolicy).
+	KeepPolicy bool
+
 	mu       sync.Mutex // serializes Sync
 	st       state
 	view     atomic.Pointer[view]
@@ -344,7 +348,7 @@ func (c *Client) loadSnapshot(ctx context.Context, n *notification) (*resolve.Co
 	if err := c.fileHeader(seq, "snapshot", n, n.Snapshot.Version); err != nil {
 		return nil, 0, 0, err
 	}
-	corpus := &resolve.Corpus{}
+	corpus := &resolve.Corpus{KeepPolicy: c.KeepPolicy}
 	added, discarded := 0, 0
 	type report struct {
 		o  *ast.Object

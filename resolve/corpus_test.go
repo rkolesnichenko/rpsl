@@ -598,3 +598,11 @@ func TestExpandableClassAgrees(t *testing.T) {
 		t.Error("ExpandableClass is not case- and space-blind")
 	}
 }
+
+func TestDumpLoaderKeepsPolicy(t *testing.T) {
+	l := &resolve.DumpLoader{Sources: []string{"RIPE", "RADB"}, KeepPolicy: true}
+	if err := l.Read(strings.NewReader(strings.Join(policyTexts, "\n"))); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	checkPolicy(t, "DumpLoader", l.Source())
+}

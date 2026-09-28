@@ -306,6 +306,86 @@ func (s *Source) fetchSet(ctx context.Context, name types.SetName) (object.Named
 	return set, nil
 }
 
+// AutNum fetches the aut-num of as ("!maut-num,AS1"), in source alone when it
+// is set; a registry the server does not have is resolve.ErrNotFound.
+func (s *Source) AutNum(ctx context.Context, as types.ASN, source string) (object.AutNum, error) {
+	o, err := s.fetchObject(ctx, "aut-num", as.String(), source)
+	if err != nil {
+		return object.AutNum{}, err
+	}
+	an, ok := o.(object.AutNum)
+	if !ok || an.AS != as {
+		return object.AutNum{}, fmt.Errorf("irrd: !maut-num,%s answered with another object", as)
+	}
+	return an, nil
+}
+
+// InetRtr fetches the inet-rtr named name ("!minet-rtr,<name>"), in source
+// alone when it is set. The name must be a DNS name.
+func (s *Source) InetRtr(ctx context.Context, name, source string) (object.InetRtr, error) {
+	if !dnsName(name) {
+		return object.InetRtr{}, fmt.Errorf("irrd: invalid inet-rtr name %q", name)
+	}
+	o, err := s.fetchObject(ctx, "inet-rtr", name, source)
+	if err != nil {
+		return object.InetRtr{}, err
+	}
+	ir, ok := o.(object.InetRtr)
+	if !ok || !strings.EqualFold(strings.TrimSpace(ir.Name), name) {
+		return object.InetRtr{}, fmt.Errorf("irrd: !minet-rtr,%s answered with another object", name)
+	}
+	return ir, nil
+}
+
+// fetchObject fetches and decodes one object with "!m", through the sub-source
+// of source when it is set.
+func (s *Source) fetchObject(ctx context.Context, class, key, source string) (object.Object, error) {
+	q := s
+	if source != "" {
+		reg, err := types.ParseSourceName(source)
+		if err != nil {
+			return nil, err
+		}
+		q = s.in(reg)
+		if q.unknown.Load() {
+			return nil, resolve.ErrNotFound
+		}
+	}
+	payload, err := q.do(ctx, "!m"+class+","+key)
+	if errors.Is(err, errUnknownSource) {
+		if q != s {
+			q.unknown.Store(true)
+		}
+		return nil, resolve.ErrNotFound
+	}
+	if errors.Is(err, errNotFound) {
+		return nil, resolve.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	raw, _ := rpsl.ParseObject(string(payload))
+	o, _ := object.Decode(raw)
+	return o, nil
+}
+
+// dnsName reports whether n is letters, digits, '-' and '.' only, so it
+// cannot carry another command.
+func dnsName(n string) bool {
+	if n == "" || len(n) > 253 {
+		return false
+	}
+	for i := 0; i < len(n); i++ {
+		c := n[i]
+		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '-' || c == '.') {
+			return false
+		}
+	}
+	return true
+}
+
+var _ resolve.PolicySource = (*Source)(nil)
+
 // OriginatedRoutes fetches prefixes originated by as via "!g" (IPv4) and "!6"
 // (IPv6), as constrained by afi. A "no routes" (D) response is an empty result,
 // not an error.

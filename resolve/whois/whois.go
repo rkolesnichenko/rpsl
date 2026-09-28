@@ -150,6 +150,104 @@ func unknownSource(err error) bool {
 	return errors.As(err, &se) && (se.Code == 102 || strings.Contains(se.Message, "sources are unavailable"))
 }
 
+// AutNum fetches the aut-num of as, from Sources' priority or, when source is
+// set, from that registry alone; a registry the server does not know is
+// resolve.ErrNotFound.
+func (s *Source) AutNum(ctx context.Context, as types.ASN, source string) (object.AutNum, error) {
+	o, err := s.fetchOne(ctx, "aut-num", as.String(), source, func(o object.Object) bool {
+		an, ok := o.(object.AutNum)
+		return ok && an.AS == as
+	})
+	if err != nil {
+		return object.AutNum{}, err
+	}
+	return o.(object.AutNum), nil
+}
+
+// InetRtr fetches the inet-rtr named name, as AutNum does.
+func (s *Source) InetRtr(ctx context.Context, name, source string) (object.InetRtr, error) {
+	if !dnsName(name) {
+		return object.InetRtr{}, fmt.Errorf("whois: invalid inet-rtr name %q", name)
+	}
+	o, err := s.fetchOne(ctx, "inet-rtr", name, source, func(o object.Object) bool {
+		ir, ok := o.(object.InetRtr)
+		return ok && strings.EqualFold(strings.TrimSpace(ir.Name), name)
+	})
+	if err != nil {
+		return object.InetRtr{}, err
+	}
+	return o.(object.InetRtr), nil
+}
+
+// fetchOne queries "-r -T class key" and returns the object match accepts from
+// the best-ranked source.
+func (s *Source) fetchOne(ctx context.Context, class, key, source string, match func(object.Object) bool) (object.Object, error) {
+	sources := s.Sources
+	if source != "" {
+		reg, err := types.ParseSourceName(source)
+		if err != nil {
+			return nil, err
+		}
+		sources = []string{reg}
+	}
+	objs, err := s.queryObjectsIn(ctx, sources, "-r -T "+class+" "+key)
+	if err != nil {
+		if source != "" && unknownSource(err) {
+			return nil, resolve.ErrNotFound
+		}
+		return nil, err
+	}
+	var best object.Object
+	bestRank := len(sources) + 1
+	for _, o := range objs {
+		if !match(o) {
+			continue
+		}
+		rank := slices.IndexFunc(sources, func(n string) bool { return strings.EqualFold(n, objectSource(o)) })
+		if rank < 0 {
+			if source != "" {
+				continue
+			}
+			rank = len(sources)
+		}
+		if rank < bestRank {
+			best, bestRank = o, rank
+		}
+	}
+	if best == nil {
+		return nil, resolve.ErrNotFound
+	}
+	return best, nil
+}
+
+// objectSource is an aut-num's or inet-rtr's source: attribute.
+func objectSource(o object.Object) string {
+	switch t := o.(type) {
+	case object.AutNum:
+		return strings.TrimSpace(t.Source)
+	case object.InetRtr:
+		return strings.TrimSpace(t.Source)
+	}
+	return ""
+}
+
+// dnsName reports whether n is letters, digits, '-' and '.' only, so it
+// cannot carry another command.
+func dnsName(n string) bool {
+	if n == "" || len(n) > 253 {
+		return false
+	}
+	for i := 0; i < len(n); i++ {
+		c := n[i]
+		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '-' || c == '.') {
+			return false
+		}
+	}
+	return true
+}
+
+var _ resolve.PolicySource = (*Source)(nil)
+
 // OriginatedRoutes returns prefixes originated by as, via the inverse "origin"
 // query, filtered to afi.
 func (s *Source) OriginatedRoutes(ctx context.Context, as types.ASN, afi types.AFI) ([]netip.Prefix, error) {
