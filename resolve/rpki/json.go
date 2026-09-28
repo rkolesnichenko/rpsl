@@ -29,6 +29,7 @@ const SLURMTrustAnchor = "SLURM file"
 // through.
 func ReadJSON(r io.Reader) (*VRPs, error) {
 	var vs []VRP
+	tas := map[string]string{} // a handful of trust anchors: one copy each
 	seen := false
 	err := walkObject(json.NewDecoder(r), func(d *json.Decoder, key string) error {
 		if key != "roas" {
@@ -43,6 +44,11 @@ func ReadJSON(r io.Reader) (*VRPs, error) {
 			if err != nil {
 				return fmt.Errorf("record %d: %w", i, err)
 			}
+			if ta, ok := tas[v.TA]; ok {
+				v.TA = ta
+			} else {
+				tas[v.TA] = v.TA
+			}
 			vs = append(vs, v)
 			return nil
 		})
@@ -53,7 +59,7 @@ func ReadJSON(r io.Reader) (*VRPs, error) {
 	if err != nil {
 		return nil, fmt.Errorf("rpki: reading VRPs: %w", err)
 	}
-	return NewVRPs(vs)
+	return indexVRPs(vs)
 }
 
 func decodeROA(raw json.RawMessage) (VRP, error) {
@@ -63,10 +69,8 @@ func decodeROA(raw json.RawMessage) (VRP, error) {
 	if err := json.Unmarshal(raw, &rec); err != nil || rec == nil {
 		return VRP{}, fmt.Errorf("not an object: %s", raw)
 	}
-	for _, k := range []string{"asn", "prefix", "maxLength", "ta"} {
-		if _, ok := rec[k]; !ok {
-			return VRP{}, fmt.Errorf("missing %q", k)
-		}
+	if err := require(rec, "asn", "prefix", "maxLength", "ta"); err != nil {
+		return VRP{}, err
 	}
 	asn, err := decodeASN(rec["asn"])
 	if err != nil {
@@ -107,7 +111,7 @@ func (s *VRPs) ApplySLURM(r io.Reader) (*VRPs, error) {
 			out = append(out, v)
 		}
 	}
-	return NewVRPs(append(out, as...))
+	return indexVRPs(append(out, as...))
 }
 
 type prefixFilter struct {
@@ -186,10 +190,8 @@ func readSLURM(r io.Reader) (fs []prefixFilter, as []VRP, err error) {
 		return nil, nil, err
 	}
 	err = eachRecord(assertions, "prefixAssertions", func(i int, rec map[string]json.RawMessage) error {
-		for _, k := range []string{"asn", "prefix"} {
-			if _, ok := rec[k]; !ok {
-				return fmt.Errorf("missing %q", k)
-			}
+		if err := require(rec, "asn", "prefix"); err != nil {
+			return err
 		}
 		a, err := decodeASN(rec["asn"])
 		if err != nil {
@@ -225,6 +227,16 @@ func member(doc map[string]json.RawMessage, outer, inner string) (json.RawMessag
 		return nil, fmt.Errorf("%s: not an object", outer)
 	}
 	return m[inner], nil
+}
+
+// require refuses a record without every one of keys.
+func require(rec map[string]json.RawMessage, keys ...string) error {
+	for _, k := range keys {
+		if _, ok := rec[k]; !ok {
+			return fmt.Errorf("missing %q", k)
+		}
+	}
+	return nil
 }
 
 // eachRecord calls fn for each object of the JSON array raw (absent or null:
@@ -333,8 +345,8 @@ func walkArray(d *json.Decoder, name string, elem func(int, json.RawMessage) err
 	if tok != json.Delim('[') {
 		return fmt.Errorf("%q is not an array", name)
 	}
+	var raw json.RawMessage // reused: elem must not keep it
 	for i := 0; d.More(); i++ {
-		var raw json.RawMessage
 		if err := d.Decode(&raw); err != nil {
 			return fmt.Errorf("invalid JSON: %w", err)
 		}

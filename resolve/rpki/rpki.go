@@ -80,7 +80,13 @@ type grant struct {
 // prefix is not valid and canonical, or whose MaxLength is shorter than the
 // prefix or longer than the family allows.
 func NewVRPs(vs []VRP) (*VRPs, error) {
-	s := &VRPs{all: append([]VRP(nil), vs...)}
+	return indexVRPs(append([]VRP(nil), vs...))
+}
+
+// indexVRPs is NewVRPs over a slice it may keep: ReadJSON's and ApplySLURM's
+// own, so that half a million VRPs are not held twice.
+func indexVRPs(vs []VRP) (*VRPs, error) {
+	s := &VRPs{all: vs}
 	for i, v := range s.all {
 		if err := check(v); err != nil {
 			return nil, fmt.Errorf("rpki: VRP %d: %w", i, err)

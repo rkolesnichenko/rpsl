@@ -6,6 +6,8 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -523,5 +525,94 @@ func TestRun(t *testing.T) {
 	}
 	if c.Status().Version != 2 || len(errs) == 0 || !strings.Contains(errs[0].Error(), "503") {
 		t.Errorf("version %d, errors %v", c.Status().Version, errs)
+	}
+}
+
+// Review regressions (v0.19.0).
+
+// An object whose primary key lengthens when upper-cased is discarded, not a
+// panic.
+func TestClientUnicodeKey(t *testing.T) {
+	s := nrtmtest.New(t, "TEST")
+	s.Publish(nrtmtest.Change{Class: "route", PK: "x", Text: "route: " + strings.Repeat("ɐ", 10) + "\norigin: AS1\nsource: TEST\n"})
+	c := newClient(s, "TEST")
+	if _, err := c.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	s.Publish(nrtmtest.Change{Delete: true, Class: "route", PK: strings.Repeat("ɐ", 10) + "AS1"})
+	if _, err := c.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A snapshot's objects reach OnDiagnostics only once its hash has checked out.
+func TestClientSnapshotDiagnosticsAfterHash(t *testing.T) {
+	s := nrtmtest.New(t, "TEST")
+	c := newClient(s, "TEST")
+	var seen int
+	c.OnDiagnostics = func(*ast.Object, []ast.Diagnostic) { seen++ }
+	var b bytes.Buffer
+	w := gzip.NewWriter(&b)
+	fmt.Fprintf(w, "\x1e{\"nrtm_version\":4,\"type\":\"snapshot\",\"source\":\"TEST\",\"session_id\":%q,\"version\":1}\n", s.Session())
+	fmt.Fprintf(w, "\x1e{\"object\":\"route: 192.0.2.0/24\\norigin: AS1\\nsource: OTHER\\n\"}\n")
+	w.Close()
+	s.Corrupt(0, b.Bytes()) // served in place of the snapshot the hash is of
+	if _, err := c.Sync(context.Background()); err == nil {
+		t.Fatal("a snapshot with the wrong hash loaded")
+	}
+	if seen != 0 {
+		t.Errorf("OnDiagnostics saw %d objects of a snapshot that failed its hash", seen)
+	}
+}
+
+// A notification file that redirects elsewhere is refused, with the client
+// the caller gave as well as the default one.
+func TestClientRefusesRedirect(t *testing.T) {
+	s := nrtmtest.New(t, "TEST")
+	elsewhere := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, s.URL(), http.StatusFound) // same content, another host
+	}))
+	defer elsewhere.Close()
+	c := newClient(s, "TEST")
+	c.URL = elsewhere.URL + "/nrtmv4/TEST/update-notification-file.jose"
+	c.HTTP = elsewhere.Client()
+	if _, err := c.Sync(context.Background()); err == nil || !strings.Contains(err.Error(), "redirect") {
+		t.Errorf("a redirect to another host: %v", err)
+	}
+}
+
+// MaxAge refuses a notification file older than it; a new session older than
+// the version held is refused whatever MaxAge says.
+func TestClientRefusesOld(t *testing.T) {
+	s := nrtmtest.New(t, "TEST")
+	c := newClient(s, "TEST")
+	c.MaxAge = 24 * time.Hour
+	s.SetTime(time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)) // two days before the client's clock
+	if _, err := c.Sync(context.Background()); err == nil || !strings.Contains(err.Error(), "MaxAge") {
+		t.Fatalf("a two-day-old file with MaxAge 24h: %v", err)
+	}
+	c.MaxAge = 0
+	s.SetTime(time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC))
+	s.Publish(route("192.0.2.0/24", 1, ""))
+	mustSync(t, c)
+	s.NewSession()
+	s.SetTime(time.Date(2026, 9, 27, 11, 0, 0, 0, time.UTC)) // older than the file the mirror came from
+	if _, err := c.Sync(context.Background()); err == nil || !strings.Contains(err.Error(), "older") {
+		t.Fatalf("a new session older than the mirror: %v", err)
+	}
+	if st := c.Status(); st.Version != 2 || st.Objects != 1 {
+		t.Errorf("a refused session moved the mirror: %+v", st)
+	}
+}
+
+// Run never polls again sooner than the minimum, after a failure either.
+func TestRunWaits(t *testing.T) {
+	for _, interval := range []time.Duration{minInterval, 3 * minInterval, time.Hour} {
+		for failures := 0; failures < 12; failures++ {
+			w := runWait(failures, interval)
+			if w < minInterval || w > interval {
+				t.Errorf("runWait(%d, %v) = %v: outside [%v, %v]", failures, interval, w, minInterval, interval)
+			}
+		}
 	}
 }

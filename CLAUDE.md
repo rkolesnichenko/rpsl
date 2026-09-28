@@ -147,7 +147,7 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   (all six modules incl. examples/bulk-ripe under -race, gofmt, invariants) with
   `scripts/check.sh`; `FUZZTIME=15s scripts/check.sh` also runs every fuzz target.
 - `go test -run 'TestRoundTrip|TestStreamRoundTrip' .` — the lossless guard (root module).
-- Fuzz (32 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
+- Fuzz (33 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
   FuzzFormat (ast); FuzzParseSetName, FuzzParseRangeOperator, FuzzParsePrefixRange,
   FuzzParseRouterID (types); FuzzParseStream, FuzzDecode (root); FuzzParseImport,
   FuzzParseASPathRegexp, FuzzParseFilter, FuzzParsePeering, FuzzParseInject,
@@ -155,7 +155,9 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   FuzzParseRPAttribute, FuzzParseTypedef, FuzzParseProtocol, FuzzFilterString (policy);
   FuzzReadFrame, FuzzParseMembers (resolve/irrd); FuzzScanResponse (resolve/whois);
   FuzzAggregate (resolve/internal/filtergen); FuzzReadJSON, FuzzApplySLURM (resolve/rpki);
-  FuzzParseNotification, FuzzReadDelta (resolve/nrtm4).
+  FuzzParseNotification, FuzzReadDelta (resolve/nrtm4); FuzzCorpusDelete (resolve).
+- Never slice a string at an offset found in a transformed copy of it (`strings.ToUpper` can
+  lengthen UTF-8): v0.19.0 panicked on "ɐ" (2 bytes) → "Ɐ" (3). Match case-insensitively in place.
 - Opt-in: `RPSL_REALDATA=$PWD/.data go test -run TestRealData ./examples/bulk-ripe/bulk`
   (RIPE, APNIC, ARIN, AFRINIC, LACNIC, RADB and RADB's ten mirrors, via scripts/fetch-irr-dumps.sh);
   `RPSL_LIVE=1 go test -run TestLiveSmoke ./resolve`;

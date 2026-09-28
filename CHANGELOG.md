@@ -18,7 +18,6 @@ same version (see [RELEASING.md](RELEASING.md)).
 - **`docs/rpslq.md`**, rpslq for bgpq4 users: install, what is the same, what
   rpslq adds (`--rpki`, `--dump`, `--whois`, `SOURCE::`, `-d`), and where the
   two differ on purpose.
-
 - **`scripts/release.sh vX.Y.Z`** releases every module as RELEASING.md
   describes: it refuses to start unless the tree, changelog and CI are ready,
   tags and pushes in dependency order, waits for the Go proxy (asking only for
@@ -26,6 +25,42 @@ same version (see [RELEASING.md](RELEASING.md)).
   from an empty module cache, creates the GitHub release, and resumes after a
   failure. `scripts/release-dryrun.sh` now rehearses by running it against a
   bare repository and a local proxy, including its refusals and a resume.
+- **`nrtm4.Client.MaxAge`**: refuse a notification file older than it, as
+  IRRd refuses one over 24 hours old, so that a replayed, validly signed file
+  cannot roll the mirror back. Zero keeps the draft's default: report it
+  (`Status.Stale`) and use it.
+- **`rpki.VRPs.AddTo(*resolve.Corpus)`**: IRRd's pseudo routes, put straight
+  into a `Corpus`; `rpslq --rpki --dump` uses it instead of writing a million
+  objects out as text and parsing them back.
+
+### Fixed
+
+Found by a review of v0.16.0..v0.19.0.
+
+- **A primary key that grows when upper-cased panicked** `Corpus.Delete` and
+  the NRTMv4 client ("ɐ" is two bytes, "Ɐ" three): a hostile or broken delta
+  could crash a mirror. The key is now read from the string searched, in one
+  place (`resolve`; `nrtm4`'s copy is gone), and fuzzed (`FuzzCorpusDelete`).
+- **`Corpus` (so `DumpLoader`) dropped a route-set's indirect member** whose
+  route has an undecodable `origin:`, which `NewMemSource` and v0.16.0 kept:
+  what claims membership is now decided by the engine's own rule. And it
+  answered a route with host bits set (`192.0.2.1/24`) masked, where
+  `NewMemSource` answers it as decoded; now it too keeps it as decoded. The
+  equivalence test now draws both.
+- `Corpus.Merge` could hold a route twice (whole and reduced), so that a
+  later `Delete` left it served; an update moved an object to the end of load
+  order, changing which of two unranked sources' same-named sets wins.
+- `nrtm4`: a record at the end of a file could be one byte over the cap;
+  `"next_signing_key": null` (or `""`) was refused rather than read as none;
+  `Run` retried a failed Sync after 30 seconds, under §5.2's one-minute
+  minimum; a snapshot's objects reached `OnDiagnostics` before its hash was
+  checked; a redirect could leave the notification file's host, or HTTPS (it
+  is refused now, with the caller's `http.Client` too); a new session whose
+  notification file is older than the one the mirror came from is refused as
+  a rollback.
+- `release.sh`: a relative `RELEASE_DIST` broke the binaries step, and with
+  `--no-gh-release` the archives were deleted as soon as they were built; they
+  now go to `RELEASE_DIST` (made absolute) or `$TMPDIR/rpsl-release-vX.Y.Z`.
 
 ## [0.19.0] - 2026-09-27
 

@@ -640,33 +640,36 @@ func loadVRPs(file, slurm string) (*rpki.VRPs, error) {
 	if file == "" {
 		return nil, nil
 	}
-	read := func(name string, fn func(io.Reader) error) error {
-		f, err := os.Open(name)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		r, err := maybeGzip(f)
-		if err == nil {
-			err = fn(r)
-		}
-		if err != nil {
-			return fmt.Errorf("%s: %w", name, err)
-		}
-		return nil
-	}
 	var vrps *rpki.VRPs
-	err := read(file, func(r io.Reader) (err error) {
+	err := readInput(file, func(r io.Reader) (err error) {
 		vrps, err = rpki.ReadJSON(r)
 		return err
 	})
 	if err == nil && slurm != "" {
-		err = read(slurm, func(r io.Reader) (err error) {
+		err = readInput(slurm, func(r io.Reader) (err error) {
 			vrps, err = vrps.ApplySLURM(r)
 			return err
 		})
 	}
 	return vrps, err
+}
+
+// readInput reads a file named on the command line — a dump, VRPs, SLURM —
+// through gzip when it is gzipped, naming it in any error but opening's.
+func readInput(name string, fn func(io.Reader) error) error {
+	f, err := os.Open(name)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	r, err := maybeGzip(f)
+	if err == nil {
+		err = fn(r)
+	}
+	if err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
 }
 
 // source builds the backend the flags describe. With vrps, a dump backend
@@ -679,42 +682,22 @@ func source(host, sources string, useWhois bool, files []string, conns int, vrps
 		}
 	}
 	if len(files) > 0 {
-		var closers []io.Closer
-		closeAll := func() {
-			for _, c := range closers {
-				c.Close()
-			}
-		}
-		defer closeAll()
 		l := &resolve.DumpLoader{Sources: prio}
 		for _, name := range files {
-			f, err := os.Open(name)
-			if err != nil {
+			if err := readInput(name, l.Read); err != nil {
 				return nil, err
-			}
-			closers = append(closers, f)
-			r, err := maybeGzip(f)
-			if err != nil {
-				return nil, fmt.Errorf("%s: %w", name, err)
-			}
-			if err := l.Read(r); err != nil {
-				return nil, fmt.Errorf("%s: %w", name, err)
 			}
 		}
 		if vrps != nil {
-			pr, pw := io.Pipe()
-			go func() { pw.CloseWithError(vrps.WriteRPSL(pw)) }()
-			err := l.Read(pr)
-			pr.Close()
-			if err != nil {
-				return nil, fmt.Errorf("--rpki: %w", err)
-			}
+			vrps.AddTo(l.Corpus())
 		}
 		// -S chooses the registries, as it does for a server ("!s"): only
 		// those, in that order; without it, every registry in the dumps.
-		all := l.Source()
+		var all *resolve.MemSource
 		if len(prio) > 0 {
 			all = l.SourceOf(prio...)
+		} else {
+			all = l.Source()
 		}
 		return &backend{
 			src:      all,

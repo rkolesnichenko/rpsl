@@ -47,14 +47,7 @@ func (f *Filter) OriginatedRoutes(ctx context.Context, as types.ASN, afi types.A
 	if err != nil {
 		return nil, err
 	}
-	out := ps[:0:0]
-	for _, p := range ps {
-		if f.suppressed(p, as) {
-			continue
-		}
-		out = append(out, p)
-	}
-	return out, nil
+	return keep(ps, func(p netip.Prefix) bool { return !f.suppressed(p, as) }), nil
 }
 
 // MembersByRef returns Src's claimants without the route and route6 objects
@@ -64,14 +57,30 @@ func (f *Filter) MembersByRef(ctx context.Context, set object.NamedSet) ([]objec
 	if err != nil {
 		return nil, err
 	}
-	out := objs[:0:0]
-	for _, o := range objs {
-		if p, origin, ok := route(o); ok && f.suppressed(p, origin) {
-			continue
+	return keep(objs, func(o object.Object) bool {
+		p, origin, ok := route(o)
+		return !ok || !f.suppressed(p, origin)
+	}), nil
+}
+
+// keep returns the elements of xs that ok accepts: xs itself when it accepts
+// them all, as it usually does, and a copy only once one is left out.
+func keep[T any](xs []T, ok func(T) bool) []T {
+	var out []T // nil until an element is left out
+	for i, x := range xs {
+		switch {
+		case !ok(x):
+			if out == nil {
+				out = append(make([]T, 0, len(xs)), xs[:i]...)
+			}
+		case out != nil:
+			out = append(out, x)
 		}
-		out = append(out, o)
 	}
-	return out, nil
+	if out == nil {
+		return xs
+	}
+	return out
 }
 
 func (f *Filter) suppressed(p netip.Prefix, origin types.ASN) bool {

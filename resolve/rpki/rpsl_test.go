@@ -103,6 +103,45 @@ func TestWriteRPSLLoads(t *testing.T) {
 	}
 }
 
+// AddTo's pseudo routes answer as WriteRPSL's text read by a DumpLoader
+// does, for every AS, under every source selection.
+func TestAddToMatchesWriteRPSL(t *testing.T) {
+	v := mustVRPs(t,
+		VRP{netip.MustParsePrefix("192.0.2.0/24"), 24, 64496, "a"},
+		VRP{netip.MustParsePrefix("192.0.2.0/24"), 25, 64496, "a"},
+		VRP{netip.MustParsePrefix("2001:db8::/32"), 48, 64496, "a"},
+		VRP{netip.MustParsePrefix("198.51.100.0/24"), 24, 0, "a"},
+		VRP{netip.MustParsePrefix("203.0.113.0/24"), 24, 64497, "b"},
+	)
+	var b strings.Builder
+	if err := v.WriteRPSL(&b); err != nil {
+		t.Fatal(err)
+	}
+	text := &resolve.DumpLoader{}
+	if err := text.Read(strings.NewReader(b.String())); err != nil {
+		t.Fatal(err)
+	}
+	typed := &resolve.Corpus{}
+	v.AddTo(typed)
+	ctx := context.Background()
+	for _, srcs := range [][]string{nil, {"RPKI"}, {"rpki"}, {"RIPE"}} {
+		a, b := text.Corpus().SourceOf(srcs...), typed.SourceOf(srcs...)
+		if srcs == nil {
+			a, b = text.Source(), typed.Source()
+		}
+		for _, as := range []types.ASN{0, 64496, 64497, 64999} {
+			ra, _ := a.OriginatedRoutes(ctx, as, types.AFIAny)
+			rb, _ := b.OriginatedRoutes(ctx, as, types.AFIAny)
+			if fmt.Sprint(ra) != fmt.Sprint(rb) {
+				t.Errorf("sources %v, AS%d: text %v, typed %v", srcs, as, ra, rb)
+			}
+		}
+	}
+	if text.Corpus().Len() != typed.Len() {
+		t.Errorf("text holds %d, typed %d", text.Corpus().Len(), typed.Len())
+	}
+}
+
 type failWriter struct{}
 
 func (failWriter) Write([]byte) (int, error) { return 0, errors.New("disk full") }

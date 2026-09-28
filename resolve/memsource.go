@@ -29,13 +29,9 @@ type MemSource struct {
 // source: is listed earliest wins (case-insensitive), sources not listed rank
 // after all listed ones, and ties go to the object loaded first. Routes are
 // unioned across sources.
+//
+// Corpus.Source builds with it too, so that the two cannot answer differently.
 func NewMemSource(objs []object.Object, sourcePrecedence ...string) *MemSource {
-	return buildMemSource(objs, sourcePrecedence)
-}
-
-// buildMemSource indexes objs; NewMemSource and Corpus both build with it,
-// so that the two cannot answer differently.
-func buildMemSource(objs []object.Object, sourcePrecedence []string) *MemSource {
 	s := &MemSource{
 		sets:   map[string]object.NamedSet{},
 		routes: map[types.ASN][]netip.Prefix{},
@@ -60,16 +56,8 @@ func buildMemSource(objs []object.Object, sourcePrecedence []string) *MemSource 
 				s.sets[key], setRank[key] = set, r
 			}
 		}
-		// A route whose origin did not decode is no AS's, not AS0's.
-		switch t := o.(type) {
-		case object.Route:
-			if t.Prefix.IsValid() && (t.Origin != 0 || asnDecodes(t, "origin")) {
-				s.routes[t.Origin] = append(s.routes[t.Origin], t.Prefix)
-			}
-		case object.Route6:
-			if t.Prefix.IsValid() && (t.Origin != 0 || asnDecodes(t, "origin")) {
-				s.routes[t.Origin] = append(s.routes[t.Origin], t.Prefix)
-			}
+		if p, origin, ok := routeOf(o); ok {
+			s.routes[origin] = append(s.routes[origin], p)
 		}
 		s.indexClaims(o)
 	}

@@ -29,16 +29,21 @@
 #   RELEASE_DIST     directory to leave rpslq's archives in (a temporary one)
 set -eu
 
+usage() {
+	echo "usage: scripts/release.sh vX.Y.Z [--no-gh-release]" >&2
+	exit 2
+}
 V=
 GH_RELEASE=1
 for a in "$@"; do
 	case $a in
 	--no-gh-release) GH_RELEASE= ;;
 	v*.*.*) V=$a ;;
-	*) echo "usage: scripts/release.sh vX.Y.Z [--no-gh-release]" >&2; exit 2 ;;
+	*) usage ;;
 	esac
 done
-[ -n "$V" ] || { echo "usage: scripts/release.sh vX.Y.Z [--no-gh-release]" >&2; exit 2; }
+[ -n "$V" ] || usage
+X=${V#v} # the version as CHANGELOG.md writes it
 M=github.com/rkolesnichenko/rpsl
 REMOTE=${RELEASE_REMOTE:-origin}
 PROXY=${RELEASE_PROXY:-https://proxy.golang.org}
@@ -46,6 +51,7 @@ POLL=${RELEASE_POLL:-30}
 WAIT=${RELEASE_WAIT:-2400}
 cd "$(dirname "$0")/.."
 export GOWORK=off
+PLATFORMS="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64" # rpslq's binaries
 
 step() { printf '\n== %s\n' "$*"; }
 refuse() {
@@ -71,17 +77,18 @@ remote_tag() { git ls-remote --tags "$REMOTE" "refs/tags/$1" | cut -f1; }
 # served reports whether the proxy serves module $1 at $V.
 served() { GOPROXY=$PROXY GOFLAGS=-mod=mod go list -m "$1@$V" >/dev/null 2>&1; }
 
-# wait_proxy waits until the proxy serves module $1 at $V, the tag being at
-# commit $2. Asking by the commit makes a proxy that cached a miss (from before
-# the push) fetch the tag again.
+# wait_proxy waits until the proxy serves module $1 at $V, tagged $2. Asking by
+# the tag's commit makes a proxy that cached a miss (from before the push)
+# fetch the tag again.
 wait_proxy() {
+	commit=$(git rev-parse "$2^{commit}")
 	waited=0
 	until served "$1"; do
 		[ "$waited" -gt 0 ] || echo "waiting for the proxy to serve $1@$V"
 		if [ "$waited" -ge "$WAIT" ]; then
 			fail "$1@$V: the proxy still does not serve it after ${WAIT}s"
 		fi
-		GOPROXY=$PROXY GOFLAGS=-mod=mod go list -m "$1@$2" >/dev/null 2>&1 || true
+		GOPROXY=$PROXY GOFLAGS=-mod=mod go list -m "$1@$commit" >/dev/null 2>&1 || true
 		sleep "$POLL"
 		waited=$((waited + POLL))
 	done
@@ -133,7 +140,6 @@ existing=$(release_tags)
 if [ -z "$existing" ]; then
 	[ "$(git rev-parse HEAD)" = "$(git rev-parse "$REMOTE/main")" ] ||
 		refuse "HEAD is not $REMOTE/main: push first, and let CI run"
-	X=${V#v}
 	grep -Eq "^## \[$X\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$" CHANGELOG.md ||
 		refuse "CHANGELOG.md has no dated \"## [$X] - YYYY-MM-DD\" section"
 	grep -q "^\[$X\]: " CHANGELOG.md || refuse "CHANGELOG.md does not link [$X]"
@@ -164,8 +170,8 @@ if [ -z "$(remote_tag "lexer/$V")" ] || [ -z "$(remote_tag "types/$V")" ]; then
 	git push -q "$REMOTE" "lexer/$V" "types/$V"
 	pushed lexer types
 fi
-wait_proxy "$M/lexer" "$(git rev-parse "lexer/$V^{commit}")"
-wait_proxy "$M/types" "$(git rev-parse "types/$V^{commit}")"
+wait_proxy "$M/lexer" "lexer/$V"
+wait_proxy "$M/types" "types/$V"
 stop_after 1
 
 # bump releases module directory $1 under tag $2 ("" for none): it requires
@@ -197,17 +203,17 @@ bump() {
 
 step "2. ast (requires lexer)"
 bump ast "ast/$V" "ast: require lexer $V" "$M/lexer"
-wait_proxy "$M/ast" "$(git rev-parse "ast/$V^{commit}")"
+wait_proxy "$M/ast" "ast/$V"
 stop_after 2
 
 step "3. the root module (requires ast, lexer, types)"
 bump . "$V" "rpsl: require the leaves at $V" "$M/ast" "$M/lexer" "$M/types"
-wait_proxy "$M" "$(git rev-parse "$V^{commit}")"
+wait_proxy "$M" "$V"
 stop_after 3
 
 step "4. resolve (requires the root module and the leaves)"
 bump resolve "resolve/$V" "resolve: require $V" "$M" "$M/ast" "$M/lexer" "$M/types"
-wait_proxy "$M/resolve" "$(git rev-parse "resolve/$V^{commit}")"
+wait_proxy "$M/resolve" "resolve/$V"
 stop_after 4
 
 step "5. examples/bulk-ripe (not tagged; builds outside the workspace)"
@@ -252,14 +258,19 @@ got=$("$tmp/bin/rpslq" -v)
 echo "$got installs"
 
 step "7. rpslq binaries, built from the published module"
-dist=${RELEASE_DIST:-$tmp/dist}
+# The archives outlive the script: in RELEASE_DIST, made absolute, or beside
+# the other temporary files of this user — not in $tmp, which the EXIT trap
+# removes, as it would with --no-gh-release before anyone uploaded them.
+dist=${RELEASE_DIST:-${TMPDIR:-/tmp}/rpsl-release-$V}
 mkdir -p "$dist" "$tmp/build"
+dist=$(cd "$dist" && pwd)
+rm -f "$dist"/rpslq_"${V}"_* "$dist/SHA256SUMS"
 (
 	cd "$tmp/build"
 	go mod init example.com/rpslq-build >/dev/null 2>&1
 	go get "$M/resolve@$V" >/dev/null 2>&1 || fail "go get $M/resolve@$V"
 	license=$(go list -m -f '{{.Dir}}' "$M/resolve")/LICENSE
-	for p in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+	for p in $PLATFORMS; do
 		os=${p%/*} arch=${p#*/}
 		exe=rpslq
 		[ "$os" = windows ] && exe=rpslq.exe
@@ -283,8 +294,30 @@ README
 	done
 )
 if command -v sha256sum >/dev/null; then sum="sha256sum"; else sum="shasum -a 256"; fi
-(cd "$dist" && rm -f SHA256SUMS && $sum rpslq_"${V}"_* >SHA256SUMS)
-echo "checksums in $dist/SHA256SUMS"
+(cd "$dist" && $sum rpslq_"${V}"_* >SHA256SUMS)
+
+# Check what is about to be published: the checksums, each archive's contents,
+# the platform and module version each binary was built for, and the native
+# binary's own word.
+(cd "$dist" && $sum -c --quiet SHA256SUMS) || fail "SHA256SUMS does not verify"
+native=$(go env GOOS)/$(go env GOARCH)
+for p in $PLATFORMS; do
+	os=${p%/*} arch=${p#*/}
+	exe=rpslq a=$dist/rpslq_${V}_${os}_$arch.tar.gz
+	[ "$os" = windows ] && exe=rpslq.exe a=$dist/rpslq_${V}_${os}_$arch.zip
+	x=$tmp/check-$os-$arch
+	mkdir -p "$x"
+	if [ "$os" = windows ]; then (cd "$x" && unzip -q "$a"); else tar -xzf "$a" -C "$x"; fi
+	[ "$(ls "$x" | tr '\n' ' ')" = "LICENSE README.txt $exe " ] || fail "$a holds $(ls "$x" | tr '\n' ' ')"
+	info=$(go version -m "$x/$exe")
+	{ echo "$info" | grep -q "GOOS=$os" && echo "$info" | grep -q "GOARCH=$arch"; } || fail "$a is not built for $p"
+	echo "$info" | grep -Eq "(mod|dep)[[:space:]]+$M/resolve[[:space:]]+$V[[:space:]]+h1:" || fail "$a is not built from resolve $V"
+	if [ "$p" = "$native" ] && [ "$("$x/$exe" -v)" != "rpslq $V" ]; then
+		fail "$a: rpslq -v says $("$x/$exe" -v)"
+	fi
+	echo "checked $(basename "$a"): $p, from resolve $V"
+done
+echo "archives and SHA256SUMS in $dist"
 
 if [ -n "$GH_RELEASE" ]; then
 	step "8. the GitHub release, with the binaries"
@@ -293,7 +326,6 @@ if [ -n "$GH_RELEASE" ]; then
 		echo "the GitHub release $V exists: attaching the binaries"
 		gh release upload "$V" $assets --clobber
 	else
-		X=${V#v}
 		awk -v h="## [$X]" 'index($0, h) == 1 {f = 1; next} /^## \[/ {f = 0} f' CHANGELOG.md |
 			sed -e '/./,$!d' >"$tmp/notes.md"
 		[ -s "$tmp/notes.md" ] || fail "no notes for $V in CHANGELOG.md"
