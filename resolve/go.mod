@@ -3,9 +3,9 @@ module github.com/rkolesnichenko/rpsl/resolve
 go 1.23
 
 require (
-	github.com/rkolesnichenko/rpsl v0.19.0
-	github.com/rkolesnichenko/rpsl/ast v0.19.0
-	github.com/rkolesnichenko/rpsl/types v0.19.0
+	github.com/rkolesnichenko/rpsl v0.19.1
+	github.com/rkolesnichenko/rpsl/ast v0.19.1
+	github.com/rkolesnichenko/rpsl/types v0.19.1
 )
 
-require github.com/rkolesnichenko/rpsl/lexer v0.19.0 // indirect
+require github.com/rkolesnichenko/rpsl/lexer v0.19.1 // indirect
