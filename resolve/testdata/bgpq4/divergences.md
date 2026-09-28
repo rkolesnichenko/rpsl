@@ -14,7 +14,7 @@ passing unnoticed.
 | `operator-on-as-member` | `AS65001^25` in a route-set | AS65001's routes under `^25` | nothing | Same as above, for an AS number (RFC 2622 §5.3). |
 | `route-set-in-as-set` | `as-set: AS-X` listing `RS-Y` | RS-Y is not followed | RS-Y's AS members are added | RFC 2622 §5.1: an as-set lists AS numbers and as-sets only. Following a route-set would let it add ASes to the as-set. |
 | `as-any` | `AS-ANY` as a member | `AnySetError` | ignored (no such set) | `AS-ANY` denotes every AS; the engine refuses to expand it rather than quietly drop it (see the design doc, §8.3). |
-| `src-members` | AS-SRC lists AS-DUP and has `src-members: RADB::AS-DUP`; RIPE and RADB both hold AS-DUP | AS64602 (RADB's, as src-members: asks) | AS64601 (RIPE's, by -S precedence) | Neither bgpq4 nor IRRd implements draft-ietf-grow-rpsl-registry-scoped-members; the engine does. rpslq over IRRd agrees with bgpq4 unless given --src-members |
+| `src-members` | AS-SRC lists AS-DUP and has `src-members: RADB::AS-DUP`; RIPE and RADB both hold AS-DUP | AS64602 (RADB's, as src-members: asks) | AS64601 (RIPE's, by -S precedence) | Neither bgpq4 nor IRRd implements draft-ietf-grow-rpsl-registry-scoped-members; the engine does. rpslq over IRRd agrees with bgpq4 unless given --src-members. |
 
 ## Agreements worth noting
 

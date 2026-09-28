@@ -36,6 +36,8 @@ Every layer ships. Until v1.0.0, a minor version may change the API; the
 | `resolve/rpki` | RPKI-aware expansion as IRRd 4 does it: RFC 6811 validation against a validator's VRPs (and RFC 8416 SLURM), suppressing invalid routes from any `Source`, and IRRd's ROA pseudo objects | shipped |
 | `resolve/nrtm4` | An NRTMv4 mirror client (draft-ietf-grow-nrtm-v4): a signed, hash-checked mirror of an IRR database — the RIPE Database publishes one — kept current, one immutable `Source` per version | shipped |
 | `auth` | Who may create, modify or delete an object, under the RIPE Database's and IRRd's rules (`auth.RIPE`, `auth.IRRd`), with lookups and cryptography injected | shipped |
+| Registry-scoped members | `src-members:` (draft-ietf-grow-rpsl-registry-scoped-members): a scoped `types.SetRef`, decoded and validated on as-set and route-set, resolved by every `Source` backend, with no cascade | shipped |
+| `resolve.PolicySource` | A sibling of `Source` serving aut-nums and inet-rtrs, scoped the same way, over `MemSource`, `Corpus` (`KeepPolicy`), `DumpLoader`, `nrtm4.Client`, `irrd`, `whois`, `Cache` and `rpki.Filter` | shipped |
 
 RFC 4012 (RPSLng) is supported: `mp-import`/`mp-export`/`mp-default`, the `afi`
 dictionary and `afi`-scoped policies (`Import`/`Export`/`Default`/`Except`/
@@ -292,8 +294,8 @@ src := resolve.NewMemSource([]object.Object{
 e := &resolve.Expander{Src: src, AFI: types.AFIv4} // MaxDepth 32, MaxPrefixes 1<<20 by default
 
 name, _ := types.ParseSetName("AS-CONE")
-asns, _ := e.ExpandAS(context.Background(), name)        // [AS1 AS2]
-prefixes, _ := e.ExpandPrefixes(context.Background(), name) // 10.0.0.0/8, 192.0.2.0/24
+asns, _ := e.ExpandAS(context.Background(), types.Ref(name))        // [AS1 AS2]
+prefixes, _ := e.ExpandPrefixes(context.Background(), types.Ref(name)) // 10.0.0.0/8, 192.0.2.0/24
 ```
 
 `ExpandPrefixes` enforces `MaxPrefixes` *during* enumeration and returns a typed
@@ -317,7 +319,7 @@ irr := &irrd.Source{
 defer irr.Close()
 
 e := &resolve.Expander{Src: irr, AFI: types.AFIv4}
-asns, err := e.ExpandAS(ctx, name)
+asns, err := e.ExpandAS(ctx, types.Ref(name))
 ```
 
 See [`resolve/README.md`](resolve/README.md) for the WHOIS and RDAP backends and
@@ -355,8 +357,9 @@ FUZZTIME=15s scripts/check.sh  # ... plus every fuzz target (what CI runs)
 - **Fuzz** (never panic, never drop input, and hold each parser's properties —
   see design §11): `FuzzTokenize` (lexer); `FuzzAttributeList`, `FuzzEdit`,
   `FuzzFormat` (ast); `FuzzParseSetName`, `FuzzParseRangeOperator`,
-  `FuzzParsePrefixRange`, `FuzzParseRouterID` (types); `FuzzParseStream`,
-  `FuzzDecode` (root); `FuzzParseImport`, `FuzzParseASPathRegexp`,
+  `FuzzParsePrefixRange`, `FuzzParseRouterID`, `FuzzParseSetRef` (types);
+  `FuzzParseStream`, `FuzzDecode` (root); `FuzzParseSrcMember` (object);
+  `FuzzParseImport`, `FuzzParseASPathRegexp`,
   `FuzzParseFilter`, `FuzzParsePeering`, `FuzzParseInject`,
   `FuzzParseComponents`, `FuzzParseAggrMtd`, `FuzzParseIfaddr`,
   `FuzzParseInterface`, `FuzzParsePeer`, `FuzzParseRPAttribute`,
@@ -364,7 +367,7 @@ FUZZTIME=15s scripts/check.sh  # ... plus every fuzz target (what CI runs)
   `FuzzReadFrame`, `FuzzParseMembers` (resolve/irrd); `FuzzScanResponse`
   (resolve/whois); `FuzzReadJSON`, `FuzzApplySLURM` (resolve/rpki);
   `FuzzParseNotification`, `FuzzReadDelta` (resolve/nrtm4);
-  `FuzzAggregate` (resolve/internal/filtergen).
+  `FuzzAggregate` (resolve/internal/filtergen); `FuzzCorpusDelete` (resolve).
 - **Real data (opt-in)** — `scripts/fetch-irr-dumps.sh` downloads the public
   dumps of RIPE, APNIC, ARIN, AFRINIC, LACNIC, RADB and the ten IRRs RADB
   mirrors (about 13.3 million objects); `RPSL_REALDATA=$PWD/.data go test -run TestRealData ./examples/bulk-ripe/bulk`

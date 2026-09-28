@@ -9,6 +9,27 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+Targets v0.20.0.
+
+### Added
+
+- `src-members:` (draft-ietf-grow-rpsl-registry-scoped-members-00): decoded on as-set and route-set,
+  validated (three diagnostics per class), resolved by every backend; `types.SetRef`, `object.DirectMembers`,
+  `object.WithSrcMembers`, `irrd.Source.SrcMembers`, rpslq `--src-members`.
+- `resolve.PolicySource` (aut-nums and inet-rtrs) over MemSource, Corpus (`KeepPolicy`), DumpLoader,
+  nrtm4.Client, irrd, whois, Cache and rpki.Filter.
+
+### Breaking
+
+- `Source.GetSet` takes a `types.SetRef`: implementers change the parameter and use `ref.Name()`;
+  honour `ref.Source()` or return an error for a scoped ref.
+- `Expander.Expand*` take a `types.SetRef`: wrap names with `types.Ref(name)`.
+- `Missing()` returns `[]types.SetRef`: `String()` prints unscoped refs as before.
+- `SetTooLargeError.Name` is a `types.SetRef`.
+- `object.Set` gains `SetSrcMembers()`: add it (return nil) to a custom set type.
+- `Corpus.SourceOf`/`DumpLoader.SourceOf`: scoped lookups and claims reach every held source.
+- `ErrNotFound`'s message is "resolve: not found" (same value).
+
 ## [0.19.1] - 2026-09-28
 
 ### Added

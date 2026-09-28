@@ -2746,7 +2746,7 @@ func (o object) ref() types.SetRef {
 - [ ] **Step 4: Run to verify pass**
 
 Run: `cd resolve && go test ./internal/rpslq . `
-Expected: PASS — including `TestRpslqMatchesBgpq4`, `TestRpslqSourceDivergences` and every `SOURCE::` case byte-identical (when bgpq4 is installed; install it with `brew install bgpq4` to run them — they are the proof that deleting `topSource` changed no output).
+Expected: PASS — including `TestRpslqMatchesBgpq4` and `TestRpslqSourceDivergences` (when bgpq4 is installed; install it with `brew install bgpq4` to run them). Deleting `topSource` does change two pinned `SOURCE::` outcomes, `source-cycle` and `source-with-depth`, because the scope no longer cascades: a self-reference now resolves unscoped and joins another registry's copy, as bgpq4 already does, so `source-cycle` newly agrees with bgpq4 (`source-with-depth` still diverges, with a new count) — both pinned in `TestRpslqSourceDivergences`. `TestRpslqSourcePrefixMatchesBgpq4`, the random `SOURCE::` differential, is the proof that nothing else changed.
 
 - [ ] **Step 5: Commit**
 

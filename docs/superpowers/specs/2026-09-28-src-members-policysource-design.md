@@ -518,8 +518,13 @@ Each behaviour is held to an oracle independent of the code under test.
    (object): an accepted member's `Ref()` round-trips. `src-members:` seeds for
    `FuzzDecode`.
 9. **bgpq4 and rpslq.** The existing differential generates no `src-members:`
-   and is unchanged. The `SOURCE::` cases in `rpslq_bgpq4_test.go` stay
-   byte-identical after `topSource` is deleted. The §7.6 divergence gets its
+   and is unchanged. Deleting `topSource` changes two pinned `SOURCE::` cases
+   in `rpslq_bgpq4_test.go`, `source-cycle` and `source-with-depth` — the scope
+   no longer cascades, so a self-reference resolves unscoped and joins another
+   registry's copy, which is what bgpq4 does too, so `source-cycle` now agrees
+   with bgpq4 (`source-with-depth` still diverges, with a new count); the
+   random `SOURCE::` differential, `TestRpslqSourcePrefixMatchesBgpq4`, is the
+   proof that nothing else moved. The §7.6 divergence gets its
    pinned test.
 10. **Real data** (`RPSL_REALDATA`). RIPE's dumps loaded with `KeepPolicy` use
     at most 150 MB more heap than without it (95 MB of aut-num text, measured,

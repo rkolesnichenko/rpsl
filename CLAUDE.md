@@ -130,6 +130,13 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
 - **Dict ↔ decoder agreement**: if `object/profiles.go` lists an attribute on a class, the
   matching `decodeXxx` in `object/classes.go` must read it. Drift silently drops data
   (as-set `mp-members` was exactly this).
+- **Registry-scoped members** (draft-ietf-grow-rpsl-registry-scoped-members): `object.DirectMembers`
+  is the one place the draft's member selection lives; the engine keys its graph by `types.SetRef`,
+  so `RIPE::AS-X` and `AS-X` are two nodes. The scope never cascades (a node's nested refs come from
+  its own object) and a scoped miss never falls back to precedence. `checkSet` refuses a scoped
+  answer from another registry. `Corpus.SourceOf` restricts unscoped lookups and routes only.
+- **`PolicySource`**: `Corpus.KeepPolicy` holds aut-nums and inet-rtrs as text (95 MB for RIPE),
+  decoded per call — never decoded in memory (707 MB).
 
 ## Scope guardrails
 
@@ -147,9 +154,10 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   (all six modules incl. examples/bulk-ripe under -race, gofmt, invariants) with
   `scripts/check.sh`; `FUZZTIME=15s scripts/check.sh` also runs every fuzz target.
 - `go test -run 'TestRoundTrip|TestStreamRoundTrip' .` — the lossless guard (root module).
-- Fuzz (33 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
+- Fuzz (35 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
   FuzzFormat (ast); FuzzParseSetName, FuzzParseRangeOperator, FuzzParsePrefixRange,
-  FuzzParseRouterID (types); FuzzParseStream, FuzzDecode (root); FuzzParseImport,
+  FuzzParseRouterID, FuzzParseSetRef (types); FuzzParseStream, FuzzDecode (root);
+  FuzzParseSrcMember (object); FuzzParseImport,
   FuzzParseASPathRegexp, FuzzParseFilter, FuzzParsePeering, FuzzParseInject,
   FuzzParseComponents, FuzzParseAggrMtd, FuzzParseIfaddr, FuzzParseInterface, FuzzParsePeer,
   FuzzParseRPAttribute, FuzzParseTypedef, FuzzParseProtocol, FuzzFilterString (policy);
@@ -174,7 +182,9 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   aggregation or printers, they must stay bgpq4's. `TestRpslqMatchesBgpq4`,
   `TestRpslqVendorsMatchBgpq4`, `TestRpslqExceptMatchesBgpq4` and `TestTreeMatchesBgpq4` hold it to
   the bgpq4 binary byte for byte (and its refusals to bgpq4's); deliberate differences are
-  pinned in resolve/testdata/bgpq4/divergences.md. rpslq-only options are `--long`.
+  pinned in resolve/testdata/bgpq4/divergences.md. rpslq-only options are long options
+  (`-P` and `-c` are rpslq's two short exceptions, kept for compatibility): `-P` writes each
+  entry as RPSL notation, `-c` sets concurrent queries in flight.
   Its IRRd queries use `irrd.Source.Pipeline` (one connection, many queries in flight).
 - Releasing: `scripts/release.sh vX.Y.Z` does RELEASING.md's steps (tag order lexer/types → ast →
   root → resolve), waits for the proxy, verifies from an empty module cache, and resumes after a

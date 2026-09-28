@@ -96,6 +96,10 @@ rpslq's own options are long, so they never clash with bgpq4's:
   or AS member, `EXCEPT` inside route-sets, a route-set listed in an as-set (not
   followed, per RFC 2622 §5.1), `AS-ANY` (refused), `-m 32`, and corners of
   `SOURCE::`.
+- **`src-members:`** (draft-ietf-grow-rpsl-registry-scoped-members). With
+  `--dump`, `--whois`, or `--src-members` over an IRRd server, rpslq follows a
+  set's `src-members:` to fetch each nested set from the registry it names;
+  bgpq4 does not implement the draft and reads `members:`/`mp-members:` alone.
 
 Each difference is pinned by a test against the bgpq4 binary and listed, with
 examples, in [`resolve/testdata/bgpq4/divergences.md`](../resolve/testdata/bgpq4/divergences.md).
