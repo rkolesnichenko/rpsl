@@ -46,8 +46,8 @@ type Expander struct {
 	// Concurrency is how many sets, or ASes, may be fetched at once. Zero and
 	// one both fetch one at a time. Discovery is breadth-first, and a whole
 	// level is fetched together, so raising this hides a live registry's
-	// latency without changing the result: the graph is built from the level's
-	// answers in name order either way.
+	// latency without changing the result: the graph is built from a level's
+	// answers in the order of its references either way.
 	Concurrency int
 	// Exclude is what every expansion leaves out; see Exclusion.
 	Exclude Exclusion

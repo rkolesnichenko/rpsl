@@ -107,15 +107,17 @@ func (e *Expander) ExpandFilterSet(ctx context.Context, ref types.SetRef) (Range
 		return RangeSet{}, fmt.Errorf("resolve: ExpandFilterSet %s: %w", ref, ErrSetClass)
 	}
 	ev := newFilterEval(e, ctx)
-	ev.top = ref
-	fg, err := ev.filterSet(ref.Name())
+	fg, err := ev.filterSet(ref)
 	if err != nil {
 		return RangeSet{}, fmt.Errorf("expand %s: %w", ref, err)
 	}
 	if fg == nil {
 		return RangeSet{}, fmt.Errorf("expand %s: %w", ref, ErrNotFound)
 	}
-	got, err := ev.run(policy.FilterSetRef{Name: ref.Name()})
+	// Only the top filter-set is evaluated through ref; every filter-set its
+	// filter names is an unscoped reference, a node of its own even when it
+	// names the top set again.
+	got, err := ev.runWith(func() (rangeSetOf, error) { return ev.topValue(ref) })
 	if err != nil {
 		return RangeSet{}, err
 	}
@@ -165,7 +167,9 @@ func (e *Expander) EvalFilter(ctx context.Context, f policy.Filter) (RangeSet, e
 type rangeSetOf map[types.PrefixRange]struct{}
 
 // filterEval evaluates one filter. Filter-sets are fetched and set references
-// expanded once per call. A cycle of filter-sets is solved by iteration: each
+// expanded once per call. Filter-sets are keyed by reference: only the top one
+// ExpandFilterSet names may be scoped, and a reference met inside a filter is
+// unscoped, so RIPE::FLTR-X and FLTR-X are two filter-sets. A cycle of filter-sets is solved by iteration: each
 // pass evaluates a back-edge to a set with that set's value from the pass
 // before (approx), starting from nothing, and passes repeat until the values
 // stop growing — the least fixpoint, since every filter it evaluates is
@@ -174,12 +178,11 @@ type filterEval struct {
 	e       *Expander
 	ctx     context.Context
 	missing []types.SetRef
-	visits  int           // filter terms evaluated and sets reached, against MaxVisited
-	cur     types.SetName // the filter-set being evaluated, to name it in errors
-	top     types.SetRef  // the filter-set ExpandFilterSet names, fetched in its scope
+	visits  int          // filter terms evaluated and sets reached, against MaxVisited
+	cur     types.SetRef // the filter-set being evaluated, to name it in errors
 
-	sets   map[string]object.FilterGroup // filter-sets fetched; nil for one not found
-	memo   map[string]rangeSetOf         // filter-set values of this pass
+	sets   map[string]object.FilterGroup // filter-sets fetched, by SetRef.String(); nil for one not found
+	memo   map[string]rangeSetOf         // filter-set values of this pass, by SetRef.String()
 	approx map[string]rangeSetOf         // filter-set values of the pass before
 	active map[string]bool               // filter-sets on the path being evaluated
 	cyclic bool                          // this pass took a back-edge
@@ -208,9 +211,15 @@ func (ev *filterEval) skipAS(a types.ASN) bool { return !ev.cur.IsZero() && ev.e
 
 // run evaluates f to its least fixpoint (see filterEval).
 func (ev *filterEval) run(f policy.Filter) (rangeSetOf, error) {
+	return ev.runWith(func() (rangeSetOf, error) { return ev.eval(f, 0) })
+}
+
+// runWith repeats one evaluation pass until the least fixpoint (see
+// filterEval).
+func (ev *filterEval) runWith(pass func() (rangeSetOf, error)) (rangeSetOf, error) {
 	for {
 		ev.memo, ev.cyclic = map[string]rangeSetOf{}, false
-		got, err := ev.eval(f, 0)
+		got, err := pass()
 		if err != nil {
 			return nil, err
 		}
@@ -274,13 +283,14 @@ func (ev *filterEval) note(r types.SetRef) {
 	ev.missing = append(ev.missing, r)
 }
 
-// cap enforces MaxPrefixes on a working set as it grows.
-func (ev *filterEval) cap(got rangeSetOf, n types.SetName) error {
+// cap enforces MaxPrefixes on a working set as it grows; r names the set it
+// belongs to, or is zero for the filter-set being evaluated.
+func (ev *filterEval) cap(got rangeSetOf, r types.SetRef) error {
 	if len(got) > ev.e.maxPrefixes() {
-		if n.IsZero() {
-			n = ev.cur
+		if r.IsZero() {
+			r = ev.cur
 		}
-		return &SetTooLargeError{Name: types.Ref(n), Limit: LimitPrefixes, Max: ev.e.maxPrefixes(), Count: len(got)}
+		return &SetTooLargeError{Name: r, Limit: LimitPrefixes, Max: ev.e.maxPrefixes(), Count: len(got)}
 	}
 	return nil
 }
@@ -288,7 +298,7 @@ func (ev *filterEval) cap(got rangeSetOf, n types.SetName) error {
 // visit charges n visits against MaxVisited.
 func (ev *filterEval) visit(n int) error {
 	if ev.visits += n; ev.visits > ev.e.maxVisited() {
-		return &SetTooLargeError{Name: types.Ref(ev.cur), Limit: LimitVisited, Max: ev.e.maxVisited(), Count: ev.visits}
+		return &SetTooLargeError{Name: ev.cur, Limit: LimitVisited, Max: ev.e.maxVisited(), Count: ev.visits}
 	}
 	return nil
 }
@@ -299,7 +309,7 @@ func (ev *filterEval) eval(f policy.Filter, depth int) (rangeSetOf, error) {
 		return nil, err
 	}
 	if depth > ev.e.maxDepth() {
-		return nil, &SetTooLargeError{Name: types.Ref(ev.cur), Limit: LimitDepth, Max: ev.e.maxDepth(), Count: depth}
+		return nil, &SetTooLargeError{Name: ev.cur, Limit: LimitDepth, Max: ev.e.maxDepth(), Count: depth}
 	}
 	if err := ev.visit(1); err != nil {
 		return nil, err
@@ -325,7 +335,7 @@ func (ev *filterEval) eval(f policy.Filter, depth int) (rangeSetOf, error) {
 			for r := range got {
 				out[r] = struct{}{}
 			}
-			if err := ev.cap(out, types.SetName{}); err != nil {
+			if err := ev.cap(out, types.SetRef{}); err != nil {
 				return nil, err
 			}
 		}
@@ -397,9 +407,9 @@ func (ev *filterEval) setRef(n types.SetName, op types.RangeOperator, depth int)
 		for _, r := range rs.List() {
 			ev.putOp(out, r, op)
 		}
-		return out, ev.cap(out, n)
+		return out, ev.cap(out, types.Ref(n))
 	case types.ClassFilterSet:
-		got, err := ev.filterSetValue(n, depth)
+		got, err := ev.filterSetValue(types.Ref(n), depth)
 		if err != nil {
 			return nil, err
 		}
@@ -418,11 +428,26 @@ func (ev *filterEval) setRef(n types.SetName, op types.RangeOperator, depth int)
 	}
 }
 
-// filterSetValue is what filter-set n denotes in this pass: the previous
+// topValue is what the filter-set ExpandFilterSet names denotes, evaluated as
+// eval evaluates a reference to it, but through its own, possibly scoped, ref.
+func (ev *filterEval) topValue(ref types.SetRef) (rangeSetOf, error) {
+	if err := ev.ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := ev.visit(1); err != nil {
+		return nil, err
+	}
+	if isAnySet(ref.Name()) {
+		return nil, &AnySetError{Name: ref.Name()}
+	}
+	return ev.filterSetValue(ref, 0)
+}
+
+// filterSetValue is what filter-set ref denotes in this pass: the previous
 // pass's value on a back-edge, this pass's value once computed, and otherwise
 // the value of its filter.
-func (ev *filterEval) filterSetValue(n types.SetName, depth int) (rangeSetOf, error) {
-	key := n.String()
+func (ev *filterEval) filterSetValue(ref types.SetRef, depth int) (rangeSetOf, error) {
+	key := ref.String()
 	if ev.active[key] {
 		ev.cyclic = true
 		if v := ev.approx[key]; v != nil {
@@ -433,16 +458,16 @@ func (ev *filterEval) filterSetValue(n types.SetName, depth int) (rangeSetOf, er
 	if v, ok := ev.memo[key]; ok {
 		return v, nil
 	}
-	fg, err := ev.filterSet(n)
+	fg, err := ev.filterSet(ref)
 	if err != nil {
 		return nil, err
 	}
 	if fg == nil {
-		ev.note(types.Ref(n))
+		ev.note(ref)
 		return rangeSetOf{}, nil
 	}
 	outer := ev.cur
-	ev.active[key], ev.cur = true, n
+	ev.active[key], ev.cur = true, ref
 	got, err := ev.eval(ev.pick(fg), depth+1)
 	delete(ev.active, key)
 	ev.cur = outer
@@ -455,16 +480,12 @@ func (ev *filterEval) filterSetValue(n types.SetName, depth int) (rangeSetOf, er
 
 // filterSet fetches a filter-set once per call: nil, with no error, when the
 // Source does not have it or has something else under its name.
-func (ev *filterEval) filterSet(n types.SetName) (object.FilterGroup, error) {
-	if fg, ok := ev.sets[n.String()]; ok {
+func (ev *filterEval) filterSet(ref types.SetRef) (object.FilterGroup, error) {
+	if fg, ok := ev.sets[ref.String()]; ok {
 		return fg, nil
 	}
 	if err := ev.visit(1); err != nil {
 		return nil, err
-	}
-	ref := types.Ref(n)
-	if !ev.top.IsZero() && n == ev.top.Name() {
-		ref = ev.top // one filter-set per name per call: a cycle back to the top reuses its copy
 	}
 	set, err := ev.e.Src.GetSet(ev.ctx, ref)
 	if err == nil {
@@ -477,7 +498,7 @@ func (ev *filterEval) filterSet(n types.SetName) (object.FilterGroup, error) {
 	case !errors.Is(err, ErrNotFound):
 		return nil, err
 	}
-	ev.sets[n.String()] = fg
+	ev.sets[ref.String()] = fg
 	return fg, nil
 }
 
@@ -519,7 +540,7 @@ func (ev *filterEval) asSet(n types.SetName) (ASNSet, error) {
 // what RFC 2622 §5.6 means by them.
 func (ev *filterEval) asExpr(e policy.ASExpr, depth int) (map[types.ASN]bool, error) {
 	if depth > ev.e.maxDepth() {
-		return nil, &SetTooLargeError{Name: types.Ref(ev.cur), Limit: LimitDepth, Max: ev.e.maxDepth(), Count: depth}
+		return nil, &SetTooLargeError{Name: ev.cur, Limit: LimitDepth, Max: ev.e.maxDepth(), Count: depth}
 	}
 	switch x := e.(type) {
 	case nil:
@@ -613,7 +634,7 @@ func (ev *filterEval) routesOf(as map[types.ASN]bool, op types.RangeOperator) (r
 			}
 			ev.putOp(out, r, op)
 		}
-		if err := ev.cap(out, types.SetName{}); err != nil {
+		if err := ev.cap(out, types.SetRef{}); err != nil {
 			return nil, err
 		}
 	}
@@ -685,7 +706,7 @@ func (ev *filterEval) intersect(a, b rangeSetOf) (rangeSetOf, error) {
 				out[c] = struct{}{}
 			}
 		}
-		return ev.cap(out, types.SetName{})
+		return ev.cap(out, types.SetRef{})
 	}
 	for x := range a {
 		p := x.Prefix()

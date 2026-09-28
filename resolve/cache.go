@@ -126,8 +126,9 @@ func (c *Cache) MembersByRef(ctx context.Context, set object.NamedSet) ([]object
 	if set == nil {
 		return nil, nil
 	}
-	// two same-named sets of two registries have different claimants
-	key := cacheKey{kind: kindClaims, name: strings.ToUpper(strings.TrimSpace(set.SetSource())) + "::" + set.SetName().String()}
+	// two same-named sets of two registries have different claimants; the
+	// source is folded as ClaimAllowed compares it (ASCII only)
+	key := cacheKey{kind: kindClaims, name: lowerASCII(strings.TrimSpace(set.SetSource())) + "::" + set.SetName().String()}
 	e, err := c.lookup(ctx, key, func(ctx context.Context, e *cacheEntry) {
 		e.claims, e.err = c.Src.MembersByRef(ctx, set)
 	})

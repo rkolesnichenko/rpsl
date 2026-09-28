@@ -186,3 +186,37 @@ func TestCacheKeysScopes(t *testing.T) {
 		t.Errorf("Cache mixed scopes: %q, %q", a.SetSource(), b.SetSource())
 	}
 }
+
+// A scoped top filter-set does not cascade: a reference back to its name from
+// inside a filter is the unscoped, precedence-chosen set, a node of its own.
+func TestScopedFilterSetDoesNotCascade(t *testing.T) {
+	src := newRefSource(t, map[string]string{
+		"RIPE::FLTR-X": "filter-set: FLTR-X\nfilter: FLTR-A OR {10.0.0.0/8}\nsource: RIPE\n",
+		"FLTR-X":       "filter-set: FLTR-X\nfilter: {172.16.0.0/12}\nsource: RADB\n",
+		"FLTR-A":       "filter-set: FLTR-A\nfilter: FLTR-X\nsource: RADB\n",
+	}, nil)
+	got, err := (&resolve.Expander{Src: src}).ExpandFilterSet(context.Background(), mustRef(t, "RIPE::FLTR-X"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.String() != "[10.0.0.0/8 172.16.0.0/12]" {
+		t.Errorf("RIPE::FLTR-X = %v, want [10.0.0.0/8 172.16.0.0/12]", got)
+	}
+	if !slices.Contains(src.calls, "RIPE::FLTR-X") || !slices.Contains(src.calls, "FLTR-X") {
+		t.Errorf("lookups %v; want both RIPE::FLTR-X and FLTR-X", src.calls)
+	}
+}
+
+// A limit tripped while evaluating a scoped filter-set names the scoped ref.
+func TestScopedFilterSetLimitNamesRef(t *testing.T) {
+	src := newRefSource(t, map[string]string{
+		"RIPE::FLTR-X": "filter-set: FLTR-X\nfilter: FLTR-A OR {10.0.0.0/8}\nsource: RIPE\n",
+		"FLTR-X":       "filter-set: FLTR-X\nfilter: {172.16.0.0/12}\nsource: RADB\n",
+		"FLTR-A":       "filter-set: FLTR-A\nfilter: FLTR-X\nsource: RADB\n",
+	}, nil)
+	_, err := (&resolve.Expander{Src: src, MaxPrefixes: 1}).ExpandFilterSet(context.Background(), mustRef(t, "RIPE::FLTR-X"))
+	var tl *resolve.SetTooLargeError
+	if !errors.As(err, &tl) || tl.Name.String() != "RIPE::FLTR-X" {
+		t.Fatalf("err = %v; want a SetTooLargeError naming RIPE::FLTR-X", err)
+	}
+}
