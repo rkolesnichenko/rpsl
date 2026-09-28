@@ -65,7 +65,10 @@ func (s *MemSource) pick(entries []policyEntry, source string) (policyEntry, err
 	return policyEntry{}, ErrNotFound
 }
 
-// AutNum returns the aut-num of as, from source ("" for the precedence).
+// AutNum returns the aut-num of as, from source ("" for the precedence). A
+// text-kept entry (Corpus.KeepPolicy) is decoded on every call — MemSource
+// holds no decoded cache of its own, so it stays an immutable, freely
+// shareable value; wrap it in a Cache for repeated lookups.
 func (s *MemSource) AutNum(_ context.Context, as types.ASN, source string) (object.AutNum, error) {
 	e, err := s.pick(s.autnums[as], source)
 	if err != nil {
@@ -79,7 +82,8 @@ func (s *MemSource) AutNum(_ context.Context, as types.ASN, source string) (obje
 }
 
 // InetRtr returns the inet-rtr named name (compared without regard to case),
-// from source ("" for the precedence).
+// from source ("" for the precedence). Like AutNum, a text-kept entry is
+// decoded on every call; wrap the source in a Cache for repeated lookups.
 func (s *MemSource) InetRtr(_ context.Context, name, source string) (object.InetRtr, error) {
 	e, err := s.pick(s.rtrs[rtrKey(name)], source)
 	if err != nil {

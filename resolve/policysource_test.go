@@ -67,6 +67,75 @@ func TestPolicySource(t *testing.T) {
 	}
 }
 
+// Review fix round 1, finding 1: a tie between copies of equal rank goes to
+// whichever was loaded first, never to a whole (claimant) copy over a
+// text-kept one just because it happens to be whole. Corpus and NewMemSource
+// over the same objects, in the same load order, must agree.
+func TestPolicyTieGoesToLoadOrder(t *testing.T) {
+	texts := []string{
+		"aut-num: AS1\nas-name: TEXT-RADB\nsource: RADB\n",                              // loaded first, non-claiming: text-kept
+		"aut-num: AS1\nas-name: CLAIM-RIPE\nmember-of: AS-X\nmnt-by: M\nsource: RIPE\n", // loaded second, claiming: whole
+		"inet-rtr: r.example.net\nlocal-as: AS2\nsource: RADB\n",                        // loaded third, non-claiming: text-kept
+		"inet-rtr: r.example.net\nlocal-as: AS3\nmember-of: AS-X\nsource: RIPE\n",       // loaded fourth, claiming: whole
+	}
+	objs := decodeAll(t, texts)
+	c := resolve.Corpus{KeepPolicy: true}
+	for _, o := range objs {
+		c.Put(o)
+	}
+	ctx := context.Background()
+	for _, tc := range []struct {
+		label      string
+		precedence []string
+	}{
+		{"no precedence", nil},
+		{"unlisted precedence", []string{"ALTDB"}}, // RADB and RIPE both unranked: still a tie
+	} {
+		for label, src := range map[string]resolve.PolicySource{
+			"Corpus":       c.Source(tc.precedence...),
+			"NewMemSource": resolve.NewMemSource(objs, tc.precedence...),
+		} {
+			if an, err := src.AutNum(ctx, 1, ""); err != nil || an.AsName != "TEXT-RADB" {
+				t.Errorf("%s (%s): AutNum(AS1, \"\") = %q, %v; want TEXT-RADB (loaded first)", label, tc.label, an.AsName, err)
+			}
+			if ir, err := src.InetRtr(ctx, "r.example.net", ""); err != nil || ir.LocalAS != 2 {
+				t.Errorf("%s (%s): InetRtr(r.example.net, \"\") = %+v, %v; want LocalAS 2 (loaded first)", label, tc.label, ir, err)
+			}
+		}
+	}
+}
+
+// Review fix round 1, finding 2: an aut-num whose AS did not decode, or an
+// inet-rtr with an empty name, is no AS's and no router's (claimant agrees) —
+// NewMemSource must not index it under the AS0 or the empty name its zero
+// value defaults to. Corpus already refuses to keep such an object at all
+// (Put's own gate), so it is checked here only for parity.
+func TestPolicyUndecodedKeyNotServed(t *testing.T) {
+	objs := decodeAll(t, []string{
+		"aut-num: ASX\nas-name: BAD\nsource: RIPE\n", // AS does not decode: AS field defaults to 0
+	})
+	src := resolve.NewMemSource(objs)
+	ctx := context.Background()
+	if _, err := src.AutNum(ctx, 0, ""); !errors.Is(err, resolve.ErrNotFound) {
+		t.Errorf("NewMemSource served an undecoded aut-num's key as AS0: err = %v", err)
+	}
+	c := resolve.Corpus{KeepPolicy: true}
+	for _, o := range objs {
+		c.Put(o)
+	}
+	if _, err := c.Source().AutNum(ctx, 0, ""); !errors.Is(err, resolve.ErrNotFound) {
+		t.Errorf("Corpus served an undecoded aut-num's key as AS0: err = %v", err)
+	}
+
+	rtrs := decodeAll(t, []string{
+		"inet-rtr:\nlocal-as: AS1\nsource: RIPE\n", // name does not decode: Name defaults to ""
+	})
+	rsrc := resolve.NewMemSource(rtrs)
+	if _, err := rsrc.InetRtr(ctx, "", ""); !errors.Is(err, resolve.ErrNotFound) {
+		t.Errorf("NewMemSource served an undecoded inet-rtr's key as an empty name: err = %v", err)
+	}
+}
+
 func TestPolicyWrappersOverPlainSource(t *testing.T) {
 	src := newRefSource(t, nil, nil) // a Source that is not a PolicySource
 	for name, ps := range map[string]resolve.PolicySource{

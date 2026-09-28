@@ -70,9 +70,10 @@ const (
 
 type cacheKey struct {
 	kind cacheKind
-	name string    // the set reference, or (set source, set name) for claims; "" for a route lookup
-	as   types.ASN // the AS, for a route lookup
+	name string    // the set reference, or (set source, set name) for claims; the inet-rtr name for kindInetRtr; "" for a route or aut-num lookup
+	as   types.ASN // the AS, for a route or aut-num lookup
 	afi  types.AFI
+	src  string // upper-case source scope, for kindAutNum and kindInetRtr ("" is the precedence); a separate field, not concatenated into name, so ("A", "B::C") and ("A::B", "C") cannot collide
 }
 
 type cacheEntry struct {
@@ -150,7 +151,7 @@ func (c *Cache) AutNum(ctx context.Context, as types.ASN, source string) (object
 	if !ok {
 		return object.AutNum{}, ErrNoPolicy
 	}
-	e, err := c.lookup(ctx, cacheKey{kind: kindAutNum, as: as, name: strings.ToUpper(source)}, func(ctx context.Context, e *cacheEntry) {
+	e, err := c.lookup(ctx, cacheKey{kind: kindAutNum, as: as, src: strings.ToUpper(source)}, func(ctx context.Context, e *cacheEntry) {
 		an, err := ps.AutNum(ctx, as, source)
 		e.obj, e.err = an, err
 	})
@@ -169,7 +170,7 @@ func (c *Cache) InetRtr(ctx context.Context, name, source string) (object.InetRt
 	if !ok {
 		return object.InetRtr{}, ErrNoPolicy
 	}
-	key := cacheKey{kind: kindInetRtr, name: strings.ToUpper(source) + "::" + rtrKey(name)}
+	key := cacheKey{kind: kindInetRtr, name: rtrKey(name), src: strings.ToUpper(source)}
 	e, err := c.lookup(ctx, key, func(ctx context.Context, e *cacheEntry) {
 		ir, err := ps.InetRtr(ctx, name, source)
 		e.obj, e.err = ir, err

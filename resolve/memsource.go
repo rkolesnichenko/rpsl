@@ -81,9 +81,15 @@ func newMemSource(objs []object.Object, sourcePrecedence []string, dflt func(str
 		s.indexClaims(o)
 		switch t := o.(type) {
 		case object.AutNum:
-			s.addPolicy("aut-num", t.AS.String(), t.Source, t, "")
+			// An aut-num whose key did not decode is no AS (claimant agrees):
+			// addPolicy would otherwise index it under the AS0 it defaults to.
+			if _, _, _, ok := claimant(t); ok {
+				s.addPolicy("aut-num", t.AS.String(), t.Source, t, "")
+			}
 		case object.InetRtr:
-			s.addPolicy("inet-rtr", t.Name, t.Source, t, "")
+			if rtrKey(t.Name) != "" {
+				s.addPolicy("inet-rtr", t.Name, t.Source, t, "")
+			}
 		}
 	}
 	s.finish()

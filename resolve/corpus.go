@@ -277,10 +277,17 @@ func (c *Corpus) Merge(other *Corpus) {
 			continue
 		}
 		// A policy entry kept as text (KeepPolicy): no object to re-derive from,
-		// so its held value is copied as it is.
+		// so its held value is copied as it is — but only when this corpus
+		// itself keeps policy text; otherwise it is what Put would do with the
+		// non-claiming aut-num or inet-rtr the text represents: dropped, and
+		// any earlier object of its identity removed.
 		k := h.key
 		k.source = c.intern(k.source)
-		c.putText(k, h.text)
+		if c.KeepPolicy {
+			c.putText(k, h.text)
+		} else {
+			delete(c.whole, k)
+		}
 	}
 	for rk := range other.routes {
 		rk.source = c.intern(rk.source)
@@ -341,10 +348,17 @@ func (c *Corpus) build(dflt func(string) bool, precedence []string) *MemSource {
 		}
 	}
 	s := newMemSource(objs, precedence, dflt)
+	// Policy entries (aut-num, inet-rtr) tie-break by this corpus's own load
+	// order across whole and text-kept copies alike — never whole-before-text,
+	// which newMemSource's own pass over the whole-only objs would give — so
+	// rebuild them from every held entry, in seq order. Every entry that
+	// reaches c.whole under the aut-num or inet-rtr class already has a valid
+	// key (Put's own gating), so no further check is needed here; addPolicy
+	// ignores every other class.
+	s.autnums = map[types.ASN][]policyEntry{}
+	s.rtrs = map[string][]policyEntry{}
 	for _, h := range hs {
-		if h.obj == nil && h.text != "" {
-			s.addPolicy(h.key.class, h.key.pk, h.key.source, nil, h.text)
-		}
+		s.addPolicy(h.key.class, h.key.pk, h.key.source, h.obj, h.text)
 	}
 	s.finish()
 	for rk := range c.routes {

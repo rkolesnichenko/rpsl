@@ -2,6 +2,7 @@ package resolve_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"net/netip"
@@ -23,14 +24,15 @@ import (
 // unknown registry ("NOSUCH"), every AS's routes in each family (as sets: the
 // engine deduplicates), and every set's honored claimants, unscoped and per
 // scope. When policy is set, got and want are PolicySources built from a
-// Corpus{KeepPolicy: true} and NewMemSource over the same objects: AutNum is
-// also compared for every ASN it enumerates, unscoped, per scope and under an
-// unknown registry.
+// Corpus{KeepPolicy: true} and NewMemSource over the same objects: AutNum and
+// InetRtr are also compared, for every ASN and inet-rtr name objs holds,
+// unscoped, per scope and under an unknown registry.
 func sameAnswers(t *testing.T, label string, objs []object.Object, got, want *resolve.MemSource, scopes []string, policy bool) {
 	t.Helper()
 	ctx := context.Background()
 	names := map[string]types.SetName{}
 	asns := map[types.ASN]bool{0: true, 64999: true}
+	rtrNames := map[string]bool{"no-such.example.net": true}
 	for _, o := range objs {
 		if s, ok := o.(object.NamedSet); ok {
 			names[s.SetName().String()] = s.SetName()
@@ -42,6 +44,8 @@ func sameAnswers(t *testing.T, label string, objs []object.Object, got, want *re
 			asns[r.Origin] = true
 		case object.AutNum:
 			asns[r.AS] = true
+		case object.InetRtr:
+			rtrNames[r.Name] = true
 		}
 	}
 	missing, _ := types.ParseSetName("AS-NOT-THERE")
@@ -98,6 +102,21 @@ func sameAnswers(t *testing.T, label string, objs []object.Object, got, want *re
 			}
 		}
 	}
+	for name := range rtrNames {
+		for _, src := range []string{"", "RIPE", "RADB", "NOSUCH"} {
+			gi, gerr := got.InetRtr(ctx, name, src)
+			wi, werr := want.InetRtr(ctx, name, src)
+			if (gerr == nil) != (werr == nil) {
+				t.Fatalf("%s: InetRtr(%s, %q) err = %v; want %v", label, name, src, gerr, werr)
+			}
+			if gerr != nil {
+				continue
+			}
+			if gi.Raw().String() != wi.Raw().String() || gi.Name != wi.Name || gi.LocalAS != wi.LocalAS || gi.Source != wi.Source {
+				t.Fatalf("%s: InetRtr(%s, %q) = %+v; want %+v", label, name, src, gi, wi)
+			}
+		}
+	}
 }
 
 func texts(objs []object.Object) []string {
@@ -142,6 +161,8 @@ func latest(objs []object.Object) []object.Object {
 			return fmt.Sprintf("route6 %s%s %s", t.Prefix.Masked(), t.Origin, src)
 		case object.AutNum:
 			return fmt.Sprintf("aut-num %s %s", t.AS, src)
+		case object.InetRtr:
+			return fmt.Sprintf("inet-rtr %s %s", strings.ToUpper(strings.TrimSpace(t.Name)), src)
 		}
 		return fmt.Sprintf("%p", o)
 	}
@@ -184,8 +205,18 @@ func TestCorpusMatchesMemSource(t *testing.T) {
 		objs := latest(decodeAll(t, texts))
 		label := fmt.Sprintf("seed %d", seed)
 		c := corpusOf(objs)
+		// The random model draws no inet-rtrs; add a few (claiming and not, both
+		// sources, sharing names so ties and precedence both get exercised) so
+		// the policy comparison below covers InetRtr as well as AutNum.
+		rtrTexts := []string{
+			fmt.Sprintf("inet-rtr: rtr%d.example.net\nlocal-as: AS%d\nifaddr: 192.0.2.1 masklen 30\nsource: RIPE\n", r.IntN(3), firstAS+r.IntN(4)),
+			fmt.Sprintf("inet-rtr: rtr%d.example.net\nlocal-as: AS%d\nifaddr: 192.0.2.2 masklen 30\nsource: RADB\n", r.IntN(3), firstAS+r.IntN(4)),
+			fmt.Sprintf("inet-rtr: rtr%d.example.net\nlocal-as: AS%d\nmember-of: AS-X\nsource: RIPE\n", r.IntN(3), firstAS+r.IntN(4)),
+			fmt.Sprintf("inet-rtr: rtr%d.example.net\nlocal-as: AS%d\nmember-of: AS-X\nsource: RADB\n", r.IntN(3), firstAS+r.IntN(4)),
+		}
+		policyObjs := latest(append(append([]object.Object(nil), objs...), decodeAll(t, rtrTexts)...))
 		cp := &resolve.Corpus{KeepPolicy: true}
-		for _, o := range objs {
+		for _, o := range policyObjs {
 			cp.Put(o)
 		}
 		// What the model never draws but registries hold: an origin that does
@@ -199,7 +230,7 @@ func TestCorpusMatchesMemSource(t *testing.T) {
 		}
 		odd := latest(append(append([]object.Object(nil), objs...), decodeAll(t, oddTexts)...))
 		sameAnswers(t, label+" with odd routes", odd, corpusOf(odd).Source("RIPE", "RADB"), resolve.NewMemSource(odd, "RIPE", "RADB"), []string{"RIPE", "RADB"}, false)
-		sameAnswers(t, label, objs, cp.Source("RIPE", "RADB"), resolve.NewMemSource(objs, "RIPE", "RADB"), []string{"RIPE", "RADB"}, true)
+		sameAnswers(t, label, policyObjs, cp.Source("RIPE", "RADB"), resolve.NewMemSource(policyObjs, "RIPE", "RADB"), []string{"RIPE", "RADB"}, true)
 		sameAnswers(t, label+" without precedence", objs, c.Source(), resolve.NewMemSource(objs), []string{"RIPE", "RADB"}, false)
 		if seed%5 == 0 && len(objs) == len(decodeAll(t, texts)) { // the oracle reads every object
 			checkModel(t, label+" (corpus)", newOracle(m), texts, c.Source("RIPE", "RADB"), true)
@@ -362,6 +393,67 @@ func TestCorpusMerge(t *testing.T) {
 	a.Delete("route", "192.0.2.0/24AS2", "NTTCOM")
 	if ps, _ := src.OriginatedRoutes(context.Background(), 2, types.AFIAny); len(ps) != 1 {
 		t.Errorf("a built MemSource changed: %v", ps)
+	}
+}
+
+// TestCorpusMergePolicyText: review fix round 1, findings 3 and 4. A merged
+// corpus's aut-num/inet-rtr text entries (KeepPolicy) keep load order, a
+// same-identity text entry replaces a whole (claimant) one, source names are
+// interned (so Delete afterwards finds them), and a target without KeepPolicy
+// drops them, as Put would the non-claiming object they represent.
+func TestCorpusMergePolicyText(t *testing.T) {
+	ctx := context.Background()
+
+	// Same identity: a whole claimant is replaced by a merged text entry.
+	a := &resolve.Corpus{KeepPolicy: true}
+	a.Put(decodeOne(t, "aut-num: AS1\nas-name: CLAIM\nmember-of: AS-X\nmnt-by: M\nsource: RIPE\n")) // whole
+	b := &resolve.Corpus{KeepPolicy: true}
+	b.Put(decodeOne(t, "aut-num: AS1\nas-name: PLAIN\nsource: RIPE\n")) // text: same identity, no longer claims
+	a.Merge(b)
+	if a.Len() != 1 {
+		t.Fatalf("Len = %d after merging one aut-num over itself, want 1", a.Len())
+	}
+	if an, err := a.Source().AutNum(ctx, 1, ""); err != nil || an.AsName != "PLAIN" {
+		t.Fatalf("merged AS1 = %+v, %v; want PLAIN (the whole claimant is replaced)", an, err)
+	}
+	// Source interning: Delete after the merge still finds it.
+	if !a.Delete("aut-num", "AS1", "RIPE") || a.Len() != 0 {
+		t.Fatalf("Delete after merge: found nothing, Len %d", a.Len())
+	}
+
+	// Ordering: ties between sources outside the precedence go to load order
+	// across the merge — the target's own entry, loaded before the merge, wins.
+	c1 := &resolve.Corpus{KeepPolicy: true}
+	c1.Put(decodeOne(t, "aut-num: AS2\nas-name: FIRST\nsource: ALTDB\n"))
+	c2 := &resolve.Corpus{KeepPolicy: true}
+	c2.Put(decodeOne(t, "aut-num: AS2\nas-name: SECOND\nsource: NTTCOM\n"))
+	c1.Merge(c2)
+	if an, err := c1.Source().AutNum(ctx, 2, ""); err != nil || an.AsName != "FIRST" {
+		t.Fatalf("tied merge = %+v, %v; want FIRST (loaded before the merge)", an, err)
+	}
+	if an, err := c1.Source().AutNum(ctx, 2, "NTTCOM"); err != nil || an.AsName != "SECOND" {
+		t.Fatalf("scoped lookup after merge = %+v, %v; want SECOND", an, err)
+	}
+
+	// A target without KeepPolicy drops a merged text entry, as Put would the
+	// non-claiming object it represents.
+	plain := &resolve.Corpus{}
+	src := &resolve.Corpus{KeepPolicy: true}
+	src.Put(decodeOne(t, "aut-num: AS3\nas-name: DROPPED\nsource: RIPE\n"))
+	plain.Merge(src)
+	if plain.Len() != 0 {
+		t.Fatalf("Len = %d after merging a text entry into a plain corpus, want 0", plain.Len())
+	}
+	if _, err := plain.Source().AutNum(ctx, 3, ""); !errors.Is(err, resolve.ErrNotFound) {
+		t.Errorf("a plain corpus served a merged text entry: %v", err)
+	}
+	// A whole claimant merged into a plain corpus is unaffected by that rule.
+	plain2 := &resolve.Corpus{}
+	claim := &resolve.Corpus{KeepPolicy: true}
+	claim.Put(decodeOne(t, "aut-num: AS4\nas-name: CLAIM4\nmember-of: AS-X\nmnt-by: M\nsource: RIPE\n"))
+	plain2.Merge(claim)
+	if an, err := plain2.Source().AutNum(ctx, 4, ""); err != nil || an.AsName != "CLAIM4" {
+		t.Fatalf("a plain corpus dropped a merged whole claimant: %+v, %v", an, err)
 	}
 }
 
