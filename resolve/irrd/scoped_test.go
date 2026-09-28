@@ -3,6 +3,9 @@ package irrd_test
 import (
 	"context"
 	"errors"
+	"net"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -144,4 +147,87 @@ func errString(err error) string {
 		return "nil"
 	}
 	return err.Error()
+}
+
+// TestScopedUnderSteadyLoad: the parent's pipes are never idle while workers
+// keep them full, so a scoped lookup must retire one rather than wait for an
+// idle one, and finish long before its deadline.
+func TestScopedUnderSteadyLoad(t *testing.T) {
+	for _, c := range []struct{ maxConns, pipeline, workers int }{{1, 8, 16}, {4, 8, 64}, {2, 1, 8}} {
+		db := scopedDB()
+		src := &irrd.Source{Addr: db.IRRd(t), Sources: []string{"RADB"}, Pipeline: c.pipeline, MaxConns: c.maxConns, Timeout: 5 * time.Second}
+		ctx, stop := context.WithCancel(context.Background())
+		var wg sync.WaitGroup
+		for i := 0; i < c.workers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for ctx.Err() == nil {
+					if _, err := src.GetSet(ctx, ref(t, "AS-X")); err != nil && ctx.Err() == nil {
+						t.Errorf("%+v: unscoped worker: %v", c, err)
+						return
+					}
+				}
+			}()
+		}
+		time.Sleep(50 * time.Millisecond) // let the workers fill every pipe
+		for i := 0; i < 3; i++ {
+			start := time.Now()
+			set, err := src.GetSet(context.Background(), ref(t, "RIPE::AS-X"))
+			if err != nil || set.SetSource() != "RIPE" {
+				t.Errorf("%+v: scoped lookup %d under load: %v, %v after %v", c, i, set, err, time.Since(start))
+			} else if d := time.Since(start); d > time.Second {
+				t.Errorf("%+v: scoped lookup %d took %v", c, i, d)
+			}
+		}
+		stop()
+		wg.Wait()
+		src.Close()
+	}
+}
+
+// TestUnknownRegistryIsRemembered: a registry the server refused is not asked
+// for again; later lookups of it are ErrNotFound without a dial.
+func TestUnknownRegistryIsRemembered(t *testing.T) {
+	for _, pipeline := range []int{0, 2} {
+		db := scopedDB()
+		addr := db.IRRd(t)
+		var dials atomic.Int32
+		src := &irrd.Source{Sources: []string{"RADB"}, Pipeline: pipeline, KeepAlive: true, Timeout: 5 * time.Second,
+			Dial: func(ctx context.Context) (net.Conn, error) {
+				dials.Add(1)
+				var d net.Dialer
+				return d.DialContext(ctx, "tcp", addr)
+			}}
+		ctx := context.Background()
+		for i := 0; i < 5; i++ {
+			if _, err := src.GetSet(ctx, ref(t, "NOSUCH::AS-X")); !errors.Is(err, resolve.ErrNotFound) {
+				t.Fatalf("pipeline %d: lookup %d: err = %v", pipeline, i, err)
+			}
+		}
+		if _, err := src.GetSet(ctx, ref(t, "NOSUCH::AS-OTHER")); !errors.Is(err, resolve.ErrNotFound) {
+			t.Fatalf("pipeline %d: another set of the refused registry: err = %v", pipeline, err)
+		}
+		n := 0
+		for _, cmd := range db.Commands() {
+			if cmd == "!sNOSUCH" {
+				n++
+			}
+		}
+		if n != 1 || dials.Load() != 1 {
+			t.Errorf("pipeline %d: %d dials, %d \"!sNOSUCH\"; want the refusal asked for once", pipeline, dials.Load(), n)
+		}
+		src.Close()
+	}
+}
+
+// TestSrcMembersSourceIsCanonical: an unscoped lookup with SrcMembers takes
+// the set's source: in canonical form, as a scoped lookup does.
+func TestSrcMembersSourceIsCanonical(t *testing.T) {
+	db := irrtest.New("as-set: AS-X\nmembers: AS1\nsrc-members: RIPE::AS-Y\nsource: ripe\n")
+	src := &irrd.Source{Addr: db.IRRd(t), Sources: []string{"RIPE"}, SrcMembers: true, Timeout: 5 * time.Second}
+	set, err := src.GetSet(context.Background(), ref(t, "AS-X"))
+	if err != nil || set.SetSource() != "RIPE" {
+		t.Errorf("source = %v, %v; want RIPE", set, err)
+	}
 }

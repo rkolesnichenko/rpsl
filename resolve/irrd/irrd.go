@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -85,6 +86,15 @@ type Source struct {
 	closed bool
 	scoped map[string]*Source // registry -> sub-source restricted to it, made on first use (under mu)
 	parent *Source            // for a sub-source: the Source whose MaxConns budget it shares
+
+	unknown atomic.Bool // sub-source: the server refused its registry; never asked again
+
+	// Reclaiming slots between the Sources of a family (pipeline.go). The
+	// root's reclaimMu serialises retirePipe and guards the root's retiring
+	// and every family member's waiting.
+	reclaimMu sync.Mutex
+	retiring  []*pipe // root: pipes retired and not yet closed, for Close
+	waiting   int     // calls of this Source waiting for a retired pipe's slot
 }
 
 var _ resolve.Source = (*Source)(nil)
@@ -200,13 +210,14 @@ func (s *Source) in(registry string) *Source {
 // GetSet fetches a set. An unscoped ref is looked up in Sources' priority; a
 // scoped ref (RIPE::AS-FOO) in that registry alone, through a connection that
 // selects only it, and a registry the server does not have is
-// resolve.ErrNotFound. For an as-set or route-set it asks for the one-level
-// membership via "!i" and synthesizes a typed set object (with SrcMembers set,
-// it also fetches the object, "!m", for its src-members: and source:). IRRd
-// answers "!i" alike for a missing set and for one with no members, so on that
-// answer GetSet asks for the object itself: a set that exists is returned
-// empty, and a missing one maps to resolve.ErrNotFound. A set of any other
-// class is fetched with "!m" and decoded.
+// resolve.ErrNotFound (remembered until Close, so such a registry costs one
+// query however often data names it). For an as-set or route-set it asks for
+// the one-level membership via "!i" and synthesizes a typed set object (with
+// SrcMembers set, it also fetches the object, "!m", for its src-members: and
+// source:). IRRd answers "!i" alike for a missing set and for one with no
+// members, so on that answer GetSet asks for the object itself: a set that
+// exists is returned empty, and a missing one maps to resolve.ErrNotFound. A
+// set of any other class is fetched with "!m" and decoded.
 func (s *Source) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error) {
 	if ref.IsZero() {
 		return nil, errors.New("irrd: empty set name")
@@ -214,8 +225,13 @@ func (s *Source) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet,
 	if !ref.IsScoped() {
 		return s.getSet(ctx, ref.Name(), "")
 	}
-	set, err := s.in(ref.Source()).getSet(ctx, ref.Name(), ref.Source())
+	sub := s.in(ref.Source())
+	if sub.unknown.Load() {
+		return nil, resolve.ErrNotFound
+	}
+	set, err := sub.getSet(ctx, ref.Name(), ref.Source())
 	if errors.Is(err, errUnknownSource) {
+		sub.unknown.Store(true) // data can name any registry: ask the server once
 		return nil, resolve.ErrNotFound
 	}
 	return set, err
@@ -255,6 +271,9 @@ func (s *Source) getSet(ctx context.Context, name types.SetName, source string) 
 					src = full.SetSrcMembers()
 					if source == "" {
 						source = strings.TrimSpace(full.SetSource())
+						if canon, err := types.ParseSourceName(source); err == nil {
+							source = canon // as a scoped lookup's registry is
+						}
 					}
 				}
 			}
@@ -596,6 +615,15 @@ func (s *Source) Close() error {
 	s.mu.Unlock()
 	for _, sub := range subs {
 		sub.Close() // closes its connections, never the semaphore it shares with s
+	}
+	if s.parent == nil {
+		s.reclaimMu.Lock()
+		retiring := s.retiring
+		s.retiring = nil
+		s.reclaimMu.Unlock()
+		for _, p := range retiring {
+			p.shut(ErrClosed)
+		}
 	}
 	for _, p := range pipes {
 		p.shut(ErrClosed)
