@@ -24,7 +24,7 @@ const shortArgs = "23467a:AbBdDEeF:S:jJKf:l:L:m:M:NnpW:r:R:G:H:tTh:UuwXsvzPc:"
 // longArgs are rpslq's long options and whether each takes an argument.
 var longArgs = map[string]bool{
 	"whois": false, "dump": true, "ranges": false, "timeout": true, "help": false, "server-expand": false,
-	"rpki": true, "slurm": true,
+	"rpki": true, "slurm": true, "src-members": false,
 }
 
 // usageError is a command line that cannot be read.

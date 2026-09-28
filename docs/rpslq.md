@@ -71,6 +71,12 @@ rpslq's own options are long, so they never clash with bgpq4's:
 - **`SOURCE::OBJECT`** (`RIPE::AS-FOO`) as bgpq4 means it — the object in that
   registry, what it reaches in the default sources — where bgpq4 itself slips
   (see below); `RIPE::AS65001` takes that AS's routes from RIPE alone.
+  `SOURCE::SET` looks the set up in that registry and what it lists in the
+  `-S` sources, as bgpq4 does; it is the same scoped reference as a
+  `src-members:` entry.
+- **`--src-members`** — over an IRRd server, also fetch each set whole to
+  follow its `src-members:` (draft-ietf-grow-rpsl-registry-scoped-members);
+  `--whois` and `--dump` always do.
 - **`-d`** — trace every question asked of the source, its answer and how long
   it took, to stderr.
 - **`--ranges`** — write RPSL's ranges as they are (`10.0.0.0/8^+`) rather than

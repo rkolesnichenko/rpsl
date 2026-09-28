@@ -91,6 +91,9 @@ Source (IRRd by default):
   --server-expand let the IRRd server expand as-sets (IRRd 4's !a), as plain
                   bgpq4 does: one query rather than one per AS, but the
                   server's rules rather than the engine's
+  --src-members   over an IRRd server, also fetch each set whole to follow its
+                  src-members: (draft-ietf-grow-rpsl-registry-scoped-members);
+                  --whois and --dump always do
   --rpki file     be RPKI-aware as IRRd 4 is, with the VRPs in file (JSON as
                   rpki-client and Routinator export it; gzip or plain): leave
                   out every route they make RPKI invalid, and with --dump add
@@ -124,6 +127,7 @@ type config struct {
 	rpki, slurm       string
 	ranges            bool
 	serverSide        bool
+	srcMembers        bool
 	special           bool
 	validate          bool
 	debug             bool
@@ -314,6 +318,8 @@ func parse(args []string) (*config, bool, error) {
 			c.ranges = true
 		case "server-expand":
 			c.serverSide = true
+		case "src-members":
+			c.srcMembers = true
 		case "timeout":
 			if c.timeout, err = time.ParseDuration(op.arg); err != nil {
 				err = usagef("--timeout wants a duration such as 30s, not %q", op.arg)
@@ -363,6 +369,8 @@ func (c *config) check(operands []string) error {
 		return usagef("--ranges writes the RPSL ranges as they are; -A, -R and -r work on the prefixes they hold")
 	case c.serverSide && (c.whois || len(c.dumps) > 0):
 		return usagef("--server-expand asks an IRRd server to expand as-sets, so it needs IRRd, not --whois or --dump")
+	case c.srcMembers && (c.whois || len(c.dumps) > 0):
+		return usagef("--src-members applies to an IRRd server: --whois and --dump read src-members: from the objects themselves")
 	case c.serverSide && c.rpki != "":
 		return usagef("--server-expand gets prefixes without their origins, so --rpki cannot validate them")
 	case c.slurm != "" && c.rpki == "":
@@ -444,7 +452,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "rpslq:", err)
 		return exitFail
 	}
-	be, err := source(c.host, c.sources, c.whois, c.dumps, c.conc, vrps)
+	be, err := source(c.host, c.sources, c.whois, c.dumps, c.conc, c.srcMembers, vrps)
 	if err != nil {
 		fmt.Fprintln(stderr, "rpslq:", err)
 		return exitFail
@@ -673,8 +681,9 @@ func readInput(name string, fn func(io.Reader) error) error {
 }
 
 // source builds the backend the flags describe. With vrps, a dump backend
-// holds their pseudo route objects too, as the registry RPKI.
-func source(host, sources string, useWhois bool, files []string, conns int, vrps *rpki.VRPs) (*backend, error) {
+// holds their pseudo route objects too, as the registry RPKI. srcMembers sets
+// irrd.Source.SrcMembers on every IRRd connection it opens.
+func source(host, sources string, useWhois bool, files []string, conns int, srcMembers bool, vrps *rpki.VRPs) (*backend, error) {
 	var prio []string
 	for _, s := range strings.Split(sources, ",") {
 		if s = strings.TrimSpace(s); s != "" {
@@ -717,11 +726,11 @@ func source(host, sources string, useWhois bool, files []string, conns int, vrps
 	}
 	// One connection, its queries pipelined, as bgpq4 queries an IRRd; a
 	// registry-restricted source is a connection of its own.
-	all := []*irrd.Source{{Addr: host, Sources: prio, Pipeline: conns, MaxConns: 1}}
+	all := []*irrd.Source{{Addr: host, Sources: prio, Pipeline: conns, MaxConns: 1, SrcMembers: srcMembers}}
 	return &backend{
 		src: all[0],
 		restrict: func(reg string) resolve.Source {
-			s := &irrd.Source{Addr: host, Sources: []string{reg}, Pipeline: conns, MaxConns: 1}
+			s := &irrd.Source{Addr: host, Sources: []string{reg}, Pipeline: conns, MaxConns: 1, SrcMembers: srcMembers}
 			all = append(all, s)
 			return s
 		},
@@ -789,10 +798,11 @@ func parseObjects(args []string) ([]object, error) {
 		}
 		a, registry := text, ""
 		if reg, name, ok := strings.Cut(text, "::"); ok {
-			if !validRegistry(reg) {
+			canon, err := types.ParseSourceName(reg)
+			if err != nil {
 				return nil, fmt.Errorf("%q: %q is not a registry's name", text, reg)
 			}
-			a, registry = name, strings.ToUpper(reg)
+			a, registry = name, canon
 		}
 		if as, err := types.ParseASN(a); err == nil {
 			out = append(out, object{text: text, registry: registry, as: as, isAS: true})
@@ -813,20 +823,6 @@ func parseObjects(args []string) ([]object, error) {
 	return out, nil
 }
 
-// validRegistry reports whether s can name an IRR source, as IRRd's "!s"
-// takes one: letters, digits, hyphens and underscores.
-func validRegistry(s string) bool {
-	if s == "" {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		if c := s[i]; !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
-			return false
-		}
-	}
-	return true
-}
-
 // restricted is the backend restricted to one registry, built once and, with
 // -d, traced.
 func (q *query) restricted(registry string) resolve.Source {
@@ -844,15 +840,12 @@ func (q *query) restricted(registry string) resolve.Source {
 	return s
 }
 
-// expander is the expander for one object: the query's own, or for
-// SOURCE::SET one that looks that set up in its registry.
-func (q *query) expander(o object) *resolve.Expander {
-	if o.registry == "" {
-		return q.e
-	}
-	e := *q.e
-	e.Src = &topSource{Source: q.e.Src, top: o.set, own: q.restricted(o.registry)}
-	return &e
+// ref is the set o names: scoped to its SOURCE:: registry when it has one, as
+// draft-ietf-grow-rpsl-registry-scoped-members §2.3.2 and bgpq4 mean it — the
+// set is looked up in that registry, what it lists by the default sources.
+func (o object) ref() types.SetRef {
+	r, _ := types.NewSetRef(o.registry, o.set) // registry was validated by parseObjects
+	return r
 }
 
 // parsePrefix reads a prefix or prefix range object; an address alone is
@@ -908,7 +901,7 @@ func (q *query) asns(ctx context.Context, args []string) ([]types.ASN, int) {
 			fmt.Fprintf(q.stderr, "rpslq: an AS list or as-path filter takes as-sets and AS numbers, not %s\n", o.text)
 			return nil, exitUsage
 		}
-		got, err := q.expander(o).ExpandAS(ctx, types.Ref(o.set))
+		got, err := q.e.ExpandAS(ctx, o.ref())
 		if err != nil {
 			return nil, q.fail(o.text, err)
 		}
@@ -975,7 +968,7 @@ func (q *query) prefixes(ctx context.Context, args []string) ([]types.PrefixRang
 				}
 			}
 		case o.set.Class() == types.ClassAsSet:
-			got, err := q.expander(o).ExpandAS(ctx, types.Ref(o.set))
+			got, err := q.e.ExpandAS(ctx, o.ref())
 			if err != nil {
 				return nil, q.fail(o.text, err)
 			}
@@ -984,7 +977,7 @@ func (q *query) prefixes(ctx context.Context, args []string) ([]types.PrefixRang
 				asns[a] = true
 			}
 		default:
-			got, err := q.expander(o).ExpandPrefixRanges(ctx, types.Ref(o.set))
+			got, err := q.e.ExpandPrefixRanges(ctx, o.ref())
 			if err != nil {
 				return nil, q.fail(o.text, err)
 			}

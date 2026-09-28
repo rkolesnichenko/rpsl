@@ -13,30 +13,6 @@ import (
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
-// topSource is bgpq4's SOURCE::SET: the set named and its indirect members
-// are looked up in one registry (own), and everything its expansion reaches
-// from there — nested sets, the routes of its ASes — in the default sources,
-// as bgpq4 sends "!sSOURCE" for that one set and its default "!s" for the rest.
-type topSource struct {
-	resolve.Source
-	top types.SetName
-	own resolve.Source
-}
-
-func (s *topSource) GetSet(ctx context.Context, ref types.SetRef) (rpslobj.NamedSet, error) {
-	if !ref.IsScoped() && ref.Name() == s.top {
-		return s.own.GetSet(ctx, ref)
-	}
-	return s.Source.GetSet(ctx, ref)
-}
-
-func (s *topSource) MembersByRef(ctx context.Context, set rpslobj.NamedSet) ([]rpslobj.Object, error) {
-	if set.SetName() == s.top {
-		return s.own.MembersByRef(ctx, set)
-	}
-	return s.Source.MembersByRef(ctx, set)
-}
-
 // tracer writes -d's trace: each question rpslq asks its sources, what came
 // back and how long it took, and a count at the end.
 type tracer struct {

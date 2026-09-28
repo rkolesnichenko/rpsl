@@ -234,6 +234,15 @@ func TestBgpq4KnownDivergences(t *testing.T) {
 			objects: []string{"as-set: AS-X\nmembers: AS65001, RS-Y\nsource: RIPE\n", "route-set: RS-Y\nmembers: AS65002\nsource: RIPE\n"},
 			set:     "AS-X", ours: "AS65001", bgp4: "AS65001 AS65002",
 		},
+		{
+			id: "src-members",
+			objects: []string{
+				"as-set: AS-SRC\nmembers: AS-DUP\nsrc-members: RADB::AS-DUP\nsource: RIPE\n",
+				"as-set: AS-DUP\nmembers: AS64601\nsource: RIPE\n",
+				"as-set: AS-DUP\nmembers: AS64602\nsource: RADB\n",
+			},
+			set: "AS-SRC", ours: "AS64602", bgp4: "AS64601",
+		},
 	} {
 		texts := append(append([]string{}, common...), c.objects...)
 		addr := irrtest.New(texts...).WithSources("RIPE", "RADB").IRRd(t)
