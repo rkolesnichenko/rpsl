@@ -23,10 +23,11 @@ import (
 
 // The whole engine against a brute-force model of RPSL (RFC 2622 §5, RFC 4012):
 // random IRRs of as-sets, route-sets, aut-nums and routes in two sources, with
-// range operators, indirect members, cycles, missing and invalid members, and
-// sets defined in both sources. The oracle computes what each set denotes
-// straight from the model — never from parsed text or engine code — and every
-// backend must agree with it.
+// range operators, indirect members, cycles, missing and invalid members, sets
+// defined in both sources, and src-members: with registry-scoped set
+// references (draft-ietf-grow-rpsl-registry-scoped-members). The oracle
+// computes what each set denotes straight from the model — never from parsed
+// text or engine code — and every backend must agree with it.
 
 // ---- the model ----
 
@@ -39,12 +40,13 @@ var (
 const firstAS = 65001
 
 type mMember struct {
-	kind string // "as", "set", "pfx" or "junk"
-	as   types.ASN
-	set  string // canonical set name
-	pfx  netip.Prefix
-	op   string // "", "^+", "^-", "^n" or "^n-m"
-	text string // as written in the object
+	kind  string // "as", "set", "pfx" or "junk"
+	as    types.ASN
+	set   string // canonical set name
+	pfx   netip.Prefix
+	op    string // "", "^+", "^-", "^n" or "^n-m"
+	scope string // registry of a src-members: set reference ("" elsewhere)
+	text  string // as written in the object
 }
 
 type mSet struct {
@@ -52,6 +54,7 @@ type mSet struct {
 	class     types.SetClass
 	source    string
 	members   []mMember
+	src       []mMember // src-members:, as written
 	mbrsByRef []string
 }
 
@@ -225,6 +228,9 @@ func randomModel(r *rand.Rand, compat bool) model {
 			}
 			s.members = append(s.members, mm)
 		}
+		if !compat && r.IntN(3) == 0 {
+			s.src = srcMembers(r, s, class, asNames, rsNames)
+		}
 		return s
 	}
 	for _, class := range []types.SetClass{types.ClassAsSet, types.ClassRouteSet} {
@@ -273,6 +279,56 @@ func randomModel(r *rand.Rand, compat bool) model {
 	return m
 }
 
+// srcMembers draws a src-members: list for s (draft §2.1-2.2): scoped copies
+// of some of its set members — in RIPE, RADB, or NOSUCH, a registry no backend
+// holds — some of its AS and prefix members, sometimes an entry members: lacks
+// (§3.1, still followed), and sometimes one name under two registries (§3.3,
+// dropped).
+func srcMembers(r *rand.Rand, s *mSet, class types.SetClass, asNames, rsNames []string) []mMember {
+	scopes := []string{"RIPE", "RADB", "NOSUCH"}
+	allowed := func(set string) bool {
+		c := setClass(set)
+		return c == types.ClassAsSet || class == types.ClassRouteSet && c == types.ClassRouteSet
+	}
+	scoped := func(set, op string) mMember {
+		sc := scopes[r.IntN(len(scopes))]
+		if class != types.ClassRouteSet || setClass(set) != types.ClassRouteSet {
+			op = "" // an operator only on a scoped route-set
+		}
+		return mMember{kind: "set", set: set, scope: sc, op: op, text: sc + "::" + set + op}
+	}
+	var out []mMember
+	for _, mm := range s.members {
+		if r.IntN(2) == 0 {
+			continue
+		}
+		switch mm.kind {
+		case "set":
+			if allowed(mm.set) {
+				out = append(out, scoped(mm.set, mm.op))
+			}
+		case "as":
+			out = append(out, mMember{kind: "as", as: mm.as, text: mm.as.String()}) // no operator on an ASN
+		case "pfx":
+			out = append(out, mm) // a prefix keeps its operator
+		}
+	}
+	pool := asNames
+	if class == types.ClassRouteSet && r.IntN(2) == 0 {
+		pool = rsNames
+	}
+	if r.IntN(4) == 0 && len(pool) > 0 {
+		out = append(out, scoped(pool[r.IntN(len(pool))], ""))
+	}
+	if r.IntN(6) == 0 && len(out) > 0 && out[0].kind == "set" {
+		c := out[0]
+		c.scope = map[string]string{"RIPE": "RADB", "RADB": "RIPE", "NOSUCH": "RIPE"}[c.scope]
+		c.text = c.scope + "::" + c.set + c.op
+		out = append(out, c)
+	}
+	return out
+}
+
 // texts renders the model as RPSL objects in random order, spelling set names
 // in random case and splitting member lists across lines and attributes.
 func (m model) texts(r *rand.Rand) []string {
@@ -297,6 +353,13 @@ func (m model) texts(r *rand.Rand) []string {
 		}
 		list(&b, "members", members)
 		list(&b, "mp-members", mp)
+		if len(s.src) > 0 {
+			var src []string
+			for _, mm := range s.src {
+				src = append(src, mm.text)
+			}
+			list(&b, "src-members", src)
+		}
 		list(&b, "mbrs-by-ref", s.mbrsByRef)
 		fmt.Fprintf(&b, "mnt-by: MNT-A\nsource: %s\n", s.source)
 		out = append(out, b.String())
@@ -320,11 +383,13 @@ func (m model) texts(r *rand.Rand) []string {
 // ---- the oracle ----
 
 type oracle struct {
-	m    model
-	sets map[string]*mSet // the definition in use: RIPE outranks RADB
-	ex   resolve.Exclusion
-	exS  map[string]bool    // ex.Sets, canonical
-	exA  map[types.ASN]bool // ex.ASNs
+	m       model
+	sets    map[string]*mSet // the definition in use: RIPE outranks RADB
+	byScope map[string]*mSet // "SOURCE::NAME" -> that source's copy
+	noSrc   bool             // ignore src-members: (what IRRd, and irrd.Source without SrcMembers, see)
+	ex      resolve.Exclusion
+	exS     map[string]bool    // ex.Sets, canonical
+	exA     map[types.ASN]bool // ex.ASNs
 
 	rpki   bool   // IRRd's RPKI-aware mode: RPKI-invalid routes are suppressed
 	roas   []mROA // the ROAs it validates with
@@ -369,13 +434,100 @@ func randomExclusion(r *rand.Rand, m model) resolve.Exclusion {
 }
 
 func newOracle(m model) *oracle {
-	o := &oracle{m: m, sets: map[string]*mSet{}}
+	o := &oracle{m: m, sets: map[string]*mSet{}, byScope: map[string]*mSet{}}
 	for _, s := range m.sets {
 		if cur, ok := o.sets[s.name]; !ok || cur.source == "RADB" && s.source == "RIPE" {
 			o.sets[s.name] = s
 		}
+		o.byScope[s.source+"::"+s.name] = s
 	}
 	return o
+}
+
+// resolveRef is the set a reference denotes: a scoped one only its source's
+// copy, an unscoped one the precedence winner.
+func (o *oracle) resolveRef(ref string) (*mSet, bool) {
+	if src, name, ok := strings.Cut(ref, "::"); ok {
+		s, found := o.byScope[src+"::"+name]
+		return s, found
+	}
+	s, found := o.sets[ref]
+	return s, found
+}
+
+// refs is every reference that denotes a set of the model: each name, and each
+// name scoped to a source that defines it.
+func (o *oracle) refs() []string {
+	var out []string
+	for ref := range o.sets {
+		out = append(out, ref)
+	}
+	for ref := range o.byScope {
+		out = append(out, ref)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// direct is the draft's §2.3 member selection, from the model: src-members:
+// first (a name under two scopes dropped), then each members: entry whose key
+// src-members: lacks. Keys: set name, AS number, prefix with its operator.
+func (o *oracle) direct(s *mSet) []mMember {
+	if o.noSrc || len(s.src) == 0 {
+		return s.members
+	}
+	key := func(m mMember) string {
+		switch m.kind {
+		case "set":
+			return "set " + m.set
+		case "as":
+			return "as " + m.as.String()
+		case "pfx":
+			return "pfx " + m.pfx.String() + m.op
+		}
+		return ""
+	}
+	scopes := map[string]map[string]bool{}
+	for _, m := range s.src {
+		if m.kind == "set" {
+			if scopes[m.set] == nil {
+				scopes[m.set] = map[string]bool{}
+			}
+			scopes[m.set][m.scope] = true
+		}
+	}
+	have := map[string]bool{}
+	var out []mMember
+	for _, m := range s.src {
+		if m.kind == "set" && len(scopes[m.set]) > 1 || have[key(m)] {
+			continue
+		}
+		have[key(m)] = true
+		out = append(out, m)
+	}
+	for _, m := range s.members {
+		if k := key(m); k != "" && have[k] {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// refOf is the reference a set member denotes.
+func refOf(m mMember) string {
+	if m.scope != "" {
+		return m.scope + "::" + m.set
+	}
+	return m.set
+}
+
+// refName is a reference's set name, without its scope.
+func refName(ref string) string {
+	if _, name, ok := strings.Cut(ref, "::"); ok {
+		return name
+	}
+	return ref
 }
 
 // honored applies RFC 2622 §5.1-5.2 and the same-source rule: an as-set's
@@ -405,38 +557,44 @@ func nested(parent, child types.SetClass) bool {
 	return child == types.ClassAsSet || parent == types.ClassRouteSet && child == types.ClassRouteSet
 }
 
-// reach walks the sets top includes, breadth first: each name's shortest
-// distance from top, and whether AS-ANY or RS-ANY is among them.
+// reach walks the references top includes, breadth first: each one's shortest
+// distance from top, and whether AS-ANY or RS-ANY (scoped or not) is among
+// them. A scoped reference is its own node: the scope selects which copy, and
+// the copy's own members say where to go next (draft §2.3 step 3).
 func (o *oracle) reach(top string) (dist map[string]int, anySet bool) {
 	dist = map[string]int{top: 0}
 	for queue := []string{top}; len(queue) > 0; queue = queue[1:] {
-		name := queue[0]
-		if name == "AS-ANY" || name == "RS-ANY" {
+		ref := queue[0]
+		if n := refName(ref); n == "AS-ANY" || n == "RS-ANY" {
 			anySet = true
 			continue
 		}
-		s, ok := o.sets[name]
+		s, ok := o.resolveRef(ref)
 		if !ok {
 			continue
 		}
-		for _, mm := range s.members {
-			if _, seen := dist[mm.set]; mm.kind != "set" || seen || !nested(s.class, setClass(mm.set)) || o.exS[mm.set] {
+		for _, mm := range o.direct(s) {
+			if mm.kind != "set" || !nested(s.class, setClass(mm.set)) || o.exS[mm.set] {
 				continue
 			}
-			dist[mm.set] = dist[name] + 1
-			queue = append(queue, mm.set)
+			next := refOf(mm)
+			if _, seen := dist[next]; seen {
+				continue
+			}
+			dist[next] = dist[ref] + 1
+			queue = append(queue, next)
 		}
 	}
 	return dist, anySet
 }
 
-// missing returns the names top includes that are not defined.
+// missing returns the references top includes that denote no set.
 func (o *oracle) missing(top string) []string {
 	dist, _ := o.reach(top)
 	var out []string
-	for name := range dist {
-		if _, ok := o.sets[name]; !ok {
-			out = append(out, name)
+	for ref := range dist {
+		if _, ok := o.resolveRef(ref); !ok {
+			out = append(out, ref)
 		}
 	}
 	sort.Strings(out)
@@ -448,12 +606,12 @@ func (o *oracle) missing(top string) []string {
 func (o *oracle) asns(top string) []types.ASN {
 	dist, _ := o.reach(top)
 	seen := map[types.ASN]bool{}
-	for name := range dist {
-		s, ok := o.sets[name]
+	for ref := range dist {
+		s, ok := o.resolveRef(ref)
 		if !ok {
 			continue
 		}
-		for _, mm := range s.members {
+		for _, mm := range o.direct(s) {
 			if mm.kind == "as" && !o.exA[mm.as] {
 				seen[mm.as] = true
 			}
@@ -533,15 +691,18 @@ func apply(op string, p netip.Prefix) []netip.Prefix {
 }
 
 // prefixes is what ExpandPrefixes returns for top under afi: the least fixpoint
-// of the set definitions, where a route-set denotes its prefix members, the
-// routes of its AS and as-set members and the sets it includes — each under the
-// member's operator — and its honored routes; and an as-set, the routes of its
-// ASes, of the as-sets it includes and of its honored aut-nums.
+// of the set definitions, over every reference, where a route-set denotes its
+// prefix members, the routes of its AS and as-set members and the sets it
+// includes — each under the member's operator — and its honored routes; and an
+// as-set, the routes of its ASes, of the as-sets it includes and of its honored
+// aut-nums. Its members are the draft's §2.3 selection (direct).
 func (o *oracle) prefixes(top string, afi types.AFI) []netip.Prefix {
 	val := map[string]map[netip.Prefix]bool{}
+	refs := o.refs()
 	for changed := true; changed; {
 		changed = false
-		for name, s := range o.sets {
+		for _, ref := range refs {
+			s, _ := o.resolveRef(ref)
 			next := map[netip.Prefix]bool{}
 			add := func(op string, ps []netip.Prefix) {
 				for _, p := range ps {
@@ -550,7 +711,7 @@ func (o *oracle) prefixes(top string, afi types.AFI) []netip.Prefix {
 					}
 				}
 			}
-			for _, mm := range s.members {
+			for _, mm := range o.direct(s) {
 				switch mm.kind {
 				case "pfx":
 					add(mm.op, []netip.Prefix{mm.pfx})
@@ -560,7 +721,7 @@ func (o *oracle) prefixes(top string, afi types.AFI) []netip.Prefix {
 					}
 				case "set":
 					if nested(s.class, setClass(mm.set)) && !o.exS[mm.set] {
-						for p := range val[mm.set] {
+						for p := range val[refOf(mm)] {
 							add(mm.op, []netip.Prefix{p})
 						}
 					}
@@ -578,8 +739,8 @@ func (o *oracle) prefixes(top string, afi types.AFI) []netip.Prefix {
 					add("", []netip.Prefix{c.pfx})
 				}
 			}
-			if len(next) != len(val[name]) {
-				val[name], changed = next, true
+			if len(next) != len(val[ref]) {
+				val[ref], changed = next, true
 			}
 		}
 	}
@@ -635,17 +796,23 @@ func checkModel(t *testing.T, label string, o *oracle, texts []string, src resol
 		t.Helper()
 		t.Fatalf("%s: %s\nobjects:\n%s", label, fmt.Sprintf(format, args...), strings.Join(texts, "\n"))
 	}
-	var tops []string
+	// Every name, then every name scoped to each source defining it: a scoped
+	// top is looked up in its registry alone and does not cascade (§2.3.2).
+	var tops, scoped []string
 	for name := range o.sets {
 		tops = append(tops, name)
 	}
+	for ref := range o.byScope {
+		scoped = append(scoped, ref)
+	}
 	sort.Strings(tops)
-	for _, top := range tops {
-		n := mustSet(t, top)
+	sort.Strings(scoped)
+	for _, top := range append(tops, scoped...) {
+		n := mustRef(t, top)
 		_, anySet := o.reach(top)
 		wantMissing := o.missing(top)
-		if o.sets[top].class == types.ClassAsSet {
-			got, err := (&resolve.Expander{Exclude: o.ex, Src: src}).ExpandAS(ctx, types.Ref(n))
+		if s, _ := o.resolveRef(top); s.class == types.ClassAsSet {
+			got, err := (&resolve.Expander{Exclude: o.ex, Src: src}).ExpandAS(ctx, n)
 			var anyErr *resolve.AnySetError
 			switch {
 			case anySet:
@@ -660,7 +827,7 @@ func checkModel(t *testing.T, label string, o *oracle, texts []string, src resol
 		}
 		for _, afi := range []types.AFI{types.AFIv4, types.AFIv6, types.AFIAny} {
 			want := o.prefixes(top, afi)
-			got, err := (&resolve.Expander{Exclude: o.ex, Src: src, AFI: afi}).ExpandPrefixes(ctx, types.Ref(n))
+			got, err := (&resolve.Expander{Exclude: o.ex, Src: src, AFI: afi}).ExpandPrefixes(ctx, n)
 			var anyErr *resolve.AnySetError
 			switch {
 			case anySet:
@@ -677,10 +844,10 @@ func checkModel(t *testing.T, label string, o *oracle, texts []string, src resol
 			if !limits || len(want) < 2 {
 				continue
 			}
-			if _, err := (&resolve.Expander{Exclude: o.ex, Src: src, AFI: afi, MaxPrefixes: len(want)}).ExpandPrefixes(ctx, types.Ref(n)); err != nil {
+			if _, err := (&resolve.Expander{Exclude: o.ex, Src: src, AFI: afi, MaxPrefixes: len(want)}).ExpandPrefixes(ctx, n); err != nil {
 				fail("ExpandPrefixes(%s, %v) with MaxPrefixes = its size %d: %v", top, afi, len(want), err)
 			}
-			_, err = (&resolve.Expander{Exclude: o.ex, Src: src, AFI: afi, MaxPrefixes: len(want) - 1}).ExpandPrefixes(ctx, types.Ref(n))
+			_, err = (&resolve.Expander{Exclude: o.ex, Src: src, AFI: afi, MaxPrefixes: len(want) - 1}).ExpandPrefixes(ctx, n)
 			if tl := (*resolve.SetTooLargeError)(nil); !errors.As(err, &tl) || tl.Limit != resolve.LimitPrefixes {
 				fail("ExpandPrefixes(%s, %v) with MaxPrefixes %d under its size: err %v", top, afi, len(want)-1, err)
 			}
@@ -696,10 +863,10 @@ func checkModel(t *testing.T, label string, o *oracle, texts []string, src resol
 		if depth < 2 {
 			continue
 		}
-		if _, err := (&resolve.Expander{Exclude: o.ex, Src: src, MaxDepth: depth}).ExpandPrefixes(ctx, types.Ref(n)); err != nil {
+		if _, err := (&resolve.Expander{Exclude: o.ex, Src: src, MaxDepth: depth}).ExpandPrefixes(ctx, n); err != nil {
 			fail("ExpandPrefixes(%s) with MaxDepth = its depth %d: %v", top, depth, err)
 		}
-		_, err := (&resolve.Expander{Exclude: o.ex, Src: src, MaxDepth: depth - 1}).ExpandPrefixes(ctx, types.Ref(n))
+		_, err := (&resolve.Expander{Exclude: o.ex, Src: src, MaxDepth: depth - 1}).ExpandPrefixes(ctx, n)
 		if tl := (*resolve.SetTooLargeError)(nil); !errors.As(err, &tl) || tl.Limit != resolve.LimitDepth {
 			fail("ExpandPrefixes(%s) with MaxDepth %d under its depth: err %v", top, depth-1, err)
 		}
@@ -721,7 +888,9 @@ func TestModelMemSource(t *testing.T) {
 }
 
 // The network backends, served the same IRRs by an IRRd-like server, agree
-// with the oracle too.
+// with the oracle too, and so does a Cache. irrd.Source reads src-members:
+// only with SrcMembers; without it, it sees what IRRd does, which is the
+// oracle that ignores them.
 func TestModelBackends(t *testing.T) {
 	for seed := uint64(0); seed < 150; seed++ {
 		r := rand.New(rand.NewPCG(seed, 5))
@@ -729,18 +898,25 @@ func TestModelBackends(t *testing.T) {
 		texts := m.texts(r)
 		db := irrtest.New(texts...).WithSources("RIPE", "RADB")
 		o := newOracle(m)
-		ir := &irrd.Source{Addr: db.IRRd(t), Sources: []string{"RIPE", "RADB"}, KeepAlive: true, Timeout: 5 * time.Second}
+		ir := &irrd.Source{Addr: db.IRRd(t), Sources: []string{"RIPE", "RADB"}, KeepAlive: true, SrcMembers: true, Timeout: 5 * time.Second}
 		checkModel(t, fmt.Sprintf("irrd seed %d", seed), o, texts, ir, false)
 		ir.Close()
-		pl := &irrd.Source{Addr: db.IRRd(t), Sources: []string{"RIPE", "RADB"}, Pipeline: 8, MaxConns: 2, Timeout: 5 * time.Second}
+		pl := &irrd.Source{Addr: db.IRRd(t), Sources: []string{"RIPE", "RADB"}, Pipeline: 8, MaxConns: 2, SrcMembers: true, Timeout: 5 * time.Second}
 		checkModel(t, fmt.Sprintf("pipelined irrd seed %d", seed), o, texts, pl, false)
 		pl.Close()
+		o2 := newOracle(m)
+		o2.noSrc = true
+		off := &irrd.Source{Addr: db.IRRd(t), Sources: []string{"RIPE", "RADB"}, Pipeline: 8, Timeout: 5 * time.Second}
+		checkModel(t, fmt.Sprintf("irrd without SrcMembers seed %d", seed), o2, texts, off, false)
+		off.Close()
+		cache := resolve.NewCache(resolve.NewMemSource(decodeAll(t, texts), "RIPE", "RADB"), 0)
+		checkModel(t, fmt.Sprintf("cache seed %d", seed), o, texts, cache, false)
 		wh := &whois.Source{Addr: db.Whois(t), Sources: []string{"RIPE", "RADB"}, Timeout: 5 * time.Second}
 		checkModel(t, fmt.Sprintf("whois seed %d", seed), o, texts, wh, false)
 		if seed%5 == 0 {
 			ex := randomExclusion(r, m)
 			checkModel(t, fmt.Sprintf("irrd seed %d excluding %v", seed, ex), o.excluding(ex), texts,
-				&irrd.Source{Addr: db.IRRd(t), Sources: []string{"RIPE", "RADB"}, Timeout: 5 * time.Second}, false)
+				&irrd.Source{Addr: db.IRRd(t), Sources: []string{"RIPE", "RADB"}, SrcMembers: true, Timeout: 5 * time.Second}, false)
 			checkModel(t, fmt.Sprintf("whois seed %d excluding %v", seed, ex), o.excluding(ex), texts, wh, false)
 		}
 	}

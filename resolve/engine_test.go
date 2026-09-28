@@ -40,40 +40,55 @@ func TestExpansionIndependentOfMemberOrder(t *testing.T) {
 // graph is a random as-set graph plus the independent BFS oracle used to check
 // the engine against.
 type graph struct {
-	asns  [][]uint32 // set i's direct ASN members
-	edges [][]int    // set i's nested set members
+	asns   [][]uint32 // set i's direct ASN members
+	edges  [][]int    // set i's nested set members
+	scoped [][]bool   // whether edges[i][k] is also in src-members:, as RIPE::AS-S<j>
 }
 
 func randomGraph(r *rand.Rand, n int) graph {
-	g := graph{asns: make([][]uint32, n), edges: make([][]int, n)}
+	g := graph{asns: make([][]uint32, n), edges: make([][]int, n), scoped: make([][]bool, n)}
 	for i := 0; i < n; i++ {
 		for k := r.IntN(3); k > 0; k-- {
 			g.asns[i] = append(g.asns[i], uint32(1000+r.IntN(4*n)))
 		}
 		for k := r.IntN(4); k > 0; k-- {
 			g.edges[i] = append(g.edges[i], r.IntN(n)) // cycles and self-loops allowed
+			g.scoped[i] = append(g.scoped[i], r.IntN(3) == 0)
 		}
 	}
 	return g
 }
 
 // oracle returns the ASNs reachable from set 0 and the largest shortest-path
-// distance of any reachable set.
+// distance of any reachable reference. RIPE::AS-S<j> and AS-S<j> are one
+// object but two references, each at its own distance (draft §2.3): a set
+// follows AS-S<j> only when its src-members: lacks RIPE::AS-S<j>, which then
+// replaces it.
 func (g graph) oracle() (asns []uint32, maxDist int) {
-	dist := map[int]int{0: 0}
-	queue := []int{0}
+	type ref struct {
+		set    int
+		scoped bool
+	}
+	dist := map[ref]int{{0, false}: 0}
+	queue := []ref{{0, false}}
 	seen := map[uint32]bool{}
 	for len(queue) > 0 {
-		i := queue[0]
+		n := queue[0]
 		queue = queue[1:]
-		maxDist = max(maxDist, dist[i])
+		i := n.set
+		maxDist = max(maxDist, dist[n])
 		for _, a := range g.asns[i] {
 			seen[a] = true
 		}
+		inSrc := map[int]bool{}
+		for k, j := range g.edges[i] {
+			inSrc[j] = inSrc[j] || g.scoped[i][k]
+		}
 		for _, j := range g.edges[i] {
-			if _, ok := dist[j]; !ok {
-				dist[j] = dist[i] + 1
-				queue = append(queue, j)
+			next := ref{j, inSrc[j]}
+			if _, ok := dist[next]; !ok {
+				dist[next] = dist[n] + 1
+				queue = append(queue, next)
 			}
 		}
 	}
@@ -85,20 +100,34 @@ func (g graph) oracle() (asns []uint32, maxDist int) {
 	return asns, maxDist
 }
 
-// corpus builds the graph as RPSL, listing each set's members in the order
-// chosen by perm (so the same graph can be presented in different orders).
+// corpus builds the graph as RPSL, listing each set's members in an order
+// drawn from r (so the same graph can be presented in different orders). Every
+// set is in RIPE, and a scoped edge is in src-members: as well as members:.
 func (g graph) corpus(t *testing.T, r *rand.Rand) *MemSource {
 	var texts []string
 	for i := range g.asns {
-		var members []string
+		var members, src []string
 		for _, a := range g.asns[i] {
 			members = append(members, fmt.Sprintf("AS%d", a))
 		}
-		for _, j := range g.edges[i] {
+		for k, j := range g.edges[i] {
 			members = append(members, fmt.Sprintf("AS-S%d", j))
+			if g.scoped[i][k] {
+				src = append(src, fmt.Sprintf("RIPE::AS-S%d", j))
+			}
 		}
 		r.Shuffle(len(members), func(a, b int) { members[a], members[b] = members[b], members[a] })
-		texts = append(texts, asSet(fmt.Sprintf("AS-S%d", i), members...))
+		r.Shuffle(len(src), func(a, b int) { src[a], src[b] = src[b], src[a] })
+		var b strings.Builder
+		fmt.Fprintf(&b, "as-set: AS-S%d\n", i)
+		for _, m := range members {
+			fmt.Fprintf(&b, "members: %s\n", m)
+		}
+		for _, m := range src {
+			fmt.Fprintf(&b, "src-members: %s\n", m)
+		}
+		b.WriteString("source: RIPE\n")
+		texts = append(texts, b.String())
 	}
 	return corpus(t, texts...)
 }
