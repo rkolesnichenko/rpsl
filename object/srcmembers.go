@@ -147,3 +147,43 @@ func (d *decoder) srcMembers(rule string, container types.SetClass, listed ...[]
 	}
 	return out
 }
+
+// DirectMembers returns the members a resolver follows
+// (draft-ietf-grow-rpsl-registry-scoped-members §2.3 steps 1-2): every
+// src-members: member, then each members:/mp-members: member whose key (spec
+// §5.2) no src-members: member has. A set name under two registries in
+// src-members: is left out of it, as the decoder leaves it out, so that name
+// is followed through members:. It reads one object and does no I/O.
+func DirectMembers(s Set) []SetMember {
+	src, listed := s.SetSrcMembers(), s.SetMembers()
+	if len(src) == 0 {
+		return listed
+	}
+	registries := map[types.SetName]map[string]bool{}
+	for _, m := range src {
+		if m.Kind == MemberSet {
+			if registries[m.Set] == nil {
+				registries[m.Set] = map[string]bool{}
+			}
+			registries[m.Set][m.Source] = true
+		}
+	}
+	have := map[memberKey]bool{}
+	out := make([]SetMember, 0, len(src)+len(listed))
+	for _, m := range src {
+		if m.Kind == MemberSet && len(registries[m.Set]) > 1 {
+			continue
+		}
+		if k, ok := keyOf(m); ok && !have[k] {
+			have[k] = true
+			out = append(out, m)
+		}
+	}
+	for _, m := range listed {
+		if k, ok := keyOf(m); ok && have[k] {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}

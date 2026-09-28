@@ -1,6 +1,7 @@
 package object
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/rkolesnichenko/rpsl/types"
@@ -98,5 +99,62 @@ func TestSetMemberRef(t *testing.T) {
 	a, _ := ParseSetMember("AS1", types.ClassAsSet)
 	if !a.Ref().IsZero() {
 		t.Errorf("an AS member's Ref is %v, want zero", a.Ref())
+	}
+}
+
+func refsOf(ms []SetMember) []string {
+	var out []string
+	for _, m := range ms {
+		switch m.Kind {
+		case MemberSet:
+			s := m.Ref().String()
+			if !m.Op.IsZero() {
+				s += m.Op.String()
+			}
+			out = append(out, s)
+		case MemberAS:
+			s := m.AS.String()
+			if !m.Op.IsZero() {
+				s += m.Op.String()
+			}
+			out = append(out, s)
+		case MemberPrefixRange:
+			out = append(out, m.Range.String())
+		}
+	}
+	return out
+}
+
+func TestDirectMembers(t *testing.T) {
+	for _, tc := range []struct {
+		name, src string
+		want      []string
+	}{
+		{"no src-members", "route-set: RS-X\nmembers: RS-A, AS1\n", []string{"RS-A", "AS1"}},
+		{"draft figure 1", "route-set: RS-FIRST\nmembers: RS-SECOND\nmp-members: RS-LEGACY\nsrc-members: RIPE::RS-SECOND\n",
+			[]string{"RIPE::RS-SECOND", "RS-LEGACY"}},
+		{"src operator wins", "route-set: RS-X\nmembers: RS-Y^-\nsrc-members: RIPE::RS-Y^+\n", []string{"RIPE::RS-Y^+"}},
+		{"ASN key ignores operator", "route-set: RS-X\nmembers: AS1^24\nsrc-members: AS1\n", []string{"AS1"}},
+		{"prefix key keeps operator", "route-set: RS-X\nmembers: 192.0.2.0/24^+\nsrc-members: 192.0.2.0/24\n",
+			[]string{"192.0.2.0/24", "192.0.2.0/24^+"}},
+		{"unlisted is followed", "as-set: AS-X\nmembers: AS1\nsrc-members: RIPE::AS-Z\n", []string{"RIPE::AS-Z", "AS1"}},
+		{"conflict falls back to members", "as-set: AS-X\nmembers: AS-O\nsrc-members: RIPE::AS-O, ARIN::AS-O\n", []string{"AS-O"}},
+	} {
+		obj, _ := Decode(parse(tc.src))
+		got := refsOf(DirectMembers(obj.(Set)))
+		if strings.Join(got, " ") != strings.Join(tc.want, " ") {
+			t.Errorf("%s: DirectMembers = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A set built by hand, bypassing the decoder, gets the same conflict rule.
+func TestDirectMembersConflictOnHandBuiltSet(t *testing.T) {
+	o, _ := ParseSetMember("AS-O", types.ClassAsSet)
+	a, _ := ParseSrcMember("RIPE::AS-O", types.ClassAsSet)
+	b, _ := ParseSrcMember("ARIN::AS-O", types.ClassAsSet)
+	set := AsSet{Members: []SetMember{o}, SrcMembers: []SetMember{a, b}}
+	if got := refsOf(DirectMembers(set)); strings.Join(got, " ") != "AS-O" {
+		t.Errorf("DirectMembers = %v, want [AS-O]", got)
 	}
 }
