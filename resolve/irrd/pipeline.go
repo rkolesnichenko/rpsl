@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -117,7 +118,12 @@ func (s *Source) pipeFor(ctx context.Context) (*pipe, error) {
 			best.load.Add(1)
 			return best, nil
 		}
-		// Every connection slot is taken by a pipe still being dialed.
+		// Every connection slot is held by a pipe of the parent's or of another
+		// scoped lookup's (they share MaxConns), or by one still being dialed.
+		// A pipe keeps its slot while it lives, so free an idle one's.
+		if s.reclaimIdlePipe() {
+			continue
+		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -144,6 +150,48 @@ func (s *Source) trySlot() bool {
 	default:
 		return false
 	}
+}
+
+// errReclaimed breaks an idle pipe whose connection slot another Source of
+// the same family needs. It is stale (net.ErrClosed), so a call that took the
+// pipe just as it was reclaimed is retried on a fresh one.
+var errReclaimed = fmt.Errorf("irrd: idle pipe reclaimed for another source list: %w", net.ErrClosed)
+
+// reclaimIdlePipe shuts one idle pipe of s's family — the Source a scoped
+// lookup came from and its sub-sources, which share one MaxConns semaphore —
+// freeing its slot. It reports whether it found one.
+func (s *Source) reclaimIdlePipe() bool {
+	root := s
+	if s.parent != nil {
+		root = s.parent
+	}
+	root.mu.Lock()
+	family := make([]*Source, 0, 1+len(root.scoped))
+	family = append(family, root)
+	for _, sub := range root.scoped {
+		family = append(family, sub)
+	}
+	root.mu.Unlock()
+	for _, m := range family {
+		if m == s {
+			continue // s has no pipe, or it would have used it
+		}
+		m.mu.Lock()
+		var idle *pipe
+		for i, p := range m.pipes {
+			if !p.isBroken() && p.load.Load() == 0 {
+				idle = p
+				m.pipes = slices.Delete(m.pipes, i, i+1) // zeroes the vacated tail
+				break
+			}
+		}
+		m.mu.Unlock()
+		if idle != nil {
+			idle.shut(errReclaimed)
+			return true
+		}
+	}
+	return false
 }
 
 // newPipe dials a persistent connection and starts its reader.

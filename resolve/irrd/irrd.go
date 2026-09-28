@@ -71,11 +71,20 @@ type Source struct {
 	// KeepAlive is implied. Zero sends one query at a time per connection.
 	Pipeline int
 
+	// SrcMembers, when set, also fetches each as-set and route-set whole
+	// ("!m") to read its src-members: (draft-ietf-grow-rpsl-registry-scoped-
+	// members) and source:. Members still come from "!i", which folds in
+	// indirect members. Off by default: IRRd does not implement the draft,
+	// and it doubles the queries for sets.
+	SrcMembers bool
+
 	mu     sync.Mutex
 	idle   []*pconn
 	pipes  []*pipe       // pipelined connections (Pipeline > 0)
-	slots  chan struct{} // semaphore of MaxConns, created on first use
+	slots  chan struct{} // semaphore of MaxConns, created on first use; shared with sub-sources, never closed
 	closed bool
+	scoped map[string]*Source // registry -> sub-source restricted to it, made on first use (under mu)
+	parent *Source            // for a sub-source: the Source whose MaxConns budget it shares
 }
 
 var _ resolve.Source = (*Source)(nil)
@@ -100,6 +109,10 @@ var errQuery = errors.New("irrd: query error")
 // ErrQueryRefused is returned when the server refuses a query outright ('F'),
 // as a server without IRRd 4's "!a" does for ASSetPrefixes.
 var ErrQueryRefused = errQuery
+
+// errUnknownSource marks a server's refusal of a "!s" source list: IRRd
+// answers "F One or more selected sources are unavailable."
+var errUnknownSource = errors.New("irrd: unknown source")
 
 // ErrClosed is returned by queries on a Source after Close.
 var ErrClosed = errors.New("irrd: source closed")
@@ -145,50 +158,82 @@ func (s *Source) maxResponse() int64 {
 func (s *Source) sourceList() (string, error) {
 	names := make([]string, len(s.Sources))
 	for i, n := range s.Sources {
-		if !validSourceName(n) {
+		canon, err := types.ParseSourceName(n)
+		if err != nil {
 			return "", fmt.Errorf("irrd: invalid source name %q", n)
 		}
-		names[i] = strings.ToUpper(n)
+		names[i] = canon
 	}
 	return strings.Join(names, ","), nil
 }
 
-// validSourceName reports whether n is a plain IRR source name: letters,
-// digits, '-' and '_' only, so it cannot carry another command or argument.
-func validSourceName(n string) bool {
-	if n == "" {
-		return false
+// in returns the sub-source restricted to registry: the same server, limits
+// and pipelining, on connections of its own that select only that registry
+// ("!s" is per connection, and switching it on a shared pipelined connection
+// would race with the queries in flight). It shares s's MaxConns budget, and
+// Close closes it.
+func (s *Source) in(registry string) *Source {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sub, ok := s.scoped[registry]; ok {
+		return sub
 	}
-	for i := 0; i < len(n); i++ {
-		c := n[i]
-		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '-' || c == '_') {
-			return false
-		}
+	if s.slots == nil && s.MaxConns >= 0 {
+		s.slots = make(chan struct{}, s.maxConns())
 	}
-	return true
+	sub := &Source{
+		Addr: s.Addr, Sources: []string{registry}, Timeout: s.Timeout, MaxResponse: s.MaxResponse,
+		Dial: s.Dial, KeepAlive: s.KeepAlive, MaxConns: s.MaxConns, Pipeline: s.Pipeline,
+		SrcMembers: s.SrcMembers, parent: s, slots: s.slots,
+	}
+	if s.closed {
+		sub.closed = true // queries on it return ErrClosed; nothing to keep
+		return sub
+	}
+	if s.scoped == nil {
+		s.scoped = map[string]*Source{}
+	}
+	s.scoped[registry] = sub
+	return sub
 }
 
-// GetSet fetches a set. For an as-set or route-set it asks for the one-level
-// membership via "!i" and synthesizes a typed set object. IRRd answers "!i"
-// alike for a missing set and for one with no members, so on that answer
-// GetSet asks for the object itself ("!m"): a set that exists is returned
+// GetSet fetches a set. An unscoped ref is looked up in Sources' priority; a
+// scoped ref (RIPE::AS-FOO) in that registry alone, through a connection that
+// selects only it, and a registry the server does not have is
+// resolve.ErrNotFound. For an as-set or route-set it asks for the one-level
+// membership via "!i" and synthesizes a typed set object (with SrcMembers set,
+// it also fetches the object, "!m", for its src-members: and source:). IRRd
+// answers "!i" alike for a missing set and for one with no members, so on that
+// answer GetSet asks for the object itself: a set that exists is returned
 // empty, and a missing one maps to resolve.ErrNotFound. A set of any other
 // class is fetched with "!m" and decoded.
 func (s *Source) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error) {
-	if ref.IsScoped() {
-		return nil, fmt.Errorf("irrd: scoped lookup of %s is not supported", ref)
-	}
-	name := ref.Name()
-	if name.IsZero() {
+	if ref.IsZero() {
 		return nil, errors.New("irrd: empty set name")
 	}
+	if !ref.IsScoped() {
+		return s.getSet(ctx, ref.Name(), "")
+	}
+	set, err := s.in(ref.Source()).getSet(ctx, ref.Name(), ref.Source())
+	if errors.Is(err, errUnknownSource) {
+		return nil, resolve.ErrNotFound
+	}
+	return set, err
+}
+
+// getSet is GetSet on this Source's own sources; source, when set, is the
+// registry they are (a scoped lookup), which a synthesized set carries.
+func (s *Source) getSet(ctx context.Context, name types.SetName, source string) (object.NamedSet, error) {
 	if c := name.Class(); c != types.ClassAsSet && c != types.ClassRouteSet {
 		return s.fetchSet(ctx, name)
 	}
+	whole := "!m" + name.Class().String() + "," + name.String()
 	payload, err := s.do(ctx, "!i"+name.String())
+	var obj []byte
+	haveObj := false
 	if errors.Is(err, errNotFound) {
-		_, err = s.do(ctx, "!m"+name.Class().String()+","+name.String())
-		payload = nil
+		obj, err = s.do(ctx, whole)
+		payload, haveObj = nil, true
 	}
 	if err != nil {
 		if errors.Is(err, errNotFound) {
@@ -196,11 +241,31 @@ func (s *Source) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet,
 		}
 		return nil, err
 	}
-	members := parseMembers(string(payload), name.Class())
-	if name.Class() == types.ClassAsSet {
-		return object.AsSet{Name: name, Members: members}, nil
+	var src []object.SetMember
+	if s.SrcMembers {
+		if !haveObj {
+			if obj, err = s.do(ctx, whole); err != nil && !errors.Is(err, errNotFound) {
+				return nil, err
+			}
+		}
+		if len(obj) > 0 {
+			raw, _ := rpsl.ParseObject(string(obj))
+			if o, _ := object.Decode(raw); o != nil {
+				if full, ok := o.(object.Set); ok && full.SetName() == name {
+					src = full.SetSrcMembers()
+					if source == "" {
+						source = strings.TrimSpace(full.SetSource())
+					}
+				}
+			}
+		}
 	}
-	return object.RouteSet{Name: name, Members: members}, nil
+	members := parseMembers(string(payload), name.Class())
+	common := object.Common{Source: source}
+	if name.Class() == types.ClassAsSet {
+		return object.AsSet{Common: common, Name: name, Members: members, SrcMembers: src}, nil
+	}
+	return object.RouteSet{Common: common, Name: name, Members: members, SrcMembers: src}, nil
 }
 
 // fetchSet fetches a set whole ("!m") and decodes it, refusing an answer that
@@ -458,6 +523,9 @@ func (s *Source) selectSources(conn net.Conn, br *bufio.Reader) error {
 		if errors.Is(err, errNotFound) {
 			return fmt.Errorf("irrd: server rejected source list %q", list)
 		}
+		if errors.Is(err, errQuery) {
+			return fmt.Errorf("irrd: selecting sources %q: %w: %w", list, errUnknownSource, err)
+		}
 		return fmt.Errorf("irrd: selecting sources %q: %w", list, err)
 	}
 	return nil
@@ -517,14 +585,18 @@ func (s *Source) releaseSlot() {
 	<-slots
 }
 
-// Close releases all pooled connections; later queries return ErrClosed, and
-// queries already running finish without returning their connections to the
-// pool. It may be called more than once, and on a Source that never pooled.
+// Close releases all pooled connections, its scoped lookups' too; later
+// queries return ErrClosed, and queries already running finish without
+// returning their connections to the pool. It may be called more than once,
+// and on a Source that never pooled.
 func (s *Source) Close() error {
 	s.mu.Lock()
-	conns, pipes := s.idle, s.pipes
-	s.idle, s.pipes, s.closed = nil, nil, true
+	conns, pipes, subs := s.idle, s.pipes, s.scoped
+	s.idle, s.pipes, s.scoped, s.closed = nil, nil, nil, true
 	s.mu.Unlock()
+	for _, sub := range subs {
+		sub.Close() // closes its connections, never the semaphore it shares with s
+	}
 	for _, p := range pipes {
 		p.shut(ErrClosed)
 	}
