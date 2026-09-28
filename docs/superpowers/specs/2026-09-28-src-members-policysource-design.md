@@ -150,7 +150,7 @@ type RouteSet struct { …; SrcMembers []SetMember } // src-members:
 type Set interface {
     NamedSet
     SetMembers() []SetMember // members: plus mp-members:, as written (unchanged)
-    SrcMembers() []SetMember // NEW: src-members:, as written
+    SetSrcMembers() []SetMember // NEW: src-members:, as written (a method named SrcMembers would clash with the field)
 }
 
 // DirectMembers returns the members a resolver follows (draft §2.3 steps 1-2):
@@ -376,7 +376,7 @@ type Source struct {
 
 | | Change |
 |---|---|
-| `Cache` | Keys sets by `SetRef`; caches `AutNum`/`InetRtr` by (source, key) |
+| `Cache` | Keys sets by `SetRef` and claims by (set source, set name) — two same-named sets from two registries have different claimants; caches `AutNum`/`InetRtr` by (source, key) |
 | `rpki.Filter` | Passes `GetSet(ref)`, `AutNum` and `InetRtr` through; it filters routes and claimants only |
 | `nrtm4.Client` | A mirror is one registry: a scoped ref to it resolves, any other is `ErrNotFound`. `CopyTo` into a shared Corpus gets §7.1. New `KeepPolicy`, passed to its Corpus |
 | `DumpLoader` | New `KeepPolicy`, passed to its Corpus |
@@ -553,7 +553,7 @@ Each behaviour is held to an oracle independent of the code under test.
 - CHANGELOG v0.20.0, **Breaking**, each with its one-line fix:
   `Source.GetSet(types.SetRef)`; `Expand*(types.SetRef)`;
   `Missing() []types.SetRef`; `SetTooLargeError.Name`; `object.Set` gains
-  `SrcMembers()`; `SourceOf` lets scoped lookups reach every held source;
+  `SetSrcMembers()`; `SourceOf` lets scoped lookups reach every held source;
   `ErrNotFound`'s message.
 
 ## 13. Risks
