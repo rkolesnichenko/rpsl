@@ -98,8 +98,8 @@ if [ -n "${FUZZTIME:-}" ]; then
 	# module-dir package fuzz-target
 	for t in "lexer . FuzzTokenize" "ast . FuzzAttributeList" "ast . FuzzEdit" "ast . FuzzFormat" \
 		"types . FuzzParseSetName" "types . FuzzParseRangeOperator" "types . FuzzParsePrefixRange" \
-		"types . FuzzParseRouterID" \
-		". . FuzzParseStream" ". . FuzzDecode" ". ./policy FuzzParseImport" ". ./policy FuzzParseASPathRegexp" \
+		"types . FuzzParseRouterID" "types . FuzzParseSetRef" \
+		". . FuzzParseStream" ". . FuzzDecode" ". ./object FuzzParseSrcMember" ". ./policy FuzzParseImport" ". ./policy FuzzParseASPathRegexp" \
 		". ./policy FuzzParseFilter" ". ./policy FuzzParsePeering" ". ./policy FuzzFilterString" \
 		". ./policy FuzzParseInject" ". ./policy FuzzParseComponents" ". ./policy FuzzParseAggrMtd" \
 		". ./policy FuzzParseIfaddr" ". ./policy FuzzParseInterface" ". ./policy FuzzParsePeer" \

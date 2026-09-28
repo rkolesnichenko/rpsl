@@ -19,6 +19,16 @@ Targets v0.20.0.
 - `resolve.PolicySource` (aut-nums and inet-rtrs) over MemSource, Corpus (`KeepPolicy`), DumpLoader,
   nrtm4.Client, irrd, whois, Cache and rpki.Filter.
 
+### Changed
+
+- rpslq `SOURCE::SET` where the set lists its own name: the inner mention now resolves in the `-S` sources, as bgpq4 does.
+- rpslq `-L` with `SOURCE::` (source-with-depth): the top's own unscoped mentions resolve in the `-S` sources.
+- `whois.Source.MembersByRef` queries `-s <the set's source>` (the claims `ClaimAllowed` keeps), not `Sources`.
+- irrd's error for a refused default source list now wraps an "unknown source" error; its message text changes.
+- `irrd.Source` learns the server's registries once via `!j-*` for scoped lookups (kept until `Close`).
+- A `MemSource` from a `Corpus`, `DumpLoader` or `nrtm4.Client` without `KeepPolicy` answers `AutNum`/`InetRtr` with `ErrNoPolicy`.
+- `object.SetMember` gains a `Source` field: unkeyed struct literals break.
+
 ### Breaking
 
 - `Source.GetSet` takes a `types.SetRef`: implementers change the parameter and use `ref.Name()`;

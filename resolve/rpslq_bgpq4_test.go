@@ -296,20 +296,9 @@ func TestRpslqSourcePrefixMatchesBgpq4(t *testing.T) {
 		r := rand.New(rand.NewPCG(seed, 23))
 		m := randomModel(r, true)
 		addr := irrtest.New(m.texts(r)...).WithSources("RIPE", "RADB").IRRd(t)
-		listed := map[string]bool{} // names some set lists as a member
-		for _, set := range m.sets {
-			for _, mm := range set.members {
-				if mm.kind == "set" {
-					listed[mm.set] = true
-				}
-			}
-		}
 		for _, set := range m.sets {
 			if set.class != types.ClassAsSet {
 				continue // bgpq4 then expands route-sets shallowly: "source-route-set"
-			}
-			if listed[set.name] {
-				continue // a way back to the top's name: "source-cycle"
 			}
 			top := set.source + "::" + set.name
 			for _, sources := range []string{"RIPE,RADB", "RADB", "RIPE"} {

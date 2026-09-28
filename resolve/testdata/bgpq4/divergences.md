@@ -32,6 +32,13 @@ passing unnoticed.
 - **Indirect members**: IRRd folds `mbrs-by-ref` members into `!i`; the engine
   resolves them itself with the same rules (maintainer and same source), and the
   two agree on every random IRR.
+- **A `SOURCE::` set that lists its own name** (`source-cycle`: `rpslq -S RADB
+  RIPE::AS-TOP`, where RIPE's AS-TOP lists AS-TOP): both answer RIPE's AS-TOP
+  plus RADB's. bgpq4 marks a `SOURCE::` set as seen only under `-L` or EXCEPT,
+  so the self-reference is looked up again in the `-S` sources; the engine's
+  scope never cascades, so a set reached scoped and then unscoped is two
+  nodes. `TestRpslqSourceDivergences` still pins it, so a regression on either
+  side fails, and `TestRpslqSourcePrefixMatchesBgpq4` no longer skips such sets.
 
 ## rpslq
 
@@ -43,7 +50,6 @@ and below. `TestRpslqKnownDivergences` pins each case.
 | --- | --- | --- | --- | --- |
 | `except-in-route-set` | `RS-TOP EXCEPT RS-BAD AS-BAD` | RS-BAD and AS-BAD left out | both kept | bgpq4's stoplist applies only while it recurses through as-sets; route-sets it has the server expand (`!i…,1`). The engine leaves an excluded set out wherever it meets it. |
 | `depth-limit` | `-L 2` over AS-TOP → AS-MID → AS-LOW | fails: the sets nest deeper than `-L 2` allows | AS-LOW left out, silently | Both count the named set as the first level. The engine never truncates a result silently (design §8.3), so rpslq refuses where bgpq4 drops; for the same reason it refuses `-L 1`, with which bgpq4 leaves every nested set out. `TestRpslqDepthLimit` pins it. |
-| `source-cycle` | `RIPE::AS-TOP`, where RIPE's AS-TOP lists AS-TOP | RIPE's AS-TOP plus, from its unscoped self-reference (the scope never cascades), RADB's AS-TOP | also RADB's AS-TOP | No longer a divergence: bgpq4 marks a `SOURCE::` set as seen only under `-L` or EXCEPT, so a set listing its own name is looked up again in the default sources, and another registry's copy joins in; the engine's scope never cascades either, so a set reached scoped and then unscoped is two nodes, and the two now agree. Still pinned so a regression on either side fails here. |
 | `source-with-depth` | `-L 8 RIPE::AS-TOP` | RIPE's AS-TOP plus, from its unscoped self-reference, RADB's AS-TOP | the default sources' AS-TOP | With `-L` or EXCEPT, bgpq4 takes its client-side path for the named sets, which sends no `!s` for them: the `SOURCE::` is ignored. rpslq still honors it for the top; its self-reference resolves like any other unscoped set. |
 | `source-route-set` | `RIPE::AS1 RS-X`, RS-X listing RS-Y | RS-X expanded whole | RS-X's prefix members only | Once any object has a `SOURCE::`, bgpq4 asks for every route-set with `!i` rather than `!i…,1`, and reads only the prefixes in the answer (nested sets and AS numbers are "unable to parse"). |
 | `source-as-number` | `RIPE::AS65003` | the routes AS65003 has in RIPE | nothing | bgpq4 reads the object as an AS number, `RIPE::AS65003`, which it cannot parse, and drops it. |
