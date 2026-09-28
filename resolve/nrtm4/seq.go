@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/rkolesnichenko/rpsl/ast"
-	"github.com/rkolesnichenko/rpsl/types"
 )
 
 // rs starts every record of a JSON text sequence (RFC 7464 §2).
@@ -18,11 +17,13 @@ const rs = 0x1E
 // seqReader reads the records of a JSON text sequence, each at most max
 // bytes. A record is the text between one RS and the next, white space
 // trimmed; an empty one is skipped, and anything but white space before the
-// first RS is an error.
+// first RS is an error. A record returned is valid until the next call:
+// every caller decodes it first.
 type seqReader struct {
 	r     *bufio.Reader
 	max   int
 	begun bool
+	buf   []byte // a record read in several pieces, reused
 }
 
 func newSeqReader(r io.Reader, max int) *seqReader {
@@ -57,68 +58,45 @@ func (s *seqReader) next() ([]byte, error) {
 	}
 }
 
-// until reads up to the next RS, which it consumes, or to the end.
+// until reads up to the next RS, which it consumes, or to the end. A record
+// in the reader's buffer whole is returned from it, not copied.
 func (s *seqReader) until() ([]byte, error) {
-	var out []byte
+	out := s.buf[:0]
 	for {
 		chunk, err := s.r.ReadSlice(rs)
 		if len(out)+len(chunk) > s.max+1 {
 			return nil, fmt.Errorf("a record longer than %d bytes", s.max)
 		}
+		if err == nil && len(out) == 0 {
+			return chunk[:len(chunk)-1], nil
+		}
 		out = append(out, chunk...)
+		s.buf = out
 		switch err {
 		case nil:
 			return out[:len(out)-1], nil
 		case bufio.ErrBufferFull:
 			continue
 		default:
+			if len(out) > s.max { // the last record: no separator follows it
+				return nil, fmt.Errorf("a record longer than %d bytes", s.max)
+			}
 			return out, err
 		}
 	}
 }
 
-// key returns the key a mirror stores an object under: its class and its
-// primary key (§8.3), canonical, so that a delete matches however either side
-// spells it — case, "AS1" or "as1", "2001:DB8::/32" or "2001:db8::/32".
-func key(class, pk string) string {
-	class = strings.ToLower(strings.TrimSpace(class))
-	pk = strings.TrimSpace(pk)
-	switch class {
-	case "route", "route6":
-		// The prefix and the origin run together: "192.0.2.0/24AS64500".
-		if i := strings.LastIndex(strings.ToUpper(pk), "AS"); i > 0 {
-			p, perr := types.ParsePrefix(pk[:i])
-			a, aerr := types.ParseASN(pk[i:])
-			if perr == nil && aerr == nil {
-				return class + " " + p.Masked().String() + a.String()
-			}
-		}
-	case "aut-num":
-		if a, err := types.ParseASN(pk); err == nil {
-			return class + " " + a.String()
-		}
-	case "as-set", "route-set", "rtr-set", "filter-set", "peering-set":
-		if n, err := types.ParseSetName(pk); err == nil {
-			return class + " " + n.String()
-		}
-	}
-	return class + " " + strings.ToUpper(pk)
-}
-
-// objectKey is key for an object's own text: its class, and its class
-// attribute's value — for a route or route6, the prefix and the origin.
-func objectKey(o *ast.Object) (string, bool) {
+// hasPrimaryKey reports whether an object has what its identity needs: a
+// class, a value for it, and for a route or route6 an origin: — the key a
+// delete names it by (§8.3). The key itself is resolve.Corpus's to read.
+func hasPrimaryKey(o *ast.Object) bool {
 	class := o.Class()
-	if class == "" {
-		return "", false
+	if class == "" || strings.TrimSpace(o.Key()) == "" {
+		return false
 	}
-	pk := o.Key()
 	if class == "route" || class == "route6" {
-		origin, ok := o.GetFirst("origin")
-		if !ok {
-			return "", false
-		}
-		pk = strings.TrimSpace(pk) + strings.TrimSpace(origin.Value)
+		a, ok := o.GetFirst("origin")
+		return ok && strings.TrimSpace(a.Value) != ""
 	}
-	return key(class, pk), true
+	return true
 }

@@ -59,39 +59,54 @@ func TestSeqReader(t *testing.T) {
 	}
 }
 
-func TestKey(t *testing.T) {
-	for _, tc := range []struct{ a, b [2]string }{
-		{[2]string{"route", "192.0.2.0/24AS64500"}, [2]string{"ROUTE", "192.0.2.0/24as64500"}},
-		{[2]string{"route6", "2001:DB8::/32AS64500"}, [2]string{"route6", "2001:db8::/32AS64500"}},
-		{[2]string{"route", "064.006.160.000/19AS1"}, [2]string{"route", "64.6.160.0/19AS1"}},
-		{[2]string{"aut-num", "as65001"}, [2]string{"aut-num", "AS65001"}},
-		{[2]string{"as-set", "as-foo"}, [2]string{"as-set", "AS-FOO"}},
-		{[2]string{"as-set", "as1:as-foo"}, [2]string{"as-set", "AS1:AS-FOO"}},
-		{[2]string{"inet-rtr", "rtr.example.net"}, [2]string{"inet-rtr", "RTR.EXAMPLE.NET"}},
-		{[2]string{"person", "prsn1-example"}, [2]string{"person", "PRSN1-EXAMPLE"}},
-	} {
-		if ka, kb := key(tc.a[0], tc.a[1]), key(tc.b[0], tc.b[1]); ka != kb {
-			t.Errorf("%v → %q, %v → %q", tc.a, ka, tc.b, kb)
-		}
+func TestSeqReaderCapAtEOF(t *testing.T) {
+	// The last record has no separator after it: the cap still holds.
+	if _, err := records(t, "\x1e"+strings.Repeat("x", 101), 100); err == nil {
+		t.Error("a last record over the cap was read")
 	}
-	if key("route", "192.0.2.0/24AS1") == key("route", "192.0.2.0/24AS2") {
-		t.Error("two origins share a key")
+	if got, err := records(t, "\x1e"+strings.Repeat("x", 100), 100); err != nil || len(got) != 1 {
+		t.Errorf("a last record at the cap: %d, %v", len(got), err)
 	}
-	if key("route", "192.0.2.0/24AS1") == key("route6", "192.0.2.0/24AS1") {
-		t.Error("two classes share a key")
-	}
-	for text, want := range map[string]string{
-		"route:  192.0.2.0/24\norigin: as64500 # comment\nsource: X\n": key("route", "192.0.2.0/24AS64500"),
-		"route6: 2001:DB8::/32\norigin: AS1\nsource: X\n":              key("route6", "2001:db8::/32AS1"),
-		"as-set: as-foo\nsource: X\n":                                  key("as-set", "AS-FOO"),
+}
+
+func TestHasPrimaryKey(t *testing.T) {
+	for text, want := range map[string]bool{
+		"route: 192.0.2.0/24\norigin: AS1\nsource: X\n": true,
+		"route: 192.0.2.0/24\nsource: X\n":              false, // no origin
+		"as-set: AS-FOO\nsource: X\n":                   true,
+		"as-set:\nsource: X\n":                          false, // an empty key
 	} {
 		o, _ := rpsl.ParseObject(text)
-		if got, ok := objectKey(o); !ok || got != want {
-			t.Errorf("objectKey(%q) = %q, want %q", text, got, want)
+		if got := hasPrimaryKey(o); got != want {
+			t.Errorf("hasPrimaryKey(%q) = %v, want %v", text, got, want)
 		}
 	}
-	o, _ := rpsl.ParseObject("route: 192.0.2.0/24\nsource: X\n")
-	if _, ok := objectKey(o); ok {
-		t.Error("a route without an origin has a key")
+}
+
+// skippable agrees with decoding a record in full: a record it skips is one
+// objectText reads and object leaves out, and it says false when unsure.
+func TestSkippable(t *testing.T) {
+	c := &Client{Database: "TEST"}
+	for rec, want := range map[string]bool{
+		`{"object":"person: A\nnic-hdl: A1-TEST\nsource: TEST\n"}`:           true,
+		`{"object":"inetnum: 192.0.2.0 - 192.0.2.255\nsource: TEST\n"}`:      true,
+		`{"object":"route: 192.0.2.0/24\norigin: AS1\nsource: TEST\n"}`:      false, // kept
+		`{"object":"AS-SET: AS-X\nsource: TEST\n"}`:                          false, // kept, any case
+		`{"object":"person: A\n"`:                                            false, // not JSON: refused in full
+		`{"object":"person: A","object":"route: 192.0.2.0/24\norigin: AS1"}`: false, // the last one wins
+		`{"object":"\u0070erson: A"}`:                                        false, // escaped
+		`{ "object": "person: A" }`:                                          false, // another spelling
+		`{"object":"person A"}`:                                              false, // no class
+		`{"object":": x"}`:                                                   false,
+	} {
+		if got := skippable([]byte(rec)); got != want {
+			t.Errorf("skippable(%s) = %v, want %v", rec, got, want)
+		}
+		if skippable([]byte(rec)) {
+			text, err := objectText([]byte(rec))
+			if err != nil || c.object(text, nil) != nil {
+				t.Errorf("%s: skipped, but decoding it gives %v, %v", rec, c.object(text, nil), err)
+			}
+		}
 	}
 }

@@ -46,6 +46,11 @@ func TestParseNotificationRules(t *testing.T) {
 	if n, err := parseNotification([]byte(withKey)); err != nil || n.NextSigningKey != key {
 		t.Fatalf("next_signing_key: %v", err)
 	}
+	for _, absent := range []string{`"next_signing_key": null`, `"next_signing_key": ""`} {
+		if n, err := parseNotification([]byte(strings.Replace(specExample, `"metadata": {}`, absent, 1))); err != nil || n.NextSigningKey != "" {
+			t.Errorf("%s: %v", absent, err)
+		}
+	}
 	if n, err := parseNotification([]byte(strings.Replace(specExample, `"deltas": [`, `"x": [`, 1))); err == nil || n != nil {
 		// "deltas" gone leaves version 4 with only a snapshot at 3: a mismatch, not a missing key.
 		if err == nil {

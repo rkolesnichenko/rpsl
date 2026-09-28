@@ -2,6 +2,7 @@ package resolve
 
 import (
 	"io"
+	"strings"
 
 	"github.com/rkolesnichenko/rpsl"
 	"github.com/rkolesnichenko/rpsl/ast"
@@ -124,8 +125,8 @@ func LoadDumps(rs []io.Reader, sourcePrecedence ...string) (*MemSource, error) {
 
 // Expandable reports whether the engine has any use for an object: the set
 // classes it traverses, the routes it expands to, and the objects that can
-// claim membership indirectly. DumpLoader keeps these and drops the rest, and
-// so does a mirror (resolve/nrtm4) by default.
+// claim membership indirectly — of which a Corpus keeps what it reads.
+// ExpandableClass is the same by class name.
 func Expandable(o object.Object) bool {
 	if _, ok := o.(object.NamedSet); ok {
 		return true
@@ -135,6 +136,19 @@ func Expandable(o object.Object) bool {
 		return true
 	}
 	return false
+}
+
+// expandableClasses are the class names of what Expandable accepts.
+var expandableClasses = map[string]bool{
+	"as-set": true, "route-set": true, "rtr-set": true, "filter-set": true, "peering-set": true,
+	"route": true, "route6": true, "aut-num": true, "inet-rtr": true,
+}
+
+// ExpandableClass reports whether the engine has any use for objects of
+// class (case and surrounding space do not matter): Expandable by class name,
+// for skipping the others without parsing them.
+func ExpandableClass(class string) bool {
+	return expandableClasses[strings.ToLower(strings.TrimSpace(class))]
 }
 
 // worstSeverity returns the highest severity among ds.

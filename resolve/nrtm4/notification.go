@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"iter"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +21,33 @@ type notification struct {
 	Snapshot       fileRef
 	Deltas         []fileRef // contiguous versions, ascending
 	NextSigningKey string    // PEM, or ""
+}
+
+// fileID names a snapshot or delta within a session.
+type fileID struct {
+	delta   bool
+	version int64
+}
+
+func (id fileID) String() string {
+	if id.delta {
+		return fmt.Sprintf("delta %d", id.version)
+	}
+	return fmt.Sprintf("snapshot %d", id.version)
+}
+
+// refs yields every file the notification file references.
+func (n *notification) refs() iter.Seq2[fileID, fileRef] {
+	return func(yield func(fileID, fileRef) bool) {
+		if !yield(fileID{false, n.Snapshot.Version}, n.Snapshot) {
+			return
+		}
+		for _, d := range n.Deltas {
+			if !yield(fileID{true, d.Version}, d) {
+				return
+			}
+		}
+	}
 }
 
 // fileRef is a snapshot or delta entry: its version, its URL relative to the
@@ -91,7 +119,7 @@ func parseNotification(payload []byte) (*notification, error) {
 	if n.Version != want {
 		return nil, fmt.Errorf("version %d, but the highest snapshot or delta version is %d", n.Version, want)
 	}
-	if raw, ok := m["next_signing_key"]; ok {
+	if raw, ok := m["next_signing_key"]; ok && string(raw) != "null" && string(raw) != `""` { // null or "": no key announced
 		if err := json.Unmarshal(raw, &n.NextSigningKey); err != nil {
 			return nil, errors.New(`"next_signing_key" is not a string`)
 		}

@@ -1,6 +1,7 @@
 package resolve
 
 import (
+	"net/netip"
 	"strings"
 
 	"github.com/rkolesnichenko/rpsl/object"
@@ -86,6 +87,22 @@ func claimant(o object.Object) (memberOf []types.SetName, mntBy []string, source
 		return t.MemberOf, t.MntBy, t.Source, true
 	}
 	return nil, nil, "", false
+}
+
+// routeOf returns what the engine indexes of a route or route6: its prefix
+// and origin, when the prefix is valid and the origin decoded — a route whose
+// origin did not decode is no AS's, not AS0's. ok is false for anything else.
+// NewMemSource and Corpus both index by it.
+func routeOf(o object.Object) (p netip.Prefix, origin types.ASN, ok bool) {
+	switch t := o.(type) {
+	case object.Route:
+		p, origin = t.Prefix, t.Origin
+	case object.Route6:
+		p, origin = t.Prefix, t.Origin
+	default:
+		return netip.Prefix{}, 0, false
+	}
+	return p, origin, p.IsValid() && (origin != 0 || asnDecodes(o, "origin"))
 }
 
 // asnDecodes reports whether o's attr holds an AS number — telling a real AS0

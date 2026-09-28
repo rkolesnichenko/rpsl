@@ -56,70 +56,91 @@ func (c *Corpus) Put(o object.Object) bool {
 	if o == nil {
 		return false
 	}
-	if c.whole == nil {
-		c.whole, c.routes, c.sources = map[wholeKey]held{}, map[routeKey]struct{}{}, map[string]string{}
-	}
+	c.init()
 	if s, ok := o.(object.NamedSet); ok {
-		k := wholeKey{o.Class(), s.SetName().String(), c.intern(s.SetSource())}
-		c.putWhole(k, o)
+		c.putWhole(wholeKey{o.Class(), s.SetName().String(), c.intern(s.SetSource())}, o)
 		return true
 	}
-	var memberOf []types.SetName
-	var source string
-	var k wholeKey
-	var rk routeKey
-	route := false
+	// What claims membership is what MembersByRef would return: the engine's
+	// own rule (claimant), so that the two cannot disagree.
+	memberOf, _, _, claims := claimant(o)
+	var class, pk, source string
 	switch t := o.(type) {
 	case object.Route:
-		if !t.Prefix.IsValid() || t.Origin == 0 && !asnDecodes(t, "origin") {
-			return false // no AS's route, and no key to replace by
-		}
-		route, rk = true, routeKey{t.Prefix.Masked(), t.Origin, ""}
-		memberOf, source = t.MemberOf, t.Source
+		class, source = "route", t.Source
 	case object.Route6:
-		if !t.Prefix.IsValid() || t.Origin == 0 && !asnDecodes(t, "origin") {
-			return false
-		}
-		route, rk = true, routeKey{t.Prefix.Masked(), t.Origin, ""}
-		memberOf, source = t.MemberOf, t.Source
+		class, source = "route6", t.Source
 	case object.AutNum:
-		if t.AS == 0 && !asnDecodes(t, "aut-num") {
-			return false
+		if !claims {
+			return false // its AS did not decode: no key, and nothing the engine reads
 		}
-		k = wholeKey{"aut-num", t.AS.String(), ""}
-		memberOf, source = t.MemberOf, t.Source
+		class, pk, source = "aut-num", t.AS.String(), t.Source
 	case object.InetRtr:
-		if strings.TrimSpace(t.Name) == "" {
-			return false
-		}
-		k = wholeKey{"inet-rtr", strings.ToUpper(strings.TrimSpace(t.Name)), ""}
-		memberOf, source = t.MemberOf, t.Source
+		class, pk, source = "inet-rtr", strings.ToUpper(strings.TrimSpace(t.Name)), t.Source
 	default:
 		return false
 	}
+	prefix, origin, route := routeOf(o) // a route the engine indexes
+	rk := routeKey{prefix, origin, ""}
+	if class == "route" || class == "route6" {
+		if route {
+			pk = rk.pk()
+		} else {
+			pk = rawRouteKey(o) // a route no AS originates, known by its text
+		}
+	}
+	if pk == "" {
+		return false
+	}
 	src := c.intern(source)
+	k := wholeKey{class, pk, src}
 	if route {
 		rk.source = src
-		k = wholeKey{o.Class(), rk.prefix.String() + rk.origin.String(), src}
 		delete(c.routes, rk)
-		if len(memberOf) == 0 {
-			delete(c.whole, k)
-			c.routes[rk] = struct{}{}
-			return true
-		}
+	}
+	if claims && len(memberOf) > 0 {
 		c.putWhole(k, o)
 		return true
 	}
-	k.source = src
-	if len(memberOf) == 0 {
-		delete(c.whole, k)
-		return false
+	delete(c.whole, k)
+	if route {
+		c.routes[rk] = struct{}{}
+		return true
 	}
-	c.putWhole(k, o)
-	return true
+	return false
 }
 
+// rawRouteKey is the identity of a route whose prefix or origin did not
+// decode: its primary key as written, upper-case — as Delete falls back to.
+func rawRouteKey(o object.Object) string {
+	raw := o.Raw()
+	if raw == nil {
+		return ""
+	}
+	a, ok := raw.GetFirst("origin")
+	if !ok {
+		return ""
+	}
+	return strings.ToUpper(strings.TrimSpace(raw.Key()) + strings.TrimSpace(a.Value))
+}
+
+// pk is a route's primary key: its prefix and origin run together, the one
+// spelling Put, Delete and Merge share.
+func (rk routeKey) pk() string { return rk.prefix.String() + rk.origin.String() }
+
+func (c *Corpus) init() {
+	if c.whole == nil {
+		c.whole, c.routes, c.sources = map[wholeKey]held{}, map[routeKey]struct{}{}, map[string]string{}
+	}
+}
+
+// putWhole holds o whole under k. A replacement keeps its place in load order,
+// by which MemSource breaks ties between sources: an update is not a new load.
 func (c *Corpus) putWhole(k wholeKey, o object.Object) {
+	if h, ok := c.whole[k]; ok {
+		c.whole[k] = held{o, k, h.seq}
+		return
+	}
 	c.seq++
 	c.whole[k] = held{o, k, c.seq}
 }
@@ -149,15 +170,14 @@ func (c *Corpus) Delete(class, primaryKey, source string) bool {
 	src := strings.ToUpper(strings.TrimSpace(source))
 	pk, ok := canonicalKey(class, primaryKey)
 	if !ok {
-		return false
+		pk = strings.ToUpper(strings.TrimSpace(primaryKey)) // as rawRouteKey keeps such a route
 	}
 	k := wholeKey{class, pk, src}
 	if _, found := c.whole[k]; found {
 		delete(c.whole, k)
 		return true
 	}
-	if class == "route" || class == "route6" {
-		p, a, _ := splitRouteKey(primaryKey)
+	if p, a, ok := splitRouteKey(primaryKey); ok && (class == "route" || class == "route6") {
 		rk := routeKey{p, a, src}
 		if _, found := c.routes[rk]; found {
 			delete(c.routes, rk)
@@ -176,7 +196,7 @@ func canonicalKey(class, pk string) (string, bool) {
 		if !ok {
 			return "", false
 		}
-		return p.String() + a.String(), true
+		return routeKey{p, a, ""}.pk(), true
 	case "aut-num":
 		a, err := types.ParseASN(pk)
 		return a.String(), err == nil
@@ -190,9 +210,10 @@ func canonicalKey(class, pk string) (string, bool) {
 }
 
 // splitRouteKey reads a route's primary key: its prefix and origin run
-// together, the origin from the last "AS".
+// together, the origin from the last "AS" (in either case). The prefix is
+// kept as written, host bits and all, as the decoder keeps a route's.
 func splitRouteKey(pk string) (netip.Prefix, types.ASN, bool) {
-	i := strings.LastIndex(strings.ToUpper(pk), "AS")
+	i := lastIndexAS(pk)
 	if i <= 0 {
 		return netip.Prefix{}, 0, false
 	}
@@ -201,7 +222,19 @@ func splitRouteKey(pk string) (netip.Prefix, types.ASN, bool) {
 	if perr != nil || aerr != nil {
 		return netip.Prefix{}, 0, false
 	}
-	return p.Masked(), a, true
+	return p, a, true
+}
+
+// lastIndexAS returns the byte offset of the last "AS", in either case, in s
+// itself — not in an upper-cased copy, whose offsets differ where upper-casing
+// lengthens a character — or -1.
+func lastIndexAS(s string) int {
+	for i := len(s) - 2; i >= 0; i-- {
+		if s[i]|0x20 == 'a' && s[i+1]|0x20 == 's' {
+			return i
+		}
+	}
+	return -1
 }
 
 // Merge adds other's objects, after this corpus's own in load order; an
@@ -211,17 +244,13 @@ func (c *Corpus) Merge(other *Corpus) {
 	if other == nil || other.whole == nil {
 		return
 	}
-	if c.whole == nil {
-		c.whole, c.routes, c.sources = map[wholeKey]held{}, map[routeKey]struct{}{}, map[string]string{}
-	}
+	c.init()
 	for _, h := range other.ordered(nil) {
-		k := h.key
-		k.source = c.intern(k.source)
-		c.putWhole(k, h.obj)
+		c.Put(h.obj) // re-derived, so a whole route replaces a reduced one here
 	}
 	for rk := range other.routes {
 		rk.source = c.intern(rk.source)
-		delete(c.whole, wholeKey{routeClass(rk.prefix), rk.prefix.String() + rk.origin.String(), rk.source})
+		delete(c.whole, wholeKey{routeClass(rk.prefix), rk.pk(), rk.source})
 		c.routes[rk] = struct{}{}
 	}
 }
@@ -272,7 +301,7 @@ func (c *Corpus) build(keep func(string) bool, precedence []string) *MemSource {
 	for i, h := range hs {
 		objs[i] = h.obj
 	}
-	s := buildMemSource(objs, precedence)
+	s := NewMemSource(objs, precedence...)
 	for rk := range c.routes {
 		if keep == nil || keep(rk.source) {
 			s.routes[rk.origin] = append(s.routes[rk.origin], rk.prefix)
@@ -281,12 +310,7 @@ func (c *Corpus) build(keep func(string) bool, precedence []string) *MemSource {
 	// A map has no order: sort each AS's routes, so that every build of the
 	// same corpus answers alike.
 	for _, ps := range s.routes {
-		sort.Slice(ps, func(i, j int) bool {
-			if c := ps[i].Addr().Compare(ps[j].Addr()); c != 0 {
-				return c < 0
-			}
-			return ps[i].Bits() < ps[j].Bits()
-		})
+		sort.Slice(ps, func(i, j int) bool { return prefixLess(ps[i], ps[j]) })
 	}
 	return s
 }

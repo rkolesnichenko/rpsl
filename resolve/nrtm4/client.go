@@ -22,6 +22,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash"
@@ -59,6 +60,14 @@ type Client struct {
 	HTTP         *http.Client // nil: http.DefaultClient with a 10-minute timeout per file
 	MaxFileBytes int64        // cap on a snapshot or delta after decompression; 0: DefaultMaxFileBytes
 
+	// MaxAge, when set, refuses a notification file older than it, as IRRd
+	// refuses one over 24 hours old, so that a server replaying an old but
+	// validly signed file cannot roll the mirror back. Zero accepts any age
+	// and reports it (Status.Stale), as the draft allows (§5.6). Whatever
+	// MaxAge, a new session older than the file the mirror came from is
+	// refused.
+	MaxAge time.Duration
+
 	// OnDiagnostics, when set, is called for each object that raised
 	// diagnostics, or was discarded — its source: not the database's, no
 	// primary key (§9.2) — with rule "nrtm4/discarded". Discarding an object
@@ -71,22 +80,22 @@ type Client struct {
 	mu       sync.Mutex // serializes Sync
 	st       state
 	view     atomic.Pointer[view]
-	failures int // consecutive Syncs that failed on a delta
+	failures int          // consecutive Syncs that failed on a delta
+	hc       *http.Client // httpClient's, once built
 }
 
 // state is what the client knows between Syncs.
 type state struct {
-	session  string
-	version  int64 // 0: nothing loaded
-	cur      *ecdsa.PublicKey
-	curPEM   string
-	next     *ecdsa.PublicKey
-	nextPEM  string
-	seen     map[string]fileRef // "S3", "D4" -> the reference a valid notification file gave
-	corpus   *resolve.Corpus
-	stamp    time.Time
-	stale    bool
-	lastSeen int64 // the latest notification file's version
+	session string
+	version int64 // 0: nothing loaded
+	cur     *ecdsa.PublicKey
+	curPEM  string
+	next    *ecdsa.PublicKey
+	nextPEM string
+	seen    map[fileID]fileRef // snapshot or delta -> the reference a valid notification file gave
+	corpus  *resolve.Corpus
+	stamp   time.Time
+	stale   bool
 }
 
 // view is one published version.
@@ -165,7 +174,19 @@ func (c *Client) Sync(ctx context.Context) (Update, error) {
 	if err != nil {
 		return u, err
 	}
-	u.Stale = c.st.stale
+	now := time.Now
+	if c.Now != nil {
+		now = c.Now
+	}
+	age := now().Sub(n.Timestamp)
+	u.Stale = age > 24*time.Hour
+	if c.MaxAge > 0 && age > c.MaxAge {
+		return u, fmt.Errorf("nrtm4: %s: notification file is %s old, over MaxAge %s", c.Database, age.Round(time.Second), c.MaxAge)
+	}
+	if c.st.version != 0 && n.SessionID != c.st.session && n.Timestamp.Before(c.st.stamp) {
+		return u, fmt.Errorf("nrtm4: %s: a new session %s whose notification file (%s) is older than the one the mirror came from (%s): refused, as a rollback",
+			c.Database, n.SessionID, n.Timestamp.Format(time.RFC3339), c.st.stamp.Format(time.RFC3339))
+	}
 
 	next := c.st.version + 1
 	switch {
@@ -189,11 +210,12 @@ func (c *Client) Sync(ctx context.Context) (Update, error) {
 			return u, fmt.Errorf("nrtm4: %s: snapshot %d: %w", c.Database, n.Snapshot.Version, err)
 		}
 		c.st.session, c.st.version, c.st.corpus = n.SessionID, n.Snapshot.Version, corpus
-		c.st.seen = map[string]fileRef{}
+		c.st.seen = map[fileID]fileRef{}
 		c.failures = 0
 		u.Snapshot, u.Added, u.Discarded = true, added, discarded
 	}
 	c.remember(n)
+	c.st.stamp, c.st.stale = n.Timestamp, u.Stale
 	var derr error
 	for _, d := range n.Deltas {
 		if d.Version <= c.st.version {
@@ -229,6 +251,7 @@ func (c *Client) Sync(ctx context.Context) (Update, error) {
 // key or the announced next one — and from then on only with that — and
 // checks what does not depend on the version held.
 func (c *Client) notification(ctx context.Context) (*notification, error) {
+	wrap := func(err error) error { return fmt.Errorf("nrtm4: %s: notification file: %w", c.Database, err) }
 	if c.st.cur == nil {
 		k, err := ParsePublicKey(c.PublicKey)
 		if err != nil {
@@ -238,7 +261,7 @@ func (c *Client) notification(ctx context.Context) (*notification, error) {
 	}
 	body, err := c.fetch(ctx, c.URL, maxNotification)
 	if err != nil {
-		return nil, fmt.Errorf("nrtm4: %s: notification file: %w", c.Database, err)
+		return nil, wrap(err)
 	}
 	payload, err := verifyJWS(body, c.st.cur)
 	if err != nil && c.st.next != nil {
@@ -249,21 +272,15 @@ func (c *Client) notification(ctx context.Context) (*notification, error) {
 		}
 	}
 	if err != nil {
-		return nil, fmt.Errorf("nrtm4: %s: notification file: %w", c.Database, err)
+		return nil, wrap(err)
 	}
 	n, err := parseNotification(payload)
 	if err != nil {
-		return nil, fmt.Errorf("nrtm4: %s: notification file: %w", c.Database, err)
+		return nil, wrap(err)
 	}
 	if !strings.EqualFold(n.Source, c.Database) {
 		return nil, fmt.Errorf("nrtm4: %s: notification file is for source %q", c.Database, n.Source)
 	}
-	now := time.Now
-	if c.Now != nil {
-		now = c.Now
-	}
-	c.st.stale = now().Sub(n.Timestamp) > 24*time.Hour
-	c.st.stamp = n.Timestamp
 	if n.NextSigningKey != "" && n.NextSigningKey != c.st.curPEM {
 		k, _ := ParsePublicKey(n.NextSigningKey) // parseNotification checked it
 		c.st.next, c.st.nextPEM = k, n.NextSigningKey
@@ -287,18 +304,9 @@ func (c *Client) history(n *notification) error {
 	if n.SessionID != c.st.session {
 		return nil
 	}
-	check := func(id string, r fileRef) error {
+	for id, r := range n.refs() {
 		if prev, ok := c.st.seen[id]; ok && prev.Hash != r.Hash {
 			return fmt.Errorf("nrtm4: %s: the server rewrote history: %s was %s (%s), now %s (%s)", c.Database, id, prev.URL, prev.Hash, r.URL, r.Hash)
-		}
-		return nil
-	}
-	if err := check(fmt.Sprintf("S%d", n.Snapshot.Version), n.Snapshot); err != nil {
-		return err
-	}
-	for _, d := range n.Deltas {
-		if err := check(fmt.Sprintf("D%d", d.Version), d); err != nil {
-			return err
 		}
 	}
 	return nil
@@ -306,13 +314,11 @@ func (c *Client) history(n *notification) error {
 
 func (c *Client) remember(n *notification) {
 	if c.st.seen == nil {
-		c.st.seen = map[string]fileRef{}
+		c.st.seen = map[fileID]fileRef{}
 	}
-	c.st.seen[fmt.Sprintf("S%d", n.Snapshot.Version)] = n.Snapshot
-	for _, d := range n.Deltas {
-		c.st.seen[fmt.Sprintf("D%d", d.Version)] = d
+	for id, r := range n.refs() {
+		c.st.seen[id] = r
 	}
-	c.st.lastSeen = n.Version
 }
 
 // loadSnapshot reads the snapshot into a new object store, streaming: the
@@ -340,6 +346,15 @@ func (c *Client) loadSnapshot(ctx context.Context, n *notification) (*resolve.Co
 	}
 	corpus := &resolve.Corpus{}
 	added, discarded := 0, 0
+	type report struct {
+		o  *ast.Object
+		ds []ast.Diagnostic
+	}
+	var reports []report                            // told only once the whole snapshot has checked out
+	var collect func(*ast.Object, []ast.Diagnostic) // nil: nobody listens, nothing kept
+	if c.OnDiagnostics != nil {
+		collect = func(o *ast.Object, ds []ast.Diagnostic) { reports = append(reports, report{o, ds}) }
+	}
 	for {
 		rec, err := seq.next()
 		if err == io.EOF {
@@ -348,11 +363,15 @@ func (c *Client) loadSnapshot(ctx context.Context, n *notification) (*resolve.Co
 		if err != nil {
 			return nil, 0, 0, err
 		}
+		if skippable(rec) {
+			discarded++
+			continue
+		}
 		text, err := objectText(rec)
 		if err != nil {
 			return nil, 0, 0, err
 		}
-		if o := c.object(text); o != nil && corpus.Put(o) {
+		if o := c.object(text, collect); o != nil && corpus.Put(o) {
 			added++
 		} else {
 			discarded++
@@ -363,6 +382,11 @@ func (c *Client) loadSnapshot(ctx context.Context, n *notification) (*resolve.Co
 	}
 	if err := hashes(h, n.Snapshot.Hash); err != nil {
 		return nil, 0, 0, err
+	}
+	if c.OnDiagnostics != nil {
+		for _, r := range reports {
+			c.OnDiagnostics(r.o, r.ds)
+		}
 	}
 	return corpus, added, discarded, nil
 }
@@ -386,9 +410,10 @@ func (c *Client) applyDelta(ctx context.Context, n *notification, d fileRef) (ad
 	if err != nil {
 		return 0, 0, 0, err
 	}
-	h := sha256.Sum256(data)
-	if got := hex.EncodeToString(h[:]); got != d.Hash {
-		return 0, 0, 0, fmt.Errorf("SHA-256 %s, but the notification file says %s", got, d.Hash)
+	h := sha256.New()
+	h.Write(data)
+	if err := hashes(h, d.Hash); err != nil {
+		return 0, 0, 0, err
 	}
 	r, err := c.decompress(u, bytes.NewReader(data))
 	if err != nil {
@@ -460,58 +485,46 @@ func (c *Client) change(rec []byte) (change, error) {
 		if err != nil {
 			return change{}, err
 		}
-		return change{obj: c.object(text)}, nil
+		return change{obj: c.object(text, c.OnDiagnostics)}, nil // the delta's hash has checked out
 	}
 	return change{}, fmt.Errorf("action %q, want \"add_modify\" or \"delete\"", action)
 }
 
-// keepClasses are the classes the engine can use, so that the others are
-// skipped without being parsed.
-var keepClasses = map[string]bool{
-	"as-set": true, "route-set": true, "rtr-set": true, "filter-set": true, "peering-set": true,
-	"route": true, "route6": true, "aut-num": true, "inet-rtr": true,
-}
-
 // object parses and decodes one object text, or returns nil when it is left
 // out: a class the engine has no use for (skipped unparsed), or — with a
-// diagnostic — an object with no primary key, of another source (§9.2), or
-// that did not decode as its class.
-func (c *Client) object(text string) object.Object {
+// diagnostic — an object with no primary key, or of another source (§9.2).
+func (c *Client) object(text string, report func(*ast.Object, []ast.Diagnostic)) object.Object {
 	class, _, _ := strings.Cut(text, ":")
-	if !keepClasses[strings.ToLower(strings.TrimSpace(class))] {
+	if !resolve.ExpandableClass(class) {
 		return nil
 	}
 	raw, ds := rpsl.ParseObject(text)
-	if _, ok := objectKey(raw); !ok {
-		c.discard(raw, ds, "it has no class, or no primary key")
+	if !hasPrimaryKey(raw) {
+		discard(report, raw, ds, "it has no class, or no primary key")
 		return nil
 	}
 	if src, has := raw.GetFirst("source"); !has || !strings.EqualFold(strings.TrimSpace(src.Value), c.Database) {
-		c.discard(raw, ds, fmt.Sprintf("its source: is not %s", c.Database))
+		discard(report, raw, ds, fmt.Sprintf("its source: is not %s", c.Database))
 		return nil
 	}
-	obj, dds := object.Decode(raw)
+	obj, dds := object.Decode(raw) // a typed object of its class, whatever its values
 	ds = append(ds, dds...)
-	if !resolve.Expandable(obj) {
-		c.discard(raw, ds, "it did not decode as its class")
-		return nil
-	}
-	if len(ds) > 0 && c.OnDiagnostics != nil {
-		c.OnDiagnostics(raw, ds)
+	if len(ds) > 0 && report != nil {
+		report(raw, ds)
 	}
 	return obj
 }
 
-func (c *Client) discard(raw *ast.Object, ds []ast.Diagnostic, why string) {
-	if c.OnDiagnostics == nil {
+// discard reports an object left out, with the rule nrtm4/discarded.
+func discard(report func(*ast.Object, []ast.Diagnostic), raw *ast.Object, ds []ast.Diagnostic, why string) {
+	if report == nil {
 		return
 	}
-	d := ast.Diagnostic{Severity: ast.Warning}
+	d := ast.Diagnostic{Severity: ast.Warning, Rule: "nrtm4/discarded", Message: "object left out of the mirror: " + why}
 	if attrs := raw.Attributes(); len(attrs) > 0 {
 		d.Span = attrs[0].Span
 	}
-	c.OnDiagnostics(raw, append(ds, ast.Diagnostic{Severity: d.Severity, Span: d.Span,
-		Rule: "nrtm4/discarded", Message: "object left out of the mirror: " + why}))
+	report(raw, append(ds, d))
 }
 
 // fileHeader reads a snapshot's or delta's first record and checks it
@@ -537,6 +550,28 @@ func (c *Client) fileHeader(seq *seqReader, typ string, n *notification, version
 		return fmt.Errorf("header: version %d, want %d", h.Version, version)
 	}
 	return nil
+}
+
+// skippable reports, without decoding it, whether a snapshot record is a
+// valid {"object": "<class>:…"} of a class the engine has no use for — what
+// objectText and object would decide at a cost of microseconds and kilobytes
+// per record, for most of a registry (persons, inetnums). It says false when
+// unsure: a record of another shape is decoded in full.
+func skippable(rec []byte) bool {
+	const lead = `{"object":"`
+	if !bytes.HasPrefix(rec, []byte(lead)) || bytes.Count(rec, []byte(`"object"`)) != 1 || bytes.Contains(rec, []byte(`\u`)) {
+		return false // another spelling, another "object" key (the last wins), or an escaped one
+	}
+	class, _, ok := bytes.Cut(rec[len(lead):], []byte(":"))
+	if !ok || len(class) == 0 {
+		return false
+	}
+	for _, b := range class {
+		if !(b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '-') {
+			return false
+		}
+	}
+	return !resolve.ExpandableClass(string(class)) && json.Valid(rec)
 }
 
 func objectText(rec []byte) (string, error) {
@@ -583,16 +618,53 @@ func (c *Client) resolve(ref string) (string, error) {
 		return "", fmt.Errorf("url %q: %w", ref, err)
 	}
 	u := base.ResolveReference(r)
-	if u.Scheme != base.Scheme || u.Host != base.Host {
-		return "", fmt.Errorf("url %q leaves %s://%s", ref, base.Scheme, base.Host)
+	if err := sameOrigin(base, u); err != nil {
+		return "", err
 	}
 	return u.String(), nil
 }
 
+// sameOrigin refuses a URL on another scheme or host than base: what the
+// notification file names, and every redirect — which is not signed.
+func sameOrigin(base, u *url.URL) error {
+	if u.Scheme != base.Scheme || u.Host != base.Host {
+		return fmt.Errorf("%s leaves %s://%s", u.Redacted(), base.Scheme, base.Host)
+	}
+	return nil
+}
+
+// httpClient is the client files are fetched with, built once: Client.HTTP
+// or a default, and either way unable to follow a redirect off the origin
+// before the caller's own CheckRedirect has its say.
+func (c *Client) httpClient() *http.Client {
+	if c.hc != nil {
+		return c.hc
+	}
+	hc := &http.Client{Timeout: 10 * time.Minute}
+	if c.HTTP != nil {
+		*hc = *c.HTTP
+	}
+	base, _ := url.Parse(c.URL)
+	theirs := hc.CheckRedirect
+	hc.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if err := sameOrigin(base, req.URL); err != nil {
+			return fmt.Errorf("refusing a redirect: %w", err)
+		}
+		if theirs != nil {
+			return theirs(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+	c.hc = hc
+	return hc
+}
+
 func (c *Client) decompress(u string, r io.Reader) (io.Reader, error) {
-	limit := &capReader{r: r, n: c.maxFile()}
 	if !strings.HasSuffix(strings.SplitN(u, "?", 2)[0], ".gz") {
-		return limit, nil
+		return &capReader{r: r, n: c.maxFile()}, nil
 	}
 	zr, err := gzip.NewReader(r)
 	if err != nil {
@@ -644,10 +716,7 @@ func (c *Client) open(ctx context.Context, u string) (io.ReadCloser, error) {
 	default:
 		return nil, fmt.Errorf("url %s: NRTMv4 is served over HTTPS only (§11)", u)
 	}
-	hc := c.HTTP
-	if hc == nil {
-		hc = &http.Client{Timeout: 10 * time.Minute}
-	}
+	hc := c.httpClient()
 	var last error
 	for attempt := 0; attempt < 4; attempt++ {
 		if attempt > 0 {
@@ -704,15 +773,15 @@ func hashes(h hash.Hash, want string) error {
 }
 
 // Run calls Sync every interval, at least a minute (§5.2), until ctx ends,
-// and returns ctx's error. After a failed Sync it waits half as long, and
-// doubles the wait with each further failure, up to interval. onError, when
-// set, is told of each failure.
+// and returns ctx's error. After a failed Sync it tries again after a minute,
+// then doubles the wait with each further failure, up to interval. onError,
+// when set, is told of each failure.
 func (c *Client) Run(ctx context.Context, interval time.Duration, onError func(error)) error {
 	if interval < minInterval {
 		interval = minInterval
 	}
 	wait := time.Duration(0)
-	backoff := interval / 2
+	failures := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -726,10 +795,25 @@ func (c *Client) Run(ctx context.Context, interval time.Duration, onError func(e
 			if onError != nil {
 				onError(err)
 			}
-			wait = min(backoff, interval)
-			backoff *= 2
+			failures++
+			wait = runWait(failures, interval)
 			continue
 		}
-		wait, backoff = interval, interval/2
+		failures = 0
+		wait = runWait(0, interval)
 	}
+}
+
+// runWait is how long Run waits after failures failed Syncs in a row: the
+// interval after a success, and after a failure the minimum doubled with each
+// further one, never below the minimum (§5.2) nor above the interval.
+func runWait(failures int, interval time.Duration) time.Duration {
+	if failures == 0 {
+		return interval
+	}
+	w := minInterval
+	for i := 1; i < failures && w < interval; i++ {
+		w *= 2
+	}
+	return min(w, interval)
 }

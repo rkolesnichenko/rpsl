@@ -7,6 +7,8 @@ import (
 	"net/netip"
 	"strings"
 
+	"github.com/rkolesnichenko/rpsl/object"
+	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
@@ -59,6 +61,20 @@ func (s *VRPs) WriteRPSL(w io.Writer) error {
 		return fmt.Errorf("rpki: writing pseudo objects: %w", err)
 	}
 	return nil
+}
+
+// AddTo puts WriteRPSL's pseudo routes into c as the engine reads them —
+// routes of the source PseudoSource — one at a time, without writing them out
+// and parsing them back.
+func (s *VRPs) AddTo(c *resolve.Corpus) {
+	for v := range s.All() {
+		common := object.Common{Source: PseudoSource}
+		if v.Prefix.Addr().Is6() {
+			c.Put(object.Route6{Common: common, Prefix: v.Prefix, Origin: v.ASN})
+		} else {
+			c.Put(object.Route{Common: common, Prefix: v.Prefix, Origin: v.ASN})
+		}
+	}
 }
 
 // oneLine keeps a trust anchor name from breaking the object it is written

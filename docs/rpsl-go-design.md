@@ -594,8 +594,9 @@ Every file is verified before any of it is used:
   MAC, `crit` — is accepted. The standard library does the cryptography;
 - each snapshot and delta is hashed (SHA-256, as served) against the
   notification file, and its header checked against the session and version
-  it should have. A URL must stay on the notification file's scheme and host,
-  and a file is capped after decompression;
+  it should have. A URL must stay on the notification file's scheme and host —
+  so must every redirect, which is not signed, with the caller's `http.Client`
+  too — and a file is capped after decompression;
 - a hash the server gave for a file in one notification file may not change in
   a later one of the same session ("rewriting history"); a URL may;
 - deltas must lead one version at a time from the version held: a delta is
@@ -616,11 +617,16 @@ version whole while the mirror moves on. Mirroring RIPE from scratch — the
 mirrors — RIPE and RIPE-NONAUTH — or a mirror with dumps and RPKI pseudo
 routes under one precedence.
 
-Two choices differ from IRRd. A notification file over 24 hours old is
-reported (`Status.Stale`) and still used, as the draft allows; IRRd refuses
-it. And the state lives in memory: a restart loads the snapshot again, and
+A signature proves who wrote a notification file, not when, so an old but
+validly signed file could be replayed to roll the mirror back. A new session
+whose file is older than the one the mirror came from is always refused; a
+file older than `Client.MaxAge` is refused when that is set, as IRRd refuses
+one over 24 hours old. By default it is not: a stale file is reported
+(`Status.Stale`) and used, as the draft allows — the one choice that differs
+from IRRd. The state lives in memory: a restart loads the snapshot again,
 `Status.CurrentKey` is the one thing to persist, so a key rotated while the
-program was down still verifies.
+program was down still verifies, and `MaxAge` is what keeps a restart from
+accepting a replayed old file.
 
 ### 8.9 What a loaded IRR costs (`Corpus`)
 

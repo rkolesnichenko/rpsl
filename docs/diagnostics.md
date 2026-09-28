@@ -105,7 +105,7 @@ attribute of it.
 The NRTMv4 client reports each object it leaves out of a mirror to
 `Client.OnDiagnostics`, after the object's own diagnostics, with the rule
 **`nrtm4/discarded`**, severity **Warning**: its `source:` is not the mirrored
-database's, it has no class or primary key, or it did not decode as its class.
+database's, or it has no class or primary key.
 A discarded object never fails the file it came in (draft-ietf-grow-nrtm-v4
 §9.2). This rule lives in the `resolve` module, so it is listed here rather
 than in a table (`resolve/nrtm4`'s `TestDiscardRuleIsDocumented` holds this

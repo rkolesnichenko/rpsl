@@ -151,6 +151,17 @@ func TestCorpusMatchesMemSource(t *testing.T) {
 		objs := latest(decodeAll(t, texts))
 		label := fmt.Sprintf("seed %d", seed)
 		c := corpusOf(objs)
+		// What the model never draws but registries hold: an origin that does
+		// not decode (on a claimant, and not), a prefix with host bits set.
+		rs := fmt.Sprintf("RS-S%d", r.IntN(3))
+		oddTexts := []string{
+			fmt.Sprintf("route: 10.0.0.%d/29\norigin: AS%d\nsource: RIPE\n", 1+r.IntN(6), firstAS+r.IntN(4)),
+			fmt.Sprintf("route: 10.0.0.0/30\norigin: ASX\nmember-of: %s\nmnt-by: MNT-A\nsource: RIPE\n", rs),
+			fmt.Sprintf("route6: 2001:db8::1/126\norigin: AS%d\nmember-of: %s\nmnt-by: MNT-A\nsource: RIPE\n", firstAS, rs),
+			"route: 10.0.0.4/30\norigin: ASY\nsource: RIPE\n",
+		}
+		odd := latest(append(append([]object.Object(nil), objs...), decodeAll(t, oddTexts)...))
+		sameAnswers(t, label+" with odd routes", odd, corpusOf(odd).Source("RIPE", "RADB"), resolve.NewMemSource(odd, "RIPE", "RADB"))
 		sameAnswers(t, label, objs, c.Source("RIPE", "RADB"), resolve.NewMemSource(objs, "RIPE", "RADB"))
 		sameAnswers(t, label+" without precedence", objs, c.Source(), resolve.NewMemSource(objs))
 		if seed%5 == 0 && len(objs) == len(decodeAll(t, texts)) { // the oracle reads every object
@@ -344,4 +355,117 @@ func TestCorpusMemory(t *testing.T) {
 	}
 	t.Logf("%d bytes per reduced route", per)
 	runtime.KeepAlive(c)
+}
+
+// Review regressions (v0.19.0).
+
+// A primary key whose upper-case form is longer than itself ("ɐ" is two
+// bytes, "Ɐ" three) must not panic Delete.
+func TestCorpusDeleteUnicodeKey(t *testing.T) {
+	c := &resolve.Corpus{}
+	c.Put(decodeOne(t, "route: 192.0.2.0/24\norigin: AS1\nsource: TEST\n"))
+	if c.Delete("route", strings.Repeat("ɐ", 10)+"AS1", "TEST") {
+		t.Error("deleted a junk key")
+	}
+	if c.Delete("route6", "2001:db8::/32ɐas1", "TEST") {
+		t.Error("deleted a junk key")
+	}
+}
+
+// A route whose origin does not decode still claims membership, as
+// NewMemSource reads it: a route-set's member is not lost.
+func TestCorpusKeepsClaimantWithBadOrigin(t *testing.T) {
+	objs := []object.Object{
+		decodeOne(t, "route-set: RS-FOO\nmbrs-by-ref: ANY\nsource: TEST\n"),
+		decodeOne(t, "route: 192.0.2.0/24\norigin: ASX\nmember-of: RS-FOO\nsource: TEST\n"),
+	}
+	n, _ := types.ParseSetName("RS-FOO")
+	ctx := context.Background()
+	want, err := (&resolve.Expander{Src: resolve.NewMemSource(objs)}).ExpandPrefixes(ctx, n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := (&resolve.Expander{Src: corpusOf(objs).Source()}).ExpandPrefixes(ctx, n)
+	if err != nil || !slices.Equal(got.List(), want.List()) {
+		t.Errorf("corpus %v (%v), NewMemSource %v", got.List(), err, want.List())
+	}
+}
+
+// Routes are answered as decoded, host bits and all, as NewMemSource answers.
+func TestCorpusKeepsPrefixAsDecoded(t *testing.T) {
+	objs := []object.Object{decodeOne(t, "route: 192.0.2.1/24\norigin: AS1\nsource: TEST\n")}
+	ctx := context.Background()
+	got, _ := corpusOf(objs).Source().OriginatedRoutes(ctx, 1, types.AFIAny)
+	want, _ := resolve.NewMemSource(objs).OriginatedRoutes(ctx, 1, types.AFIAny)
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("corpus %v, NewMemSource %v", got, want)
+	}
+}
+
+// Merging a whole route over a reduced one of the same identity leaves one.
+func TestCorpusMergeReplacesReduced(t *testing.T) {
+	a, b := &resolve.Corpus{}, &resolve.Corpus{}
+	a.Put(decodeOne(t, "route: 192.0.2.0/24\norigin: AS1\nsource: TEST\n"))
+	b.Put(decodeOne(t, "route: 192.0.2.0/24\norigin: AS1\nmember-of: RS-X\nsource: TEST\n"))
+	a.Merge(b)
+	if a.Len() != 1 {
+		t.Fatalf("Len %d after merging one route over itself", a.Len())
+	}
+	a.Delete("route", "192.0.2.0/24AS1", "TEST")
+	if ps, _ := a.Source().OriginatedRoutes(context.Background(), 1, types.AFIAny); len(ps) != 0 || a.Len() != 0 {
+		t.Errorf("after Delete: %v, Len %d", ps, a.Len())
+	}
+}
+
+// An update keeps an object's place in load order: ties between sources
+// not in the precedence still go to the object loaded first.
+func TestCorpusUpdateKeepsLoadOrder(t *testing.T) {
+	c := &resolve.Corpus{}
+	c.Put(decodeOne(t, "as-set: AS-FOO\nmembers: AS1\nsource: A\n"))
+	c.Put(decodeOne(t, "as-set: AS-FOO\nmembers: AS2\nsource: B\n"))
+	c.Put(decodeOne(t, "as-set: AS-FOO\nmembers: AS3\nsource: A\n")) // A updated
+	n, _ := types.ParseSetName("AS-FOO")
+	s, _ := c.Source().GetSet(context.Background(), n)
+	if s.SetSource() != "A" {
+		t.Errorf("after A's update, %s's AS-FOO wins", s.SetSource())
+	}
+}
+
+// FuzzCorpusDelete: no class or primary key panics Delete.
+func FuzzCorpusDelete(f *testing.F) {
+	f.Add("route", "192.0.2.0/24AS1")
+	f.Add("route6", "2001:db8::/32as1")
+	f.Add("route", strings.Repeat("ɐ", 10)+"AS1")
+	f.Add("as-set", "AS1:AS-FOO")
+	f.Fuzz(func(t *testing.T, class, pk string) {
+		c := &resolve.Corpus{}
+		c.Put(decodeOneF(t, "route: 192.0.2.0/24\norigin: AS1\nsource: TEST\n"))
+		c.Delete(class, pk, "TEST")
+	})
+}
+
+func decodeOneF(t *testing.T, text string) object.Object {
+	raw, _ := rpsl.ParseObject(text)
+	o, _ := rpsl.Decode(raw)
+	return o
+}
+
+// ExpandableClass is Expandable by class name: for each class, a decoded
+// object is Expandable exactly when its class name is ExpandableClass.
+func TestExpandableClassAgrees(t *testing.T) {
+	for _, text := range []string{
+		"as-set: AS-X\nsource: T\n", "route-set: RS-X\nsource: T\n", "rtr-set: RTRS-X\nsource: T\n",
+		"filter-set: FLTR-X\nfilter: ANY\nsource: T\n", "peering-set: PRNG-X\nsource: T\n",
+		"route: 192.0.2.0/24\norigin: AS1\nsource: T\n", "route6: 2001:db8::/32\norigin: AS1\nsource: T\n",
+		"aut-num: AS1\nsource: T\n", "inet-rtr: rtr.example.net\nsource: T\n",
+		"person: A\nnic-hdl: A1-T\nsource: T\n", "mntner: M\nsource: T\n", "inetnum: 192.0.2.0 - 192.0.2.255\nsource: T\n",
+	} {
+		o := decodeOne(t, text)
+		if resolve.Expandable(o) != resolve.ExpandableClass(o.Class()) {
+			t.Errorf("%s: Expandable %v, ExpandableClass %v", o.Class(), resolve.Expandable(o), resolve.ExpandableClass(o.Class()))
+		}
+	}
+	if !resolve.ExpandableClass(" AS-SET ") {
+		t.Error("ExpandableClass is not case- and space-blind")
+	}
 }

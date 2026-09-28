@@ -11,8 +11,9 @@
 # release it checks the script's refusals (a dirty tree, HEAD not pushed, an
 # undated version, a tag outside HEAD's history); during it, it stops the
 # script after step 2 and runs it again, which must resume. release.sh's own
-# last step then checks every module from an empty module cache: its @latest,
-# that a consumer gets only what it requires, and its tests from the zip.
+# last steps then check every module from an empty module cache — its
+# @latest, that a consumer gets only what it requires, its tests from the
+# zip — and every rpslq archive it builds, as a real release does.
 # Nothing touches the real repository, its remote, the public proxy, the
 # checksum database, GitHub, or your module cache.
 set -eu
@@ -114,35 +115,6 @@ release "$V" || die "the resumed release failed"
 [ "$(remote_tags)" = "ast/$V lexer/$V resolve/$V types/$V $V " ] || die "the remote has: $(remote_tags)"
 [ "$(git rev-parse HEAD)" = "$(git rev-parse rehearsal/main)" ] || die "main is not pushed"
 
-step "rpslq's archives"
-cd "$tmp/dist"
-if command -v sha256sum >/dev/null; then sha256sum -c --quiet SHA256SUMS; else shasum -a 256 -c --quiet SHA256SUMS; fi ||
-	die "SHA256SUMS does not verify"
-native=$(go env GOOS)_$(go env GOARCH)
-for p in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64 windows_amd64; do
-	os=${p%_*} arch=${p#*_}
-	x=$tmp/x-$p
-	mkdir -p "$x"
-	if [ "$os" = windows ]; then
-		a=rpslq_${V}_$p.zip exe=rpslq.exe
-		[ -f "$a" ] || die "no $a"
-		(cd "$x" && unzip -q "$tmp/dist/$a")
-	else
-		a=rpslq_${V}_$p.tar.gz exe=rpslq
-		[ -f "$a" ] || die "no $a"
-		tar -xzf "$a" -C "$x"
-	fi
-	[ "$(ls "$x" | tr '\n' ' ')" = "LICENSE README.txt $exe " ] || die "$a holds $(ls "$x" | tr '\n' ' ')"
-	info=$(go version -m "$x/$exe")
-	echo "$info" | grep -q "GOOS=$os" && echo "$info" | grep -q "GOARCH=$arch" || die "$a is not built for $os/$arch"
-	echo "$info" | grep -Eq "(mod|dep)[[:space:]]+$M/resolve[[:space:]]+$V[[:space:]]+h1:" || die "$a is not built from resolve $V:
-$info"
-	if [ "$p" = "$native" ]; then
-		[ "$("$x/$exe" -v)" = "rpslq $V" ] || die "$a: rpslq -v says $("$x/$exe" -v)"
-	fi
-	echo "$a: $os/$arch, from resolve $V"
-done
-cd "$work"
 
 step "release dry run: ok"
 echo "The release commits release.sh made, in order:"
