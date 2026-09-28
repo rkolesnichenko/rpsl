@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -80,4 +81,70 @@ func TestRealDataCorpus(t *testing.T) {
 		}
 		t.Logf("%s: %d objects, a corpus of %d", reg, len(objs), c.Len())
 	}
+}
+
+// TestRealDataKeepPolicy: RIPE's dumps with KeepPolicy cost at most 150 MB
+// more heap than without (95 MB of aut-num text measured, plus index), and
+// every aut-num decoded on demand is the one decoded at load.
+func TestRealDataKeepPolicy(t *testing.T) {
+	dir := os.Getenv("RPSL_REALDATA")
+	if dir == "" {
+		t.Skip("set RPSL_REALDATA to the directory scripts/fetch-irr-dumps.sh fills")
+	}
+	files, _ := filepath.Glob(filepath.Join(dir, "ripe", "*.gz"))
+	heap := func() uint64 {
+		runtime.GC()
+		runtime.GC()
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		return m.HeapAlloc
+	}
+	load := func(keep bool) (*resolve.DumpLoader, uint64) {
+		before := heap()
+		l := &resolve.DumpLoader{KeepPolicy: keep, Sources: []string{"RIPE"}}
+		for _, f := range files {
+			fh, err := os.Open(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			zr, err := gzip.NewReader(fh)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := l.Read(zr); err != nil {
+				t.Fatal(err)
+			}
+			fh.Close()
+		}
+		return l, heap() - before
+	}
+	_, without := load(false)
+	l, with := load(true)
+	if extra := int64(with) - int64(without); extra > 150<<20 {
+		t.Errorf("KeepPolicy costs %d MB, over the 150 MB bound", extra>>20)
+	}
+	src := l.Source()
+	fh, err := os.Open(filepath.Join(dir, "ripe", "ripe.db.aut-num.gz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fh.Close()
+	zr, err := gzip.NewReader(fh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for raw := range rpsl.Parse(zr) {
+		o, _ := object.Decode(raw)
+		want, ok := o.(object.AutNum)
+		if !ok {
+			continue
+		}
+		got, err := src.AutNum(context.Background(), want.AS, "RIPE")
+		if err != nil || got.Raw().String() != want.Raw().String() {
+			t.Fatalf("%s: on-demand decode differs (%v)", want.AS, err)
+		}
+		n++
+	}
+	t.Logf("%d aut-nums, KeepPolicy +%d MB", n, (int64(with)-int64(without))>>20)
 }
