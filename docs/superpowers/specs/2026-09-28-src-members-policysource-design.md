@@ -358,6 +358,15 @@ type Source struct {
   whois.radb.net, 2026-09-28). On a scoped lookup this is `ErrNotFound`; the
   query fails alone and the connection stays in step. A bad default `Sources`
   list stays a loud error, as today.
+- Data can name any registry, so a probe per name would cost a connection and
+  a sub-source each (final review: 2,000 `FAKEi::` src-members, 2,001 dials).
+  The root Source learns the server's registries once with `!j-*` (IRRd 4
+  lists every real source, `RIPE:N:0-66028019`; verified against
+  whois.radb.net and IRRd's `handle_irrd_database_serial_range`, 2026-09-28),
+  kept until `Close`; an unlisted registry is `ErrNotFound` with no query.
+  `!s-lc` would not do: it lists only the default sources. A server that
+  refuses `!j` falls back to the probe above; a refused registry's sub-source
+  is dropped and at most 1,024 refused names are remembered.
 
 ### 7.4 whois.Source
 

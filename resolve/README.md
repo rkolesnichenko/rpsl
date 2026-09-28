@@ -34,9 +34,12 @@ an optional source precedence for set names defined in several IRRs.
 
 `PolicySource` is a sibling interface — `Source` plus `AutNum(ctx, as, source)` and
 `InetRtr(ctx, name, source)` — for the objects routing policy names outside sets, with
-the same registry scoping as `GetSet`. `MemSource` and `irrd.Source` implement it;
-`Corpus.KeepPolicy` feeds a `MemSource` built from a `Corpus`. A wrapper (`Cache`,
-`rpki.Filter`) over a `Source` that is not a `PolicySource` returns `ErrNoPolicy`.
+the same registry scoping as `GetSet`. `MemSource`, `irrd.Source`, `whois.Source`,
+`Cache` and `rpki.Filter` implement it; `Corpus.KeepPolicy` (and `DumpLoader`'s and
+`nrtm4.Client`'s) feeds a `MemSource` built from a `Corpus`, and one built without it
+returns `ErrNoPolicy` rather than the few aut-nums and inet-rtrs it keeps as claimants.
+A wrapper (`Cache`, `rpki.Filter`) over a `Source` that is not a `PolicySource` returns
+`ErrNoPolicy` too.
 
 ## The `Expander`
 
@@ -154,7 +157,11 @@ one deadline covering the wait for a `MaxConns` slot, the dial, the I/O and any
 retry. `rdap.Client.Timeout` bounds each RDAP request the same way.
 `irrd.MaxConns` (default 4) bounds concurrent connections; with `KeepAlive`, a
 pooled connection the server has closed is retried once on a fresh one, and a
-refused `!s` source list is an error rather than "not found". IRRd answers
+refused `!s` source list is an error rather than "not found". For scoped lookups
+`irrd` learns the server's registries once, with IRRd's `!j-*`, and kept until
+`Close`: a registry not listed is `ErrNotFound` without a query, so data naming
+any number of made-up registries costs nothing more (a server that refuses `!j`
+is asked per registry, with up to 1,024 refusals remembered). IRRd answers
 `!i` for an existing set with no members as for a missing one, so `irrd`
 confirms with `!m` and returns such a set empty (not in `Missing()`). Like
 `irrd`, `whois` takes a set defined in several sources from the first in

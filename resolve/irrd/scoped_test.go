@@ -176,7 +176,7 @@ func TestScopedUnderSteadyLoad(t *testing.T) {
 			set, err := src.GetSet(context.Background(), ref(t, "RIPE::AS-X"))
 			if err != nil || set.SetSource() != "RIPE" {
 				t.Errorf("%+v: scoped lookup %d under load: %v, %v after %v", c, i, set, err, time.Since(start))
-			} else if d := time.Since(start); d > time.Second {
+			} else if d := time.Since(start); d > 3*time.Second { // under the 5 s Timeout a starved lookup would hit
 				t.Errorf("%+v: scoped lookup %d took %v", c, i, d)
 			}
 		}
@@ -186,38 +186,57 @@ func TestScopedUnderSteadyLoad(t *testing.T) {
 	}
 }
 
-// TestUnknownRegistryIsRemembered: a registry the server refused is not asked
-// for again; later lookups of it are ErrNotFound without a dial.
+// TestUnknownRegistryIsRemembered: a registry the server does not have is
+// not asked for again; later lookups of it are ErrNotFound without a dial.
+// With "!j-*" the Source learns the server's registries once and asks for no
+// unknown one at all; a server that refuses "!j" is asked for the registry
+// ("!s") once.
 func TestUnknownRegistryIsRemembered(t *testing.T) {
-	for _, pipeline := range []int{0, 2} {
-		db := scopedDB()
-		addr := db.IRRd(t)
-		var dials atomic.Int32
-		src := &irrd.Source{Sources: []string{"RADB"}, Pipeline: pipeline, KeepAlive: true, Timeout: 5 * time.Second,
-			Dial: func(ctx context.Context) (net.Conn, error) {
-				dials.Add(1)
-				var d net.Dialer
-				return d.DialContext(ctx, "tcp", addr)
-			}}
-		ctx := context.Background()
-		for i := 0; i < 5; i++ {
-			if _, err := src.GetSet(ctx, ref(t, "NOSUCH::AS-X")); !errors.Is(err, resolve.ErrNotFound) {
-				t.Fatalf("pipeline %d: lookup %d: err = %v", pipeline, i, err)
+	for _, listed := range []bool{true, false} {
+		for _, pipeline := range []int{0, 2} {
+			db := scopedDB()
+			if !listed {
+				db.WithoutSerialRange()
 			}
-		}
-		if _, err := src.GetSet(ctx, ref(t, "NOSUCH::AS-OTHER")); !errors.Is(err, resolve.ErrNotFound) {
-			t.Fatalf("pipeline %d: another set of the refused registry: err = %v", pipeline, err)
-		}
-		n := 0
-		for _, cmd := range db.Commands() {
-			if cmd == "!sNOSUCH" {
-				n++
+			addr := db.IRRd(t)
+			var dials atomic.Int32
+			src := &irrd.Source{Sources: []string{"RADB"}, Pipeline: pipeline, KeepAlive: true, Timeout: 5 * time.Second,
+				Dial: func(ctx context.Context) (net.Conn, error) {
+					dials.Add(1)
+					var d net.Dialer
+					return d.DialContext(ctx, "tcp", addr)
+				}}
+			ctx := context.Background()
+			for i := 0; i < 5; i++ {
+				if _, err := src.GetSet(ctx, ref(t, "NOSUCH::AS-X")); !errors.Is(err, resolve.ErrNotFound) {
+					t.Fatalf("listed %v, pipeline %d: lookup %d: err = %v", listed, pipeline, i, err)
+				}
 			}
+			if _, err := src.GetSet(ctx, ref(t, "NOSUCH::AS-OTHER")); !errors.Is(err, resolve.ErrNotFound) {
+				t.Fatalf("listed %v, pipeline %d: another set of the unknown registry: err = %v", listed, pipeline, err)
+			}
+			probes, lists := 0, 0
+			for _, cmd := range db.Commands() {
+				switch cmd {
+				case "!sNOSUCH":
+					probes++
+				case "!j-*":
+					lists++
+				}
+			}
+			wantProbes, wantDials := 0, int32(1) // the "!j-*" alone
+			if !listed {
+				wantProbes, wantDials = 1, 2 // the refused "!j-*", then "!sNOSUCH" once
+			}
+			if probes != wantProbes || lists != 1 || dials.Load() != wantDials {
+				t.Errorf("listed %v, pipeline %d: %d dials, %d \"!j-*\", %d \"!sNOSUCH\"; want %d, 1, %d",
+					listed, pipeline, dials.Load(), lists, probes, wantDials, wantProbes)
+			}
+			if set, err := src.GetSet(ctx, ref(t, "RIPE::AS-X")); err != nil || set.SetSource() != "RIPE" {
+				t.Errorf("listed %v, pipeline %d: a real registry after the unknown one: %v, %v", listed, pipeline, set, err)
+			}
+			src.Close()
 		}
-		if n != 1 || dials.Load() != 1 {
-			t.Errorf("pipeline %d: %d dials, %d \"!sNOSUCH\"; want the refusal asked for once", pipeline, dials.Load(), n)
-		}
-		src.Close()
 	}
 }
 

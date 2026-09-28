@@ -68,33 +68,49 @@ func TestAutNumUnscopedUnknownSourceIsLoud(t *testing.T) {
 }
 
 // Fix round 1, finding 2: a second scoped AutNum to a registry the server
-// already refused does not dial or query again — the sub-source's cached
-// refusal (Source.in's "unknown" flag) applies to AutNum/InetRtr exactly as
-// it does to GetSet (TestUnknownRegistryIsRemembered).
+// does not have does not dial or query again — the Source's list of the
+// server's registries ("!j-*"), or its memory of a refusal when the server
+// will not list them, applies to AutNum/InetRtr exactly as it does to GetSet
+// (TestUnknownRegistryIsRemembered).
 func TestAutNumUnknownRegistryIsRemembered(t *testing.T) {
-	db := irrtest.New("aut-num: AS1\nas-name: ONE\nsource: RIPE\n")
-	addr := db.IRRd(t)
-	var dials atomic.Int32
-	src := &Source{Sources: []string{"RIPE"}, Timeout: 5 * time.Second,
-		Dial: func(ctx context.Context) (net.Conn, error) {
-			dials.Add(1)
-			var d net.Dialer
-			return d.DialContext(ctx, "tcp", addr)
-		}}
-	defer src.Close()
-	ctx := context.Background()
-	for i := 0; i < 2; i++ {
-		if _, err := src.AutNum(ctx, 1, "NOSUCH"); !errors.Is(err, resolve.ErrNotFound) {
-			t.Fatalf("lookup %d: err = %v", i, err)
+	for _, listed := range []bool{true, false} {
+		db := irrtest.New("aut-num: AS1\nas-name: ONE\nsource: RIPE\n")
+		if !listed {
+			db.WithoutSerialRange()
 		}
-	}
-	n := 0
-	for _, cmd := range db.Commands() {
-		if cmd == "!sNOSUCH" {
-			n++
+		addr := db.IRRd(t)
+		var dials atomic.Int32
+		src := &Source{Sources: []string{"RIPE"}, Timeout: 5 * time.Second,
+			Dial: func(ctx context.Context) (net.Conn, error) {
+				dials.Add(1)
+				var d net.Dialer
+				return d.DialContext(ctx, "tcp", addr)
+			}}
+		ctx := context.Background()
+		for i := 0; i < 2; i++ {
+			if _, err := src.AutNum(ctx, 1, "NOSUCH"); !errors.Is(err, resolve.ErrNotFound) {
+				t.Fatalf("listed %v: lookup %d: err = %v", listed, i, err)
+			}
+			if _, err := src.InetRtr(ctx, "rtr1.example.net", "NOSUCH"); !errors.Is(err, resolve.ErrNotFound) {
+				t.Fatalf("listed %v: InetRtr lookup %d: err = %v", listed, i, err)
+			}
 		}
-	}
-	if n != 1 || dials.Load() != 1 {
-		t.Errorf("%d dials, %d %q; want the refusal asked for once", dials.Load(), n, "!sNOSUCH")
+		n := 0
+		for _, cmd := range db.Commands() {
+			if cmd == "!sNOSUCH" {
+				n++
+			}
+		}
+		wantProbes, wantDials := 0, int32(1)
+		if !listed {
+			wantProbes, wantDials = 1, 2
+		}
+		if n != wantProbes || dials.Load() != wantDials {
+			t.Errorf("listed %v: %d dials, %d %q; want %d, %d", listed, dials.Load(), n, "!sNOSUCH", wantDials, wantProbes)
+		}
+		if an, err := src.AutNum(ctx, 1, "RIPE"); err != nil || an.AsName != "ONE" {
+			t.Errorf("listed %v: AutNum(AS1, RIPE) = %q, %v", listed, an.AsName, err)
+		}
+		src.Close()
 	}
 }

@@ -36,6 +36,8 @@ type DB struct {
 	rpki bool  // IRRd's RPKI-aware mode (WithRPKI)
 	roas []ROA // the ROAs it imported
 
+	noSerialRange bool // refuse "!j", as a server without it does (WithoutSerialRange)
+
 	mu   sync.Mutex
 	cmds []string
 }
@@ -97,6 +99,45 @@ func (db *DB) WithSources(names ...string) *DB {
 		db.extra = append(db.extra, strings.ToUpper(n))
 	}
 	return db
+}
+
+// WithoutSerialRange makes the IRRd server refuse "!j" ('F'), as a server
+// that does not implement it would, and returns db.
+func (db *DB) WithoutSerialRange() *DB {
+	db.noSerialRange = true
+	return db
+}
+
+// serialRange answers "!j" as IRRd 4's handle_irrd_database_serial_range
+// does: one line per source, "NAME:N:0-<serial>" (no journal kept; a source
+// with no objects has no serial, "NAME:N:-"), for every source with "-*",
+// and "NAME:X:Database unknown" for a named source the server lacks. The
+// serial here is the source's object count.
+func (db *DB) serialRange(arg string) string {
+	known := db.sources()
+	count := map[string]int{}
+	for _, e := range db.objs {
+		count[e.source]++
+	}
+	want := known
+	if arg != "-*" {
+		want = nil
+		for _, s := range strings.Split(arg, ",") {
+			want = append(want, strings.ToUpper(s))
+		}
+	}
+	var lines, unknown []string
+	for _, s := range want {
+		switch {
+		case !contains(known, s):
+			unknown = append(unknown, s+":X:Database unknown")
+		case count[s] > 0:
+			lines = append(lines, fmt.Sprintf("%s:N:0-%d", s, count[s]))
+		default:
+			lines = append(lines, s+":N:-")
+		}
+	}
+	return strings.Join(append(lines, unknown...), "\n")
 }
 
 // ROA is one ROA as IRRd 4 imports it from rpki.roa_source.
@@ -502,6 +543,14 @@ func (db *DB) irrdConn(c net.Conn) {
 				frame(c, strings.Join(sel, ","))
 			} else {
 				frame(c, strings.Join(db.sources(), ","))
+			}
+		case strings.HasPrefix(cmd, "!j"):
+			if db.noSerialRange {
+				fmt.Fprintf(c, "F unsupported command %q\n", cmd)
+			} else if ans := db.serialRange(cmd[2:]); ans == "" {
+				fmt.Fprint(c, "C\n")
+			} else {
+				frame(c, ans)
 			}
 		case strings.HasPrefix(cmd, "!s"):
 			var next []string

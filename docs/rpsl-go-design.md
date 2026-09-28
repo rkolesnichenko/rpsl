@@ -479,7 +479,9 @@ type PolicySource interface {
 }
 ```
 
-Backends shipped: an in-memory `Source` (for tests and for loading an IRRd snapshot/`.db` dump), a caching `Source`, a WHOIS `Source`, and a `Source` over an IRRd query port. RDAP serves registration data, not IRR sets, so `resolve/rdap` is a client, not a `Source`. The engine never opens a socket itself. `MemSource` and `irrd.Source` also implement `PolicySource`; a wrapper (`Cache`, `rpki.Filter`) whose inner `Source` does not returns `ErrNoPolicy`.
+Backends shipped: an in-memory `Source` (for tests and for loading an IRRd snapshot/`.db` dump), a caching `Source`, a WHOIS `Source`, and a `Source` over an IRRd query port. RDAP serves registration data, not IRR sets, so `resolve/rdap` is a client, not a `Source`. The engine never opens a socket itself. `MemSource`, `irrd.Source`, `whois.Source`, `Cache` and `rpki.Filter` also implement `PolicySource`; a wrapper (`Cache`, `rpki.Filter`) whose inner `Source` does not returns `ErrNoPolicy`, and so does a `MemSource` built from a `Corpus` without `KeepPolicy` (§8.9), which holds only the aut-nums and inet-rtrs that claim membership of a set — a partial answer it will not pass off as a whole one.
+
+`irrd.Source` resolves a scoped lookup — `GetSet` of `RIPE::AS-FOO`, or `AutNum`/`InetRtr` with a source — on connections of a sub-source that select only that registry (`!s` is per connection). Data can name any registry, so the Source learns the server's registries once, with IRRd's `!j-*` (every source it has, with its serial range: `RIPE:N:0-66028019`), on a connection that selects none, and keeps the list until `Close`: a registry not on it is `ErrNotFound` without a query, a sub-source or a connection, and there are only ever as many sub-sources as the server has registries. A server that refuses `!j` is asked for each registry instead; a refused registry's sub-source is dropped, and up to 1,024 refused names are remembered.
 
 The engine does not take a `Source`'s answer on trust: a set whose name is not the one asked for is an error, one whose class is not its name's (`route-set: AS-EVIL`) is invalid data, treated as missing, and — for a scoped `GetSet` — one whose source is not the ref's registry fails the same way, since a `Source` that ignores scoping cannot quietly answer by precedence. Expanded under its name's rules a mismatched set would let an as-set pull in prefixes, or claims, its class does not allow. Every indirect claim is re-checked with `ClaimAllowed`.
 
@@ -740,6 +742,10 @@ text-kept entry on every `AutNum`/`InetRtr` call — `rpsl.ParseObject` then
 them — so the `MemSource` stays immutable and safe to share; wrap it in
 `Cache` for repeated lookups. An aut-num that claims `member-of:` is already
 kept decoded (it answers `MembersByRef` directly) and needs no re-decoding.
+Without `KeepPolicy` a `MemSource` built from the `Corpus` answers `AutNum` and
+`InetRtr` with `ErrNoPolicy`: the claimants it holds are not the registry's
+aut-nums, and serving them alone would be a partial answer. `NewMemSource`
+serves every aut-num and inet-rtr it is given.
 
 ## 9. Top-level façade
 
