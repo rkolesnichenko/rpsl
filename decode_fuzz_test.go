@@ -34,6 +34,8 @@ func FuzzDecode(f *testing.F) {
 		"route-set: RS-X\nmembers: 192.0.2.0/24^+, AS1^24, RS-Y^-\nmp-members: 2001:db8::/32\nmbrs-by-ref: ANY\n",
 		"inetnum: 192.0.2.0 - 192.0.2.255\nnetname: X\ncountry: NL\nadmin-c: X1-RIPE\nstatus: ASSIGNED PA\n",
 		"filter-set: FLTR-X\nfilter: community == {1:2} OR community.contains(3:4)\n",
+		"as-set: AS-X\nmembers: AS1, AS-Y\nsrc-members: RIPE::AS-Y, AS1, ARIN::AS-Y\nsource: RIPE\n",
+		"route-set: RS-X\nmp-members: 2001:db8::/32, RS-Y\nsrc-members: 2001:db8::/32, RIPE::RS-Y^+, RIPE::AS-Z^+\nsource: RIPE\n",
 	} {
 		f.Add(s, uint8(1))
 	}
