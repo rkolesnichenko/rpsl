@@ -13,6 +13,7 @@ func TestASPathREStringRoundTrips(t *testing.T) {
 		"[AS1 AS2 - AS5 AS-FOO]", "[^AS1 .]", "AS1~*", "(AS1 | AS2)~{2,3}",
 		"AS1{2}", "AS1{2,}", "AS1{2,4}", "AS1?", "^PeerAS+ AS1:AS-X:PeerAS*$",
 		"AS1 (AS2 | AS3) $", "(^AS1 | AS2$)", "[PeerAS AS1:AS-X:PeerAS]",
+		"()", "AS1 () AS2", "(AS1 | ())",
 	} {
 		re, err := ParseASPathRegexp(s)
 		if err != nil {
