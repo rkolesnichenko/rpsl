@@ -204,6 +204,7 @@ type filterEval struct {
 	ranges map[string]RangeSet           // route-set and as-set expansions
 	asns   map[string]ASNSet             // as-set expansions in AS expressions
 	ex     excluded                      // what the expansion leaves out
+	anyAll bool                          // AS-ANY and RS-ANY denote every route (NormalizeFilter) rather than an AnySetError
 }
 
 func newFilterEval(e *Expander, ctx context.Context) *filterEval {
@@ -377,6 +378,9 @@ func (ev *filterEval) eval(f policy.Filter, depth int) (rangeSetOf, error) {
 	case policy.FilterSetRef:
 		return ev.setRef(x.Name, x.Op, depth)
 	case policy.FilterASExpr:
+		if ref, ok := x.AS.(policy.ASSetRef); ok && ev.anyAll && isAnySet(ref.Name) {
+			return ev.setRef(ref.Name, x.Op, depth)
+		}
 		as, err := ev.asExpr(x.AS, depth)
 		if err != nil {
 			return nil, err
@@ -412,7 +416,14 @@ func (ev *filterEval) setRef(n types.SetName, op types.RangeOperator, depth int)
 		return rangeSetOf{}, nil
 	}
 	if isAnySet(n) {
-		return nil, &AnySetError{Name: n}
+		if !ev.anyAll {
+			return nil, &AnySetError{Name: n}
+		}
+		out := rangeSetOf{}
+		for r := range ev.everything() {
+			ev.putOp(out, r, op)
+		}
+		return out, nil
 	}
 	switch n.Class() {
 	case types.ClassRouteSet, types.ClassAsSet:
@@ -703,13 +714,13 @@ func (ev *filterEval) putOp(out rangeSetOf, r types.PrefixRange, op types.RangeO
 	ev.put(out, r)
 }
 
-// intersect returns the ranges denoting exactly what both sets denote. Two
-// ranges meet only if one's prefix contains the other's, so each range of a is
-// tested against b's ranges at its own prefix's ancestors, looked up by
-// prefix, and at its descendants, found by binary search in b sorted by
-// address — not against all of b. The context is checked, and MaxPrefixes
-// enforced, as the result grows.
-func (ev *filterEval) intersect(a, b rangeSetOf) (rangeSetOf, error) {
+// pairs calls fn for every range x of a and y of b whose prefixes nest — y's
+// prefix is x's, an ancestor of it, or a descendant — which are the only pairs
+// that can meet. Each x is tested against b's ranges at its own prefix's
+// ancestors, looked up by prefix, and at its descendants, found by binary
+// search in b sorted by address — not against all of b. The context is
+// checked as it goes.
+func (ev *filterEval) pairs(a, b rangeSetOf, fn func(x, y types.PrefixRange) error) error {
 	byPrefix := make(map[netip.Prefix][]types.PrefixRange, len(b))
 	for y := range b {
 		byPrefix[y.Prefix()] = append(byPrefix[y.Prefix()], y)
@@ -720,7 +731,6 @@ func (ev *filterEval) intersect(a, b rangeSetOf) (rangeSetOf, error) {
 	}
 	sort.Slice(prefixes, func(i, j int) bool { return prefixLess(prefixes[i], prefixes[j]) })
 
-	out := rangeSetOf{}
 	tests := 0
 	meet := func(x types.PrefixRange, ys []types.PrefixRange) error {
 		for _, y := range ys {
@@ -729,17 +739,17 @@ func (ev *filterEval) intersect(a, b rangeSetOf) (rangeSetOf, error) {
 					return err
 				}
 			}
-			if c, ok := x.Intersect(y); ok {
-				out[c] = struct{}{}
+			if err := fn(x, y); err != nil {
+				return err
 			}
 		}
-		return ev.cap(out, types.SetRef{})
+		return nil
 	}
 	for x := range a {
 		p := x.Prefix()
 		for bits := p.Bits(); bits >= 0; bits-- { // ancestors, and p itself
 			if err := meet(x, byPrefix[netip.PrefixFrom(p.Addr(), bits).Masked()]); err != nil {
-				return nil, err
+				return err
 			}
 		}
 		last := lastAddr(p)
@@ -747,12 +757,30 @@ func (ev *filterEval) intersect(a, b rangeSetOf) (rangeSetOf, error) {
 		for ; i < len(prefixes) && prefixes[i].Addr().Compare(last) <= 0; i++ {
 			if q := prefixes[i]; q.Bits() > p.Bits() { // a strict descendant
 				if err := meet(x, byPrefix[q]); err != nil {
-					return nil, err
+					return err
 				}
 			}
 		}
 	}
-	if err := ev.ctx.Err(); err != nil {
+	return ev.ctx.Err()
+}
+
+// intersect returns the ranges denoting exactly what both sets denote,
+// enforcing MaxPrefixes as the result grows.
+func (ev *filterEval) intersect(a, b rangeSetOf) (rangeSetOf, error) {
+	out := rangeSetOf{}
+	err := ev.pairs(a, b, func(x, y types.PrefixRange) error {
+		c, ok := x.Intersect(y)
+		if !ok {
+			return nil
+		}
+		if _, dup := out[c]; dup {
+			return nil
+		}
+		out[c] = struct{}{}
+		return ev.cap(out, types.SetRef{})
+	})
+	if err != nil {
 		return nil, err
 	}
 	return out, nil

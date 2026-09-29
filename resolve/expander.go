@@ -16,17 +16,19 @@ import (
 )
 
 const (
-	defaultMaxDepth    = 32
-	defaultMaxPrefixes = 1 << 20
-	defaultMaxVisited  = 1 << 17 // 131 072 unique sets — well above any real graph
+	defaultMaxDepth     = 32
+	defaultMaxPrefixes  = 1 << 20
+	defaultMaxVisited   = 1 << 17 // 131 072 unique sets — well above any real graph
+	defaultMaxConjuncts = 1 << 12 // 4 096 — well above any router config's route-map entries
 )
 
 // Expander expands set references into concrete ASNs and prefixes. It is pure:
 // all I/O is delegated to Src, all limits are explicit, and every traversal is
 // context-cancellable. A zero Expander (except Src) uses the default limits
-// MaxDepth=32, MaxPrefixes=1<<20 (1,048,576), MaxVisited=1<<17 (131,072); each
-// returns SetTooLargeError, naming the Limit, when breached. An Expander holds no
-// per-call state, so one value may serve concurrent expansions.
+// MaxDepth=32, MaxPrefixes=1<<20 (1,048,576), MaxVisited=1<<17 (131,072),
+// MaxConjuncts=1<<12 (4,096); each returns SetTooLargeError, naming the Limit,
+// when breached. An Expander holds no per-call state, so one value may serve
+// concurrent expansions.
 //
 // Expansion runs in two phases. Discovery walks the set graph breadth-first
 // from the named set, fetching every reachable set once (so a set's depth is
@@ -38,11 +40,12 @@ const (
 // IRR source precedence is the Source's concern (e.g. irrd.Source.Sources,
 // NewMemSource's sourcePrecedence).
 type Expander struct {
-	Src         Source
-	MaxDepth    int       // cap on a set's shortest nesting distance from the top (default 32)
-	MaxPrefixes int       // cap on output prefixes, or ranges for ExpandPrefixRanges (default 1<<20)
-	MaxVisited  int       // cap on distinct sets fetched and on evaluation visits (default 1<<17)
-	AFI         types.AFI // address-family constraint; Unspecified/Any = both
+	Src          Source
+	MaxDepth     int       // cap on a set's shortest nesting distance from the top (default 32)
+	MaxPrefixes  int       // cap on output prefixes, or ranges for ExpandPrefixRanges (default 1<<20)
+	MaxVisited   int       // cap on distinct sets fetched and on evaluation visits (default 1<<17)
+	MaxConjuncts int       // cap on the conjuncts of any disjunction NormalizeFilter builds (default 1<<12)
+	AFI          types.AFI // address-family constraint; Unspecified/Any = both
 	// Concurrency is how many sets, or ASes, may be fetched at once. Zero and
 	// one both fetch one at a time. Discovery is breadth-first, and a whole
 	// level is fetched together, so raising this hides a live registry's
@@ -119,6 +122,8 @@ func (e *Expander) maxDepth() int { return limit(e.MaxDepth, defaultMaxDepth) }
 func (e *Expander) maxPrefixes() int { return limit(e.MaxPrefixes, defaultMaxPrefixes) }
 
 func (e *Expander) maxVisited() int { return limit(e.MaxVisited, defaultMaxVisited) }
+
+func (e *Expander) maxConjuncts() int { return limit(e.MaxConjuncts, defaultMaxConjuncts) }
 
 // concurrency is how many fetches may be in flight, at least one.
 func (e *Expander) concurrency() int {
