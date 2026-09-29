@@ -100,7 +100,7 @@ if [ -n "${FUZZTIME:-}" ]; then
 		"types . FuzzParseSetName" "types . FuzzParseRangeOperator" "types . FuzzParsePrefixRange" \
 		"types . FuzzParseRouterID" "types . FuzzParseSetRef" \
 		". . FuzzParseStream" ". . FuzzDecode" ". ./object FuzzParseSrcMember" ". ./policy FuzzParseImport" ". ./policy FuzzParseASPathRegexp" \
-		". ./policy FuzzParseFilter" ". ./policy FuzzParsePeering" ". ./policy FuzzFilterString" \
+		". ./policy FuzzParseFilter" ". ./policy FuzzParsePeering" ". ./policy FuzzFilterString" ". ./policy FuzzParseMPFilter" \
 		". ./policy FuzzParseInject" ". ./policy FuzzParseComponents" ". ./policy FuzzParseAggrMtd" \
 		". ./policy FuzzParseIfaddr" ". ./policy FuzzParseInterface" ". ./policy FuzzParsePeer" \
 		". ./policy FuzzParseRPAttribute" ". ./policy FuzzParseTypedef" ". ./policy FuzzParseProtocol" \
