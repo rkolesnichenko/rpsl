@@ -41,7 +41,11 @@ func (c Conjunct) AnyPrefix() bool { return c.any }
 // not). RE has PeerAS and set templates bound. Sets holds every as-set RE
 // names, expanded, so a printer can write the regexp without a registry;
 // AS-ANY, which matches any AS, has no entry. The regexp is never evaluated
-// here (design §13), and Expander.Exclude does not reach inside it.
+// here (design §13). Un-negated, Sets is expanded with Expander.Exclude
+// applied, as everywhere else; negated, it is expanded with Exclude cleared,
+// so NOT <AS-EXCLUDED> still rejects paths through the excluded AS — exclusion
+// only ever narrows what PathMatch admits, never what it rejects (see
+// NormalizeFilter).
 type PathMatch struct {
 	Negated bool
 	RE      *policy.ASPathRE
@@ -65,6 +69,15 @@ type CommunityMatch struct {
 // it. A term naming the peer with no Peer bound is a *NotEnumerableError
 // wrapping ErrUnboundPeer, and so is an AS-path regexp that did not parse.
 //
+// Expander.Exclude applies only where it narrows what f accepts: a positive
+// literal, and a positive PathMatch's Sets, are evaluated with it as
+// EvalFilter would. A negated literal — a NOT'd term, or a filter-set inlined
+// under NOT — and a negated PathMatch's Sets, are evaluated with Exclude
+// cleared, so the rejecting side is always the term's true value; otherwise
+// removing a set or AS from Exclude's deny side would admit it instead of
+// leaving it out. That holds through an inlined filter-set too, since polarity
+// is tracked through the inlining.
+//
 // Whenever EvalFilter(f) succeeds, NormalizeFilter(f) has at most one
 // conjunct, with no NotPrefixes, Paths or Communities, and its Prefixes are
 // EvalFilter's answer. MaxConjuncts caps every disjunction built on the way.
@@ -77,6 +90,15 @@ func (e *Expander) NormalizeFilter(ctx context.Context, f policy.Filter) (Normal
 func (e *Expander) normalize(ctx context.Context, f policy.Filter) (NormalFilter, int, error) {
 	n := &normalizer{ev: newFilterEval(e, ctx), inline: map[string]bool{}}
 	n.ev.anyAll = true
+	// noEx is the same Expander with Exclude cleared, for negated contexts: a
+	// deny side must be evaluated in full, or removing an excluded set or AS
+	// from it would admit what it was meant to leave out (see NormalizeFilter).
+	// prefixRanges/asSet and discovery apply an Expander's own Exclude, so the
+	// two evaluators cannot share their caches.
+	noExclude := *e
+	noExclude.Exclude = Exclusion{}
+	n.noEx = newFilterEval(&noExclude, ctx)
+	n.noEx.anyAll = true
 	cs, err := n.norm(f, false, 0)
 	if err != nil {
 		return NormalFilter{}, n.peak, err
@@ -94,11 +116,25 @@ type nconj struct {
 }
 
 // normalizer builds one normal form over one filterEval, so every set is
-// fetched and expanded once however often the filter names it.
+// fetched and expanded once however often the filter names it. noEx is a
+// second filterEval, over the same Expander with Exclude cleared, used for
+// negated contexts (see NormalizeFilter); it has its own caches, since the two
+// evaluators must not share prefixRanges/asSet/filter-set results.
 type normalizer struct {
 	ev     *filterEval
+	noEx   *filterEval
 	peak   int             // the largest disjunction built
 	inline map[string]bool // filter-sets being inlined, against cycles
+}
+
+// evFor returns the evaluator a term normalized under the given polarity must
+// use: ev, with Exclude applied, when neg is false; noEx, with Exclude
+// cleared, when neg is true.
+func (n *normalizer) evFor(neg bool) *filterEval {
+	if neg {
+		return n.noEx
+	}
+	return n.ev
 }
 
 // out returns a disjunction, charging it against MaxConjuncts.
@@ -121,7 +157,7 @@ func (n *normalizer) norm(f policy.Filter, neg bool, depth int) ([]nconj, error)
 	if depth > ev.e.maxDepth() {
 		return nil, &SetTooLargeError{Name: ev.cur, Limit: LimitDepth, Max: ev.e.maxDepth(), Count: depth}
 	}
-	sym, err := n.symbolic(f, false, map[string]bool{})
+	sym, err := n.symbolic(f, false, neg, map[string]bool{})
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +172,7 @@ func (n *normalizer) norm(f policy.Filter, neg bool, depth int) ([]nconj, error)
 	case policy.FilterAnd:
 		return n.group(x.Terms, true, neg, depth)
 	case policy.FilterPathRE:
-		pm, err := n.path(x)
+		pm, err := n.path(x, neg)
 		if err != nil {
 			return nil, err
 		}
@@ -151,10 +187,13 @@ func (n *normalizer) norm(f policy.Filter, neg bool, depth int) ([]nconj, error)
 }
 
 // literal evaluates an enumerable filter to one literal: the ranges it denotes
-// or, when neg, their complement.
+// or, when neg, their complement. neg selects the evaluator (see evFor), so a
+// negated literal's complement is always exact, never missing an excluded set
+// or AS's routes.
 func (n *normalizer) literal(f policy.Filter, neg bool) ([]nconj, error) {
-	n.ev.approx = nil
-	rs, err := n.ev.run(f)
+	ev := n.evFor(neg)
+	ev.approx = nil
+	rs, err := ev.run(f)
 	if err != nil {
 		return nil, err
 	}
@@ -170,18 +209,22 @@ func (n *normalizer) literal(f policy.Filter, neg bool) ([]nconj, error) {
 // symbolic reports whether f holds a term that stays symbolic in the normal
 // form — NOT, an AS-path regexp, a community test — itself or through the
 // filter-sets it names. inSet is whether f is inside a filter-set, where
-// Exclude applies; seen breaks cycles.
-func (n *normalizer) symbolic(f policy.Filter, inSet bool, seen map[string]bool) (bool, error) {
+// Exclude applies; neg is the polarity f will be normalized under. An excluded
+// filter-set is only ever treated as vacuously empty in a positive context (as
+// skipSet treats it during evaluation); under negation that would admit what
+// it should reject, so the walk does not skip it there and inlines it instead
+// (see NormalizeFilter). seen breaks cycles.
+func (n *normalizer) symbolic(f policy.Filter, inSet, neg bool, seen map[string]bool) (bool, error) {
 	switch x := f.(type) {
 	case policy.FilterNot, policy.FilterPathRE, policy.FilterCommunity:
 		return true, nil
 	case policy.FilterOr:
-		return n.anySymbolic(x.Terms, inSet, seen)
+		return n.anySymbolic(x.Terms, inSet, neg, seen)
 	case policy.FilterAnd:
-		return n.anySymbolic(x.Terms, inSet, seen)
+		return n.anySymbolic(x.Terms, inSet, neg, seen)
 	case policy.FilterSetRef:
 		if x.Name.Class() != types.ClassFilterSet || isAnySet(x.Name) ||
-			(inSet || !n.ev.cur.IsZero()) && n.ev.ex.set(x.Name) {
+			!neg && (inSet || !n.ev.cur.IsZero()) && n.ev.ex.set(x.Name) {
 			return false, nil
 		}
 		ref := types.Ref(x.Name)
@@ -193,14 +236,14 @@ func (n *normalizer) symbolic(f policy.Filter, inSet bool, seen map[string]bool)
 		if err != nil || fg == nil {
 			return false, err
 		}
-		return n.symbolic(n.ev.pick(fg), true, seen)
+		return n.symbolic(n.ev.pick(fg), true, neg, seen)
 	}
 	return false, nil
 }
 
-func (n *normalizer) anySymbolic(fs []policy.Filter, inSet bool, seen map[string]bool) (bool, error) {
+func (n *normalizer) anySymbolic(fs []policy.Filter, inSet, neg bool, seen map[string]bool) (bool, error) {
 	for _, f := range fs {
-		if sym, err := n.symbolic(f, inSet, seen); sym || err != nil {
+		if sym, err := n.symbolic(f, inSet, neg, seen); sym || err != nil {
 			return sym, err
 		}
 	}
@@ -219,7 +262,7 @@ func (n *normalizer) group(terms []policy.Filter, and, neg bool, depth int) ([]n
 	var enum []policy.Filter
 	var parts [][]nconj
 	for _, t := range terms {
-		sym, err := n.symbolic(t, false, map[string]bool{})
+		sym, err := n.symbolic(t, false, neg, map[string]bool{})
 		if err != nil {
 			return nil, err
 		}
@@ -315,8 +358,11 @@ func (n *normalizer) merge(x, y nconj) (nconj, bool, error) {
 	return c, true, nil
 }
 
-// path binds an AS-path regexp to the peer and expands the as-sets it names.
-func (n *normalizer) path(x policy.FilterPathRE) (PathMatch, error) {
+// path binds an AS-path regexp to the peer and expands the as-sets it names,
+// negated when neg. Negated, the sets are expanded with Exclude cleared (see
+// evFor and the PathMatch doc), so a NOT'd regexp always rejects the terms it
+// names in full.
+func (n *normalizer) path(x policy.FilterPathRE, neg bool) (PathMatch, error) {
 	if x.Regexp == nil {
 		return PathMatch{}, &NotEnumerableError{Term: filterText(x), Why: "the AS-path regexp did not parse"}
 	}
@@ -328,19 +374,20 @@ func (n *normalizer) path(x policy.FilterPathRE) (PathMatch, error) {
 		re = re.Bind(n.ev.e.Peer)
 	}
 	pm := PathMatch{RE: re, Sets: map[types.SetName]ASNSet{}}
+	ev := n.evFor(neg)
 	for _, name := range re.SetNames() {
 		if isAnySet(name) {
 			continue
 		}
-		s, err := n.ev.asSet(name)
+		s, err := ev.asSet(name)
 		if err != nil {
 			if !errors.Is(err, ErrNotFound) {
 				return PathMatch{}, err
 			}
-			n.ev.note(types.Ref(name))
+			ev.note(types.Ref(name))
 		}
 		for _, m := range s.Missing() {
-			n.ev.note(m)
+			ev.note(m)
 		}
 		pm.Sets[name] = s
 	}
@@ -434,8 +481,25 @@ func (n *normalizer) finish(cs []nconj) (NormalFilter, error) {
 		seen[key] = true
 		nf.Conjuncts = append(nf.Conjuncts, conj)
 	}
-	nf.missing = sortedRefs(ev.missing)
+	nf.missing = mergedMissing(n.ev.missing, n.noEx.missing)
 	return nf, nil
+}
+
+// mergedMissing merges the sets noted missing by both evaluators — the
+// positive one and the Exclude-cleared one NormalizeFilter uses under
+// negation — deduplicated and sorted by String().
+func mergedMissing(a, b []types.SetRef) []types.SetRef {
+	seen := make(map[types.SetRef]bool, len(a)+len(b))
+	out := make([]types.SetRef, 0, len(a)+len(b))
+	for _, refs := range [2][]types.SetRef{a, b} {
+		for _, r := range refs {
+			if !seen[r] {
+				seen[r] = true
+				out = append(out, r)
+			}
+		}
+	}
+	return sortedRefs(out)
 }
 
 // covers reports whether every range of b is in a.

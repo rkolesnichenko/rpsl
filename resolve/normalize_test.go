@@ -22,6 +22,8 @@ func normCorpus(t *testing.T) *MemSource {
 		fltrSet("FLTR-NEST", "FLTR-RE OR {10.7.0.0/16}"),
 		fltrSet("FLTR-LOOP-A", "<AS1> OR FLTR-LOOP-B"),
 		fltrSet("FLTR-LOOP-B", "FLTR-LOOP-A"),
+		fltrSet("FLTR-X", "AS1 OR AS2"),
+		fltrSet("FLTR-DENY", "AS-A"),
 	)
 }
 
@@ -175,5 +177,50 @@ func TestNormalizeMaxConjuncts(t *testing.T) {
 	var tl *SetTooLargeError
 	if !errors.As(err, &tl) || tl.Limit != LimitConjuncts || tl.Limit.String() != "MaxConjuncts" {
 		t.Errorf("MaxConjuncts 3: err %v, want *SetTooLargeError{Limit: LimitConjuncts}", err)
+	}
+}
+
+// TestNormalizeExcludeUnderNot is fix round 1: Exclude only ever narrows what
+// a filter accepts. Before the fix, excluding AS1 turned NOT of a filter
+// naming it into an admission of AS1's routes — a positive literal correctly
+// drops an excluded AS's routes, but the same exclusion, carried unchanged
+// into a negated literal's complement, dropped the excluded AS from the deny
+// side too, admitting it instead of rejecting it. FLTR-X = "AS1 OR AS2" and
+// FLTR-DENY = "AS-A" (AS-A = AS1, AS2) are the reviewer's two probes.
+func TestNormalizeExcludeUnderNot(t *testing.T) {
+	src := normCorpus(t)
+	e := &Expander{Src: src, AFI: types.AFIv4, Exclude: Exclusion{ASNs: []types.ASN{1}}}
+	normalizes(t, e, map[string]string{
+		// Both probes must reject AS1's route, not admit it: the deny side is
+		// complete regardless of Exclude.
+		"NOT FLTR-X":            "NOT {10.1.0.0/16, 10.2.0.0/16}",
+		"ANY AND NOT FLTR-DENY": "NOT {10.1.0.0/16, 10.2.0.0/16}",
+		"NOT (AS1 OR AS2)":      "NOT {10.1.0.0/16, 10.2.0.0/16}",
+		// The positive counterpart is unaffected: it must still drop AS1.
+		"FLTR-X": "{10.2.0.0/16}",
+	})
+
+	ctx := context.Background()
+	// A negated AS-path regexp's Sets must hold the excluded AS too, so a
+	// printer that writes NOT <AS-A> out as a router config still rejects
+	// paths through AS1.
+	nf, err := e.NormalizeFilter(ctx, mustFilter(t, "NOT <AS-A>"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := nf.Conjuncts[0].Paths[0].Sets[mustSet(t, "AS-A")]
+	if !set.Has(1) || !set.Has(2) || set.Len() != 2 {
+		t.Errorf("NOT <AS-A>: Sets[AS-A] = %v, want AS1 and AS2", set.List())
+	}
+
+	// The positive form still excludes it, as TestNormalizeRegexps checks for
+	// an Expander with no Exclude.
+	nf, err = e.NormalizeFilter(ctx, mustFilter(t, "<AS-A>"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	set = nf.Conjuncts[0].Paths[0].Sets[mustSet(t, "AS-A")]
+	if set.Has(1) || !set.Has(2) || set.Len() != 1 {
+		t.Errorf("<AS-A>: Sets[AS-A] = %v, want just AS2", set.List())
 	}
 }

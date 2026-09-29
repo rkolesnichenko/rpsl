@@ -69,7 +69,8 @@ type Expander struct {
 // aut-num members, and the set and AS references inside a filter-set), but
 // never to the set an Expand call names, which is expanded as asked; nor, in
 // EvalFilter, to the terms of the filter passed in. A set excluded and also
-// reachable another way stays out.
+// reachable another way stays out. Under NOT, in NormalizeFilter, an excluded
+// set or AS is not left out, so exclusion never widens what a filter accepts.
 type Exclusion struct {
 	Sets []types.SetName
 	ASNs []types.ASN
