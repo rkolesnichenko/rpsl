@@ -104,7 +104,7 @@ if [ -n "${FUZZTIME:-}" ]; then
 		". ./policy FuzzParseInject" ". ./policy FuzzParseComponents" ". ./policy FuzzParseAggrMtd" \
 		". ./policy FuzzParseIfaddr" ". ./policy FuzzParseInterface" ". ./policy FuzzParsePeer" \
 		". ./policy FuzzParseRPAttribute" ". ./policy FuzzParseTypedef" ". ./policy FuzzParseProtocol" \
-		"resolve ./irrd FuzzReadFrame" "resolve ./irrd FuzzParseMembers" "resolve ./whois FuzzScanResponse" \
+		"resolve ./irrd FuzzReadFrame" "resolve ./irrd FuzzParseMembers" "resolve ./irrd FuzzParseRegistries" "resolve ./whois FuzzScanResponse" \
 		"resolve ./internal/filtergen FuzzAggregate" "resolve ./rpki FuzzReadJSON" "resolve ./rpki FuzzApplySLURM" \
 		"resolve ./nrtm4 FuzzParseNotification" "resolve ./nrtm4 FuzzReadDelta" "resolve . FuzzCorpusDelete"; do
 		set -- $t

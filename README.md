@@ -364,7 +364,7 @@ FUZZTIME=15s scripts/check.sh  # ... plus every fuzz target (what CI runs)
   `FuzzParseComponents`, `FuzzParseAggrMtd`, `FuzzParseIfaddr`,
   `FuzzParseInterface`, `FuzzParsePeer`, `FuzzParseRPAttribute`,
   `FuzzParseTypedef`, `FuzzParseProtocol`, `FuzzFilterString` (policy);
-  `FuzzReadFrame`, `FuzzParseMembers` (resolve/irrd); `FuzzScanResponse`
+  `FuzzReadFrame`, `FuzzParseMembers`, `FuzzParseRegistries` (resolve/irrd); `FuzzScanResponse`
   (resolve/whois); `FuzzReadJSON`, `FuzzApplySLURM` (resolve/rpki);
   `FuzzParseNotification`, `FuzzReadDelta` (resolve/nrtm4);
   `FuzzAggregate` (resolve/internal/filtergen); `FuzzCorpusDelete` (resolve).
