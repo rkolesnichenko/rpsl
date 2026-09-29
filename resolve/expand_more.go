@@ -126,15 +126,29 @@ func (e *Expander) ExpandFilterSet(ctx context.Context, ref types.SetRef) (Range
 
 // NotEnumerableError reports a filter term that denotes no finite set of
 // prefixes, so it cannot be expanded without a routing table: a negation, a
-// community test, an AS-path regexp, or anything that depends on which peer the
-// policy is being evaluated for.
+// community test, an AS-path regexp, or — with no Expander.Peer — anything
+// that depends on which peer the policy is being evaluated for.
 type NotEnumerableError struct {
 	Term string // the offending term, as RPSL
 	Why  string
+	err  error // ErrUnboundPeer for a term that names the peer
 }
 
 func (e *NotEnumerableError) Error() string {
 	return "resolve: cannot enumerate the prefixes of " + e.Term + ": " + e.Why
+}
+
+// Unwrap returns ErrUnboundPeer for a term that needs a bound peer, and nil
+// otherwise.
+func (e *NotEnumerableError) Unwrap() error { return e.err }
+
+// ErrUnboundPeer is wrapped by the *NotEnumerableError of a term that names
+// the peer — PeerAS, or a set template — evaluated with no Expander.Peer.
+var ErrUnboundPeer = errors.New("resolve: PeerAS with no peer bound")
+
+// unboundPeer is the error for a peer-dependent term with no peer bound.
+func unboundPeer(term string) error {
+	return &NotEnumerableError{Term: term, Why: "it depends on which peer the policy is for", err: ErrUnboundPeer}
 }
 
 // EvalFilter evaluates a policy filter into the prefix ranges it denotes,
@@ -144,8 +158,9 @@ func (e *NotEnumerableError) Error() string {
 // evaluated: ANY, prefix lists, route-set, as-set and filter-set references, AS
 // numbers and AS expressions, OR, and AND (as the intersection of what the two
 // sides denote). A term that denotes no such set — NOT, PeerAS, a community
-// test, an AS-path regexp, a per-peer set template — returns a
-// *NotEnumerableError naming it, rather than a quietly smaller answer.
+// test, an AS-path regexp, or — with no Expander.Peer — a per-peer set
+// template — returns a *NotEnumerableError naming it, rather than a quietly
+// smaller answer.
 //
 // Each set is fetched and expanded once per call, and MaxVisited bounds the
 // call as a whole: the sets every expansion reached and the filter terms
@@ -370,9 +385,18 @@ func (ev *filterEval) eval(f policy.Filter, depth int) (rangeSetOf, error) {
 	case policy.FilterNot:
 		return nil, &NotEnumerableError{Term: filterText(x), Why: "a negation has no finite set of prefixes"}
 	case policy.FilterPeerAS:
-		return nil, &NotEnumerableError{Term: "PeerAS", Why: "it depends on which peer the policy is for"}
+		if ev.e.Peer == 0 {
+			return nil, unboundPeer("PeerAS")
+		}
+		if ev.skipAS(ev.e.Peer) {
+			return rangeSetOf{}, nil
+		}
+		return ev.routesOf(map[types.ASN]bool{ev.e.Peer: true}, x.Op)
 	case policy.FilterSetTemplate:
-		return nil, &NotEnumerableError{Term: x.Template.String(), Why: "it depends on which peer the policy is for"}
+		if ev.e.Peer == 0 {
+			return nil, unboundPeer(x.Template.String())
+		}
+		return ev.setRef(x.Template.Instantiate(ev.e.Peer), x.Op, depth)
 	case policy.FilterCommunity:
 		return nil, &NotEnumerableError{Term: filterText(x), Why: "a community test needs a routing table"}
 	case policy.FilterPathRE:
@@ -606,7 +630,10 @@ func (ev *filterEval) asExpr(e policy.ASExpr, depth int) (map[types.ASN]bool, er
 		}
 		return out, nil
 	case policy.ASSetTemplate:
-		return nil, &NotEnumerableError{Term: x.Template.String(), Why: "it depends on which peer the policy is for"}
+		if ev.e.Peer == 0 {
+			return nil, unboundPeer(x.Template.String())
+		}
+		return ev.asExpr(policy.ASSetRef{Name: x.Template.Instantiate(ev.e.Peer)}, depth)
 	}
 	return nil, &NotEnumerableError{Term: "AS expression", Why: "unknown AS expression"}
 }

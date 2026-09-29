@@ -51,6 +51,12 @@ type Expander struct {
 	Concurrency int
 	// Exclude is what every expansion leaves out; see Exclusion.
 	Exclude Exclusion
+	// Peer binds PeerAS for EvalFilter and NormalizeFilter: PeerAS denotes
+	// Peer's routes, and a set template (AS1:AS-CUST:PeerAS, in a filter, an AS
+	// expression or an AS-path regexp) the set it names for Peer. Zero leaves
+	// them unbound: such a term is a *NotEnumerableError wrapping
+	// ErrUnboundPeer. It binds inside filter-sets too. AS0 is never a peer.
+	Peer types.ASN
 }
 
 // Exclusion is what an expansion leaves out, as bgpq4's EXCEPT does: a set
