@@ -1,6 +1,7 @@
 package routemodel
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/rkolesnichenko/rpsl/policy"
@@ -41,6 +42,17 @@ func TestMatchPath(t *testing.T) {
 		if err != nil || got != c.want {
 			t.Errorf("<%s> on %v = %v, %v; want %v", c.re, c.path, got, err, c.want)
 		}
+	}
+}
+
+// TestMatchPathNotSingleAS pins a fuzz-found input (testdata/fuzz/FuzzNormalizeFilter/106dd5b5f56a746e,
+// "<000000*~{00}"): a same-AS repetition chained directly onto another
+// quantifier ("AS0*~{0}") has no single AS to be "the same" as, so MatchPath
+// declines with ErrNotSingleAS rather than guessing.
+func TestMatchPathNotSingleAS(t *testing.T) {
+	_, err := MatchPath(resolve.PathMatch{RE: re(t, "AS0*~{0}")}, []types.ASN{0})
+	if !errors.Is(err, ErrNotSingleAS) {
+		t.Errorf("AS0*~{0}: err = %v, want ErrNotSingleAS", err)
 	}
 }
 

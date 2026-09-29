@@ -45,6 +45,7 @@ func FuzzNormalizeFilter(f *testing.F) {
 		"ANY", "NOT ANY", "AS65001 AND <^AS65001 .* $>", "(<AS-A> OR community(1:1)) AND NOT {10.0.0.0/8^+}",
 		"FLTR-RE", "FLTR-LOOP", "PeerAS^+", "NOT (AS-A OR RS-B)", "<[AS65001 - AS65003]~* $>",
 		"community == {1:1, 1:2}", "RS-B^24-32 AND NOT <AS65002>", "AS-ANY",
+		"<[^AS65001 AS65002]>", "<AS65001~+ AS65002~{1,2}>",
 	} {
 		f.Add(s)
 	}
@@ -83,7 +84,14 @@ func FuzzNormalizeFilter(f *testing.F) {
 		for _, rt := range fuzzRoutes {
 			a, err1 := routemodel.Match(nf, rt)
 			b, err2 := routemodel.Match(again, rt)
-			if errors.Is(err1, routemodel.ErrTooComplex) || errors.Is(err2, routemodel.ErrTooComplex) {
+			// routemodel declines rather than guesses on two constructs with no
+			// modelable meaning: a repetition count Go's regexp can't compile,
+			// and a same-AS repetition ("~*"/"~+"/"~{m,n}") whose inner atom is
+			// itself already a repeat (e.g. a quantifier chained onto another,
+			// "AS1*~{2}") — RFC 2622 §5.4's "same AS" only means something when
+			// every repetition fills in one AS number.
+			if errors.Is(err1, routemodel.ErrTooComplex) || errors.Is(err2, routemodel.ErrTooComplex) ||
+				errors.Is(err1, routemodel.ErrNotSingleAS) || errors.Is(err2, routemodel.ErrNotSingleAS) {
 				return
 			}
 			if err1 != nil || err2 != nil || a != b {

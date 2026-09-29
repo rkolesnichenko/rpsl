@@ -103,11 +103,15 @@ func (f *mFilter) text() string {
 }
 
 type mRE struct {
-	kind string // "asn", "set", "any", "peer", "start", "end", "class", "seq", "alt", "star", "plus", "opt"
-	as   types.ASN
-	set  string
-	cls  []types.ASN
-	subs []*mRE
+	kind             string // "asn", "set", "any", "peer", "start", "end", "class", "seq", "alt", "star", "plus", "opt", "samestar", "sameplus", "samerange"
+	as               types.ASN
+	set              string
+	cls              []types.ASN
+	neg              bool   // class: "[^...]" (RFC 2622 §5.4)
+	clsSet           string // class: an extra as-set item, as the parser also accepts ("" if none)
+	clsAny           bool   // class: an extra '.' item
+	sameMin, sameMax int    // samerange: the "~{m,n}" bounds
+	subs             []*mRE
 }
 
 func (m *mRE) text() string {
@@ -129,7 +133,17 @@ func (m *mRE) text() string {
 		for i, a := range m.cls {
 			parts[i] = a.String()
 		}
-		return "[" + strings.Join(parts, " ") + "]"
+		if m.clsSet != "" {
+			parts = append(parts, m.clsSet)
+		}
+		if m.clsAny {
+			parts = append(parts, ".")
+		}
+		open := "["
+		if m.neg {
+			open = "[^"
+		}
+		return open + strings.Join(parts, " ") + "]"
 	case "seq":
 		parts := make([]string, len(m.subs))
 		for i, s := range m.subs {
@@ -142,12 +156,27 @@ func (m *mRE) text() string {
 		return "(" + m.subs[0].text() + ")*"
 	case "plus":
 		return "(" + m.subs[0].text() + ")+"
+	case "samestar":
+		return "(" + m.subs[0].text() + ")~*"
+	case "sameplus":
+		return "(" + m.subs[0].text() + ")~+"
+	case "samerange":
+		return fmt.Sprintf("(%s)~{%d,%d}", m.subs[0].text(), m.sameMin, m.sameMax)
 	}
 	return "(" + m.subs[0].text() + ")?"
 }
 
-// goRE is the model's own reading of the regexp, over "<n>" tokens.
-func (m *mRE) goRE(o *oracle, peer types.ASN) string {
+// goRE is the model's own reading of the regexp, over "<n>" tokens. path is
+// the route's AS path: a negated class ("[^...]") and a same-AS repetition
+// ("~*", "~+", "~{m,n}") have no finite denotation on their own — RE2 (Go's
+// regexp engine) has no negative lookahead to express "not one of these", and
+// "the same AS, repeated" is not a regular property over an unbounded alphabet
+// — so both are instead resolved against the finite set of ASes this one path
+// actually carries, exactly as routemodel.MatchPath does over its own
+// "universe" (see routemodel.go's builder.single/members): an AS the path
+// never carries can never make the match differ, so restricting to the path's
+// own ASes is not an approximation, only a finite way to say the same thing.
+func (m *mRE) goRE(o *oracle, peer types.ASN, path []types.ASN) string {
 	tok := func(a types.ASN) string { return fmt.Sprintf("<%d>", uint32(a)) }
 	alt := func(as []types.ASN) string {
 		if len(as) == 0 {
@@ -173,21 +202,114 @@ func (m *mRE) goRE(o *oracle, peer types.ASN) string {
 	case "end":
 		return "$"
 	case "class":
-		return alt(m.cls)
+		if !m.neg {
+			if m.clsAny {
+				return `<\d+>`
+			}
+			members := append([]types.ASN(nil), m.cls...)
+			if m.clsSet != "" {
+				members = append(members, o.asns(m.clsSet)...)
+			}
+			return alt(members)
+		}
+		return alt(sameMembers(m, o, peer, path))
 	case "seq":
 		var b strings.Builder
 		for _, s := range m.subs {
-			b.WriteString(s.goRE(o, peer))
+			b.WriteString(s.goRE(o, peer, path))
 		}
 		return "(?:" + b.String() + ")"
 	case "alt":
-		return "(?:" + m.subs[0].goRE(o, peer) + "|" + m.subs[1].goRE(o, peer) + ")"
+		return "(?:" + m.subs[0].goRE(o, peer, path) + "|" + m.subs[1].goRE(o, peer, path) + ")"
 	case "star":
-		return "(?:" + m.subs[0].goRE(o, peer) + ")*"
+		return "(?:" + m.subs[0].goRE(o, peer, path) + ")*"
 	case "plus":
-		return "(?:" + m.subs[0].goRE(o, peer) + ")+"
+		return "(?:" + m.subs[0].goRE(o, peer, path) + ")+"
+	case "samestar":
+		return sameAlt(sameMembers(m.subs[0], o, peer, path), "*", true)
+	case "sameplus":
+		return sameAlt(sameMembers(m.subs[0], o, peer, path), "+", false)
+	case "samerange":
+		q := fmt.Sprintf("{%d,%d}", m.sameMin, m.sameMax)
+		if m.sameMin == m.sameMax {
+			q = fmt.Sprintf("{%d}", m.sameMin)
+		}
+		return sameAlt(sameMembers(m.subs[0], o, peer, path), q, m.sameMin == 0)
 	}
-	return "(?:" + m.subs[0].goRE(o, peer) + ")?"
+	return "(?:" + m.subs[0].goRE(o, peer, path) + ")?"
+}
+
+// atomMatchesAS reports whether the single-AS atom m (an "asn", "any",
+// "peer", "set" or "class" mRE — never "alt"/"seq"/a quantifier) accepts a,
+// straight from the model (o.asns, the literal peer and AS values), never
+// from parsed text or engine code.
+func atomMatchesAS(m *mRE, o *oracle, peer, a types.ASN) bool {
+	switch m.kind {
+	case "asn":
+		return a == m.as
+	case "any":
+		return true
+	case "peer":
+		return a == peer
+	case "set":
+		return containsASN(o.asns(m.set), a)
+	case "class":
+		in := containsASN(m.cls, a) || m.clsAny || (m.clsSet != "" && containsASN(o.asns(m.clsSet), a))
+		return in != m.neg
+	}
+	return false
+}
+
+// sameMembers returns path's distinct ASes that the single-AS atom inner
+// matches: the finite domain a negated class or a same-AS repetition ranges
+// over (see goRE's doc comment).
+func sameMembers(inner *mRE, o *oracle, peer types.ASN, path []types.ASN) []types.ASN {
+	var out []types.ASN
+	for _, a := range distinctASNs(path) {
+		if atomMatchesAS(inner, o, peer, a) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// sameAlt builds the Go-regex alternation for a same-AS repetition: each
+// matching AS repeated by itself under q, plus the empty alternative when the
+// quantifier admits zero repetitions (RFC 2622 §5.4: "~*", "~+", "~{m,n}"
+// require every repetition to be the identical AS).
+func sameAlt(as []types.ASN, q string, allowEmpty bool) string {
+	var alts []string
+	for _, a := range as {
+		alts = append(alts, fmt.Sprintf("(?:<%d>)", uint32(a))+q)
+	}
+	if allowEmpty {
+		alts = append(alts, "")
+	}
+	if len(alts) == 0 {
+		return "(?:<never>)"
+	}
+	return "(?:" + strings.Join(alts, "|") + ")"
+}
+
+func containsASN(list []types.ASN, a types.ASN) bool {
+	for _, x := range list {
+		if x == a {
+			return true
+		}
+	}
+	return false
+}
+
+func distinctASNs(path []types.ASN) []types.ASN {
+	seen := map[types.ASN]bool{}
+	var out []types.ASN
+	for _, a := range path {
+		if !seen[a] {
+			seen[a] = true
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 func encodePath(path []types.ASN) string {
@@ -316,25 +438,62 @@ func (g *filterGen) reAtom(depth int) *mRE {
 	case 3:
 		a = &mRE{kind: "peer"}
 	case 4:
-		a = &mRE{kind: "class", cls: []types.ASN{types.ASN(firstAS + r.IntN(4)), types.ASN(firstAS + r.IntN(4))}}
+		a = g.reClass()
 	default:
 		a = &mRE{kind: "any"}
 		if len(g.asSets) > 0 {
 			a = &mRE{kind: "set", set: g.asSets[r.IntN(len(g.asSets))]}
 		}
 	}
+	// a is still a single-AS atom here (asn, any, peer, class or set): a
+	// same-AS repetition ("~*", "~+", "~{m,n}") applies only to one of those,
+	// since every repetition must be the identical AS (RFC 2622 §5.4) — once
+	// wrapped in "alt" below it may span more than one AS per position, so it
+	// is excluded from singleAS and can only take a plain quantifier.
+	singleAS := true
 	if depth > 0 && r.IntN(4) == 0 {
 		a = &mRE{kind: "alt", subs: []*mRE{g.re(depth - 1), g.re(depth - 1)}}
+		singleAS = false
 	}
-	switch r.IntN(5) {
+	n := r.IntN(8)
+	if !singleAS && n >= 3 && n <= 5 {
+		n = 6 // no same-AS repetition on a multi-AS atom; fall back to "no quantifier"
+	}
+	switch n {
 	case 0:
 		return &mRE{kind: "star", subs: []*mRE{a}}
 	case 1:
 		return &mRE{kind: "plus", subs: []*mRE{a}}
 	case 2:
 		return &mRE{kind: "opt", subs: []*mRE{a}}
+	case 3:
+		return &mRE{kind: "samestar", subs: []*mRE{a}}
+	case 4:
+		return &mRE{kind: "sameplus", subs: []*mRE{a}}
+	case 5:
+		lo := 1 + r.IntN(3)       // 1..3
+		hi := lo + r.IntN(3-lo+1) // lo..3
+		return &mRE{kind: "samerange", subs: []*mRE{a}, sameMin: lo, sameMax: hi}
 	}
 	return a
+}
+
+// reClass draws a "[...]" or "[^...]" AS-path class (RFC 2622 §5.4):
+// negated about half the time, and sometimes holding an as-set name or '.'
+// alongside its bare ASNs, as the parser also accepts (policy/regexp.go's
+// classifyWord and the reDot case in parseClass).
+func (g *filterGen) reClass() *mRE {
+	r := g.r
+	c := &mRE{kind: "class", cls: []types.ASN{types.ASN(firstAS + r.IntN(4)), types.ASN(firstAS + r.IntN(4))}, neg: r.IntN(2) == 0}
+	switch r.IntN(4) {
+	case 0:
+		if len(g.asSets) > 0 {
+			c.clsSet = g.asSets[r.IntN(len(g.asSets))]
+		}
+	case 1:
+		c.clsAny = true
+	}
+	return c
 }
 
 // prefixes is what a set denotes, from the oracle, memoized per generator.
@@ -371,7 +530,7 @@ func (g *filterGen) accepts(f *mFilter, rt routemodel.Route, peer types.ASN) boo
 	case "peer":
 		return in(g.o.routes(peer), f.op)
 	case "re":
-		return regexp.MustCompile(f.re.goRE(g.o, peer)).MatchString(encodePath(rt.Path))
+		return regexp.MustCompile(f.re.goRE(g.o, peer, rt.Path)).MatchString(encodePath(rt.Path))
 	case "comm":
 		have := map[string]bool{}
 		for _, c := range rt.Communities {

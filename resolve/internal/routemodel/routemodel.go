@@ -29,6 +29,13 @@ type Route struct {
 // compile (over 1000).
 var ErrTooComplex = errors.New("routemodel: repetition count too large to model")
 
+// ErrNotSingleAS reports a same-AS repetition ("~*", "~+", "~{m,n}") whose
+// inner expression is not itself a single-AS atom — for example one quantifier
+// chained directly onto another, as in "AS1*~{2}". RFC 2622 §5.4's "same AS"
+// constraint only has a defined meaning when every repetition fills in one AS
+// number, so this package declines to evaluate it rather than guess.
+var ErrNotSingleAS = errors.New("routemodel: not a single-AS atom under a same-AS repetition")
+
 // Match reports whether any conjunct of f accepts r.
 func Match(f resolve.NormalFilter, r Route) (bool, error) {
 	for _, c := range f.Conjuncts {
@@ -202,7 +209,7 @@ func (b builder) single(e policy.ASPathExpr, a types.ASN) (bool, error) {
 	case policy.ASPathPeerAS, policy.ASPathSetTemplate:
 		return false, errors.New("routemodel: regexp not bound to a peer")
 	}
-	return false, fmt.Errorf("routemodel: %T is not a single-AS atom", e)
+	return false, fmt.Errorf("%w: %T", ErrNotSingleAS, e)
 }
 
 // members are the ASes of the path the atom e matches.
