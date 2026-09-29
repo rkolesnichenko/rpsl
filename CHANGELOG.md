@@ -9,6 +9,14 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Fixed
+
+- `release.sh` asked the proxy whether a tag was served with the local module
+  cache in place, which answered for a version a `go mod tidy` had just
+  resolved; a miss the proxy had cached (v0.20.0: 404 for the root module for
+  about 45 minutes) went unseen until step 6. It now asks from an empty module
+  cache, so it waits on the proxy, and refreshes it by commit, until it serves.
+
 ## [0.20.0] - 2026-09-29
 
 ### Added
