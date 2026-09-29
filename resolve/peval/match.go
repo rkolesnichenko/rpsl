@@ -303,6 +303,8 @@ func (c *call) routerSet(n types.SetName) (*resolve.RouterSet, error) {
 }
 
 // filter normalizes a term's filter with PeerAS bound to peer (0: unbound).
+//
+//lint:ignore U1000 used by the Import/Export/Via/Default methods Task 7 adds
 func (c *call) filter(f policy.Filter, peer types.ASN) (resolve.NormalFilter, error) {
 	e := c.e
 	e.Peer = peer

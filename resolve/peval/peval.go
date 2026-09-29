@@ -92,6 +92,7 @@ type Undecided struct {
 	Why   string      // "peer router not given", "local router not given", "peering regexp", "protocol OSPF", …
 }
 
+//lint:ignore U1000 used by the Import/Export/Via/Default methods Task 7 adds
 var errNoSource = errors.New("peval: Evaluator.Src is nil")
 
 // newCall starts one evaluation for s.
