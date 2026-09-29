@@ -56,7 +56,12 @@ import (
 // Each name must be letters, digits, '-' or '_'. A scoped lookup (RIPE::AS-FOO,
 // AutNum or InetRtr with a source) goes to the server's registry of that name
 // whatever Sources says; the server's registries are learned once ("!j-*")
-// and kept until Close.
+// and kept until Close. IRRd lists its real sources there, not the source
+// aliases it may also accept in "!s" (IRRd 4.4's source_aliases, each a set
+// of sources), so a scoped lookup of an alias is resolve.ErrNotFound: scope by
+// the registry's own name, the one an object's source: gives. The list is what
+// the server had when it was learned: a source added on the server later is
+// unknown until Close.
 type Source struct {
 	Addr        string                                      // "whois.radb.net:43"
 	Sources     []string                                    // optional "!s" priority, e.g. {"RADB", "RIPE"}
@@ -406,10 +411,11 @@ func (s *Source) refusedBy(sub *Source, err error) bool {
 // selects only it. A registry the server does not have is resolve.ErrNotFound
 // without a query: the first scoped lookup learns the server's registries
 // with IRRd's "!j-*", kept until Close, so data naming any number of unknown
-// registries costs that one query. A server that refuses "!j", or hangs up on
-// it twice in a row, is asked for each registry ("!s") instead, and up to 1,024 refusals are remembered until
-// Close. For an as-set or route-set it asks for
-// the one-level membership via "!i" and synthesizes a typed set object (with
+// registries costs that one query; a source alias is not on that list (see
+// Source). A server that refuses "!j", or hangs up on it twice in a row, is
+// asked for each registry ("!s") instead, and up to 1,024 refusals are
+// remembered until Close. For an as-set or route-set it asks for the one-level
+// membership via "!i" and synthesizes a typed set object (with
 // SrcMembers set, it also fetches the object, "!m", for its src-members: and
 // source:). IRRd answers "!i" alike for a missing set and for one with no
 // members, so on that answer GetSet asks for the object itself: a set that
