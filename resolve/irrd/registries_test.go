@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -218,4 +219,114 @@ func mustName(t *testing.T, s string) types.SetName {
 		t.Fatal(err)
 	}
 	return n
+}
+
+// serialRangeAsked counts the "!j" commands db received.
+func serialRangeAsked(db *irrtest.DB) int {
+	n := 0
+	for _, cmd := range db.Commands() {
+		if strings.HasPrefix(cmd, "!j") {
+			n++
+		}
+	}
+	return n
+}
+
+// TestSerialRangeHangupFallsBack: a server that hangs up on "!j" — IRRd answers
+// or refuses it, but another server may not know it — must not fail scoped
+// lookups. Each falls back to asking for its registry with "!s", and after
+// maxRegistryFailures hangups in a row the Source stops sending "!j".
+func TestSerialRangeHangupFallsBack(t *testing.T) {
+	for _, pipeline := range []int{0, 2} {
+		db := irrtest.New(
+			"as-set: AS-X\nmembers: AS1\nsource: RIPE\n",
+			"as-set: AS-X\nmembers: AS2\nsource: RADB\n",
+		).WithSerialRangeHangups(-1)
+		src := &Source{Addr: db.IRRd(t), Sources: []string{"RADB"}, Pipeline: pipeline, KeepAlive: true,
+			Timeout: 5 * time.Second}
+		ctx := context.Background()
+		for i := 0; i < 5; i++ {
+			set, err := src.GetSet(ctx, mustRef(t, "RIPE::AS-X"))
+			if err != nil || set.SetSource() != "RIPE" {
+				t.Fatalf("pipeline %d, lookup %d: RIPE::AS-X = %v, %v; want RIPE's copy", pipeline, i, set, err)
+			}
+		}
+		if _, err := src.GetSet(ctx, mustRef(t, "FAKE::AS-X")); !errors.Is(err, resolve.ErrNotFound) {
+			t.Errorf("pipeline %d: FAKE::AS-X: err = %v; want ErrNotFound (by asking for FAKE)", pipeline, err)
+		}
+		// Each failed attempt is one "!j"; a pipelined query broken in transport
+		// is retried once on a fresh pipe, so there it is two.
+		asked := serialRangeAsked(db)
+		want := maxRegistryFailures
+		if pipeline > 0 {
+			want *= 2
+		}
+		if asked != want {
+			t.Errorf("pipeline %d: \"!j\" sent %d times; want %d", pipeline, asked, want)
+		}
+		for i := 0; i < 5; i++ {
+			if _, err := src.GetSet(ctx, mustRef(t, "RIPE::AS-X")); err != nil {
+				t.Fatalf("pipeline %d: RIPE::AS-X after giving up on \"!j\": %v", pipeline, err)
+			}
+		}
+		if n := serialRangeAsked(db); n != asked {
+			t.Errorf("pipeline %d: \"!j\" sent again after giving up (%d, then %d)", pipeline, asked, n)
+		}
+		src.Close()
+	}
+}
+
+// TestSerialRangeHangupOnceThenLearns: one hangup is a transient fault. That
+// lookup falls back to "!s"; the next learns the registries, after which
+// unlisted registries cost no connection.
+func TestSerialRangeHangupOnceThenLearns(t *testing.T) {
+	db := irrtest.New("as-set: AS-X\nmembers: AS1\nsource: RIPE\n").WithSerialRangeHangups(1)
+	var dials atomic.Int32
+	src := &Source{Sources: []string{"RIPE"}, KeepAlive: true, Timeout: 5 * time.Second,
+		Dial: countingDial(db.IRRd(t), &dials)}
+	defer src.Close()
+	ctx := context.Background()
+	for i := 0; i < 2; i++ {
+		if _, err := src.GetSet(ctx, mustRef(t, "RIPE::AS-X")); err != nil {
+			t.Fatalf("lookup %d: %v", i, err)
+		}
+	}
+	base := dials.Load()
+	for i := 0; i < 100; i++ {
+		if _, err := src.GetSet(ctx, mustRef(t, fmt.Sprintf("FAKE%d::AS-X", i))); !errors.Is(err, resolve.ErrNotFound) {
+			t.Fatalf("FAKE%d::AS-X: err = %v; want ErrNotFound", i, err)
+		}
+	}
+	if extra := dials.Load() - base; extra != 0 {
+		t.Errorf("100 unlisted registries cost %d dials after the registries were learned; want 0", extra)
+	}
+	if n := serialRangeAsked(db); n != 2 {
+		t.Errorf("\"!j\" sent %d times; want 2 (the hangup, then the answer)", n)
+	}
+}
+
+// TestSerialRangeCancelIsNotAFailure: a caller that gives up while "!j-*" is
+// in flight is not the server failing: it is not counted, and the next caller
+// learns the registries.
+func TestSerialRangeCancelIsNotAFailure(t *testing.T) {
+	db := irrtest.New("as-set: AS-X\nmembers: AS1\nsource: RIPE\n")
+	src := &Source{Addr: db.IRRd(t), Sources: []string{"RIPE"}, Timeout: 5 * time.Second}
+	defer src.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := src.GetSet(ctx, mustRef(t, "RIPE::AS-X")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled lookup: err = %v; want context.Canceled", err)
+	}
+	src.mu.Lock()
+	failures := src.regFailures
+	src.mu.Unlock()
+	if failures != 0 {
+		t.Errorf("a cancelled lookup counted %d registry-list failures; want 0", failures)
+	}
+	if _, err := src.GetSet(context.Background(), mustRef(t, "RIPE::AS-X")); err != nil {
+		t.Fatal(err)
+	}
+	if known, err := src.registries(context.Background()); err != nil || !known["RIPE"] {
+		t.Errorf("registries after the cancel = %v, %v; want learned, with RIPE", known, err)
+	}
 }
