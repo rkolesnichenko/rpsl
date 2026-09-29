@@ -196,10 +196,11 @@ type Expander struct {
 - `FilterPathRE` with a nil `Regexp` (it did not parse): `*NotEnumerableError`
   naming it — a printer cannot translate what did not parse.
 
-**Contract with EvalFilter.** EvalFilter is unchanged. For every filter without
-AS-ANY/RS-ANY, if NormalizeFilter returns only conjuncts with no `NotPrefixes`,
-`Paths` or `Communities`, the union of their `Prefixes` equals EvalFilter's
-answer; otherwise EvalFilter returns the `*NotEnumerableError` it returns today.
+**Contract with EvalFilter.** EvalFilter is unchanged. Whenever EvalFilter(f)
+succeeds, NormalizeFilter(f) has at most one conjunct, with no `NotPrefixes`,
+`Paths` or `Communities`, and its `Prefixes` are EvalFilter's answer. The
+converse does not hold: `NOT NOT AS1` normalizes to a pure conjunct, but
+EvalFilter still refuses its NOT, as it does today.
 
 ## 5. Layer 2 — policy evaluation (`resolve/peval`, new package)
 
@@ -478,7 +479,7 @@ Every layer is held to an oracle independent of the code under test.
    regexps with sets and `~*`, communities, PeerAS and templates, AS-ANY) are
    checked on boundary-biased sampled routes: `NormalizeFilter` accepts exactly
    what the model accepts, over MemSource and every backend against `irrtest`.
-   `EvalFilter` equals the union of pure conjuncts (§4.2). `MaxConjuncts` holds
+   Whenever `EvalFilter` succeeds it equals the one pure conjunct (§4.2). `MaxConjuncts` holds
    at exactly the true count.
 2. **Policy model.** Random aut-nums: import/export/mp-*/`*-via`/default,
    EXCEPT/REFINE with and without afi clauses, peering-sets, AS expressions,
