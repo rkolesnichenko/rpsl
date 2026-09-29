@@ -154,14 +154,14 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   (all six modules incl. examples/bulk-ripe under -race, gofmt, invariants) with
   `scripts/check.sh`; `FUZZTIME=15s scripts/check.sh` also runs every fuzz target.
 - `go test -run 'TestRoundTrip|TestStreamRoundTrip' .` — the lossless guard (root module).
-- Fuzz (35 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
+- Fuzz (36 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
   FuzzFormat (ast); FuzzParseSetName, FuzzParseRangeOperator, FuzzParsePrefixRange,
   FuzzParseRouterID, FuzzParseSetRef (types); FuzzParseStream, FuzzDecode (root);
   FuzzParseSrcMember (object); FuzzParseImport,
   FuzzParseASPathRegexp, FuzzParseFilter, FuzzParsePeering, FuzzParseInject,
   FuzzParseComponents, FuzzParseAggrMtd, FuzzParseIfaddr, FuzzParseInterface, FuzzParsePeer,
   FuzzParseRPAttribute, FuzzParseTypedef, FuzzParseProtocol, FuzzFilterString (policy);
-  FuzzReadFrame, FuzzParseMembers (resolve/irrd); FuzzScanResponse (resolve/whois);
+  FuzzReadFrame, FuzzParseMembers, FuzzParseRegistries (resolve/irrd); FuzzScanResponse (resolve/whois);
   FuzzAggregate (resolve/internal/filtergen); FuzzReadJSON, FuzzApplySLURM (resolve/rpki);
   FuzzParseNotification, FuzzReadDelta (resolve/nrtm4); FuzzCorpusDelete (resolve).
 - Never slice a string at an offset found in a transformed copy of it (`strings.ToUpper` can

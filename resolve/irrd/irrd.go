@@ -56,7 +56,12 @@ import (
 // Each name must be letters, digits, '-' or '_'. A scoped lookup (RIPE::AS-FOO,
 // AutNum or InetRtr with a source) goes to the server's registry of that name
 // whatever Sources says; the server's registries are learned once ("!j-*")
-// and kept until Close.
+// and kept until Close. IRRd lists its real sources there, not the source
+// aliases it may also accept in "!s" (IRRd 4.4's source_aliases, each a set
+// of sources), so a scoped lookup of an alias is resolve.ErrNotFound: scope by
+// the registry's own name, the one an object's source: gives. The list is what
+// the server had when it was learned: a source added on the server later is
+// unknown until Close.
 type Source struct {
 	Addr        string                                      // "whois.radb.net:43"
 	Sources     []string                                    // optional "!s" priority, e.g. {"RADB", "RIPE"}
@@ -82,15 +87,16 @@ type Source struct {
 	// and it doubles the queries for sets.
 	SrcMembers bool
 
-	mu      sync.Mutex
-	idle    []*pconn
-	pipes   []*pipe       // pipelined connections (Pipeline > 0)
-	slots   chan struct{} // semaphore of MaxConns, created on first use; shared with sub-sources, never closed
-	closed  bool
-	scoped  map[string]*Source  // registry -> sub-source restricted to it, made on first use (under mu)
-	parent  *Source             // for a sub-source: the Source whose MaxConns budget it shares
-	regs    *registryList       // root: the server's registries ("!j-*"), learned once (under mu)
-	refused map[string]struct{} // root: registries the server refused, at most maxRefused (under mu)
+	mu          sync.Mutex
+	idle        []*pconn
+	pipes       []*pipe       // pipelined connections (Pipeline > 0)
+	slots       chan struct{} // semaphore of MaxConns, created on first use; shared with sub-sources, never closed
+	closed      bool
+	scoped      map[string]*Source  // registry -> sub-source restricted to it, made on first use (under mu)
+	parent      *Source             // for a sub-source: the Source whose MaxConns budget it shares
+	regs        *registryList       // root: the server's registries ("!j-*"), learned once (under mu)
+	refused     map[string]struct{} // root: registries the server refused, at most maxRefused (under mu)
+	regFailures int                 // root: "!j-*" attempts in a row the transport broke (under mu)
 
 	unknown atomic.Bool // sub-source: the server refused its registry; it has left scoped
 
@@ -222,6 +228,12 @@ func (s *Source) in(registry string) *Source {
 // the server again.
 var maxRefused = 1024
 
+// maxRegistryFailures is how many times in a row "!j-*" may fail in transport
+// before the Source stops asking and probes each registry instead, as it does
+// for a server that refuses "!j". IRRd answers or refuses "!j"; a server that
+// hangs up on it does not know it.
+var maxRegistryFailures = 2
+
 // registryList is the answer to "!j-*", learned once per Source: known holds
 // the server's registries, or is nil when the server would not list them
 // (the Source then asks for each registry with "!s" instead). done is closed
@@ -234,8 +246,11 @@ type registryList struct {
 
 // registries returns the server's registries, learning them on first use,
 // or nil when the server does not list them. Concurrent callers wait for one
-// query; a failure (the transport, the first caller's context) is not kept,
-// so the next caller asks again.
+// query. A failure is not kept, so the next caller asks again: the first
+// caller's context ending is its error; a broken transport is not, and that
+// caller probes its registry instead (nil), since a server that hangs up on
+// "!j" does not know it — after maxRegistryFailures such failures in a row the
+// Source stops asking.
 func (s *Source) registries(ctx context.Context) (map[string]bool, error) {
 	for {
 		s.mu.Lock()
@@ -251,14 +266,24 @@ func (s *Source) registries(ctx context.Context) (map[string]bool, error) {
 		s.mu.Unlock()
 		if leader {
 			r.known, r.err = s.learnRegistries(ctx)
+			// A broken transport, not the caller giving up nor the Source closing.
+			broken := r.err != nil && ctx.Err() == nil && !errors.Is(r.err, ErrClosed)
 			if r.err != nil {
 				s.mu.Lock()
-				if s.regs == r {
+				if broken {
+					s.regFailures++
+				}
+				if broken && s.regFailures >= maxRegistryFailures {
+					r.err = nil // kept: the server does not list its registries
+				} else if s.regs == r {
 					s.regs = nil
 				}
 				s.mu.Unlock()
 			}
 			close(r.done)
+			if broken {
+				return nil, nil // probe this registry instead
+			}
 			return r.known, r.err
 		}
 		select {
@@ -386,10 +411,11 @@ func (s *Source) refusedBy(sub *Source, err error) bool {
 // selects only it. A registry the server does not have is resolve.ErrNotFound
 // without a query: the first scoped lookup learns the server's registries
 // with IRRd's "!j-*", kept until Close, so data naming any number of unknown
-// registries costs that one query. A server that refuses "!j" is asked for
-// each registry ("!s") instead, and up to 1,024 refusals are remembered until
-// Close. For an as-set or route-set it asks for
-// the one-level membership via "!i" and synthesizes a typed set object (with
+// registries costs that one query; a source alias is not on that list (see
+// Source). A server that refuses "!j", or hangs up on it twice in a row, is
+// asked for each registry ("!s") instead, and up to 1,024 refusals are
+// remembered until Close. For an as-set or route-set it asks for the one-level
+// membership via "!i" and synthesizes a typed set object (with
 // SrcMembers set, it also fetches the object, "!m", for its src-members: and
 // source:). IRRd answers "!i" alike for a missing set and for one with no
 // members, so on that answer GetSet asks for the object itself: a set that
@@ -865,7 +891,7 @@ func (s *Source) Close() error {
 	s.mu.Lock()
 	conns, pipes, subs := s.idle, s.pipes, s.scoped
 	s.idle, s.pipes, s.scoped, s.closed = nil, nil, nil, true
-	s.regs, s.refused = nil, nil // what was learned of the server's registries
+	s.regs, s.refused, s.regFailures = nil, nil, 0 // what was learned of the server's registries
 	s.mu.Unlock()
 	for _, sub := range subs {
 		sub.Close() // closes its connections, never the semaphore it shares with s

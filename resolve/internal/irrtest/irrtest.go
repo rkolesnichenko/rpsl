@@ -37,6 +37,7 @@ type DB struct {
 	roas []ROA // the ROAs it imported
 
 	noSerialRange bool // refuse "!j", as a server without it does (WithoutSerialRange)
+	serialHangups int  // "!j" commands answered by hanging up; < 0: every one (WithSerialRangeHangups)
 
 	mu   sync.Mutex
 	cmds []string
@@ -106,6 +107,29 @@ func (db *DB) WithSources(names ...string) *DB {
 func (db *DB) WithoutSerialRange() *DB {
 	db.noSerialRange = true
 	return db
+}
+
+// WithSerialRangeHangups makes the IRRd server close the connection, answering
+// nothing, on the first n "!j" commands, or on every one when n < 0 — as a
+// server that does not know the command might — and returns db.
+func (db *DB) WithSerialRangeHangups(n int) *DB {
+	db.serialHangups = n
+	return db
+}
+
+// hangUpOnSerialRange reports whether this "!j" is to be answered by hanging
+// up, counting it against WithSerialRangeHangups.
+func (db *DB) hangUpOnSerialRange() bool {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	switch {
+	case db.serialHangups < 0:
+		return true
+	case db.serialHangups > 0:
+		db.serialHangups--
+		return true
+	}
+	return false
 }
 
 // serialRange answers "!j" as IRRd 4's handle_irrd_database_serial_range
@@ -545,6 +569,9 @@ func (db *DB) irrdConn(c net.Conn) {
 				frame(c, strings.Join(db.sources(), ","))
 			}
 		case strings.HasPrefix(cmd, "!j"):
+			if db.hangUpOnSerialRange() {
+				return // the connection closes, unanswered
+			}
 			if db.noSerialRange {
 				fmt.Fprintf(c, "F unsupported command %q\n", cmd)
 			} else if ans := db.serialRange(cmd[2:]); ans == "" {

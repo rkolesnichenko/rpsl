@@ -16,6 +16,10 @@ same version (see [RELEASING.md](RELEASING.md)).
   resolved; a miss the proxy had cached (v0.20.0: 404 for the root module for
   about 45 minutes) went unseen until step 6. It now asks from an empty module
   cache, so it waits on the proxy, and refreshes it by commit, until it serves.
+- `irrd.Source`: when the connection broke on "!j-*" (a server that hangs up on
+  a command it does not know), every scoped lookup failed. That lookup now asks
+  for its registry with "!s" instead, and after two such failures in a row the
+  Source stops sending "!j-*", as for a server that refuses it.
 
 ## [0.20.0] - 2026-09-29
 

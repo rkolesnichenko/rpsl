@@ -160,8 +160,11 @@ pooled connection the server has closed is retried once on a fresh one, and a
 refused `!s` source list is an error rather than "not found". For scoped lookups
 `irrd` learns the server's registries once, with IRRd's `!j-*`, and kept until
 `Close`: a registry not listed is `ErrNotFound` without a query, so data naming
-any number of made-up registries costs nothing more (a server that refuses `!j`
-is asked per registry, with up to 1,024 refusals remembered). IRRd answers
+any number of made-up registries costs nothing more (a server that refuses `!j`,
+or hangs up on it twice in a row, is asked per registry, with up to 1,024
+refusals remembered). IRRd lists its real sources, not the aliases it may also
+accept in `!s`, so a scoped lookup of an alias is `ErrNotFound`: scope by the
+registry's own name, the one an object's `source:` gives. IRRd answers
 `!i` for an existing set with no members as for a missing one, so `irrd`
 confirms with `!m` and returns such a set empty (not in `Missing()`). Like
 `irrd`, `whois` takes a set defined in several sources from the first in

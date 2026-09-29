@@ -52,3 +52,43 @@ func FuzzParseMembers(f *testing.F) {
 		}
 	})
 }
+
+// FuzzParseRegistries: parseRegistries reads a server's answer to "!j-*", which
+// is untrusted. It never panics; it returns nil or a non-empty set; each name
+// it returns is a canonical source name that the answer lists on a line of its
+// own, never one the answer only calls "Database unknown".
+func FuzzParseRegistries(f *testing.F) {
+	for _, s := range []string{
+		radbSerialRange,
+		"ripe:N:0-1\r\nFOO:X:Database unknown\n",
+		"RIPE:X:Database unknown\nRIPE:N:0-1\n",
+		"", ":", "\n\n", "RIPE", "RIPE:", ":N:-", "ɐ:N:-", "RI PE:N:-", "RIPE:N:0-1\nnot a line\n",
+		strings.Repeat("A:N:-\n", 64),
+	} {
+		f.Add([]byte(s))
+	}
+	f.Fuzz(func(t *testing.T, payload []byte) {
+		got := parseRegistries(payload)
+		if got == nil {
+			return
+		}
+		if len(got) == 0 {
+			t.Fatalf("parseRegistries(%q) = an empty set; want nil", payload)
+		}
+		listed := map[string]bool{} // names of lines that are not "Database unknown"
+		for _, line := range strings.Split(string(payload), "\n") {
+			name, rest, ok := strings.Cut(strings.TrimRight(line, "\r"), ":")
+			if ok && !strings.HasPrefix(rest, "X:") {
+				listed[strings.ToUpper(name)] = true
+			}
+		}
+		for name := range got {
+			if canon, err := types.ParseSourceName(name); err != nil || canon != name {
+				t.Fatalf("parseRegistries(%q) returned %q, not a canonical source name", payload, name)
+			}
+			if !listed[name] {
+				t.Fatalf("parseRegistries(%q) returned %q, which no listed line names", payload, name)
+			}
+		}
+	})
+}
