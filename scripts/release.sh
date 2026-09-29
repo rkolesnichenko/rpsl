@@ -8,8 +8,9 @@
 # types; bump, tidy, build, vet, test, commit, tag and push ast, the root module
 # and resolve in turn; bump examples/bulk-ripe (untagged). After each push it
 # waits until the Go proxy serves the tag — asking only for tags already
-# pushed, and by the tag's commit too, which makes a proxy that cached a miss
-# fetch again — and it retries a `go mod tidy` the checksum database is not
+# pushed, from an empty module cache so the local one cannot answer for it, and
+# by the tag's commit too, which makes a proxy that cached a miss fetch
+# again — and it retries a `go mod tidy` the checksum database is not
 # ready for. Last, from an empty module cache: every module's @latest is the
 # version, a consumer of each gets only what it requires and its tests pass
 # from the published zip, and rpslq installs; then rpslq's binaries, built from
@@ -74,8 +75,23 @@ stop_after() {
 # remote_tag prints the commit a tag names on the remote, or nothing.
 remote_tag() { git ls-remote --tags "$REMOTE" "refs/tags/$1" | cut -f1; }
 
+# ask_proxy asks the proxy for the module query $1, from an empty module cache
+# and outside any module, so the answer is the proxy's own. With the local cache
+# the query passes, without asking, for a version a tidy has just resolved, and
+# a miss the proxy has cached goes unseen until a consumer — or step 6 — hits it
+# (v0.20.0: the root module was "served" while the proxy answered 404 for ~45 min).
+ask_proxy() {
+	d=$(mktemp -d "${TMPDIR:-/tmp}/rpsl-ask.XXXXXX")
+	rc=0
+	(cd "$d" && GOMODCACHE="$d/modcache" GOPATH="$d/gopath" GOPROXY=$PROXY GOFLAGS=-mod=mod \
+		go list -m "$1" >/dev/null 2>&1) || rc=$?
+	chmod -R u+w "$d" 2>/dev/null || true
+	rm -rf "$d"
+	return "$rc"
+}
+
 # served reports whether the proxy serves module $1 at $V.
-served() { GOPROXY=$PROXY GOFLAGS=-mod=mod go list -m "$1@$V" >/dev/null 2>&1; }
+served() { ask_proxy "$1@$V"; }
 
 # wait_proxy waits until the proxy serves module $1 at $V, tagged $2. Asking by
 # the tag's commit makes a proxy that cached a miss (from before the push)
@@ -88,7 +104,7 @@ wait_proxy() {
 		if [ "$waited" -ge "$WAIT" ]; then
 			fail "$1@$V: the proxy still does not serve it after ${WAIT}s"
 		fi
-		GOPROXY=$PROXY GOFLAGS=-mod=mod go list -m "$1@$commit" >/dev/null 2>&1 || true
+		ask_proxy "$1@$commit" || true
 		sleep "$POLL"
 		waited=$((waited + POLL))
 	done

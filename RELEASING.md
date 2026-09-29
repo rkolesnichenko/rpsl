@@ -68,7 +68,12 @@ same command again: each step checks whether it is done and resumes.
 Never ask the proxy (or `go get`) for a version or commit that is not pushed
 yet: the proxy and the checksum database cache the miss for about half an
 hour. The script only asks for pushed tags, and asks by the tag's commit too,
-which makes a proxy that cached a miss fetch again.
+which makes a proxy that cached a miss fetch again. It asks from an empty module
+cache: the local cache already holds a version a `go mod tidy` has just
+resolved, and would answer for the proxy while the proxy still serves a cached
+miss. If step 6 still meets one (a 404 "unknown revision" for a pushed tag),
+wait until `curl https://proxy.golang.org/<module>/@v/vX.Y.Z.info` answers 200
+repeatedly and run the script again; it resumes at step 6.
 
 ### What the script does, step by step (example: v0.2.0)
 
