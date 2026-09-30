@@ -23,6 +23,16 @@ func (s ASNSet) Missing() []types.SetRef { return s.missing }
 
 func newASSet() *ASNSet { return &ASNSet{m: make(map[types.ASN]struct{})} }
 
+// NewASNSet returns a set holding asns: for callers that build one outside an
+// expansion (tests, and code that assembles a PathMatch by hand).
+func NewASNSet(asns ...types.ASN) ASNSet {
+	s := newASSet()
+	for _, a := range asns {
+		s.add(a)
+	}
+	return *s
+}
+
 func (s *ASNSet) add(a types.ASN) { s.m[a] = struct{}{} }
 
 // Has reports membership.
