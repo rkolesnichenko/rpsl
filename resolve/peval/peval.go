@@ -34,6 +34,12 @@ type Session struct {
 // template — its limits, Exclude and Concurrency — whose Src, AFI and Peer
 // each call sets; an Evaluator holds no per-call state, so one value may serve
 // concurrent calls. Wrap Src in resolve.Cache to share lookups across calls.
+//
+// Expander.Exclude narrows only the clause filters, and there only their
+// prefix literals (see resolve.Expander.NormalizeFilter). It never decides
+// which terms cover a session: the as-sets, peering-sets and rtr-sets of
+// peerings and router expressions are expanded with Exclude cleared, since an
+// excluded set on the right of an EXCEPT would otherwise widen the peering.
 type Evaluator struct {
 	Src      resolve.PolicySource
 	Expander resolve.Expander
@@ -102,8 +108,10 @@ var errNoSource = errors.New("peval: Evaluator.Src is nil")
 func (v *Evaluator) newCall(ctx context.Context, s Session) *call {
 	e := v.Expander
 	e.Src, e.AFI, e.Peer = v.Src, s.AF.AFI, s.Peer
+	m := e
+	m.Exclude = resolve.Exclusion{}
 	return &call{
-		ctx: ctx, src: v.Src, e: e, s: s,
+		ctx: ctx, src: v.Src, e: e, m: m, s: s,
 		asns:    map[types.SetName]asMembers{},
 		prngs:   map[types.SetName]*resolve.PeeringSet{},
 		rtrSets: map[types.SetName]*resolve.RouterSet{},

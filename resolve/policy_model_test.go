@@ -570,3 +570,67 @@ func TestModelPolicyBackends(t *testing.T) {
 		checkPolicyModel(t, fmt.Sprintf("whois seed %d", seed), pg, attrs, &peval.Evaluator{Src: wh}, r)
 	}
 }
+
+// Expander.Exclude only narrows a policy: with a random Exclude on the
+// Evaluator's Expander, the terms that cover a session — and those undecided —
+// are the model's without it, and every route peval accepts the model accepts
+// without it (actions aside: a narrower clause may pass a route to a later one).
+func TestModelPolicyExclude(t *testing.T) {
+	ctx := context.Background()
+	narrowed := 0
+	for seed := uint64(0); seed < 300; seed++ {
+		r := rand.New(rand.NewPCG(seed, 17))
+		texts, pg, attrs := randomPolicy(t, r, seed)
+		ex := randomExclusion(rand.New(rand.NewPCG(seed, 29)), pg.fg.o.m)
+		v := &peval.Evaluator{Src: resolve.NewMemSource(decodeAll(t, texts), "RIPE", "RADB"), Expander: resolve.Expander{Exclude: ex}}
+		label := fmt.Sprintf("seed %d: exclude %v", seed, ex)
+		for k := 0; k < 6; k++ {
+			s := peval.Session{Local: localAS, Peer: types.ASN(firstAS + r.IntN(4)), AF: families[r.IntN(2)]}
+			if a := peerRtrs[r.IntN(len(peerRtrs))]; a != "" {
+				s.PeerRtr = netip.MustParseAddr(a)
+			}
+			if a := localRtrs[r.IntN(len(localRtrs))]; a != "" {
+				s.LocalRtr = netip.MustParseAddr(a)
+			}
+			pol, err := v.Import(ctx, s)
+			if err != nil {
+				t.Fatalf("%s: Import(%+v): %v", label, s, err)
+			}
+			terms, wantUnd := pg.evaluate(attrs, s)
+			gotUnd := map[int]int{}
+			for _, u := range pol.Undecided {
+				gotUnd[u.Index]++
+			}
+			if !maps.Equal(gotUnd, wantUnd) {
+				t.Fatalf("%s: Import(%+v): undecided %v, the model says %v", label, s, gotUnd, wantUnd)
+			}
+			if len(pol.Clauses) != len(terms) {
+				t.Fatalf("%s: Import(%+v): %d clauses, the model %d terms", label, s, len(pol.Clauses), len(terms))
+			}
+			for j := 0; j < 60; j++ {
+				rt := randomRoute(r, s.Peer)
+				want, _ := pg.decide(terms, rt, s.Peer, s.AF.AFI)
+				got := false
+				for _, c := range pol.Clauses {
+					ok, err := routemodel.Match(c.Filter, rt)
+					if err != nil {
+						t.Fatalf("%s: %v", label, err)
+					}
+					if ok {
+						got = true
+						break
+					}
+				}
+				if got && !want {
+					t.Fatalf("%s: session %+v, route %v: peval accepts it; without Exclude the model refuses it", label, s, rt)
+				}
+				if want && !got {
+					narrowed++
+				}
+			}
+		}
+	}
+	if narrowed == 0 {
+		t.Fatal("Exclude never left out a route the model accepts")
+	}
+}

@@ -23,12 +23,13 @@ const (
 
 func (v verdict) String() string { return [...]string{"noMatch", "match", "undecided"}[v] }
 
-// call is one evaluation: the session, the Expander it expands with, what it
+// call is one evaluation: the session, the Expanders it expands with, what it
 // has fetched and what it found missing. Nothing here outlives the call.
 type call struct {
 	ctx     context.Context
 	src     resolve.PolicySource
-	e       resolve.Expander
+	e       resolve.Expander // for clause filters: the template's Exclude applies
+	m       resolve.Expander // for peering and router matching: Exclude cleared
 	s       Session
 	asns    map[types.SetName]asMembers
 	prngs   map[types.SetName]*resolve.PeeringSet // nil: not found
@@ -156,14 +157,15 @@ func (c *call) asExpr(e policy.ASExpr) (bool, error) {
 }
 
 // inASSet reports whether the peer is a member of the as-set, expanding it
-// once per call. AS-ANY, and a set reaching it, hold every AS.
+// once per call, with Exclude cleared (see Evaluator). AS-ANY, and a set
+// reaching it, hold every AS.
 func (c *call) inASSet(n types.SetName) (bool, error) {
 	if strings.EqualFold(n.String(), "AS-ANY") {
 		return true, nil
 	}
 	m, ok := c.asns[n]
 	if !ok {
-		s, err := c.e.ExpandAS(c.ctx, types.Ref(n))
+		s, err := c.m.ExpandAS(c.ctx, types.Ref(n))
 		var anySet *resolve.AnySetError
 		switch {
 		case errors.As(err, &anySet):
@@ -264,7 +266,7 @@ func (c *call) peeringSet(n types.SetName) (*resolve.PeeringSet, error) {
 	if ps, ok := c.prngs[n]; ok {
 		return ps, nil
 	}
-	ps, err := c.e.ExpandPeerings(c.ctx, types.Ref(n))
+	ps, err := c.m.ExpandPeerings(c.ctx, types.Ref(n))
 	var out *resolve.PeeringSet
 	switch {
 	case errors.Is(err, resolve.ErrNotFound):
@@ -285,7 +287,7 @@ func (c *call) routerSet(n types.SetName) (*resolve.RouterSet, error) {
 	if rs, ok := c.rtrSets[n]; ok {
 		return rs, nil
 	}
-	rs, err := c.e.ExpandRouters(c.ctx, types.Ref(n))
+	rs, err := c.m.ExpandRouters(c.ctx, types.Ref(n))
 	var out *resolve.RouterSet
 	switch {
 	case errors.Is(err, resolve.ErrNotFound):
