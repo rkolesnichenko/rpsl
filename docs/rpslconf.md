@@ -276,12 +276,18 @@ after any of them.
 | `junos_policy_name` | `policy_%d_%d` | the Junos policy-statement name pattern |
 | `cisco_map_first_no` | 1 | the first route-map/route-policy entry's sequence number |
 | `cisco_map_increment_by` | 1 | the step between entries |
-| `prefix_acl_no` | 100 | the first prefix list/prefix-set number |
-| `aspath_acl_no` | 100 | the first AS-path list/set number |
-| `community_acl_no` | 100 | the first community list/set number |
-| `cisco_access_list_no` | 100 | the first plain `access_list` number |
+| `prefix_acl_no` | 100 | the first prefix list number: cisco's `plN` prefix-lists and ciscoxr's `plN` prefix-sets, for `import`, `export` and `access_list`; bird's `plN`, for `access_list` |
+| `aspath_acl_no` | 100 | the first AS-path list number: cisco's numbered `ip as-path access-list`s and ciscoxr's `asN` as-path-sets, for `import`, `export` and `aspath_access_list`; junos's `as-path-N` and bird's `asN`, for `aspath_access_list` |
+| `community_acl_no` | 100 | the first community list number: cisco's `clN` community-lists and ciscoxr's `csN` community-sets |
+| `cisco_access_list_no` | 100 | junos only: the first `prefix-list-N` policy-statement `access_list` writes. cisco, ciscoxr and bird read `prefix_acl_no` for `access_list` instead |
 | `cisco_max_preference` | 1000 | pref *N* becomes local-preference *max−N*; a pref above it is refused (`CausePref`) |
 | `sources` | the server's own precedence | the registries queried from here on; reopens the connection |
+
+Junos's `import` and `export` take no numbering knob: the as-paths,
+communities and subroutine policies a policy-statement uses are named after
+it (`<policy>-path-N`, `<policy>-comm-N`, `<policy>-sub-N`), N counting from
+1 within that policy. bird's `import` and `export` write their tests inline
+in the filter and name no list.
 
 A `set` of `0` means the default, since `Naming`'s zero fields take
 `DefaultNaming()`'s — the same rule `resolve/rtconfig.Generator.Names` follows
@@ -403,6 +409,13 @@ is not an AS number. A term `peval` cannot decide, and a set a filter names
 that is not found, are warnings on stderr rather than failures: neither
 stops the rest of the template from running.
 
+Template output streams: each command's configuration is written as the
+command runs. A refusal or error at template line N exits 1 with the output
+of lines 1 to N−1 already on stdout, and nothing after it; for bird, the
+`protocol bgp` blocks that come at the end are not written. A script should
+use the exit status, not the presence of output, to decide whether to load
+the configuration.
+
 ## What a vendor cannot say
 
 A printer never approximates: a construct a vendor's configuration cannot express is refused. The error wraps `rtconfig.ErrUnsupported` and names the vendor, the term, and one of these causes (`rtconfig.Cause*`). When a vendor refuses a policy, it writes nothing for it.
@@ -413,7 +426,7 @@ A printer never approximates: a construct a vendor's configuration cannot expres
 | `a SAFI other than unicast` | a multicast session |
 | `two AS-path regexps that must both match` | IOS and Junos OR the as-path lists of one entry or term |
 | `a negated AS-path class [^…]` | no dialect has a negated AS class |
-| `same-AS repetition (~*, ~+, ~{m,n}) over more than one AS` | `~*` over a set or class is not a regular language over paths |
+| `same-AS repetition (~*, ~+, ~{m,n}) over more than one AS` | `~*`, `~+` or `~{m,n}` over anything but one AS number: a set, a class or `.`, even a set or class of one AS. Over a finite set it is regular (an alternation of each member's own repetition), but no printer writes that expansion: the refusal is a choice. BIRD, which has no repetition at all, refuses these with the path-shape cause below |
 | `an AS-path regexp shape the vendor's path syntax lacks` | an inner anchor for Junos or BIRD, alternation or repetition for BIRD, a count over 32 for IOS, a class of more than 1024 ASes |
 | `a community that is neither a:b nor a well-known one` | large and extended communities are not typed yet |
 | `an exact community match (community == {…})` | where the vendor has no exact match, or cannot combine one with other tests |
@@ -585,6 +598,14 @@ for reasons that have nothing to do with `rpslconf`. See that file for the
 narrower `pevalSafe` allow-list and why. `TestRtconfigMatches` and
 `TestRtconfigGoldens` (`resolve/rtconfig_irrtoolset_test.go`) run the
 equivalent comparison for template mode, against IRRToolSet's `rtconfig`.
+
+One more difference is a choice of form, not a bug, and is not numbered.
+IRRToolSet's `rtconfig` writes Cisco's `access_list` as a numbered extended
+access-list, numbered from `cisco_access_list_no`
+(`access-list 500 permit ip 10.0.0.0 0.255.255.0 255.255.0.0 0.0.255.0`
+for `{10.0.0.0/8^16-24}` with the knob at 500). `rpslconf` writes an
+`ip prefix-list plN`, numbered from `prefix_acl_no`, the form its route-maps
+use; for cisco, `cisco_access_list_no` numbers nothing.
 
 ## Testing against IRRToolSet
 

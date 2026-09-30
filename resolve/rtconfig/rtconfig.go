@@ -60,10 +60,10 @@ type Naming struct {
 	MapName         string // cisco_map_name: route-maps and route-policies, "MyMap_%d_%d"
 	MapFirstNo      int    // cisco_map_first_no: the first route-map entry's sequence number, 1
 	MapIncrementBy  int    // cisco_map_increment_by: the step between route-map entries, 1
-	PrefixACLNo     int    // prefix_acl_no: the first prefix list number, 100
+	PrefixACLNo     int    // prefix_acl_no: the first prefix list number (IOS, IOS-XR, BIRD), 100
 	ASPathACLNo     int    // aspath_acl_no: the first AS-path list number, 100
-	CommunityACLNo  int    // community_acl_no: the first community list number, 100
-	AccessListNo    int    // cisco_access_list_no: the first number access_list uses, 100
+	CommunityACLNo  int    // community_acl_no: the first community list number (IOS, IOS-XR), 100
+	AccessListNo    int    // cisco_access_list_no: the first number Junos's WritePrefixList uses, 100
 	JunosPolicyName string // junos_policy_name: Junos policy-statements, "policy_%d_%d"
 }
 
