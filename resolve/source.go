@@ -29,9 +29,10 @@ var ErrSetClass = errors.New("resolve: set class does not fit this expansion")
 type Limit uint8
 
 const (
-	LimitPrefixes Limit = iota // MaxPrefixes: output prefixes (or ranges)
-	LimitVisited               // MaxVisited: distinct sets fetched, or evaluation visits
-	LimitDepth                 // MaxDepth: shortest nesting distance from the top set
+	LimitPrefixes  Limit = iota // MaxPrefixes: output prefixes (or ranges)
+	LimitVisited                // MaxVisited: distinct sets fetched, or evaluation visits
+	LimitDepth                  // MaxDepth: shortest nesting distance from the top set
+	LimitConjuncts              // MaxConjuncts: conjuncts of a disjunction, or tests of a conjunct, NormalizeFilter built
 )
 
 // String returns the name of the Expander field the limit is, e.g. "MaxVisited".
@@ -41,6 +42,8 @@ func (l Limit) String() string {
 		return "MaxVisited"
 	case LimitDepth:
 		return "MaxDepth"
+	case LimitConjuncts:
+		return "MaxConjuncts"
 	default:
 		return "MaxPrefixes"
 	}

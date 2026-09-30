@@ -268,6 +268,11 @@ func FuzzParseASPathRegexp(f *testing.F) {
 			if d := depth(reflect.ValueOf(re)); d > maxParseDepth+8 {
 				t.Fatalf("ParseASPathRegexp(%q): depth %d over the cap", s, d)
 			}
+			text := re.String()
+			back, err := ParseASPathRegexp(text)
+			if err != nil || !reflect.DeepEqual(re, back) {
+				t.Fatalf("ParseASPathRegexp(%q) renders as %q, which parses back to %v, %v", s, text, back, err)
+			}
 		}
 		// Errors and bare-number warnings point at bytes of the body.
 		var rerr *reError

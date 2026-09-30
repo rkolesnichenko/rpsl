@@ -512,12 +512,14 @@ that name, as if `src-members:` had not named it.
 
 ```go
 type Expander struct {
-    Src         Source
-    MaxDepth    int       // cap on shortest nesting distance from the top (default 32)
-    MaxPrefixes int       // cap on output prefixes, or ranges (default 1<<20)
-    MaxVisited  int       // cap on distinct sets fetched per call (default 1<<17)
-    AFI         types.AFI // constrain to v4 or v6 (Unspecified / Any = both)
-    Exclude     Exclusion // sets and AS numbers left out (bgpq4's EXCEPT)
+    Src          Source
+    MaxDepth     int       // cap on shortest nesting distance from the top (default 32)
+    MaxPrefixes  int       // cap on output prefixes, or ranges (default 1<<20)
+    MaxVisited   int       // cap on distinct sets fetched per call (default 1<<17)
+    MaxConjuncts int       // cap on conjuncts NormalizeFilter builds (default 1<<12)
+    AFI          types.AFI // constrain to v4 or v6 (Unspecified / Any = both)
+    Exclude      Exclusion // sets and AS numbers left out (bgpq4's EXCEPT)
+    Peer         types.ASN // binds PeerAS and set templates for EvalFilter/NormalizeFilter; 0 = unbound
 }
 
 // ExpandAS returns the ASNs of every as-set reachable from ref, plus indirect
@@ -547,7 +549,8 @@ Engine mechanics that matter:
 - **AFI constraint.** A v4 expansion must drop `route6`-only members and `mp-members` IPv6 entries, and vice versa. The `afi` dictionary from RFC 4012 makes this explicit; `any` means both. A *SAFI* has no role here: no RPSL set member carries one and there is no multicast route class, so `Expander.AFI` is an `AFI`, and the sub-family matters only where RFC 4012 puts it — in `policy.Import`/`Export`/`Default.AppliesTo`.
 - **The other set classes.** `ExpandRouters` walks an `rtr-set` to routers (`types.RouterID`), `ExpandPeerings` a `peering-set` to the peerings it denotes with nested references replaced, and `ExpandFilterSet`/`EvalFilter` a `filter-set`'s expression to prefix ranges. Discovery is the same breadth-first traversal for all of them; only what counts as a nested name, and which indirect claims are honored, differs by class.
 - **Filters are only partly enumerable.** `EvalFilter` evaluates `ANY`, prefix lists, route-set/as-set/filter-set references, AS numbers and AS expressions, `OR`, and `AND` (the intersection of two range sets, via `types.PrefixRange.Intersect`, testing each range only against the ranges at its prefix's ancestors and descendants). `NOT`, `PeerAS`, community tests, AS-path regexps and per-peer templates have no finite prefix denotation, and return a `*NotEnumerableError` naming the term instead of a quietly smaller answer. Within one call each set is fetched and expanded once, `MaxVisited` bounds the call as a whole, and a cycle of filter-sets is solved by iteration to the least fixpoint, as a cycle of route-sets is.
-- **Exclusion.** `Expander.Exclude` names sets and AS numbers an expansion leaves out, as bgpq4's `EXCEPT` does: an excluded set is never followed, fetched or reported missing — discovery skips it, so it costs nothing against `MaxVisited` — and an excluded AS contributes nothing, as a member, an indirect aut-num member or a reference inside a filter-set. The set an Expand call names is expanded as asked, and so are the terms of a filter passed to `EvalFilter`. It applies inside route-sets as well, where bgpq4's stoplist does not reach (bgpq4 has the server expand route-sets).
+  `Expander.Peer` binds `PeerAS` and a set template (`AS1:AS-CUST:PeerAS`) to one AS, in a filter, an AS expression or an AS-path regexp, for both `EvalFilter` and `NormalizeFilter`; zero leaves them unbound, so `EvalFilter` still refuses a `PeerAS` term with `*NotEnumerableError`. `NormalizeFilter` goes further: it evaluates a filter into disjunctive normal form rather than refusing what `EvalFilter` cannot. What can be enumerated (prefix lists, set and AS references, a bound `PeerAS` or template) folds into prefix ranges through the same evaluation as `EvalFilter`; AS-path regexps and community tests stay symbolic and are never evaluated (§13), kept as `PathMatch`/`CommunityMatch` on the `Conjunct` that carries them, each optionally `Negated`. NOT is pushed to the leaves by De Morgan, so an enumerable NOT becomes a `Conjunct.NotPrefixes` and a symbolic one sets `Negated`; only an OR mixing symbolic literals multiplies conjuncts, and `MaxConjuncts` (default 4,096) bounds that growth the same way the other three limits bound theirs, returning `*SetTooLargeError` — it caps both the conjuncts of any disjunction and the tests (`Paths` and `Communities`) of any conjunct. A filter-set holding a symbolic term is inlined once per polarity however often the filter names it, a test repeated in a conjunct is kept once, and every normalization step is charged against `MaxVisited`, so a filter-set named four times at each of ten levels is one conjunct of one test, not 4^10 copies. Whenever `EvalFilter(f)` succeeds, `NormalizeFilter(f)` has at most one conjunct (none when the answer is empty) with no `NotPrefixes`, `Paths` or `Communities`, and the same `Prefixes` `EvalFilter` returned — the two never disagree on what they can both decide. `Expander.Exclude` applies to `NormalizeFilter` only where it narrows the answer — positive prefix literals — never under a NOT, where a literal is evaluated with `Exclude` cleared so an excluded AS or set cannot drop out of a deny side and become accepted, and never inside an AS-path regexp, in either polarity: a set can reject even inside a positive regexp (`<[^AS-A]>`), so `PathMatch.Sets` is always the full expansion.
+- **Exclusion.** `Expander.Exclude` names sets and AS numbers an expansion leaves out, as bgpq4's `EXCEPT` does: an excluded set is never followed, fetched or reported missing — discovery skips it, so it costs nothing against `MaxVisited` — and an excluded AS contributes nothing, as a member, an indirect aut-num member or a reference inside a filter-set. The set an Expand call names is expanded as asked, and so are the terms of a filter passed to `EvalFilter`; `NormalizeFilter` applies it to positive prefix literals only (above), and `resolve/peval` to clause filters only, never to peering or router matching (§8.10). It applies inside route-sets as well, where bgpq4's stoplist does not reach (bgpq4 has the server expand route-sets).
 - **Concurrency is optional and invisible.** `Expander.Concurrency` fetches one breadth-first level at a time and merges the answers in the level's own order, so a parallel expansion returns exactly what a serial one does.
 - **Source precedence.** When the same set name exists in multiple IRRs, the `Source` decides which wins (`irrd.Source.Sources`, `NewMemSource(objs, "RIPE", "RADB")`). Hijack-relevant; surfaced as configuration, not buried.
 
@@ -747,6 +750,66 @@ Without `KeepPolicy` a `MemSource` built from the `Corpus` answers `AutNum` and
 aut-nums, and serving them alone would be a partial answer. `NewMemSource`
 serves every aut-num and inet-rtr it is given.
 
+### 8.10 Policy evaluation (`resolve/peval`)
+
+`resolve/peval` is the consumer §8's engine was always missing: what
+IRRToolSet's `RtConfig` and `peval` compute, on this engine. A `Session` is
+one BGP session seen from `Local` — `Local`/`Peer` AS numbers, optional
+`LocalRtr`/`PeerRtr` addresses, and the `types.AddrFamily` that selects which
+mp-* terms apply and trims prefixes to one family. An `Evaluator` reads
+`Local`'s aut-num through a `resolve.PolicySource` and evaluates one of its
+policy attributes — `Import`, `Export`, `ImportVia`, `ExportVia`, `Default` —
+for that session; `Filter` runs the same normalization `rpslconf -e` exposes,
+for a bare filter. All I/O goes through `Src`; an `Evaluator` holds no
+per-call state, so one value serves concurrent calls, and wrapping `Src` in
+`resolve.Cache` shares lookups across them.
+
+A `Policy` is its `Clause`s in specification order (RFC 2622 §6.1): each
+attribute's terms, in document order, `Flatten`ed for the session's address
+family, filtered to the ones whose peering matches, and normalized (§8.3)
+with `PeerAS` bound to the session's peer. A route takes the first clause it
+matches; one matching none is refused (import) or not announced (export) —
+the same rule a router's route-map applies.
+
+**`Undecided` never guesses.** A term whose peering names a router the
+session does not give (`LocalRtr`/`PeerRtr` unset but the peering has an
+`at`/router clause), a peering regexp, or a protocol other than BGP4,
+contributes no `Clause`; it is reported in `Policy.Undecided` with a `Why`
+string instead. Approximating a router the caller did not name — matching
+regardless, or refusing the whole policy — would be a silent wrong answer
+either way, so the evaluator reports the uncertainty and moves on. An AS
+mismatch, by contrast, is always decidable: it is simply no match, whatever
+the routers say.
+
+**Matching.** An `ASNum` peering is an equality test against `Session.Peer`;
+an `ASSetRef`/`ASSetTemplate` expands the set (once per call, memoized) and
+tests membership; `AS-ANY` always matches; AS expressions combine with
+AND/OR/EXCEPT as booleans. A router expression is matched the same way
+against whichever of `LocalRtr`/`PeerRtr` the peering's side names: a
+`RouterName` is resolved via `Src.InetRtr` and compared against its
+`ifaddr:`/`interface:` addresses (not found: no match, listed in
+`MissingRouters()`), and an `rtr-set` is expanded and each member checked the
+same way. A `PeeringSetRef` matches if any of its (already-replaced) nested
+peerings does. `Expander.Exclude` plays no part in matching: as-sets,
+peering-sets and rtr-sets are expanded for it with `Exclude` cleared, since an
+excluded set on the right of an EXCEPT (`AS-PEERS EXCEPT AS-BAD`) would
+otherwise widen the peering. It narrows the clause filters' prefix literals
+only, as `NormalizeFilter` applies it. `import-via:`/`export-via:` match the *via* peering — the
+route-server session itself — against the session, and carry the peering
+beyond it in `Clause.Remote`; `PeerAS` binds to `Remote`'s AS only when it
+names exactly one AS number, otherwise a filter using it is `Undecided`
+("PeerAS beyond a via peering names no single AS").
+
+**`Flatten`'s approximation carries through.** `peval` resolves EXCEPT and
+REFINE with `policy.Flatten`, which is exact except for one documented
+simplification: REFINE's peering intersection (RFC 2622 §6.6) is approximated
+by comparing peerings' rendered text, or treating `AS-ANY` as meeting
+anything, rather than expanding both sides through a registry — `Flatten`
+has no `Source` to expand with (§1, principle 4: the resolver is an
+interface, not a hardcoded transport, and `policy` sits below `resolve` in
+the import order). `peval` inherits that approximation as written; nothing
+in this package widens or narrows it.
+
 ## 9. Top-level façade
 
 ```go
@@ -838,9 +901,9 @@ The correctness bar is "matches the tools operators already trust," so testing i
 
 1. **Golden round-trip corpus.** A directory of real objects from RIPE/RADB/ARIN; assert `Parse → String` is byte-identical. This guards the lossless property and catches lexer regressions.
 2. **Policy tests from the RFCs.** Table tests for the grammar's forms, and every routing-policy example in RFC 2622, 2650 and 4012 kept verbatim in `policy/testdata/rfc-examples.txt`: each must parse clean, except the one the parser rejects on purpose (RFC 2622's `NOT` in a peering).
-3. **A model of the engine.** Random IRRs — as-sets and route-sets in two sources, range operators on every kind of member, indirect members honored and rejected, cycles, missing and invalid members, `AS-ANY` — are expanded by the engine and by a brute-force oracle that evaluates RFC 2622 straight from the generator's model, never from parsed text. They must agree on AS numbers, prefixes of each family, `Missing()`, and on `MaxDepth`/`MaxPrefixes` holding exactly at the true depth and size. The same IRRs are served by `resolve/internal/irrtest`, an in-process server that answers the IRRd and whois protocols as IRRd does, so `irrd.Source`, `whois.Source` and `MemSource` are held to the same oracle. With random ROAs added, the oracle also applies RFC 6811 from the model: `rpki.Filter` over `MemSource` (with and without `WriteRPSL`'s pseudo objects), the backends against `irrtest` in IRRd's RPKI-aware mode (its own port of IRRd's validator and pseudo-object rendering), and `Filter` over a server that is not RPKI-aware must all agree with it. The NRTMv4 client is held to `resolve/internal/nrtmtest`, an independent server that follows the draft: random histories of changes, snapshots, expiring deltas and new sessions, with clients joining late, after each of which the mirror must equal the server's database object for object and in every expansion; and each way a server can misbehave — a corrupt or rewritten file, a key it was never given, a gap in the deltas, an older notification file — must leave the mirror where it was.
-4. **Differential expansion vs. `bgpq4`.** A real `bgpq4` binary queries `irrtest` serving the same objects the engine expands (bgpq4 recurses through as-sets itself with `-L`; route-sets it asks the server to resolve with `!i…,1`, which `irrtest` implements as IRRd does). Random IRRs must expand identically, AS numbers and both families' prefixes; the golden expansions of the snapshot in `resolve/testdata` are bgpq4's own output, re-checked whenever bgpq4 is installed (CI installs it). Where the two knowingly differ — bgpq4 drops the single-length `^n` form (a bgpq4 bug), neither IRRd nor bgpq4 applies range operators on set and AS members, bgpq4 follows route-sets listed in as-sets — the difference is pinned in `resolve/testdata/bgpq4/divergences.md` and a test, so a change on either side fails. `rpslq` is held to the binary the same way, over every vendor, kind of list and shape (`-A`, `-R`, `-r`, `-s`, `-W`, `-w`, …) and `EXCEPT`, with its own divergences pinned alongside. An opt-in run (`RPSL_REALDATA`) does the same for the largest and a random sample of real RIPE sets. `rpslq --dump --rpki` is held to bgpq4 against an RPKI-aware `irrtest` holding the same objects and ROAs, with bgpq4 recursing itself and letting the server expand, with the pseudo source selected and not. An older opt-in diff against bgpq4 on a live IRR runs when `RPSL_BGPQ4_SERVER`/`RPSL_BGPQ4_SET` are set.
-5. **Fuzzing** (`go test -fuzz`) of every parser that takes untrusted text — lexer, attribute lists, set names, set references (`FuzzParseSetRef`: what it accepts, `String()` parses back to an equal ref, and its source matches `[A-Z0-9_-]+`), range operators, prefix ranges, the stream, decoding, editing, src-members items (`FuzzParseSrcMember`: an accepted member's `Ref()` round-trips), the policy parser (import, filter, peering, AS-path regexp), what the network backends read from a server (the IRRd frame reader, member list and `!j-*` registry list — `FuzzParseRegistries`: only canonical names of listed lines, never a "Database unknown" one — the whois response scanner), the NRTMv4 notification file and delta reader (what is accepted holds the §6.3 rules), the VRP export and SLURM readers (what they accept is well-formed and its pseudo objects load back one per VRP; a SLURM file only drops VRPs it may and adds those it asserts), and rpslq's port of bgpq4's aggregation (any prefix set, aggregated and refined, without a panic — bgpq4 aborts on an "unreachable point" — and aggregation losing and adding nothing) — for properties, not only for panics:
+3. **A model of the engine.** Random IRRs — as-sets and route-sets in two sources, range operators on every kind of member, indirect members honored and rejected, cycles, missing and invalid members, `AS-ANY` — are expanded by the engine and by a brute-force oracle that evaluates RFC 2622 straight from the generator's model, never from parsed text. They must agree on AS numbers, prefixes of each family, `Missing()`, and on `MaxDepth`/`MaxPrefixes` holding exactly at the true depth and size. The same IRRs are served by `resolve/internal/irrtest`, an in-process server that answers the IRRd and whois protocols as IRRd does, so `irrd.Source`, `whois.Source` and `MemSource` are held to the same oracle. With random ROAs added, the oracle also applies RFC 6811 from the model: `rpki.Filter` over `MemSource` (with and without `WriteRPSL`'s pseudo objects), the backends against `irrtest` in IRRd's RPKI-aware mode (its own port of IRRd's validator and pseudo-object rendering), and `Filter` over a server that is not RPKI-aware must all agree with it. The NRTMv4 client is held to `resolve/internal/nrtmtest`, an independent server that follows the draft: random histories of changes, snapshots, expiring deltas and new sessions, with clients joining late, after each of which the mirror must equal the server's database object for object and in every expansion; and each way a server can misbehave — a corrupt or rewritten file, a key it was never given, a gap in the deltas, an older notification file — must leave the mirror where it was. **The filter model** (`TestModelNormalizeFilter`) checks `NormalizeFilter` the same way, route by route: the model decides whether a random filter (NOT/AND/OR, prefix lists, AS numbers, route-sets, as-sets and filter-sets, range operators, regexps with sets, classes and `~*`, communities, `PeerAS`) accepts a sampled route, matching its regexps with its own Go translation, and `routemodel.Match` (`resolve/internal/routemodel`, a brute-force RFC matcher) must find that `NormalizeFilter`'s normal form, and its text read back, accept exactly the same routes. Its filters name no set templates and no set that reaches `AS-ANY`, and it runs over `MemSource` only. Whenever `EvalFilter` succeeds it must equal the normal form's one pure conjunct (or none), `MaxConjuncts` (`TestModelMaxConjuncts`) holds at exactly the true count, and with a random `Exclude` (`TestModelNormalizeExclude`) every route the normal form accepts is one the model accepts without it. The model's translation and `routemodel` are the only code that matches an AS-path regexp against a concrete path, and both are test-only. **The policy model** (`TestModelPolicy`, `TestModelPolicyBackends`) does the same for `resolve/peval`: random `import:` and `mp-import:` attributes (EXCEPT/REFINE, lists, attributes with and without afi clauses, peering-sets, AS expressions, router addresses, inet-rtr names, rtr-sets, protocols) are evaluated by `peval.Evaluator.Import` and by an oracle that applies RFC 2622 §6 per route directly from the generator's model — first term whose peering and filter match, its actions — without `Flatten`, marking a term Undecided exactly when a needed router is not given; checked over `MemSource`, `Corpus` with `KeepPolicy`, and `irrd`/`whois` against `irrtest`, and with a random `Exclude` (`TestModelPolicyExclude`, over `MemSource`) the terms that cover a session are unchanged and what peval accepts is a subset of the model's. Export, the `*-via` forms and default are covered by table tests in `resolve/peval`, not by the model.
+4. **Differential expansion vs. `bgpq4`.** A real `bgpq4` binary queries `irrtest` serving the same objects the engine expands (bgpq4 recurses through as-sets itself with `-L`; route-sets it asks the server to resolve with `!i…,1`, which `irrtest` implements as IRRd does). Random IRRs must expand identically, AS numbers and both families' prefixes; the golden expansions of the snapshot in `resolve/testdata` are bgpq4's own output, re-checked whenever bgpq4 is installed (CI installs it). Where the two knowingly differ — bgpq4 drops the single-length `^n` form (a bgpq4 bug), neither IRRd nor bgpq4 applies range operators on set and AS members, bgpq4 follows route-sets listed in as-sets — the difference is pinned in `resolve/testdata/bgpq4/divergences.md` and a test, so a change on either side fails. `rpslq` is held to the binary the same way, over every vendor, kind of list and shape (`-A`, `-R`, `-r`, `-s`, `-W`, `-w`, …) and `EXCEPT`, with its own divergences pinned alongside. An opt-in run (`RPSL_REALDATA`) does the same for the largest and a random sample of real RIPE sets. `rpslq --dump --rpki` is held to bgpq4 against an RPKI-aware `irrtest` holding the same objects and ROAs, with bgpq4 recursing itself and letting the server expand, with the pseudo source selected and not. An older opt-in diff against bgpq4 on a live IRR runs when `RPSL_BGPQ4_SERVER`/`RPSL_BGPQ4_SET` are set. **`TestPevalMatchesIRRToolSet`** does the same for `resolve/peval`'s underlying `NormalizeFilter`, against IRRToolSet 5.1.3's `peval` when it is on `PATH` (the Homebrew bottle works: the test gives `peval` its server through `IRR_HOST`/`IRR_PORT`/`IRR_SOURCES`, since the arm64 build ignores its command-line options) — but only on the filters IRRToolSet gets right: prefix lists, bare AS numbers, AND, OR and NOT over prefix lists, all IPv4. IRRToolSet's own bugs (substituting `0.0.0.0/0` for an unresolvable set member, dropping NOT over an AS-derived term, enumerating IPv6 ranges without end, and others) are pinned, each with the input that shows it, in `resolve/testdata/rtconfig/divergences.md`, numbered D1–D10 from the design spec's spike; the filter model (item 3) is the oracle for everything outside that narrow overlap.
+5. **Fuzzing** (`go test -fuzz`) of every parser that takes untrusted text — lexer, attribute lists, set names, set references (`FuzzParseSetRef`: what it accepts, `String()` parses back to an equal ref, and its source matches `[A-Z0-9_-]+`), range operators, prefix ranges, the stream, decoding, editing, src-members items (`FuzzParseSrcMember`: an accepted member's `Ref()` round-trips), the policy parser (import, filter, peering, AS-path regexp, and `FuzzParseMPFilter` for the mp-filter/afi-prefix form), what the network backends read from a server (the IRRd frame reader, member list and `!j-*` registry list — `FuzzParseRegistries`: only canonical names of listed lines, never a "Database unknown" one — the whois response scanner), the NRTMv4 notification file and delta reader (what is accepted holds the §6.3 rules), the VRP export and SLURM readers (what they accept is well-formed and its pseudo objects load back one per VRP; a SLURM file only drops VRPs it may and adds those it asserts), `FuzzNormalizeFilter` (no panic, `MaxConjuncts` holds, and `String()` parses back to a filter the route model says matches the same sampled routes), and rpslq's port of bgpq4's aggregation (any prefix set, aggregated and refined, without a panic — bgpq4 aborts on an "unreachable point" — and aggregation losing and adding nothing) — for properties, not only for panics:
    - every token's span and segments point at its bytes, and its kind follows the line rules the stream shares;
    - the stream is lossless, splits objects where the lexer sees them end, yields each object exactly as `ParseObject` reads its text (positions shifted), resumes after a break, and under caps drops only whole, diagnosed objects;
    - `Append`/`Set` produce text that parses back to exactly the edit, other attributes' bytes untouched;
@@ -876,7 +939,7 @@ sub-grammar of RFC 2622 §8.1 and §9 parsed, the `policy` AST with canonical `S
 engine expanding every set class — including `EvalFilter` over the enumerable fragment of the
 filter language — with in-memory, dump and caching `Source`s, optional concurrency and the
 bgpq4 differential, the three live backends in `resolve/{irrd,whois,rdap}`, and the `auth`
-package for RFC 2725 and RIPE's `mnt-irt:` consent rule, and RPKI-aware expansion as IRRd 4 does it (`resolve/rpki`, §8.7), and NRTMv4 mirroring (`resolve/nrtm4`, §8.8). See [README.md#Status](../README.md#status) for the same matrix in
+package for RFC 2725 and RIPE's `mnt-irt:` consent rule, and RPKI-aware expansion as IRRd 4 does it (`resolve/rpki`, §8.7), and NRTMv4 mirroring (`resolve/nrtm4`, §8.8), and policy evaluation (`resolve/peval`, §8.10) and `rpslconf -e`. See [README.md#Status](../README.md#status) for the same matrix in
 shipping form.
 
 Three limits are deliberate and are not gaps. AS-path regexps are parsed but never evaluated
@@ -892,6 +955,7 @@ injection `Source` uses, so the library stays dependency-free.
 - Publish leaves as separate modules (`rpsl/types`, `rpsl/lexer`) so minimal consumers stay dependency-light.
 - Keep the engine **pure**: no global state, no implicit network, context-cancellable, all limits explicit. This is what makes it safe to embed in a server doing thousands of expansions.
 - Resist scope creep into BGP-table evaluation (AS-path regexp matching against live routes) — that belongs in a separate `bgp` consumer, and conflating them is how RPSL tools become unmaintainable.
+- The only code anywhere in the module that matches an AS-path regexp against a concrete path is test code: `resolve/internal/routemodel`, a test oracle over synthetic paths, and the filter model's own Go translation of its regexps (`resolve/filter_model_test.go`); nothing exported does this, and `resolve/peval` keeps regexps symbolic (§8.10).
 
 ---
 

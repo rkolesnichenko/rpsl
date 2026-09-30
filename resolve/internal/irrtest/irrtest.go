@@ -6,7 +6,10 @@
 //
 // "!i<set>,1" resolves recursively as IRRd does (see Recursive), "!a"
 // expands an as-set to its routes' prefixes as IRRd 4 does (see ASetPrefixes),
-// and WithRPKI turns on IRRd 4's RPKI-aware mode.
+// and WithRPKI turns on IRRd 4's RPKI-aware mode. "!s-*" resets the source
+// selection to every source, "q" closes the connection (IRRToolSet's way,
+// alongside IRRd's own "!q"), and a command with no "!" is answered as IRRd 4
+// answers a RIPE-style whois query sent on the IRRd port (see ripeAnswer).
 package irrtest
 
 import (
@@ -561,7 +564,12 @@ func (db *DB) irrdConn(c net.Conn) {
 		case strings.HasPrefix(cmd, "!n"):
 			fmt.Fprint(c, "C\n")
 		case cmd == "!v":
-			frame(c, "irrtest")
+			frame(c, "IRRd -- version 4.4.4 (irrtest)") // IRRToolSet reads the version; it crashes on an answer without "version"
+		case cmd == "q":
+			return // IRRToolSet's way to close
+		case !strings.HasPrefix(cmd, "!"):
+			// IRRd 4 answers a RIPE-style query on its IRRd port too.
+			fmt.Fprint(c, db.ripeAnswer(sel, strings.Fields(cmd)))
 		case cmd == "!s-lc":
 			if len(sel) > 0 {
 				frame(c, strings.Join(sel, ","))
@@ -579,6 +587,9 @@ func (db *DB) irrdConn(c net.Conn) {
 			} else {
 				frame(c, ans)
 			}
+		case cmd == "!s-*":
+			sel = nil // every source, as with no "!s"
+			fmt.Fprint(c, "C\n")
 		case strings.HasPrefix(cmd, "!s"):
 			var next []string
 			known := db.sources()
@@ -733,6 +744,46 @@ query:
 		return "%ERROR:101: no entries found\n"
 	}
 	return "% irrtest\n\n" + strings.Join(out, "\n")
+}
+
+// ripeAnswer answers a RIPE-style query sent on the IRRd port, as IRRd 4
+// does: whois flags over the connection's sources, the matching objects —
+// only their primary key attributes with -K — and two empty lines at the end.
+func (db *DB) ripeAnswer(sel, tokens []string) string {
+	keysOnly := false
+	var rest []string
+	if len(sel) > 0 {
+		rest = append(rest, "-s", strings.Join(sel, ","))
+	}
+	for _, t := range tokens {
+		if t == "-K" {
+			keysOnly = true
+			continue
+		}
+		rest = append(rest, t)
+	}
+	body, ok := strings.CutPrefix(db.whoisAnswer(rest), "% irrtest\n\n")
+	if !ok {
+		return "%  No entries found for the selected source(s).\n\n\n"
+	}
+	if keysOnly {
+		var out []string
+		for _, text := range strings.Split(strings.TrimRight(body, "\n"), "\n\n") {
+			o, _ := rpsl.ParseObject(text)
+			var lines []string
+			if a, ok := o.GetFirst(o.Class()); ok {
+				lines = append(lines, o.Class()+": "+strings.TrimSpace(a.Value))
+			}
+			if cl := o.Class(); cl == "route" || cl == "route6" {
+				if a, ok := o.GetFirst("origin"); ok {
+					lines = append(lines, "origin: "+strings.TrimSpace(a.Value))
+				}
+			}
+			out = append(out, strings.Join(lines, "\n"))
+		}
+		body = strings.Join(out, "\n\n")
+	}
+	return strings.TrimRight(body, "\n") + "\n\n\n"
 }
 
 // serve accepts connections on a localhost listener until the test ends.

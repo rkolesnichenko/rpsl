@@ -9,6 +9,25 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Added
+
+- `resolve.NormalizeFilter`: a filter in disjunctive normal form — prefix ranges for what can be
+  enumerated, AS-path regexps and community tests kept symbolic, NOT pushed to the leaves — as
+  IRRToolSet's peval computes it. `Expander.MaxConjuncts` (default 4,096) caps the conjuncts of
+  any disjunction and the tests of any conjunct; a filter-set is inlined once per polarity, a
+  repeated test kept once, and every step charged against `MaxVisited`. `Expander.Exclude`
+  narrows only its positive prefix literals — never a negated one, nor an AS-path regexp's sets.
+- `Expander.Peer` binds PeerAS and set templates (`AS1:AS-CUST:PeerAS`) for `EvalFilter` and
+  `NormalizeFilter`; unbound, they are a `*NotEnumerableError` wrapping `ErrUnboundPeer`.
+- `resolve/peval`: an aut-num's import, export, via and default policies evaluated for one BGP
+  session — ordered clauses of normalized filter and actions; terms that depend on a router the
+  session does not name are reported as `Undecided`, never guessed. On RIPE's dumps, a 301-aut-num
+  sample evaluated 3,468 import/export sessions (both families, every named peer) into 1,972
+  clauses in 15 s, with 58 terms Undecided (a local or peer router not given) and no limit or
+  timeout failures. `Expander.Exclude` narrows clause filters only, never peering or router matching.
+- `policy.ParseMPFilter`; `(*policy.ASPathRE).String`, `Bind`, `UsesPeer`, `SetNames`.
+- `rpslconf -e`: peval on the command line (`resolve/cmd/rpslconf`); `-h` takes `host:port` too.
+
 ## [0.20.1] - 2026-09-29
 
 ### Fixed

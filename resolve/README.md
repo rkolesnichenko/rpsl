@@ -284,6 +284,40 @@ in-band key rotation), each snapshot's and delta's SHA-256 — and a delta
 applies whole or not at all. Persist `Status().CurrentKey`: after a rotation
 it, not the key you started with, verifies.
 
+## Evaluating policy (`peval`)
+
+`resolve/peval` evaluates an aut-num's `import:`/`export:`/`*-via:`/`default:`
+policies for one BGP session — what IRRToolSet's `RtConfig` computes before
+printing a router configuration:
+
+```go
+import "github.com/rkolesnichenko/rpsl/resolve/peval"
+
+v := &peval.Evaluator{Src: resolve.NewMemSource(objs)}
+p, err := v.Import(ctx, peval.Session{
+	Local: 1, Peer: 2, AF: types.AddrFamily{AFI: types.AFIv4, SAFI: types.SAFIUnicast},
+})
+for _, c := range p.Clauses {
+	fmt.Println(c.Actions[0], "|", c.Filter) // pref = 10 | {10.2.0.0/16}
+}
+```
+
+This is trimmed from a runnable `Example` test
+([`peval/example_test.go`](peval/example_test.go)).
+
+A `Policy`'s `Clauses` are in RFC 2622 §6.1 specification order, each with its
+filter already normalized (`resolve.NormalFilter`, PeerAS bound to the
+session's peer). A term the evaluator cannot decide for this session — a
+peering that names a router the session doesn't give, a peering regexp, or a
+protocol other than BGP4 — is never guessed at either way: it lands in
+`Policy.Undecided` with a reason, and contributes no clause. `NormalizeFilter`
+is the same disjunctive-normal-form evaluation `EvalFilter` uses where it can
+answer; where it can't (AS-path regexps, community tests), the term is kept
+symbolic rather than dropped, so a printer — or a human reading
+`NormalFilter.String()` — sees exactly what the filter says, never a quietly
+narrower approximation. `rpslconf -e` (see
+[`docs/rpslconf.md`](../docs/rpslconf.md)) exposes this on the command line.
+
 ## Concurrency
 
 `Expander.Concurrency` fetches a whole breadth-first level at once, which hides

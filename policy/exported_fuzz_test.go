@@ -207,3 +207,25 @@ func FuzzParseProtocol(f *testing.F) {
 		checkParse(t, s, pr, p.diags, nil)
 	})
 }
+
+// FuzzParseMPFilter asserts the mp-filter parser never panics, drops nothing
+// silently, and reads address families only after an afi keyword.
+func FuzzParseMPFilter(f *testing.F) {
+	for _, s := range []string{
+		"AS-FOO", "afi ipv6.unicast AS-FOO", "afi ipv4, ipv6 ANY", "afi any", "afi",
+		"afi ipv4 any", "AFI IPV6.UNICAST {2001:db8::/32^+}", "afi ipv4.multicast <^AS1>",
+	} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		afis, flt, p := parseMPFilterValue(s)
+		assertNothingDropped(t, s, p)
+		checkParse(t, s, flt, p.diags, func(v string) (any, []ast.Diagnostic) {
+			_, f, d := ParseMPFilter(v)
+			return f, d
+		})
+		if len(afis) > 0 && !strings.Contains(strings.ToLower(s), "afi") {
+			t.Fatalf("ParseMPFilter(%q) read address families %v without an afi keyword", s, afis)
+		}
+	})
+}
