@@ -12,8 +12,11 @@ package peval
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
+	"strings"
 
+	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/policy"
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/types"
@@ -92,7 +95,7 @@ type Undecided struct {
 	Why   string      // "peer router not given", "local router not given", "peering regexp", "protocol OSPF", …
 }
 
-//lint:ignore U1000 used by the Import/Export/Via/Default methods Task 7 adds
+// errNoSource is returned by every evaluation method when Evaluator.Src is nil.
 var errNoSource = errors.New("peval: Evaluator.Src is nil")
 
 // newCall starts one evaluation for s.
@@ -108,4 +111,207 @@ func (v *Evaluator) newCall(ctx context.Context, s Session) *call {
 		missing: map[types.SetRef]bool{},
 		noRtr:   map[string]bool{},
 	}
+}
+
+// begin checks a call's arguments and reads Local's aut-num.
+func (v *Evaluator) begin(ctx context.Context, s Session) (object.AutNum, *call, error) {
+	if v.Src == nil {
+		return object.AutNum{}, nil, errNoSource
+	}
+	if s.Local == 0 || s.Peer == 0 {
+		return object.AutNum{}, nil, errors.New("peval: Session.Local and Session.Peer must be set")
+	}
+	if s.AF == (types.AddrFamily{}) {
+		return object.AutNum{}, nil, errors.New("peval: Session.AF must be set")
+	}
+	an, err := v.Src.AutNum(ctx, s.Local, v.Source)
+	if err != nil {
+		return object.AutNum{}, nil, fmt.Errorf("peval: %w", err)
+	}
+	return an, v.newCall(ctx, s), nil
+}
+
+// attr is one import or export attribute, as evaluation needs it.
+type attr struct {
+	proto, into string
+	applies     func(types.AddrFamily) bool
+	terms       func(types.AddrFamily) ([]policy.Term, error)
+}
+
+func imports(is []policy.Import) []attr {
+	out := make([]attr, len(is))
+	for i, x := range is {
+		out[i] = attr{x.Protocol, x.IntoProtocol, x.AppliesTo, x.Terms}
+	}
+	return out
+}
+
+func exports(es []policy.Export) []attr {
+	out := make([]attr, len(es))
+	for i, x := range es {
+		out[i] = attr{x.Protocol, x.IntoProtocol, x.AppliesTo, x.Terms}
+	}
+	return out
+}
+
+// Import evaluates Local's import: and mp-import: attributes for the session:
+// every flattened term (policy.Import.Terms) whose peering covers the session,
+// in specification order, its filter normalized with PeerAS bound to s.Peer.
+// An error — a limit, a context, a filter that cannot be normalized — is
+// returned whole, with no partial Policy.
+func (v *Evaluator) Import(ctx context.Context, s Session) (Policy, error) {
+	an, c, err := v.begin(ctx, s)
+	if err != nil {
+		return Policy{}, err
+	}
+	return c.policy(imports(an.Imports), false)
+}
+
+// Export evaluates Local's export: and mp-export: attributes, as Import does.
+func (v *Evaluator) Export(ctx context.Context, s Session) (Policy, error) {
+	an, c, err := v.begin(ctx, s)
+	if err != nil {
+		return Policy{}, err
+	}
+	return c.policy(exports(an.Exports), false)
+}
+
+// ImportVia evaluates Local's import-via: attributes: the session is with the
+// via peering (a route server), and Clause.Remote is the peering beyond it.
+// PeerAS is bound to Remote's AS when that is a single AS number; a term
+// whose filter names the peer when it is not is Undecided.
+func (v *Evaluator) ImportVia(ctx context.Context, s Session) (Policy, error) {
+	an, c, err := v.begin(ctx, s)
+	if err != nil {
+		return Policy{}, err
+	}
+	return c.policy(imports(an.ImportVia), true)
+}
+
+// ExportVia evaluates Local's export-via: attributes, as ImportVia does.
+func (v *Evaluator) ExportVia(ctx context.Context, s Session) (Policy, error) {
+	an, c, err := v.begin(ctx, s)
+	if err != nil {
+		return Policy{}, err
+	}
+	return c.policy(exports(an.ExportVia), true)
+}
+
+// Default evaluates Local's default: and mp-default: attributes for the session.
+func (v *Evaluator) Default(ctx context.Context, s Session) (Defaults, error) {
+	an, c, err := v.begin(ctx, s)
+	if err != nil {
+		return Defaults{}, err
+	}
+	var d Defaults
+	for i, x := range an.Defaults {
+		if !x.AppliesTo(s.AF) {
+			continue
+		}
+		t := policy.Term{Peering: x.Peering, Actions: x.Actions, Filter: x.Networks}
+		vd, why, err := c.peering(x.Peering)
+		if err != nil {
+			return Defaults{}, err
+		}
+		switch vd {
+		case noMatch:
+			continue
+		case undecided:
+			d.Undecided = append(d.Undecided, Undecided{Index: i, Term: t, Why: why})
+			continue
+		}
+		dc := DefaultClause{Index: i, Peering: x.Peering, Actions: x.Actions}
+		if x.Networks != nil {
+			nf, err := c.filter(x.Networks, s.Peer)
+			if err != nil {
+				return Defaults{}, fmt.Errorf("peval: default %d: %w", i, err)
+			}
+			dc.Networks = &nf
+		}
+		d.Clauses = append(d.Clauses, dc)
+	}
+	d.missing, d.rtrs = c.missingLists()
+	return d, nil
+}
+
+// Filter is peval: f normalized with PeerAS bound to peer (0 leaves it
+// unbound) and prefixes trimmed to afi.
+func (v *Evaluator) Filter(ctx context.Context, f policy.Filter, afi types.AFI, peer types.ASN) (resolve.NormalFilter, error) {
+	if v.Src == nil {
+		return resolve.NormalFilter{}, errNoSource
+	}
+	e := v.Expander
+	e.Src, e.AFI, e.Peer = v.Src, afi, peer
+	return e.NormalizeFilter(ctx, f)
+}
+
+// policy evaluates import or export attributes; via marks the -via forms,
+// whose terms are matched on their via peering.
+func (c *call) policy(attrs []attr, via bool) (Policy, error) {
+	var p Policy
+	for i, a := range attrs {
+		if !a.applies(c.s.AF) {
+			continue
+		}
+		if !isBGP(a.proto) || !isBGP(a.into) {
+			why := "protocol " + a.proto
+			if isBGP(a.proto) {
+				why = "into " + a.into
+			}
+			p.Undecided = append(p.Undecided, Undecided{Index: i, Why: why})
+			continue
+		}
+		terms, err := a.terms(c.s.AF)
+		if err != nil {
+			return Policy{}, fmt.Errorf("peval: %w", err)
+		}
+		for _, t := range terms {
+			pe := t.Peering
+			if via {
+				pe = t.Via
+			}
+			vd, why, err := c.peering(pe)
+			if err != nil {
+				return Policy{}, err
+			}
+			switch vd {
+			case noMatch:
+				continue
+			case undecided:
+				p.Undecided = append(p.Undecided, Undecided{Index: i, Term: t, Why: why})
+				continue
+			}
+			cl := Clause{Index: i, Term: t, Actions: t.Actions}
+			peer := c.s.Peer
+			if via {
+				cl.Remote, peer = t.Peering, singleAS(t.Peering)
+			}
+			nf, err := c.filter(t.Filter, peer)
+			if via && errors.Is(err, resolve.ErrUnboundPeer) {
+				p.Undecided = append(p.Undecided, Undecided{Index: i, Term: t, Why: "PeerAS beyond a via peering names no single AS"})
+				continue
+			}
+			if err != nil {
+				return Policy{}, fmt.Errorf("peval: %s: %w", t, err)
+			}
+			cl.Filter = nf
+			p.Clauses = append(p.Clauses, cl)
+		}
+	}
+	p.missing, p.rtrs = c.missingLists()
+	return p, nil
+}
+
+// isBGP reports whether a protocol or into clause leaves the policy one for a
+// BGP session: absent, or BGP4 (RFC 2622 §6.1's default).
+func isBGP(p string) bool { return p == "" || strings.EqualFold(p, "BGP4") }
+
+// singleAS is the AS number a peering names when it is exactly one, else 0.
+func singleAS(p policy.Peering) types.ASN {
+	if pa, ok := p.(policy.PeeringAS); ok && pa.Router == nil && pa.AtRouter == nil {
+		if n, ok := pa.AS.(policy.ASNum); ok {
+			return n.AS
+		}
+	}
+	return 0
 }
