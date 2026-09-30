@@ -64,9 +64,12 @@ The random differential draws only what rtconfig renders correctly:
 - Junos with `-junos_and_not_or`.
 
 Three shapes it draws are wrong on one vendor, and are set aside for that
-vendor only, counted in the test's log:
+vendor only, counted in the test's log. Seeds are drawn until every vendor
+rtconfig writes has compared 30 in full (at most 200; fewer fails the test),
+and a vendor that has is not run again:
 - **D14** on IOS-XR: a policy with a clause that `peval` finds ANY, or NOT ANY
-  before another clause (about half the seeds: `pevalFilter` draws ANY often);
+  before another clause (about half the seeds: `pevalFilter` draws ANY often,
+  so IOS-XR takes about 70 seeds to reach 30);
 - **D15** on IOS: rtconfig attached a route-map it never wrote, and rpslconf's
   policy must then accept none of the routes;
 - **D16** on IOS-XR: a policy with a negated regexp.

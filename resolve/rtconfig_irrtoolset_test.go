@@ -350,9 +350,23 @@ func TestRtconfigMatches(t *testing.T) {
 		t.Fatal("rtconfig wrote no vendor's configuration")
 	}
 	t.Logf("rtconfig writes %v here", vendors)
+	// Seeds are drawn until every vendor has compared minCompared of them in
+	// full; a vendor that has is not run again. The divergences set seeds
+	// aside for one vendor only (D14 about half of IOS-XR's), so the vendors
+	// need different numbers of seeds.
+	const minCompared, maxSeeds = 30, 200
 	tally := map[string]int{} // what became of each seed's comparison, by vendor
 	defer func() { t.Logf("compared, and set aside by divergence: %v", tally) }()
-	for seed := uint64(0); seed < 40; seed++ {
+	for seed := uint64(0); seed < maxSeeds; seed++ {
+		var todo []string
+		for _, v := range vendors {
+			if tally[v] < minCompared {
+				todo = append(todo, v)
+			}
+		}
+		if len(todo) == 0 {
+			break
+		}
 		r := rand.New(rand.NewPCG(seed, 43))
 		m := randomModel(r, true)
 		g := newFilterGen(r, newOracle(m))
@@ -384,7 +398,7 @@ func TestRtconfigMatches(t *testing.T) {
 		if err != nil {
 			t.Fatalf("seed %d: peval: %v\npolicy:\n%s", seed, err, pol)
 		}
-		for _, v := range vendors {
+		for _, v := range todo {
 			if v == "ciscoxr" && xrDrops(p) {
 				tally[v+" D14"]++
 				continue
@@ -425,6 +439,11 @@ func TestRtconfigMatches(t *testing.T) {
 				}
 			}
 			tally[v]++
+		}
+	}
+	for _, v := range vendors {
+		if tally[v] < minCompared {
+			t.Errorf("%s: %d seeds compared in full of the %d drawn; want %d", v, tally[v], maxSeeds, minCompared)
 		}
 	}
 }
