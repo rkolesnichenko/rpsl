@@ -99,6 +99,18 @@ func TestBIRDCommunitiesAndActions(t *testing.T) {
 	if !ok || !reflect.DeepEqual(a, want) {
 		t.Errorf("got %v %+v, want %+v\n%s", ok, a, want, b.String())
 	}
+
+	// An IPv6 next-hop, in an IPv6 session's filter.
+	b.Reset()
+	s, p = fixturePolicyFor(t, v6Session, "mp-import: afi ipv6.unicast from AS2 action next-hop = 2001:db8::1; accept AS2")
+	if err := writeImport(&Generator{Vendor: BIRD2}, &b, s, p); err != nil {
+		t.Fatal(err)
+	}
+	ok, a = simulate(t, BIRD2, b.String(), s, false, rt("2001:db8:2::/48", []types.ASN{2}))
+	want = cfgsim.Attrs{LocalPref: -1, MED: -1, NextHop: "2001:db8::1"}
+	if !ok || !reflect.DeepEqual(a, want) {
+		t.Errorf("got %v %+v, want %+v\n%s", ok, a, want, b.String())
+	}
 }
 
 // One protocol per neighbour, naming its import and export filters; a

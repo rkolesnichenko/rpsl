@@ -261,9 +261,10 @@ type oTerm struct {
 }
 
 type policyGen struct {
-	fg     *filterGen
-	prngs  map[string][]*mPeering
-	asSets []string
+	fg      *filterGen
+	prngs   map[string][]*mPeering
+	asSets  []string
+	actions []string // the actions a clause draws from: modelActions, unless a model asks for others
 }
 
 func (pg *policyGen) asn() types.ASN { return types.ASN(firstAS + pg.fg.r.IntN(4)) }
@@ -308,7 +309,7 @@ func (pg *policyGen) factor(nPeers int, peering func() *mPeering) mFactor {
 	for i := 0; i < nPeers; i++ {
 		pa := mPeerAct{p: peering()}
 		for n := pg.fg.r.IntN(3); n > 0; n-- {
-			pa.actions = append(pa.actions, modelActions[pg.fg.r.IntN(len(modelActions))])
+			pa.actions = append(pa.actions, pg.actions[pg.fg.r.IntN(len(pg.actions))])
 		}
 		f.peers = append(f.peers, pa)
 	}
@@ -383,7 +384,7 @@ func (pg *policyGen) defaultAttr() *mDefault {
 	}
 	d.p = pg.peering(true)
 	for n := r.IntN(3); n > 0; n-- {
-		d.actions = append(d.actions, modelActions[r.IntN(len(modelActions))])
+		d.actions = append(d.actions, pg.actions[r.IntN(len(pg.actions))])
 	}
 	if r.IntN(2) == 0 {
 		pg.fg.v4only = !d.mp
@@ -660,9 +661,16 @@ var policyKinds = []string{"import", "export", "via", "default"}
 // and the policy.
 func randomPolicy(t *testing.T, r *rand.Rand, seed uint64) ([]string, *policyGen, *mPolicy) {
 	t.Helper()
+	return randomPolicyWith(t, r, seed, modelActions)
+}
+
+// randomPolicyWith is randomPolicy with its clauses' actions drawn from
+// actions.
+func randomPolicyWith(t *testing.T, r *rand.Rand, seed uint64, actions []string) ([]string, *policyGen, *mPolicy) {
+	t.Helper()
 	m := withTemplateSets(r, randomModel(r, false))
 	fg := newFilterGen(r, newOracle(m))
-	pg := &policyGen{fg: fg, prngs: map[string][]*mPeering{}, asSets: fg.asSets}
+	pg := &policyGen{fg: fg, prngs: map[string][]*mPeering{}, asSets: fg.asSets, actions: actions}
 	texts := append(m.texts(r), fg.filterSets(2)...)
 	texts = append(texts, routerTexts...)
 	for i := 0; i < 2; i++ {
