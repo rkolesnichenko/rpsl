@@ -20,7 +20,7 @@ on either side is caught instead of passing unnoticed.
 | D6 | `default:` with `pref` on cisco; any default on Junos | pref dropped; "default not implemented" | rendered |
 | D7 | `configureRouter` | drops router-specific clauses | deferred (design §8) |
 | D8 | `importGroup` with a template | empty policy | deferred (design §8) |
-| D9 | exit status | 0 after "no object for AS1" | non-zero |
+| D9 | exit status | 0 after "Error: no object for AS99" | non-zero |
 | D10 | peval prints an AS range as `AS10-AS12`; rtconfig names an unbound PeerAS `AS4294967295`, even in its queries (`!iAS1:AS-CUST:AS4294967295,1`) | not re-parseable; a query for a set that cannot exist | `NormalFilter.String` parses back |
 | D11 | IOS-XR, `NOT community.contains(5:666)` | `community matches-any <*> and not …`: refuses a route with no community | accepted, as rtconfig's own IOS rendering does |
 | D12 | Junos, a clause with a community test and a prefix list | two `from policy` subroutines, a Junos policy chain: the community test decides alone (unless `-junos_and_not_or`) | both must hold |
@@ -28,7 +28,7 @@ on either side is caught instead of passing unnoticed.
 | D14 | IOS-XR, a clause that is ANY (`announce ANY`) or NOT ANY | `drop` (then `done`), which ends the policy: ANY refuses every route, NOT ANY also the routes a later clause accepts | ANY: `done`; NOT ANY: nothing |
 | D15 | IOS, a session whose policy denotes no route (`accept NOT ANY`, an AS with no routes) | `neighbor … route-map MyMap_2_1 in`, with no `route-map MyMap_2_1` written or cleared: what the router already holds under that name decides | a route-map that denies |
 | D16 | IOS-XR, a clause whose only AS-path regexp is negated (`NOT <AS65004>`) | an `as-path-set` holding `permit .*`, which is not RPL (its elements are `ios-regex`, `length`, …): the configuration does not load | `not as-path in …` alone |
-| D17 | peval, IPv4 routes under a range-operator window beyond /32 (`AS65001^127-128`, `^126`, `^40`) | the Linux build (`scripts/build-irrtoolset.sh`, -O0; seen on aarch64, in Docker) enumerates prefixes: `({10.0.0.0/31, 10.0.0.2/31})` for a /30, or invalid ones (`10.0.0.4/33`, `138.0.0.4/33`), with no pattern (`^33` and `^65` come out right); the Homebrew bottle answers `NOT ANY` | `NOT ANY`: no IPv4 prefix is longer than /32 |
+| D17 | peval, IPv4 routes under a range-operator window beyond /32 (`AS65001^127-128`, `^126`, `^40`) | the Linux build (`scripts/build-irrtoolset.sh`, -O0; seen on aarch64 and on x86-64, both in Docker, the latter emulated) enumerates prefixes: `({10.0.0.0/31, 10.0.0.2/31})` for a /30, or invalid ones (`10.0.0.4/33`, `138.0.0.4/33`), with no pattern (`^33` and `^65` come out right); the Homebrew bottle answers `NOT ANY` | `NOT ANY`: no IPv4 prefix is longer than /32 |
 
 ## Where each is pinned
 
@@ -44,7 +44,7 @@ Each test fails when its divergence goes away, on either side.
 | D6 | `TestRtconfigDivergences/D6`; `TestTemplateModeVendors` (resolve/internal/rpslconf) |
 | D7 | `TestRtconfigDivergences/D7` |
 | D8 | `TestRtconfigDivergences/D8+D10` |
-| D9 | `TestRtconfigDivergences/D9`; `TestTemplateModeErrors` |
+| D9 | `TestRtconfigDivergences/D9`; `TestTemplateModeErrors` (resolve/internal/rpslconf) |
 | D10 | `TestRtconfigDivergences/D8+D10`; `TestPevalDivergences/D10` |
 | D11 | `TestRtconfigGoldens` (import-v4, ciscoxr, 10.0.0.5); `TestXRReadsRtconfig` (cfgsim) |
 | D12 | `TestRtconfigDivergences/D12`; `TestJunosPolicyChains` (cfgsim) |
@@ -52,7 +52,7 @@ Each test fails when its divergence goes away, on either side.
 | D14 | `TestRtconfigGoldens` (export-v4, ciscoxr, 10.0.0.3: ANY); `TestRtconfigDivergences/D14` (NOT ANY before a clause that accepts) |
 | D15 | `TestRtconfigDivergences/D15` |
 | D16 | `TestRtconfigDivergences/D16` |
-| D17 | `TestPevalDivergences/D17` (skips where peval answers correctly, as the bottle does); `pevalSafe` keeps it out of `TestPevalMatchesIRRToolSet` |
+| D17 | `TestPevalDivergences/D17`, on the Linux build (told by its echo, not by its answer) on the architectures seen (`d17Arches`: arm64, amd64); skipped on the bottle, which answers correctly; `pevalSafe` keeps it out of `TestPevalMatchesIRRToolSet` |
 
 ## rtconfig (`TestRtconfigMatches`, `TestRtconfigGoldens`)
 

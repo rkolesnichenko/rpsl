@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -416,8 +417,13 @@ func TestRtconfigMatches(t *testing.T) {
 			if code != 0 {
 				t.Fatalf("%s: rpslconf exited %d: %s\npolicy:\n%s", label, code, errOut, pol)
 			}
-			b, _ := decide(t, label+" rpslconf", v, ours, nb, export, routes)
-			if undefinedPolicy(t, label+" rtconfig", v, theirs, nb, export) { // D15: the policy must accept nothing
+			b, attachedOurs := decide(t, label+" rpslconf", v, ours, nb, export, routes)
+			if !attachedOurs { // every comparison below needs rpslconf's policy; D13's right answer is one refusing all
+				t.Fatalf("%s: rpslconf attached no policy\npolicy:\n%s\nours:\n%s", label, pol, ours)
+			}
+			// D15 is IOS's alone: an undefined policy on another vendor falls
+			// through, and cfgsim refuses it below.
+			if v == "cisco" && undefinedPolicy(t, label+" rtconfig", v, theirs, nb, export) { // D15: the policy must accept nothing
 				if i := slices.IndexFunc(b, func(d decision) bool { return d.ok }); i >= 0 {
 					t.Fatalf("%s: rtconfig attached a policy it never wrote, but rpslconf accepts %v\npolicy:\n%s\nours:\n%s\ntheirs:\n%s", label, routes[i], pol, ours, theirs)
 				}
@@ -635,6 +641,10 @@ func TestRtconfigDivergences(t *testing.T) {
 	})
 }
 
+// d17Arches are the architectures D17 was seen on, with the Linux build (for
+// Docker, the image's, which is the host's).
+var d17Arches = []string{"arm64", "amd64"}
+
 // cappedBuffer keeps the first 1 MiB written to it: peval's D3 writes without
 // end.
 type cappedBuffer struct{ bytes.Buffer }
@@ -655,7 +665,8 @@ func TestPevalDivergences(t *testing.T) {
 	// AS65001's one small route keeps D17's answer short.
 	addr := irrtest.New(append(goldenObjects(t), "route: 10.0.0.0/30\norigin: AS65001\nmnt-by: MNT-X\nsource: RADB\n")...).IRRd(t)
 	host, port, _ := net.SplitHostPort(addr)
-	theirs := func(filter string, timeout time.Duration) (string, error) {
+	// raw is all peval writes for filter; theirs, its answer (pevalAnswer).
+	raw := func(filter string, timeout time.Duration) (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, bin)
@@ -667,7 +678,11 @@ func TestPevalDivergences(t *testing.T) {
 		if ctx.Err() != nil {
 			err = ctx.Err()
 		}
-		return pevalAnswer(out.String(), filter), err
+		return out.String(), err
+	}
+	theirs := func(filter string, timeout time.Duration) (string, error) {
+		out, err := raw(filter, timeout)
+		return pevalAnswer(out, filter), err
 	}
 	ours := func(t *testing.T, filter string) string {
 		t.Helper()
@@ -701,18 +716,28 @@ func TestPevalDivergences(t *testing.T) {
 			t.Errorf("rpslconf says %q", out)
 		}
 	})
+	// D17 is the Linux build's (scripts/build-irrtoolset.sh, -O0), seen on
+	// d17Arches. Which build this is does not depend on the answer: the Linux
+	// one, built with GNU readline, echoes the line it reads; the Homebrew
+	// bottle does not, and answers correctly.
 	t.Run("D17", func(t *testing.T) { // IPv4 routes under a window beyond /32 denote nothing
-		if ours := ours(t, "afi ipv4.unicast AS65001^127-128"); ours != "NOT ANY" {
+		const filter = "AS65001^127-128"
+		if ours := ours(t, "afi ipv4.unicast "+filter); ours != "NOT ANY" {
 			t.Errorf("rpslconf says %q", ours)
 		}
-		out, err := theirs("AS65001^127-128", 10*time.Second)
+		out, err := raw(filter, 10*time.Second)
 		if err != nil {
 			t.Fatalf("peval: %v\n%s", err, out)
 		}
-		if out == "NOT ANY" {
-			t.Skip("this peval answers AS65001^127-128 correctly, as the Homebrew bottle does; the Linux build does not")
+		answer := pevalAnswer(out, filter)
+		switch {
+		case answer == strings.TrimSpace(out):
+			t.Skipf("peval echoes nothing: not the Linux build (it answers %q)", answer)
+		case !slices.Contains(d17Arches, runtime.GOARCH):
+			t.Skipf("D17 is pinned on the Linux build for %v, not %s; peval answers %q", d17Arches, runtime.GOARCH, answer)
+		case !strings.Contains(answer, "10.0.0.0/31"):
+			t.Errorf("D17 is gone: the Linux build answers %s with %q", filter, answer)
 		}
-		t.Logf("D17: peval answers AS65001^127-128 with %s", out)
 	})
 	t.Run("D10", func(t *testing.T) { // peval prints ranges as AS10-AS12; ours parses back
 		if out, err := theirs("<^AS1 AS-FOO*$>", 10*time.Second); err != nil || !strings.Contains(out, "AS10-AS12") {
