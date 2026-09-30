@@ -247,9 +247,9 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   (`TestRtconfigMatches`, `TestRtconfigGoldens`, resolve/rtconfig_irrtoolset_test.go) run when
   `peval`/`rtconfig` are on PATH — `scripts/build-irrtoolset.sh` builds IRRToolSet 5.1.3 from
   source (CI does; natively on Linux, in Docker elsewhere) and installs them there, or
-  `brew install irrtoolset` gives the peval-only, cisco-only bottle (the arm64 build ignores its
-  command line; the differential runs it against the shapes IRRToolSet gets right and only the
-  vendor it actually writes). `RPSL_RTCONFIG_UPDATE=1` rewrites the rtconfig goldens
+  `brew install irrtoolset` also gives both binaries, but its `rtconfig`'s arm64 build ignores
+  its command line and always writes Cisco — the differential probes each vendor by its output
+  and compares only the ones a given build actually produces. `RPSL_RTCONFIG_UPDATE=1` rewrites the rtconfig goldens
   (resolve/testdata/rtconfig/golden) from a live `rtconfig`; divergences D1–D17 are pinned in
   resolve/testdata/rtconfig/divergences.md. `bird -p` (resolve/internal/cfgsim.BIRDSyntax) checks
   a BIRD writer's output against the real parser when `bird` is installed; it is skipped otherwise.
