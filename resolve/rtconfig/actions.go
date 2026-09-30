@@ -72,11 +72,11 @@ func (g *Generator) compileActions(acts []policy.Action, afi types.AFI, term str
 				continue
 			}
 			addr, err := netip.ParseAddr(v)
-			if err != nil || addr.Is4() != (afi == types.AFIv4) {
+			if err != nil || addr.Zone() != "" || addr.Is4() != (afi == types.AFIv4) {
 				// A next-hop of the other family is no next-hop for this
 				// session: IOS rejects "set ipv6 next-hop 192.0.2.1" on load
 				// but keeps the entry, which then leaves routes' next-hop as
-				// it was.
+				// it was. A zone is no part of an RPSL address.
 				return ops, unsupported(g.Vendor, CauseActionValue, a.String())
 			}
 			ops.nextHop, ops.nextHopSelf = addr, false

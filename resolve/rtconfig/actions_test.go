@@ -105,6 +105,8 @@ func TestCompileActionsRefuses(t *testing.T) {
 		{Junos, types.AFIv6, "next-hop = 192.0.2.1;", CauseActionValue},
 		{IOSXR, types.AFIv4, "next-hop = 2001:db8::1;", CauseActionValue},
 		{BIRD2, types.AFIv4, "next-hop = 2001:db8::1;", CauseActionValue},
+		// A zone is no part of an RPSL address, nor of a router's next-hop.
+		{IOS, types.AFIv6, "next-hop = fe80::1%eth0;", CauseActionValue},
 		// Junos sets a named community's members, and one has at least one.
 		{Junos, types.AFIv4, "community = {};", CauseActionValue},
 	} {
