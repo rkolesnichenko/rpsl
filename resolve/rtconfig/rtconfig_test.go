@@ -6,6 +6,10 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+
+	"github.com/rkolesnichenko/rpsl/resolve"
+	"github.com/rkolesnichenko/rpsl/resolve/internal/cfgsim"
+	"github.com/rkolesnichenko/rpsl/types"
 )
 
 func TestParseVendor(t *testing.T) {
@@ -151,5 +155,71 @@ func TestDuplicateMapName(t *testing.T) {
 				t.Errorf("%v default names, map %d: %v", v, i+1, err)
 			}
 		}
+	}
+}
+
+// WritePrefixList of a filter with no conjuncts (NOT ANY) writes a list that
+// admits nothing: a deny-all entry on IOS, a policy-statement or filter that
+// rejects everything on Junos and BIRD, and an empty prefix-set on IOS-XR
+// (whether IOS-XR loads an empty prefix-set is not checked offline).
+func TestWritePrefixListNothing(t *testing.T) {
+	junos := "policy-options {\n    policy-statement prefix-list-100 {\n        term rest {\n            then reject;\n        }\n    }\n}\n"
+	bird := "filter pl100 {\n  if false then accept;\n  reject;\n}\n"
+	for _, c := range []struct {
+		v    Vendor
+		afi  types.AFI
+		want string
+	}{
+		{IOS, types.AFIv4, "!\nno ip prefix-list pl100\nip prefix-list pl100 seq 5 deny 0.0.0.0/0 le 32\n"},
+		{IOS, types.AFIv6, "!\nno ipv6 prefix-list pl100\nipv6 prefix-list pl100 seq 5 deny ::/0 le 128\n"},
+		{Junos, types.AFIv4, junos},
+		{Junos, types.AFIv6, junos},
+		{IOSXR, types.AFIv4, "!\nprefix-set pl100\nend-set\n"},
+		{IOSXR, types.AFIv6, "!\nprefix-set pl100\nend-set\n"},
+		{BIRD2, types.AFIv4, bird},
+		{BIRD2, types.AFIv6, bird},
+	} {
+		var b bytes.Buffer
+		if err := (&Generator{Vendor: c.v}).WritePrefixList(&b, resolve.NormalFilter{}, c.afi); err != nil || b.String() != c.want {
+			t.Errorf("%v %v: %q, %v; want %q", c.v, c.afi, b.String(), err, c.want)
+			continue
+		}
+		if c.v == BIRD2 {
+			if err := cfgsim.BIRDSyntax(b.String()); err != nil && !errors.Is(err, cfgsim.ErrNoBIRD) {
+				t.Errorf("bird -p: %v", err)
+			}
+		}
+		if c.v == Junos || c.v == BIRD2 { // a policy cfgsim can run a route through
+			cfg, err := cfgsim.Parse(c.v.String(), b.String())
+			if err != nil {
+				t.Fatalf("%v: %v", c.v, err)
+			}
+			r := rt("10.0.0.0/8", []types.ASN{2})
+			if c.afi == types.AFIv6 {
+				r = rt("2001:db8::/32", []types.ASN{2})
+			}
+			if ok, _, err := cfg.Policy(cfg.Policies()[0], r); ok || err != nil {
+				t.Errorf("%v %v: the list admits %v: %v, %v", c.v, c.afi, r, ok, err)
+			}
+		}
+	}
+}
+
+// A Generator whose Vendor is set to no vendor rtconfig knows refuses every
+// write, naming it.
+func TestUnknownVendor(t *testing.T) {
+	s, p := fixturePolicy(t, "from AS2 accept AS2")
+	g := &Generator{Vendor: Vendor(9)}
+	var b bytes.Buffer
+	for _, err := range []error{g.WriteImport(&b, s, p), g.WritePrefixList(&b, resolve.NormalFilter{}, types.AFIv4), g.WriteSessions(&b)} {
+		if err == nil || err.Error() != "rtconfig: unknown vendor Vendor(9)" {
+			t.Errorf("err %v, want rtconfig: unknown vendor Vendor(9)", err)
+		}
+	}
+	if b.Len() > 0 {
+		t.Errorf("wrote %q", b.String())
+	}
+	if err := (&Generator{}).WriteSessions(&b); err != errNoVendor {
+		t.Errorf("unset vendor: %v", err)
 	}
 }

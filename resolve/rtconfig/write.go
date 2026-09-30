@@ -40,7 +40,7 @@ func (g *Generator) writer() (vendorWriter, error) {
 	if g.Vendor == 0 {
 		return nil, errNoVendor
 	}
-	return nil, fmt.Errorf("rtconfig: no writer for %v yet", g.Vendor)
+	return nil, fmt.Errorf("rtconfig: unknown vendor %v", g.Vendor)
 }
 
 // WriteImport writes the import policy p evaluates for session s — a
