@@ -1,0 +1,131 @@
+policy-options {
+   community community-1 members [1:200];
+   policy-statement prefix-list-150 {
+      term prefixes {
+         from {
+            route-filter 10.1.0.0/16 exact accept;
+            route-filter 10.10.0.0/15 prefix-length-range /16-/16 accept;
+            route-filter 10.10.1.0/24 exact accept;
+            route-filter 10.12.0.0/16 exact accept;
+         }
+      }
+      term catch-rest {
+          then reject;
+      }
+   }
+
+  policy-statement policy_2_1 {
+      term policy_2_1-term-1 {
+         from {
+ policy prefix-list-150;
+         }
+         then {
+            metric 10;
+            community add community-1;
+            accept;
+         }
+      }
+   }
+
+   policy-statement policy_2_1 {
+      term policy_2_1-catch-rest {
+         then reject;
+      }
+   }
+}
+
+protocols {
+   bgp {
+      group peer-10.0.0.2 {
+         type external;
+         peer-as 2;
+         neighbor 10.0.0.2 {
+            export policy_2_1 ;
+            family inet {
+                unicast;
+            }
+         }
+      }
+   }
+}
+
+policy-options {
+Warning: filter "policy_3_2" matches ANY/NOT ANY
+  policy-statement policy_3_2 {
+      term policy_3_2-term-1 {
+         from {
+         }
+         then {
+            accept;
+         }
+      }
+   }
+
+   policy-statement policy_3_2 {
+      term policy_3_2-catch-rest {
+         then reject;
+      }
+   }
+}
+
+protocols {
+   bgp {
+      group peer-10.0.0.3 {
+         type external;
+         peer-as 3;
+         neighbor 10.0.0.3 {
+            export policy_3_2 ;
+            family inet {
+                unicast;
+            }
+         }
+      }
+   }
+}
+
+policy-options {
+   policy-statement prefix-list-151 {
+      term prefixes {
+         from {
+            route-filter 10.1.0.0/16 exact accept;
+         }
+      }
+      term catch-rest {
+          then reject;
+      }
+   }
+
+  policy-statement policy_5_3 {
+      term policy_5_3-term-1 {
+         from {
+ policy prefix-list-151;
+         }
+         then {
+            as-path-prepend "1 1 1 ";
+            accept;
+         }
+      }
+   }
+
+   policy-statement policy_5_3 {
+      term policy_5_3-catch-rest {
+         then reject;
+      }
+   }
+}
+
+protocols {
+   bgp {
+      group peer-10.0.0.5 {
+         type external;
+         peer-as 5;
+         neighbor 10.0.0.5 {
+            export policy_5_3 ;
+            family inet {
+                unicast;
+            }
+         }
+      }
+   }
+}
+

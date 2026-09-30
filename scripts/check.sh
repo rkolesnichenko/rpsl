@@ -60,8 +60,8 @@ done
 step "tools: scripts/mkproxy builds and vets"
 (cd scripts/mkproxy && GOWORK=off go build -o /dev/null . && GOWORK=off go vet .) || bad "scripts/mkproxy"
 
-step "engine purity: resolve and resolve/peval do not import net"
-if (cd resolve && go list -deps . ./peval) | grep -qx net; then bad "resolve or resolve/peval imports net"; fi
+step "engine purity: resolve, resolve/peval and resolve/rtconfig do not import net"
+if (cd resolve && go list -deps . ./peval ./rtconfig) | grep -qx net; then bad "resolve, resolve/peval or resolve/rtconfig imports net"; fi
 
 bin=$(go env GOPATH)/bin
 for tool in staticcheck govulncheck; do
@@ -106,7 +106,8 @@ if [ -n "${FUZZTIME:-}" ]; then
 		". ./policy FuzzParseRPAttribute" ". ./policy FuzzParseTypedef" ". ./policy FuzzParseProtocol" \
 		"resolve ./irrd FuzzReadFrame" "resolve ./irrd FuzzParseMembers" "resolve ./irrd FuzzParseRegistries" "resolve ./whois FuzzScanResponse" \
 		"resolve ./internal/filtergen FuzzAggregate" "resolve ./rpki FuzzReadJSON" "resolve ./rpki FuzzApplySLURM" \
-		"resolve ./nrtm4 FuzzParseNotification" "resolve ./nrtm4 FuzzReadDelta" "resolve . FuzzCorpusDelete" "resolve . FuzzNormalizeFilter"; do
+		"resolve ./nrtm4 FuzzParseNotification" "resolve ./nrtm4 FuzzReadDelta" "resolve . FuzzCorpusDelete" "resolve . FuzzNormalizeFilter" \
+		"resolve ./rtconfig FuzzTranslateRegexp" "resolve ./internal/rpslconf FuzzParseTemplate"; do
 		set -- $t
 		step "fuzz $3 ($FUZZTIME)"
 		fuzz "$1" "$2" "$3" || bad "fuzz $3"

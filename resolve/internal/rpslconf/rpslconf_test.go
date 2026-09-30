@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rkolesnichenko/rpsl/resolve/internal/buildinfo"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/irrtest"
 )
 
@@ -23,6 +24,13 @@ func run(t *testing.T, args ...string) (code int, stdout, stderr string) {
 	t.Helper()
 	var out, errb bytes.Buffer
 	code = Run(context.Background(), args, strings.NewReader(""), &out, &errb)
+	return code, out.String(), errb.String()
+}
+
+func runIn(t *testing.T, stdin string, args ...string) (code int, stdout, stderr string) {
+	t.Helper()
+	var out, errb bytes.Buffer
+	code = Run(context.Background(), args, strings.NewReader(stdin), &out, &errb)
 	return code, out.String(), errb.String()
 }
 
@@ -51,7 +59,10 @@ func TestPevalMode(t *testing.T) {
 		{[]string{"-dump", dump, "-e", "PeerAS"}, 1, "", "PeerAS"},
 		{[]string{"-dump", dump, "-e", "{"}, 1, "", "rpslconf:"},
 		{[]string{"-dump", dump, "-e", "AS1", "-peer", "nonsense"}, 2, "", "-peer"},
-		{[]string{"-dump", dump}, 2, "", "-e"},
+		{[]string{"-dump", dump}, 0, "", ""}, // template mode, over an empty template
+		{[]string{"-dump", dump, "-peer", "AS1"}, 2, "", "-e"},
+		{[]string{"-dump", dump, "-config", "nonsense"}, 2, "", "-config"},
+		{[]string{"-v"}, 0, "rpslconf " + buildinfo.Version() + "\n", ""},
 	} {
 		code, out, errOut := run(t, c.args...)
 		if code != c.code || out != c.out || !strings.Contains(errOut, c.inErr) {

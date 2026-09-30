@@ -56,6 +56,25 @@ func TestMatchPathNotSingleAS(t *testing.T) {
 	}
 }
 
+// TestMatchPathTooComplex pins two rtconfig-fuzz-found inputs (task 16, fix
+// round 1: FuzzTranslateRegexp found "0{1000}{1000}" and "0{700}{700}" against
+// an empty path, minimized here to a matchable AS): a repeat nested inside
+// another repeat multiplies out past what Go's regexp package can compile —
+// building a million (or 490,000) copies of the inner group — even though
+// each level's own Min/Max passes quant's 1000 cap on its own. MatchPath must
+// report an error wrapping ErrTooComplex, not a bare compile error, and an
+// ordinary regexp must still match.
+func TestMatchPathTooComplex(t *testing.T) {
+	for _, c := range []string{"AS1{700}{700}", "AS1{1000}{1000}"} {
+		if _, err := MatchPath(resolve.PathMatch{RE: re(t, c)}, []types.ASN{1}); !errors.Is(err, ErrTooComplex) {
+			t.Errorf("<%s>: err = %v, want ErrTooComplex", c, err)
+		}
+	}
+	if got, err := MatchPath(resolve.PathMatch{RE: re(t, "^AS1$")}, []types.ASN{1}); err != nil || !got {
+		t.Errorf("<^AS1$> on [1] = %v, %v; want true, nil", got, err)
+	}
+}
+
 func TestMatchCommunity(t *testing.T) {
 	has := []string{"1:1", "NO_EXPORT"}
 	for _, c := range []struct {

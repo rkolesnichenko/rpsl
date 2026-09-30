@@ -4,10 +4,12 @@
 `Expander.NormalizeFilter` against IRRToolSet 5.1.3's `peval` on random IPv4
 filters, served by the in-process IRRd in `internal/irrtest`. A throwaway
 spike (design doc §3) found ten IRRToolSet bugs running `rtconfig` and
-`peval` together against it; they are pinned here so later rtconfig-
-differential work (design §9 item 4) reuses the same numbering instead of
-rediscovering them, and so a fix on either side is caught by a test instead
-of passing unnoticed.
+`peval` together against it (D1–D10); writing v0.22's plan found three more
+(D11–D13), and the rtconfig differential (`resolve/rtconfig_irrtoolset_test.go`)
+three after that (D14–D16), and running the peval differential against the
+Linux build one more (D17), and CI one more (D18). They are pinned here, and
+each but D18 by a test, so a fix on either side is caught instead of passing
+unnoticed; D18 does not show on every run, so no test can pin it.
 
 | # | Input | rtconfig/peval does | Correct |
 | --- | --- | --- | --- |
@@ -19,12 +21,71 @@ of passing unnoticed.
 | D6 | `default:` with `pref` on cisco; any default on Junos | pref dropped; "default not implemented" | rendered |
 | D7 | `configureRouter` | drops router-specific clauses | deferred (design §8) |
 | D8 | `importGroup` with a template | empty policy | deferred (design §8) |
-| D9 | exit status | 0 after "no object for AS1" | non-zero |
-| D10 | peval prints `AS2-AS3`, PeerAS as `AS4294967295` | not re-parseable | `NormalFilter.String` parses back |
+| D9 | exit status | 0 after "Error: no object for AS99" | non-zero |
+| D10 | peval prints an AS range as `AS10-AS12`; rtconfig names an unbound PeerAS `AS4294967295`, even in its queries (`!iAS1:AS-CUST:AS4294967295,1`) | not re-parseable; a query for a set that cannot exist | `NormalFilter.String` parses back |
+| D11 | IOS-XR, `NOT community.contains(5:666)` | `community matches-any <*> and not …`: refuses a route with no community | accepted, as rtconfig's own IOS rendering does |
+| D12 | Junos, a clause with a community test and a prefix list | two `from policy` subroutines, a Junos policy chain: the community test decides alone (unless `-junos_and_not_or`) | both must hold |
+| D13 | a session the aut-num has no policy for | a warning, and no policy: the neighbour keeps the router's default | a policy that refuses everything |
+| D14 | IOS-XR, a clause that is ANY (`announce ANY`) or NOT ANY | `drop` (then `done`), which ends the policy: ANY refuses every route, NOT ANY also the routes a later clause accepts | ANY: `done`; NOT ANY: nothing |
+| D15 | IOS, a session whose policy denotes no route (`accept NOT ANY`, an AS with no routes) | `neighbor … route-map MyMap_2_1 in`, with no `route-map MyMap_2_1` written or cleared: what the router already holds under that name decides | a route-map that denies |
+| D16 | IOS-XR, a clause whose only AS-path regexp is negated (`NOT <AS65004>`) | an `as-path-set` holding `permit .*`, which is not RPL (its elements are `ios-regex`, `length`, …): the configuration does not load | `not as-path in …` alone |
+| D17 | peval, IPv4 routes under a range-operator window beyond /32 (`AS65001^127-128`, `^126`, `^40`) | the Linux build (`scripts/build-irrtoolset.sh`, -O0; seen on aarch64 and on x86-64, both in Docker, the latter emulated) enumerates prefixes: `({10.0.0.0/31, 10.0.0.2/31})` or `({10.0.0.0/32, …, 10.0.0.3/32})` for a /30, or invalid ones (`10.0.0.4/33`, `138.0.0.4/33`), differing from run to run, with no pattern (`^33` and `^65` come out right); the Homebrew bottle answers `NOT ANY` | `NOT ANY`: no IPv4 prefix is longer than /32 |
+| D18 | IOS-XR, a clause with `NOT community.contains(5:666)` (D11's shape) | the Linux build names the clause's community-sets from one run of one binary to the next (`commset51` in one, `commset21904` in another) and sometimes writes the deny set with no members (and an `end-set` with no set before it), so the clause accepts routes carrying 5:666: seen in CI on x86-64, the same cached binary right in one job and wrong in the next | the same sets every run, with their members |
 
-D5–D9 are rtconfig/config-generation bugs with no peval-side test yet; they
-are listed here only so this file matches the design doc's numbering when a
-later task (the rtconfig differential, design §9 item 4) adds one.
+## Where each is pinned
+
+Each test fails when its divergence goes away, on either side.
+
+| # | Pinned by |
+| --- | --- |
+| D1 | `TestPevalDivergences/D1`; `pevalSafe` keeps it out of `TestPevalMatchesIRRToolSet` |
+| D2 | `TestRtconfigGoldens` (import-v4, 10.0.0.3, all three vendors); `TestPevalDivergences/D2` |
+| D3 | `TestPevalDivergences/D3` |
+| D4 | `TestRtconfigDivergences/D4`; `TestImportIPv6SessionIgnoresLegacyImport` (resolve/peval) |
+| D5 | `TestRtconfigDivergences/D5` |
+| D6 | `TestRtconfigDivergences/D6`; `TestTemplateModeVendors` (resolve/internal/rpslconf) |
+| D7 | `TestRtconfigDivergences/D7` |
+| D8 | `TestRtconfigDivergences/D8+D10` |
+| D9 | `TestRtconfigDivergences/D9`; `TestTemplateModeErrors` (resolve/internal/rpslconf) |
+| D10 | `TestRtconfigDivergences/D8+D10`; `TestPevalDivergences/D10` |
+| D11 | `TestRtconfigGoldens` (import-v4, ciscoxr, 10.0.0.5); `TestXRReadsRtconfig` (cfgsim) |
+| D12 | `TestRtconfigDivergences/D12`; `TestJunosPolicyChains` (cfgsim) |
+| D13 | `TestRtconfigDivergences/D13`; `TestEmptyPolicyRejects` (resolve/rtconfig) |
+| D14 | `TestRtconfigGoldens` (export-v4, ciscoxr, 10.0.0.3: ANY); `TestRtconfigDivergences/D14` (NOT ANY before a clause that accepts) |
+| D15 | `TestRtconfigDivergences/D15` |
+| D16 | `TestRtconfigDivergences/D16` |
+| D17 | `TestPevalDivergences/D17`, on the Linux build (told by its echo, not by its answer) on the architectures seen (`d17Arches`: arm64, amd64), failing only when it answers `NOT ANY`, since its wrong answers vary; skipped on the bottle, which answers correctly; `pevalSafe` keeps it out of `TestPevalMatchesIRRToolSet` |
+| D18 | not pinned: it does not happen on every run. `TestRtconfigGoldens` compares IOS-XR's live output with its golden apart from community-set blocks and numbers, stray `end-set` lines and blank lines (`withoutCommSets`), and logs a D18 difference instead of failing on it |
+
+## rtconfig (`TestRtconfigMatches`, `TestRtconfigGoldens`)
+
+The random differential draws only what rtconfig renders correctly:
+- IPv4 policies over prefix lists and bare AS numbers;
+- NOT over prefix lists only;
+- AS-path regexps over AS numbers;
+- positive community tests;
+- Junos with `-junos_and_not_or`.
+
+Three shapes it draws are wrong on one vendor, and are set aside for that
+vendor only, counted in the test's log. Seeds are drawn until every vendor
+rtconfig writes has compared 30 in full (at most 200; fewer fails the test),
+and a vendor that has is not run again:
+- **D14** on IOS-XR: a policy with a clause that `peval` finds ANY, or NOT ANY
+  before another clause (about half the seeds: `pevalFilter` draws ANY often,
+  so IOS-XR takes about 70 seeds to reach 30);
+- **D15** on IOS: rtconfig attached a route-map it never wrote, and rpslconf's
+  policy must then accept none of the routes;
+- **D16** on IOS-XR: a policy with a negated regexp.
+
+D13 is handled like D15: when rtconfig attaches nothing, rpslconf must accept
+nothing.
+
+`TestRtconfigGoldens` compares rtconfig's checked-in output for two fixed templates with rpslconf's, so it runs without rtconfig. With rtconfig installed, it also holds rtconfig to its goldens; `RPSL_RTCONFIG_UPDATE=1` rewrites them.
+
+rtconfig writes its warnings to stderr and its configuration to stdout, one
+line at a time, and the goldens keep the two in that order. The Docker
+wrappers `scripts/build-irrtoolset.sh` installs join stderr to stdout inside
+the container, since docker relays the two apart and reorders them.
 
 ## peval (`TestPevalMatchesIRRToolSet`)
 
@@ -81,7 +142,15 @@ excludes the `"set"` `mFilter` kind entirely, reusing D2 rather than adding a
 new number: it is the same `0.0.0.0/0`-substitution bug, just reached through
 a wider range of inputs than the one case the design doc's table shows.
 
-A bare AS number (`mFilter` kind `"as"`) is unaffected and stays in
+**The Linux build echoes its input, and gets D17 wrong.** A peval built with
+GNU readline (`scripts/build-irrtoolset.sh`, which CI uses) writes the line it
+read before its answer; `pevalAnswer` drops that echo, and `pevalPrefixes`
+refuses a range it cannot parse instead of skipping it, so an answer like
+D17's `10.0.0.4/33` fails the test rather than vanishing. `pevalSafe` leaves out
+a bare AS number under a window beyond /32 (`modelOps`' `^126`, `^127-128`):
+the bottle answers `NOT ANY`, correctly, and the Linux build does not (D17).
+
+A bare AS number (`mFilter` kind `"as"`) is otherwise unaffected and stays in
 `pevalSafe`: it resolves straight to `-K -r -i origin ASn`, a route lookup
 with no `!i` membership walk to corrupt — confirmed with mixed-family and
 open-ended operators (`AS1^+`, `AS1^127-128`) producing no hang and a correct,

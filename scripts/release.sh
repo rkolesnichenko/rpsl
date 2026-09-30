@@ -13,9 +13,9 @@
 # again — and it retries a `go mod tidy` the checksum database is not
 # ready for. Last, from an empty module cache: every module's @latest is the
 # version, a consumer of each gets only what it requires and its tests pass
-# from the published zip, and rpslq installs; then rpslq's binaries, built from
-# the published module for each platform, and the GitHub release, from the
-# changelog section, with the binaries attached.
+# from the published zip, and rpslq and rpslconf install; then rpslq's and
+# rpslconf's binaries, built from the published module for each platform, and
+# the GitHub release, from the changelog section, with the binaries attached.
 #
 # Each step first checks whether it is done — its tag on the remote, its commit
 # made — so after a failure the same command resumes where it stopped.
@@ -27,7 +27,7 @@
 #   RELEASE_SKIP_CI  1: do not ask GitHub whether CI passed
 #   RELEASE_ON_PUSH  a command run with the module directories after each tag push
 #   RELEASE_STOP_AFTER  stop after this step (1-5), as if it had failed there
-#   RELEASE_DIST     directory to leave rpslq's archives in (a temporary one)
+#   RELEASE_DIST     directory to leave rpslq's and rpslconf's archives in (a temporary one)
 set -eu
 
 usage() {
@@ -52,7 +52,7 @@ POLL=${RELEASE_POLL:-30}
 WAIT=${RELEASE_WAIT:-2400}
 cd "$(dirname "$0")/.."
 export GOWORK=off
-PLATFORMS="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64" # rpslq's binaries
+PLATFORMS="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64" # rpslq's and rpslconf's binaries
 
 step() { printf '\n== %s\n' "$*"; }
 refuse() {
@@ -272,72 +272,91 @@ GOBIN=$tmp/bin go install "$M/resolve/cmd/rpslq@$V" || fail "go install rpslq@$V
 got=$("$tmp/bin/rpslq" -v)
 [ "$got" = "rpslq $V" ] || fail "rpslq -v says \"$got\", not \"rpslq $V\""
 echo "$got installs"
+GOBIN=$tmp/bin go install "$M/resolve/cmd/rpslconf@$V" || fail "go install rpslconf@$V"
+got=$("$tmp/bin/rpslconf" -v)
+[ "$got" = "rpslconf $V" ] || fail "rpslconf -v says \"$got\", not \"rpslconf $V\""
+echo "$got installs"
 
-step "7. rpslq binaries, built from the published module"
+step "7. rpslq and rpslconf binaries, built from the published module"
 # The archives outlive the script: in RELEASE_DIST, made absolute, or beside
 # the other temporary files of this user — not in $tmp, which the EXIT trap
 # removes, as it would with --no-gh-release before anyone uploaded them.
 dist=${RELEASE_DIST:-${TMPDIR:-/tmp}/rpsl-release-$V}
 mkdir -p "$dist" "$tmp/build"
 dist=$(cd "$dist" && pwd)
-rm -f "$dist"/rpslq_"${V}"_* "$dist/SHA256SUMS"
+rm -f "$dist"/rpslq_"${V}"_* "$dist"/rpslconf_"${V}"_* "$dist/SHA256SUMS"
 (
 	cd "$tmp/build"
 	go mod init example.com/rpslq-build >/dev/null 2>&1
 	go get "$M/resolve@$V" >/dev/null 2>&1 || fail "go get $M/resolve@$V"
 	license=$(go list -m -f '{{.Dir}}' "$M/resolve")/LICENSE
-	for p in $PLATFORMS; do
-		os=${p%/*} arch=${p#*/}
-		exe=rpslq
-		[ "$os" = windows ] && exe=rpslq.exe
-		stage=$tmp/stage-$os-$arch
-		mkdir -p "$stage"
-		GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "$stage/$exe" "$M/resolve/cmd/rpslq" ||
-			fail "building rpslq for $p"
-		cp "$license" "$stage/LICENSE"
-		cat >"$stage/README.txt" <<README
+	for tool in rpslq rpslconf; do
+		for p in $PLATFORMS; do
+			os=${p%/*} arch=${p#*/}
+			exe=$tool
+			[ "$os" = windows ] && exe=$tool.exe
+			stage=$tmp/stage-$tool-$os-$arch
+			mkdir -p "$stage"
+			GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "$stage/$exe" "$M/resolve/cmd/$tool" ||
+				fail "building $tool for $p"
+			cp "$license" "$stage/LICENSE"
+			case $tool in
+			rpslq)
+				cat >"$stage/README.txt" <<README
 rpslq $V ($os/$arch): router filters from IRR data, as bgpq4 writes them,
 on the rpsl engine. Its command line is bgpq4's; see
 https://github.com/rkolesnichenko/rpsl/blob/main/docs/rpslq.md
 README
-		name=rpslq_${V}_${os}_$arch
-		if [ "$os" = windows ]; then
-			(cd "$stage" && zip -q -X "$dist/$name.zip" "$exe" LICENSE README.txt)
-		else
-			tar -czf "$dist/$name.tar.gz" -C "$stage" "$exe" LICENSE README.txt
-		fi
-		echo "built $name"
+				;;
+			rpslconf)
+				cat >"$stage/README.txt" <<README
+rpslconf $V ($os/$arch): router configuration from the routing policy in
+IRR data, as IRRToolSet's rtconfig writes it, on the rpsl engine. See
+https://github.com/rkolesnichenko/rpsl/blob/main/docs/rpslconf.md
+README
+				;;
+			esac
+			name=${tool}_${V}_${os}_$arch
+			if [ "$os" = windows ]; then
+				(cd "$stage" && zip -q -X "$dist/$name.zip" "$exe" LICENSE README.txt)
+			else
+				tar -czf "$dist/$name.tar.gz" -C "$stage" "$exe" LICENSE README.txt
+			fi
+			echo "built $name"
+		done
 	done
 )
 if command -v sha256sum >/dev/null; then sum="sha256sum"; else sum="shasum -a 256"; fi
-(cd "$dist" && $sum rpslq_"${V}"_* >SHA256SUMS)
+(cd "$dist" && $sum rpslq_"${V}"_* rpslconf_"${V}"_* >SHA256SUMS)
 
 # Check what is about to be published: the checksums, each archive's contents,
 # the platform and module version each binary was built for, and the native
 # binary's own word.
 (cd "$dist" && $sum -c --quiet SHA256SUMS) || fail "SHA256SUMS does not verify"
 native=$(go env GOOS)/$(go env GOARCH)
-for p in $PLATFORMS; do
-	os=${p%/*} arch=${p#*/}
-	exe=rpslq a=$dist/rpslq_${V}_${os}_$arch.tar.gz
-	[ "$os" = windows ] && exe=rpslq.exe a=$dist/rpslq_${V}_${os}_$arch.zip
-	x=$tmp/check-$os-$arch
-	mkdir -p "$x"
-	if [ "$os" = windows ]; then (cd "$x" && unzip -q "$a"); else tar -xzf "$a" -C "$x"; fi
-	[ "$(ls "$x" | tr '\n' ' ')" = "LICENSE README.txt $exe " ] || fail "$a holds $(ls "$x" | tr '\n' ' ')"
-	info=$(go version -m "$x/$exe")
-	{ echo "$info" | grep -q "GOOS=$os" && echo "$info" | grep -q "GOARCH=$arch"; } || fail "$a is not built for $p"
-	echo "$info" | grep -Eq "(mod|dep)[[:space:]]+$M/resolve[[:space:]]+$V[[:space:]]+h1:" || fail "$a is not built from resolve $V"
-	if [ "$p" = "$native" ] && [ "$("$x/$exe" -v)" != "rpslq $V" ]; then
-		fail "$a: rpslq -v says $("$x/$exe" -v)"
-	fi
-	echo "checked $(basename "$a"): $p, from resolve $V"
+for tool in rpslq rpslconf; do
+	for p in $PLATFORMS; do
+		os=${p%/*} arch=${p#*/}
+		exe=$tool a=$dist/${tool}_${V}_${os}_$arch.tar.gz
+		[ "$os" = windows ] && exe=$tool.exe a=$dist/${tool}_${V}_${os}_$arch.zip
+		x=$tmp/check-$tool-$os-$arch
+		mkdir -p "$x"
+		if [ "$os" = windows ]; then (cd "$x" && unzip -q "$a"); else tar -xzf "$a" -C "$x"; fi
+		[ "$(ls "$x" | tr '\n' ' ')" = "LICENSE README.txt $exe " ] || fail "$a holds $(ls "$x" | tr '\n' ' ')"
+		info=$(go version -m "$x/$exe")
+		{ echo "$info" | grep -q "GOOS=$os" && echo "$info" | grep -q "GOARCH=$arch"; } || fail "$a is not built for $p"
+		echo "$info" | grep -Eq "(mod|dep)[[:space:]]+$M/resolve[[:space:]]+$V[[:space:]]+h1:" || fail "$a is not built from resolve $V"
+		if [ "$p" = "$native" ] && [ "$("$x/$exe" -v)" != "$tool $V" ]; then
+			fail "$a: $tool -v says $("$x/$exe" -v)"
+		fi
+		echo "checked $(basename "$a"): $p, from resolve $V"
+	done
 done
 echo "archives and SHA256SUMS in $dist"
 
 if [ -n "$GH_RELEASE" ]; then
 	step "8. the GitHub release, with the binaries"
-	assets=$(ls "$dist"/rpslq_"${V}"_* "$dist/SHA256SUMS")
+	assets=$(ls "$dist"/rpslq_"${V}"_* "$dist"/rpslconf_"${V}"_* "$dist/SHA256SUMS")
 	if gh release view "$V" >/dev/null 2>&1; then
 		echo "the GitHub release $V exists: attaching the binaries"
 		gh release upload "$V" $assets --clobber

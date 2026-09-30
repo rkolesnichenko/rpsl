@@ -93,11 +93,12 @@ func (e *Expander) NormalizeFilter(ctx context.Context, f policy.Filter) (Normal
 
 // normalize is NormalizeFilter, also returning the largest disjunction built.
 func (e *Expander) normalize(ctx context.Context, f policy.Filter) (NormalFilter, int, error) {
-	n := &normalizer{ev: newFilterEval(e, ctx), inline: map[string]bool{}, memo: map[string][]nconj{}}
+	n := &normalizer{ev: newFilterEval(e, ctx), inline: map[string]bool{}, memo: map[string][]nconj{}, height: map[string]int{}}
 	n.ev.anyAll = true
-	// noEx is the same Expander with Exclude cleared, for negated contexts: a
-	// deny side must be evaluated in full, or removing an excluded set or AS
-	// from it would admit what it was meant to leave out (see NormalizeFilter).
+	// noEx is the same Expander with Exclude cleared. It evaluates negated
+	// literals — a deny side must be complete, or removing an excluded set or
+	// AS from it would admit what it was meant to leave out — and every AS-path
+	// regexp's sets, which Exclude never reaches (see NormalizeFilter).
 	// prefixRanges/asSet and discovery apply an Expander's own Exclude, so the
 	// two evaluators cannot share their caches.
 	noExclude := *e
@@ -138,6 +139,9 @@ type normalizer struct {
 	peak   int                // the largest disjunction built, or the most tests in one conjunct
 	inline map[string]bool    // filter-sets being inlined, against cycles
 	memo   map[string][]nconj // inlined filter-sets' normal forms, by polarity and SetRef.String()
+
+	deepest int            // the deepest norm depth reached in the inlining under way
+	height  map[string]int // per memo key: how far below its own depth an inlining reached
 }
 
 // evFor returns the evaluator a literal normalized under the given polarity
@@ -169,6 +173,9 @@ func (n *normalizer) norm(f policy.Filter, neg bool, depth int) ([]nconj, error)
 	}
 	if depth > ev.e.maxDepth() {
 		return nil, &SetTooLargeError{Name: ev.cur, Limit: LimitDepth, Max: ev.e.maxDepth(), Count: depth}
+	}
+	if depth > n.deepest {
+		n.deepest = depth
 	}
 	if err := ev.visit(1); err != nil {
 		return nil, err
@@ -376,13 +383,6 @@ func (n *normalizer) merge(x, y nconj) (nconj, bool, error) {
 			}
 		}
 	}
-	tests := len(c.paths) + len(c.comms)
-	if tests > n.peak {
-		n.peak = tests
-	}
-	if max := n.ev.e.maxConjuncts(); tests > max {
-		return nconj{}, false, &SetTooLargeError{Name: n.ev.cur, Limit: LimitConjuncts, Max: max, Count: tests}
-	}
 	switch {
 	case x.pos == nil:
 		c.pos = y.pos
@@ -397,6 +397,13 @@ func (n *normalizer) merge(x, y nconj) (nconj, bool, error) {
 			return nconj{}, false, nil
 		}
 		c.pos = p
+	}
+	tests := len(c.paths) + len(c.comms)
+	if tests > n.peak {
+		n.peak = tests
+	}
+	if max := n.ev.e.maxConjuncts(); tests > max {
+		return nconj{}, false, &SetTooLargeError{Name: n.ev.cur, Limit: LimitConjuncts, Max: max, Count: tests}
 	}
 	if len(x.neg) > 0 || len(y.neg) > 0 {
 		c.neg = make(rangeSetOf, len(x.neg)+len(y.neg))
@@ -478,6 +485,13 @@ func (n *normalizer) filterSet(x policy.FilterSetRef, neg bool, depth int) ([]nc
 		memoKey = "!" + key
 	}
 	if cs, ok := n.memo[memoKey]; ok {
+		reach := depth + n.height[memoKey]
+		if max := n.ev.e.maxDepth(); reach > max {
+			return nil, &SetTooLargeError{Name: ref, Limit: LimitDepth, Max: max, Count: reach}
+		}
+		if reach > n.deepest {
+			n.deepest = reach
+		}
 		return cs, nil
 	}
 	if n.inline[key] {
@@ -491,15 +505,21 @@ func (n *normalizer) filterSet(x policy.FilterSetRef, neg bool, depth int) ([]nc
 	if fg == nil {
 		return n.literal(x, neg)
 	}
+	saved := n.deepest
+	n.deepest = depth
 	outer := n.ev.cur
 	n.inline[key], n.ev.cur = true, ref
 	cs, err := n.norm(n.ev.pick(fg), neg, depth+1)
 	delete(n.inline, key)
 	n.ev.cur = outer
+	height := n.deepest - depth
+	if saved > n.deepest {
+		n.deepest = saved
+	}
 	if err != nil {
 		return nil, err
 	}
-	n.memo[memoKey] = cs
+	n.memo[memoKey], n.height[memoKey] = cs, height
 	return cs, nil
 }
 

@@ -40,7 +40,8 @@ Every layer ships. Until v1.0.0, a minor version may change the API; the
 | `resolve.PolicySource` | A sibling of `Source` serving aut-nums and inet-rtrs, scoped the same way, over `MemSource`, `Corpus` (`KeepPolicy`), `DumpLoader`, `nrtm4.Client`, `irrd`, `whois`, `Cache` and `rpki.Filter` | shipped |
 | `resolve.NormalizeFilter` + `Expander.Peer` | A filter evaluated to disjunctive normal form for a bound peer (PeerAS, `AS1:AS-CUST:PeerAS`): prefix ranges for what can be enumerated, AS-path regexps and community tests kept symbolic, capped by `Expander.MaxConjuncts` | shipped |
 | `resolve/peval` | An aut-num's import, export, via and default policies evaluated for one BGP session into ordered clauses of normalized filter and actions, with undecidable terms reported rather than guessed | shipped |
-| `rpslconf -e` | Policy evaluation on the command line — IRRToolSet's `peval` on this engine (`resolve/cmd/rpslconf`); template mode and the vendor printers follow in v0.22.0 | shipped |
+| `resolve/rtconfig` | Router configuration from an evaluated policy — Cisco IOS/IOS-XE, Junos, Cisco IOS-XR and BIRD 2 — never approximating a construct a vendor cannot express (`*UnsupportedError`) | shipped |
+| `rpslconf` | IRRToolSet's `RtConfig` and `peval` on this engine: router configuration for Cisco IOS, Junos, IOS-XR and BIRD 2 from `@RtConfig` templates, and filters' normal forms (`resolve/cmd/rpslconf`) | shipped |
 
 RFC 4012 (RPSLng) is supported: `mp-import`/`mp-export`/`mp-default`, the `afi`
 dictionary and `afi`-scoped policies (`Import`/`Export`/`Default`/`Except`/

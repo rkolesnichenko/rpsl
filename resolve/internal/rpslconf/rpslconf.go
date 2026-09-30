@@ -1,8 +1,9 @@
 // Package rpslconf is the rpslconf command: router configuration from the
 // routing policy in IRR data, as IRRToolSet's rtconfig writes it, on the
-// rpsl engine. This release has its peval mode (-e): a filter evaluated to
-// its normal form. Template mode, reading rtconfig's @RtConfig commands,
-// arrives with the configuration printers.
+// rpsl engine. It has two modes: peval mode (-e), which prints the normal
+// form of one filter, and template mode (the default), which reads an
+// rtconfig-style template from stdin and copies it to stdout with each
+// @RtConfig command replaced by the router configuration it asks for.
 package rpslconf
 
 import (
@@ -19,6 +20,8 @@ import (
 	"github.com/rkolesnichenko/rpsl/policy"
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/backend"
+	"github.com/rkolesnichenko/rpsl/resolve/internal/buildinfo"
+	"github.com/rkolesnichenko/rpsl/resolve/rtconfig"
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
@@ -41,24 +44,52 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	fs.Var(&dumps, "dump", "read objects from a dump `file` instead of a server (repeatable; gzip is read too)")
 	expr := fs.String("e", "", "peval mode: print the normal form of this (mp-)`filter`")
 	peerFlag := fs.String("peer", "", "peval mode: the `AS` PeerAS denotes")
+	config := fs.String("config", "cisco", "template mode: the configuration `format`: cisco, junos, ciscoxr or bird")
 	timeout := fs.Duration("timeout", 60*time.Second, "give up after this long")
+	showVersion := fs.Bool("v", false, "print rpslconf's version and exit")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if *expr == "" {
-		fmt.Fprintln(stderr, "rpslconf: template mode arrives with the configuration printers; use -e <filter> for peval mode")
+	if *showVersion {
+		fmt.Fprintf(stdout, "rpslconf %s\n", buildinfo.Version())
+		return 0
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(stderr, "rpslconf: unexpected argument %q (the template is read from stdin)\n", fs.Arg(0))
 		return 2
 	}
-	var peer types.ASN
+	vendor, err := rtconfig.ParseVendor(*config)
+	if err != nil {
+		fmt.Fprintf(stderr, "rpslconf: -config: %v\n", err)
+		return 2
+	}
+	opts := backend.Options{Host: hostPort(*host, *port), Sources: *sources, Whois: *useWhois, Dumps: dumps, Conns: 8}
+	ctx, cancel := context.WithTimeout(ctx, *timeout)
+	defer cancel()
+	if *expr != "" {
+		return pevalMode(ctx, opts, *expr, *peerFlag, stdout, stderr)
+	}
 	if *peerFlag != "" {
-		a, err := types.ParseASN(*peerFlag)
+		fmt.Fprintln(stderr, "rpslconf: -peer belongs to peval mode (-e)")
+		return 2
+	}
+	opts.KeepPolicy = true // dumps: keep the aut-nums and inet-rtrs templates read
+	t := &tmpl{ctx: ctx, opts: opts, g: &rtconfig.Generator{Vendor: vendor}, out: stdout, errw: stderr}
+	return t.run(stdin)
+}
+
+// pevalMode prints the normal form of expr: -e.
+func pevalMode(ctx context.Context, opts backend.Options, expr, peerFlag string, stdout, stderr io.Writer) int {
+	var peer types.ASN
+	if peerFlag != "" {
+		a, err := types.ParseASN(peerFlag)
 		if err != nil {
 			fmt.Fprintf(stderr, "rpslconf: -peer: %v\n", err)
 			return 2
 		}
 		peer = a
 	}
-	afis, f, diags := policy.ParseMPFilter(*expr)
+	afis, f, diags := policy.ParseMPFilter(expr)
 	failed := false
 	for _, d := range diags {
 		fmt.Fprintf(stderr, "rpslconf: %v\n", d)
@@ -67,15 +98,12 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if failed {
 		return 1
 	}
-	b, err := backend.Open(backend.Options{Host: hostPort(*host, *port), Sources: *sources,
-		Whois: *useWhois, Dumps: dumps, Conns: 8})
+	b, err := backend.Open(opts)
 	if err != nil {
 		fmt.Fprintf(stderr, "rpslconf: %v\n", err)
 		return 1
 	}
 	defer b.Close()
-	ctx, cancel := context.WithTimeout(ctx, *timeout)
-	defer cancel()
 	e := resolve.Expander{Src: b.Src, AFI: afiOf(afis), Peer: peer}
 	nf, err := e.NormalizeFilter(ctx, f)
 	if err != nil {

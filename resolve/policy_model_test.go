@@ -6,12 +6,14 @@ import (
 	"maps"
 	"math/rand/v2"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/rkolesnichenko/rpsl"
 	"github.com/rkolesnichenko/rpsl/ast"
+	"github.com/rkolesnichenko/rpsl/policy"
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/irrtest"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/routemodel"
@@ -21,14 +23,20 @@ import (
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
-// peval against a per-route model of RFC 2622 §6: random import policies of
-// one aut-num — factors with several peer clauses, lists, EXCEPT and REFINE,
-// peerings by AS, as-set, AS-ANY, AS expression and peering-set, routers by
-// address, inet-rtr and rtr-set, afi clauses and protocols — are decided route
-// by route and session by session from the model, and the first clause of
-// peval's Policy that accepts a route must be the model's, with its actions.
+// peval against a per-route model of RFC 2622 §6: random policies of one
+// aut-num — import:, export:, import-via: (draft-ietf-grow-rpsl-via) or
+// default:, each with its mp- form; factors with several peer clauses, lists,
+// EXCEPT and REFINE, peerings by AS, as-set, AS-ANY, AS expression and
+// peering-set, routers by address, inet-rtr and rtr-set, afi clauses and
+// protocols — are decided route by route and session by session from the
+// model, and the first clause of peval's Policy that accepts a route must be
+// the model's, with its actions.
 
-const localAS = types.ASN(64500)
+const (
+	localAS = types.ASN(64500)
+	// routeServerAS is the via peering of every generated import-via:.
+	routeServerAS = types.ASN(64777)
+)
 
 var (
 	peerRtrs     = []string{"", "192.0.2.1", "192.0.2.2", "192.0.2.9"}
@@ -85,41 +93,69 @@ type mFactor struct {
 	filter *mFilter
 }
 
-func (f mFactor) text() string {
+// kw is how an attribute writes its factors: the peer keyword ("from" or
+// "to"), the filter keyword ("accept" or "announce"), and the via peering
+// written before each peer clause ("" for none).
+type kw struct{ peer, filter, via string }
+
+func (f mFactor) text(k kw) string {
 	var b strings.Builder
 	for _, pa := range f.peers {
-		fmt.Fprintf(&b, "from %s ", pa.p.text())
+		if k.via != "" {
+			b.WriteString(k.via + " ")
+		}
+		fmt.Fprintf(&b, "%s %s ", k.peer, pa.p.text())
 		if len(pa.actions) > 0 {
 			fmt.Fprintf(&b, "action %s; ", strings.Join(pa.actions, "; "))
 		}
 	}
-	return b.String() + "accept " + f.filter.text()
+	return b.String() + k.filter + " " + f.filter.text()
 }
 
 type mAttr struct {
 	mp          bool
-	afi         string // mp-import only: "", "ipv4.unicast" or "ipv6.unicast"
+	afi         string // mp only: "", "ipv4.unicast" or "ipv6.unicast"
 	protocol    string // "" or "OSPF"
 	kind        string // "factor", "list", "except", "refine"
 	left, right []mFactor
+	export      bool      // export:/mp-export: rather than import:/mp-import:
+	via         *mPeering // import-via: only: the route server's peering
 }
 
-func block(fs []mFactor, braces bool) string {
+func (a *mAttr) kw() kw {
+	k := kw{peer: "from", filter: "accept"}
+	if a.export {
+		k.peer, k.filter = "to", "announce"
+	}
+	if a.via != nil {
+		k.via = a.via.text()
+	}
+	return k
+}
+
+func block(fs []mFactor, braces bool, k kw) string {
 	if len(fs) == 1 && !braces {
-		return fs[0].text()
+		return fs[0].text(k)
 	}
 	parts := make([]string, len(fs))
 	for i, f := range fs {
-		parts[i] = f.text()
+		parts[i] = f.text(k)
 	}
 	return "{ " + strings.Join(parts, "; ") + "; }"
 }
 
 func (a *mAttr) line() string {
 	var b strings.Builder
-	if a.mp {
+	switch {
+	case a.via != nil:
+		b.WriteString("import-via: ")
+	case a.export && a.mp:
+		b.WriteString("mp-export: ")
+	case a.export:
+		b.WriteString("export: ")
+	case a.mp:
 		b.WriteString("mp-import: ")
-	} else {
+	default:
 		b.WriteString("import: ")
 	}
 	if a.protocol != "" {
@@ -128,22 +164,25 @@ func (a *mAttr) line() string {
 	if a.afi != "" {
 		b.WriteString("afi " + a.afi + " ")
 	}
+	k := a.kw()
 	switch a.kind {
 	case "factor":
-		b.WriteString(block(a.left, false))
+		b.WriteString(block(a.left, false, k))
 	case "list":
-		b.WriteString(block(a.left, true))
+		b.WriteString(block(a.left, true, k))
 	case "except":
-		b.WriteString(block(a.left, false) + " except " + block(a.right, true))
+		b.WriteString(block(a.left, false, k) + " except " + block(a.right, true, k))
 	case "refine":
-		b.WriteString(block(a.left, false) + " refine " + block(a.right, true))
+		b.WriteString(block(a.left, false, k) + " refine " + block(a.right, true, k))
 	}
 	return b.String()
 }
 
+// applies is whether the attribute covers af. import-via: is always mp
+// (draft-ietf-grow-rpsl-via): with no afi clause it covers every family.
 func (a *mAttr) applies(af types.AddrFamily) bool {
 	switch {
-	case !a.mp:
+	case !a.mp && a.via == nil:
 		return af.AFI == types.AFIv4
 	case a.afi == "":
 		return true
@@ -151,19 +190,81 @@ func (a *mAttr) applies(af types.AddrFamily) bool {
 	return a.afi == af.String()
 }
 
+// mPolicy is the policy generated for the local aut-num: one kind of
+// attribute, so that one Evaluator method answers for all of it.
+type mPolicy struct {
+	kind     string // "import", "export", "via" or "default"
+	attrs    []*mAttr
+	defaults []*mDefault
+}
+
+// lines are the policy's attributes as the aut-num carries them.
+func (pol *mPolicy) lines() []string {
+	var out []string
+	for _, a := range pol.attrs {
+		out = append(out, a.line())
+	}
+	for _, d := range pol.defaults {
+		out = append(out, d.line())
+	}
+	return out
+}
+
+// mDefault is a default: or mp-default: attribute.
+type mDefault struct {
+	mp       bool
+	afi      string // mp only: "", "ipv4.unicast" or "ipv6.unicast"
+	p        *mPeering
+	actions  []string
+	networks *mFilter // nil: no networks clause
+}
+
+func (d *mDefault) line() string {
+	var b strings.Builder
+	if d.mp {
+		b.WriteString("mp-default: ")
+		if d.afi != "" {
+			b.WriteString("afi " + d.afi + " ")
+		}
+	} else {
+		b.WriteString("default: ")
+	}
+	b.WriteString("to " + d.p.text())
+	if len(d.actions) > 0 {
+		b.WriteString(" action " + strings.Join(d.actions, "; ") + ";")
+	}
+	if d.networks != nil {
+		b.WriteString(" networks " + d.networks.text())
+	}
+	return b.String()
+}
+
+func (d *mDefault) applies(af types.AddrFamily) bool {
+	switch {
+	case !d.mp:
+		return af.AFI == types.AFIv4
+	case d.afi == "":
+		return true
+	}
+	return d.afi == af.String()
+}
+
 // oTerm is one term of the oracle's reading: a peering, the filters a route
-// must pass, those it must fail, and the actions it takes.
+// must pass, those it must fail, and the actions it takes. peer is the AS its
+// filters bind PeerAS to; zero means the session's peer.
 type oTerm struct {
 	p       *mPeering
 	filters []*mFilter
 	notAny  []*mFilter
 	actions []string
+	peer    types.ASN
 }
 
 type policyGen struct {
-	fg     *filterGen
-	prngs  map[string][]*mPeering
-	asSets []string
+	fg      *filterGen
+	prngs   map[string][]*mPeering
+	asSets  []string
+	actions []string // the actions a clause draws from: modelActions, unless a model asks for others
 }
 
 func (pg *policyGen) asn() types.ASN { return types.ASN(firstAS + pg.fg.r.IntN(4)) }
@@ -208,16 +309,32 @@ func (pg *policyGen) factor(nPeers int, peering func() *mPeering) mFactor {
 	for i := 0; i < nPeers; i++ {
 		pa := mPeerAct{p: peering()}
 		for n := pg.fg.r.IntN(3); n > 0; n-- {
-			pa.actions = append(pa.actions, modelActions[pg.fg.r.IntN(len(modelActions))])
+			pa.actions = append(pa.actions, pg.actions[pg.fg.r.IntN(len(pg.actions))])
 		}
 		f.peers = append(f.peers, pa)
 	}
 	return f
 }
 
-func (pg *policyGen) attr() *mAttr {
+// attr draws an import:, export: or import-via: attribute (kind "import",
+// "export" or "via"). An import-via: is mp, its via peering the route server
+// AS, its remote peerings drawn without routers or peering-sets; it has no
+// REFINE, since its terms would meet only on the via peering, which is always
+// the same.
+func (pg *policyGen) attr(kind string) *mAttr {
 	r := pg.fg.r
-	a := &mAttr{mp: r.IntN(2) == 0}
+	a := &mAttr{mp: r.IntN(2) == 0, export: kind == "export"}
+	any := func() *mPeering { return pg.peering(true) }
+	kinds := 5
+	if kind == "via" {
+		a.mp, a.via = true, &mPeering{kind: "as", as: routeServerAS}
+		any = func() *mPeering {
+			p := pg.peering(false)
+			p.peerRtr, p.atRtr = "", ""
+			return p
+		}
+		kinds = 4
+	}
 	if a.mp && r.IntN(2) == 0 {
 		a.afi = []string{"ipv4.unicast", "ipv6.unicast"}[r.IntN(2)]
 	}
@@ -226,8 +343,7 @@ func (pg *policyGen) attr() *mAttr {
 	}
 	pg.fg.v4only = !a.mp
 	defer func() { pg.fg.v4only = false }()
-	any := func() *mPeering { return pg.peering(true) }
-	switch r.IntN(5) {
+	switch r.IntN(kinds) {
 	case 0, 1:
 		a.kind, a.left = "factor", []mFactor{pg.factor(1+r.IntN(2), any)}
 	case 2:
@@ -257,6 +373,25 @@ func (pg *policyGen) attr() *mAttr {
 		})}
 	}
 	return a
+}
+
+// defaultAttr draws a default: or mp-default: attribute.
+func (pg *policyGen) defaultAttr() *mDefault {
+	r := pg.fg.r
+	d := &mDefault{mp: r.IntN(2) == 0}
+	if d.mp && r.IntN(2) == 0 {
+		d.afi = []string{"ipv4.unicast", "ipv6.unicast"}[r.IntN(2)]
+	}
+	d.p = pg.peering(true)
+	for n := r.IntN(3); n > 0; n-- {
+		d.actions = append(d.actions, pg.actions[r.IntN(len(pg.actions))])
+	}
+	if r.IntN(2) == 0 {
+		pg.fg.v4only = !d.mp
+		d.networks = pg.fg.filter(2)
+		pg.fg.v4only = false
+	}
+	return d
 }
 
 func flat(fs []mFactor) []oTerm {
@@ -412,6 +547,68 @@ func (pg *policyGen) evaluate(attrs []*mAttr, s peval.Session) ([]oTerm, map[int
 	return terms, und
 }
 
+// evaluateVia is evaluate for import-via: attributes. A term covers the
+// session when its via peering does; its filters bind PeerAS to the remote
+// peering's AS when that is one AS number, and a term whose filters name the
+// peer when it is not is undecided.
+func (pg *policyGen) evaluateVia(attrs []*mAttr, s peval.Session) ([]oTerm, map[int]int) {
+	var terms []oTerm
+	und := map[int]int{}
+	for i, a := range attrs {
+		if !a.applies(s.AF) {
+			continue
+		}
+		if a.protocol != "" {
+			und[i]++
+			continue
+		}
+		if pg.matches(a.via, s) != 1 {
+			continue
+		}
+		for _, t := range pg.terms(a) {
+			if t.p.kind == "as" {
+				t.peer = t.p.as
+			} else if namesPeer(t) {
+				und[i]++
+				continue
+			}
+			terms = append(terms, t)
+		}
+	}
+	return terms, und
+}
+
+// namesPeer is whether any of a term's filters names the peer: PeerAS, in a
+// filter, a set template or an AS-path regexp. The model's filter-sets never
+// do (filterNoPeer).
+func namesPeer(t oTerm) bool {
+	for _, f := range append(append([]*mFilter{}, t.filters...), t.notAny...) {
+		if strings.Contains(f.text(), "PeerAS") {
+			return true
+		}
+	}
+	return false
+}
+
+// evaluateDefaults is the oracle for default: attributes: the indexes of those
+// that cover the session, in order, and how many were undecided per attribute.
+func (pg *policyGen) evaluateDefaults(ds []*mDefault, s peval.Session) ([]int, map[int]int) {
+	var out []int
+	und := map[int]int{}
+	for i, d := range ds {
+		if !d.applies(s.AF) {
+			continue
+		}
+		switch pg.matches(d.p, s) {
+		case 1:
+			out = append(out, i)
+		case 2:
+			und[i]++
+		}
+	}
+	return out, und
+}
+
 // prefixAFI is the address family of a route's prefix.
 func prefixAFI(p netip.Prefix) types.AFI {
 	if p.Addr().Is4() {
@@ -431,11 +628,15 @@ func prefixAFI(p netip.Prefix) types.AFI {
 // samplePrefixes mixes both families (it is shared with Task 5's filterGen,
 // whose model has no per-call AFI), so this check belongs here rather than in
 // filterGen.accepts.
-func (pg *policyGen) decide(terms []oTerm, rt routemodel.Route, peer types.ASN, af types.AFI) (bool, string) {
+func (pg *policyGen) decide(terms []oTerm, rt routemodel.Route, sessionPeer types.ASN, af types.AFI) (bool, string) {
 	if prefixAFI(rt.Prefix) != af {
 		return false, ""
 	}
 	for _, t := range terms {
+		peer := sessionPeer
+		if t.peer != 0 {
+			peer = t.peer
+		}
 		ok := true
 		for _, f := range t.filters {
 			ok = ok && pg.fg.accepts(f, rt, peer)
@@ -450,11 +651,26 @@ func (pg *policyGen) decide(terms []oTerm, rt routemodel.Route, peer types.ASN, 
 	return false, ""
 }
 
-func randomPolicy(t *testing.T, r *rand.Rand, seed uint64) ([]string, *policyGen, []*mAttr) {
+// policyKinds are the kinds of policy randomPolicy draws, with equal weight.
+var policyKinds = []string{"import", "export", "via", "default"}
+
+// randomPolicy draws a random IRR (with the set templates' as-sets, so a
+// template in a filter denotes something for every peer a session names), its
+// filter-sets, routers and peering-sets, and an aut-num for localAS carrying
+// a random policy of one kind. It returns the objects' RPSL, the generator
+// and the policy.
+func randomPolicy(t *testing.T, r *rand.Rand, seed uint64) ([]string, *policyGen, *mPolicy) {
 	t.Helper()
-	m := randomModel(r, false)
+	return randomPolicyWith(t, r, seed, modelActions)
+}
+
+// randomPolicyWith is randomPolicy with its clauses' actions drawn from
+// actions.
+func randomPolicyWith(t *testing.T, r *rand.Rand, seed uint64, actions []string) ([]string, *policyGen, *mPolicy) {
+	t.Helper()
+	m := withTemplateSets(r, randomModel(r, false))
 	fg := newFilterGen(r, newOracle(m))
-	pg := &policyGen{fg: fg, prngs: map[string][]*mPeering{}, asSets: fg.asSets}
+	pg := &policyGen{fg: fg, prngs: map[string][]*mPeering{}, asSets: fg.asSets, actions: actions}
 	texts := append(m.texts(r), fg.filterSets(2)...)
 	texts = append(texts, routerTexts...)
 	for i := 0; i < 2; i++ {
@@ -469,13 +685,20 @@ func randomPolicy(t *testing.T, r *rand.Rand, seed uint64) ([]string, *policyGen
 		b.WriteString("mnt-by: MNT-A\nsource: RIPE\n")
 		texts = append(texts, b.String())
 	}
-	var attrs []*mAttr
+	pol := &mPolicy{kind: policyKinds[r.IntN(len(policyKinds))]}
+	if pol.kind == "default" {
+		for n := 1 + r.IntN(3); n > 0; n-- {
+			pol.defaults = append(pol.defaults, pg.defaultAttr())
+		}
+	} else {
+		for n := 1 + r.IntN(4); n > 0; n-- {
+			pol.attrs = append(pol.attrs, pg.attr(pol.kind))
+		}
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "aut-num: %s\nas-name: LOCAL\n", localAS)
-	for n := 1 + r.IntN(4); n > 0; n-- {
-		a := pg.attr()
-		attrs = append(attrs, a)
-		b.WriteString(a.line() + "\n")
+	for _, l := range pol.lines() {
+		b.WriteString(l + "\n")
 	}
 	b.WriteString("mnt-by: MNT-A\nsource: RIPE\n")
 	raw, _ := rpsl.ParseObject(b.String())
@@ -486,148 +709,255 @@ func randomPolicy(t *testing.T, r *rand.Rand, seed uint64) ([]string, *policyGen
 			}
 		}
 	}
-	return append(texts, b.String()), pg, attrs
+	return append(texts, b.String()), pg, pol
 }
 
-func checkPolicyModel(t *testing.T, label string, pg *policyGen, attrs []*mAttr, v *peval.Evaluator, r *rand.Rand) {
-	t.Helper()
+// session draws a session for pol: the peer one of the model's AS numbers,
+// or, for import-via:, the route server half the time; each router given or
+// not.
+func (pol *mPolicy) session(r *rand.Rand) peval.Session {
+	s := peval.Session{Local: localAS, Peer: types.ASN(firstAS + r.IntN(4)), AF: families[r.IntN(2)]}
+	if pol.kind == "via" && r.IntN(2) == 0 {
+		s.Peer = routeServerAS
+	}
+	if a := peerRtrs[r.IntN(len(peerRtrs))]; a != "" {
+		s.PeerRtr = netip.MustParseAddr(a)
+	}
+	if a := localRtrs[r.IntN(len(localRtrs))]; a != "" {
+		s.LocalRtr = netip.MustParseAddr(a)
+	}
+	return s
+}
+
+// evaluate is the Evaluator method answering for pol's kind (not "default").
+func (pol *mPolicy) evaluate(v *peval.Evaluator, s peval.Session) (peval.Policy, error) {
 	ctx := context.Background()
-	for k := 0; k < 6; k++ {
-		s := peval.Session{Local: localAS, Peer: types.ASN(firstAS + r.IntN(4)), AF: families[r.IntN(2)]}
-		if a := peerRtrs[r.IntN(len(peerRtrs))]; a != "" {
-			s.PeerRtr = netip.MustParseAddr(a)
+	switch pol.kind {
+	case "export":
+		return v.Export(ctx, s)
+	case "via":
+		return v.ImportVia(ctx, s)
+	}
+	return v.Import(ctx, s)
+}
+
+// expect is the oracle's reading of pol (not "default") for the session.
+func (pg *policyGen) expect(pol *mPolicy, s peval.Session) ([]oTerm, map[int]int) {
+	if pol.kind == "via" {
+		return pg.evaluateVia(pol.attrs, s)
+	}
+	return pg.evaluate(pol.attrs, s)
+}
+
+func undecidedByIndex(us []peval.Undecided) map[int]int {
+	out := map[int]int{}
+	for _, u := range us {
+		out[u.Index]++
+	}
+	return out
+}
+
+func actionsText(as []policy.Action) string {
+	parts := make([]string, len(as))
+	for i, a := range as {
+		parts[i] = a.String()
+	}
+	return strings.Join(parts, "; ")
+}
+
+// checkSession holds peval's answer for one session to the model's, over 60
+// random routes, and returns how many clauses peval found. exact asks for the
+// same routes accepted, by the same first clause's actions; otherwise (under
+// Exclude, which only narrows) the same clauses and a subset of the routes,
+// and *narrowed counts the routes the model accepts and peval does not.
+func checkSession(t *testing.T, label string, pg *policyGen, pol *mPolicy, v *peval.Evaluator, s peval.Session, r *rand.Rand, exact bool, narrowed *int) int {
+	t.Helper()
+	fail := func(format string, args ...any) {
+		t.Helper()
+		t.Fatalf("%s: session %+v: %s\npolicy:\n%s", label, s, fmt.Sprintf(format, args...), strings.Join(pol.lines(), "\n"))
+	}
+	compare := func(got, want bool, what string) {
+		t.Helper()
+		switch {
+		case got && !want && exact:
+			fail("%s: peval accepts it; the model refuses it", what)
+		case got && !want:
+			fail("%s: peval accepts it; without Exclude the model refuses it", what)
+		case want && !got && exact:
+			fail("%s: peval refuses it; the model accepts it", what)
+		case want && !got:
+			*narrowed++
 		}
-		if a := localRtrs[r.IntN(len(localRtrs))]; a != "" {
-			s.LocalRtr = netip.MustParseAddr(a)
-		}
-		pol, err := v.Import(ctx, s)
+	}
+	if pol.kind == "default" {
+		d, err := v.Default(context.Background(), s)
 		if err != nil {
-			t.Fatalf("%s: Import(%+v): %v", label, s, err)
+			fail("Default: %v", err)
 		}
-		terms, wantUnd := pg.evaluate(attrs, s)
-		gotUnd := map[int]int{}
-		for _, u := range pol.Undecided {
-			gotUnd[u.Index]++
+		want, wantUnd := pg.evaluateDefaults(pol.defaults, s)
+		if got := undecidedByIndex(d.Undecided); !maps.Equal(got, wantUnd) {
+			fail("undecided %v, the model says %v", got, wantUnd)
 		}
-		if !maps.Equal(gotUnd, wantUnd) {
-			t.Fatalf("%s: Import(%+v): undecided %v, the model says %v", label, s, gotUnd, wantUnd)
+		var got, wantText []string
+		for _, dc := range d.Clauses {
+			got = append(got, fmt.Sprintf("%d: %s", dc.Index, actionsText(dc.Actions)))
 		}
-		for j := 0; j < 60; j++ {
-			rt := randomRoute(r, s.Peer)
-			wantOK, wantActs := pg.decide(terms, rt, s.Peer, s.AF.AFI)
-			gotOK, gotActs := false, ""
-			for _, c := range pol.Clauses {
-				ok, err := routemodel.Match(c.Filter, rt)
+		for _, i := range want {
+			wantText = append(wantText, fmt.Sprintf("%d: %s", i, strings.Join(pol.defaults[i].actions, "; ")))
+		}
+		if !slices.Equal(got, wantText) {
+			fail("clauses %q, the model %q", got, wantText)
+		}
+		for k, dc := range d.Clauses {
+			md := pol.defaults[want[k]]
+			if (dc.Networks == nil) != (md.networks == nil) {
+				fail("default %d: networks %v, the model %v", dc.Index, dc.Networks, md.networks)
+			}
+			if md.networks == nil {
+				continue
+			}
+			for j := 0; j < 60; j++ {
+				rt := randomRoute(r, s.Peer)
+				ok, err := routemodel.Match(*dc.Networks, rt)
 				if err != nil {
-					t.Fatalf("%s: %v", label, err)
+					fail("%v", err)
 				}
-				if ok {
-					var acts []string
-					for _, a := range c.Actions {
-						acts = append(acts, a.String())
-					}
-					gotOK, gotActs = true, strings.Join(acts, "; ")
-					break
-				}
-			}
-			if gotOK != wantOK || gotActs != wantActs {
-				var lines []string
-				for _, a := range attrs {
-					lines = append(lines, a.line())
-				}
-				t.Fatalf("%s: session %+v, route %v: peval accepts %v with %q; the model %v with %q\npolicy:\n%s",
-					label, s, rt, gotOK, gotActs, wantOK, wantActs, strings.Join(lines, "\n"))
+				compare(ok, prefixAFI(rt.Prefix) == s.AF.AFI && pg.fg.accepts(md.networks, rt, s.Peer),
+					fmt.Sprintf("default %d, networks %s, route %v", dc.Index, *dc.Networks, rt))
 			}
 		}
+		return len(d.Clauses)
+	}
+	p, err := pol.evaluate(v, s)
+	if err != nil {
+		fail("%s: %v", pol.kind, err)
+	}
+	terms, wantUnd := pg.expect(pol, s)
+	if got := undecidedByIndex(p.Undecided); !maps.Equal(got, wantUnd) {
+		fail("undecided %v, the model says %v", got, wantUnd)
+	}
+	if !exact && len(p.Clauses) != len(terms) {
+		fail("%d clauses, the model %d terms", len(p.Clauses), len(terms))
+	}
+	for j := 0; j < 60; j++ {
+		rt := randomRoute(r, s.Peer)
+		wantOK, wantActs := pg.decide(terms, rt, s.Peer, s.AF.AFI)
+		gotOK, gotActs := false, ""
+		for _, c := range p.Clauses {
+			ok, err := routemodel.Match(c.Filter, rt)
+			if err != nil {
+				fail("%v", err)
+			}
+			if ok {
+				gotOK, gotActs = true, actionsText(c.Actions)
+				break
+			}
+		}
+		if exact && gotOK && wantOK && gotActs != wantActs {
+			fail("route %v: peval accepts it with %q; the model with %q", rt, gotActs, wantActs)
+		}
+		compare(gotOK, wantOK, fmt.Sprintf("route %v", rt))
+	}
+	return len(p.Clauses)
+}
+
+// kindCounts tallies, per kind of policy, the policies, the sessions with a
+// clause, and the clauses checked.
+type kindCounts map[string]*[3]int
+
+func (kc kindCounts) add(kind string, clauses int) {
+	if kc[kind] == nil {
+		kc[kind] = &[3]int{}
+	}
+	if clauses > 0 {
+		kc[kind][1]++
+	}
+	kc[kind][2] += clauses
+}
+
+func (kc kindCounts) log(t *testing.T, label string) {
+	t.Helper()
+	for _, k := range policyKinds {
+		if c := kc[k]; c != nil {
+			t.Logf("%s %s: %d policies, %d sessions with a clause, %d clauses", label, k, c[0], c[1], c[2])
+		}
+	}
+}
+
+// checkPolicyModel holds v to the model over six random sessions.
+func checkPolicyModel(t *testing.T, label string, pg *policyGen, pol *mPolicy, v *peval.Evaluator, r *rand.Rand, kc kindCounts) {
+	t.Helper()
+	if kc[pol.kind] == nil {
+		kc[pol.kind] = &[3]int{}
+	}
+	kc[pol.kind][0]++
+	for k := 0; k < 6; k++ {
+		kc.add(pol.kind, checkSession(t, label, pg, pol, v, pol.session(r), r, true, nil))
 	}
 }
 
 func TestModelPolicy(t *testing.T) {
+	kc := kindCounts{}
 	for seed := uint64(0); seed < 300; seed++ {
 		r := rand.New(rand.NewPCG(seed, 17))
-		texts, pg, attrs := randomPolicy(t, r, seed)
+		texts, pg, pol := randomPolicy(t, r, seed)
 		v := &peval.Evaluator{Src: resolve.NewMemSource(decodeAll(t, texts), "RIPE", "RADB")}
-		checkPolicyModel(t, fmt.Sprintf("seed %d", seed), pg, attrs, v, r)
+		checkPolicyModel(t, fmt.Sprintf("seed %d", seed), pg, pol, v, r, kc)
+	}
+	kc.log(t, "memsource")
+	for _, k := range policyKinds {
+		if c := kc[k]; c == nil || c[1] < 20 {
+			t.Errorf("%s: only %v policies, sessions with a clause and clauses checked", k, c)
+		}
 	}
 }
 
 // The same, over a Corpus kept with KeepPolicy and over the network
-// backends against an IRRd-like server.
+// backends against an IRRd-like server. 100 seeds, so that each of the four
+// kinds randomPolicy draws gets about 25 policies, as import alone had before.
 func TestModelPolicyBackends(t *testing.T) {
-	for seed := uint64(0); seed < 25; seed++ {
+	kcs := map[string]kindCounts{"corpus": {}, "irrd": {}, "whois": {}}
+	for seed := uint64(0); seed < 100; seed++ {
 		r := rand.New(rand.NewPCG(seed, 17))
-		texts, pg, attrs := randomPolicy(t, r, seed)
+		texts, pg, pol := randomPolicy(t, r, seed)
 		l := &resolve.DumpLoader{Sources: []string{"RIPE", "RADB"}, KeepPolicy: true}
 		if err := l.Read(strings.NewReader(strings.Join(texts, "\n"))); err != nil {
 			t.Fatal(err)
 		}
-		checkPolicyModel(t, fmt.Sprintf("corpus seed %d", seed), pg, attrs, &peval.Evaluator{Src: l.Source()}, r)
+		checkPolicyModel(t, fmt.Sprintf("corpus seed %d", seed), pg, pol, &peval.Evaluator{Src: l.Source()}, r, kcs["corpus"])
 		db := irrtest.New(texts...).WithSources("RIPE", "RADB")
 		ir := &irrd.Source{Addr: db.IRRd(t), Sources: []string{"RIPE", "RADB"}, Pipeline: 8, Timeout: 5 * time.Second}
-		checkPolicyModel(t, fmt.Sprintf("irrd seed %d", seed), pg, attrs, &peval.Evaluator{Src: ir}, r)
+		checkPolicyModel(t, fmt.Sprintf("irrd seed %d", seed), pg, pol, &peval.Evaluator{Src: ir}, r, kcs["irrd"])
 		ir.Close()
 		wh := &whois.Source{Addr: db.Whois(t), Sources: []string{"RIPE", "RADB"}, Timeout: 5 * time.Second}
-		checkPolicyModel(t, fmt.Sprintf("whois seed %d", seed), pg, attrs, &peval.Evaluator{Src: wh}, r)
+		checkPolicyModel(t, fmt.Sprintf("whois seed %d", seed), pg, pol, &peval.Evaluator{Src: wh}, r, kcs["whois"])
+	}
+	for _, b := range []string{"corpus", "irrd", "whois"} {
+		kcs[b].log(t, b)
+		for _, k := range policyKinds {
+			if c := kcs[b][k]; c == nil || c[1] < 10 {
+				t.Errorf("%s %s: only %v policies, sessions with a clause and clauses checked", b, k, c)
+			}
+		}
 	}
 }
 
 // Expander.Exclude only narrows a policy: with a random Exclude on the
-// Evaluator's Expander, the terms that cover a session — and those undecided —
-// are the model's without it, and every route peval accepts the model accepts
-// without it (actions aside: a narrower clause may pass a route to a later one).
+// Evaluator's Expander, the clauses that cover a session — and those
+// undecided — are the model's without it, and every route peval accepts (for
+// a default, every route its networks filter accepts) the model accepts
+// without it (actions aside: a narrower clause may pass a route to a later
+// one).
 func TestModelPolicyExclude(t *testing.T) {
-	ctx := context.Background()
 	narrowed := 0
 	for seed := uint64(0); seed < 300; seed++ {
 		r := rand.New(rand.NewPCG(seed, 17))
-		texts, pg, attrs := randomPolicy(t, r, seed)
+		texts, pg, pol := randomPolicy(t, r, seed)
 		ex := randomExclusion(rand.New(rand.NewPCG(seed, 29)), pg.fg.o.m)
 		v := &peval.Evaluator{Src: resolve.NewMemSource(decodeAll(t, texts), "RIPE", "RADB"), Expander: resolve.Expander{Exclude: ex}}
 		label := fmt.Sprintf("seed %d: exclude %v", seed, ex)
 		for k := 0; k < 6; k++ {
-			s := peval.Session{Local: localAS, Peer: types.ASN(firstAS + r.IntN(4)), AF: families[r.IntN(2)]}
-			if a := peerRtrs[r.IntN(len(peerRtrs))]; a != "" {
-				s.PeerRtr = netip.MustParseAddr(a)
-			}
-			if a := localRtrs[r.IntN(len(localRtrs))]; a != "" {
-				s.LocalRtr = netip.MustParseAddr(a)
-			}
-			pol, err := v.Import(ctx, s)
-			if err != nil {
-				t.Fatalf("%s: Import(%+v): %v", label, s, err)
-			}
-			terms, wantUnd := pg.evaluate(attrs, s)
-			gotUnd := map[int]int{}
-			for _, u := range pol.Undecided {
-				gotUnd[u.Index]++
-			}
-			if !maps.Equal(gotUnd, wantUnd) {
-				t.Fatalf("%s: Import(%+v): undecided %v, the model says %v", label, s, gotUnd, wantUnd)
-			}
-			if len(pol.Clauses) != len(terms) {
-				t.Fatalf("%s: Import(%+v): %d clauses, the model %d terms", label, s, len(pol.Clauses), len(terms))
-			}
-			for j := 0; j < 60; j++ {
-				rt := randomRoute(r, s.Peer)
-				want, _ := pg.decide(terms, rt, s.Peer, s.AF.AFI)
-				got := false
-				for _, c := range pol.Clauses {
-					ok, err := routemodel.Match(c.Filter, rt)
-					if err != nil {
-						t.Fatalf("%s: %v", label, err)
-					}
-					if ok {
-						got = true
-						break
-					}
-				}
-				if got && !want {
-					t.Fatalf("%s: session %+v, route %v: peval accepts it; without Exclude the model refuses it", label, s, rt)
-				}
-				if want && !got {
-					narrowed++
-				}
-			}
+			checkSession(t, label, pg, pol, v, pol.session(r), r, false, &narrowed)
 		}
 	}
 	if narrowed == 0 {

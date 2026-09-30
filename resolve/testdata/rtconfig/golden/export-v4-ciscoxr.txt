@@ -1,0 +1,67 @@
+
+prefix-set pl150-deny
+end-set
+
+prefix-set pl150-permit
+  10.1.0.0/16,
+  10.10.0.0/15 ge 16 le 16,
+  10.10.1.0/24,
+  10.12.0.0/16
+end-set
+
+!
+route-policy MyMap_2_1
+if destination in pl150-permit and not destination in pl150-deny then
+ set med 10
+ set community (1:200) additive
+ done
+endif
+end-policy
+!
+router bgp 1
+!
+ neighbor 10.0.0.2
+ remote-as 2
+  address-family ipv4 unicast
+   route-policy MyMap_2_1 out
+exit
+
+Warning: filter matches ANY/NOT ANY:MyMap_3_2
+
+!
+route-policy MyMap_3_2
+ drop
+done
+end-policy
+!
+router bgp 1
+!
+ neighbor 10.0.0.3
+ remote-as 3
+  address-family ipv4 unicast
+   route-policy MyMap_3_2 out
+exit
+
+prefix-set pl151-deny
+end-set
+
+prefix-set pl151-permit
+  10.1.0.0/16
+end-set
+
+!
+route-policy MyMap_5_3
+if destination in pl151-permit and not destination in pl151-deny then
+  prepend as-path 1 3
+ done
+endif
+end-policy
+!
+router bgp 1
+!
+ neighbor 10.0.0.5
+ remote-as 5
+  address-family ipv4 unicast
+   route-policy MyMap_5_3 out
+exit
+

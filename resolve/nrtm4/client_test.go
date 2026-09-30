@@ -483,10 +483,15 @@ func mustKey(t *testing.T, s string) *ecdsa.PublicKey {
 // TestDiscardRuleIsDocumented holds docs/diagnostics.md to the rule and
 // severity the client emits.
 func TestDiscardRuleIsDocumented(t *testing.T) {
-	doc, err := os.ReadFile("../../docs/diagnostics.md")
-	if os.IsNotExist(err) {
-		t.Skip("docs/ is not in the resolve module's zip; the repository's own run checks it")
+	// docs/diagnostics.md lives in the root rpsl module, outside resolve's
+	// own module tree, so it is not in resolve's published zip (release.sh
+	// step 6 tests resolve alone, from an empty module cache). Skip rather
+	// than fail when this is not a checkout of the whole repository —
+	// detected by the repo root's go.work, which only a checkout has.
+	if _, err := os.Stat("../../go.work"); err != nil {
+		t.Skip("not running inside the rpsl repository checkout (../../go.work not found); docs/diagnostics.md lives outside resolve's own module")
 	}
+	doc, err := os.ReadFile("../../docs/diagnostics.md")
 	if err != nil {
 		t.Fatal(err)
 	}

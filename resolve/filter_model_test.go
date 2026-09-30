@@ -61,8 +61,29 @@ func pfxOp(op string, p netip.Prefix) string {
 var samplePrefixes = append(append(moreSpecifics(v4Universe, 29, 32), moreSpecifics(v6Universe, 126, 128)...),
 	netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("2001:db8::/32"))
 
+// templateSet is the as-set a filter's set template names for peer:
+// AS65001:AS-T:AS<peer>.
+func templateSet(peer types.ASN) string {
+	return fmt.Sprintf("%s:AS-T:%s", types.ASN(firstAS), peer)
+}
+
+// withTemplateSets adds, for each AS of the model, the as-set its set template
+// names (templateSet), holding one or two of the model's AS numbers, so that
+// AS65001:AS-T:PeerAS denotes something for every peer a test may bind.
+func withTemplateSets(r *rand.Rand, m model) model {
+	for a := firstAS; a < firstAS+4; a++ {
+		s := &mSet{name: templateSet(types.ASN(a)), class: types.ClassAsSet, source: "RIPE"}
+		for n := 1 + r.IntN(2); n > 0; n-- {
+			as := types.ASN(firstAS + r.IntN(4))
+			s.members = append(s.members, mMember{kind: "as", as: as, text: as.String()})
+		}
+		m.sets = append(m.sets, s)
+	}
+	return m
+}
+
 type mFilter struct {
-	kind string // "any", "pfx", "as", "set", "peer", "re", "comm", "fltr", "and", "or", "not"
+	kind string // "any", "pfx", "as", "set", "peer", "re", "comm", "fltr", "tmpl", "and", "or", "not"
 	pfx  netip.Prefix
 	as   types.ASN
 	set  string // a set name, or a filter-set name
@@ -94,6 +115,8 @@ func (f *mFilter) text() string {
 		return "community(" + strings.Join(f.comm, ", ") + ")"
 	case "fltr":
 		return f.set
+	case "tmpl":
+		return fmt.Sprintf("%s:AS-T:PeerAS", types.ASN(firstAS)) + f.op
 	case "not":
 		return "NOT (" + f.subs[0].text() + ")"
 	case "and":
@@ -103,7 +126,7 @@ func (f *mFilter) text() string {
 }
 
 type mRE struct {
-	kind             string // "asn", "set", "any", "peer", "start", "end", "class", "seq", "alt", "star", "plus", "opt", "samestar", "sameplus", "samerange"
+	kind             string // "asn", "set", "any", "peer", "tmpl", "start", "end", "class", "seq", "alt", "star", "plus", "opt", "samestar", "sameplus", "samerange"
 	as               types.ASN
 	set              string
 	cls              []types.ASN
@@ -124,6 +147,8 @@ func (m *mRE) text() string {
 		return "."
 	case "peer":
 		return "PeerAS"
+	case "tmpl":
+		return fmt.Sprintf("%s:AS-T:PeerAS", types.ASN(firstAS))
 	case "start":
 		return "^"
 	case "end":
@@ -197,6 +222,8 @@ func (m *mRE) goRE(o *oracle, peer types.ASN, path []types.ASN) string {
 		return `<\d+>`
 	case "peer":
 		return tok(peer)
+	case "tmpl":
+		return alt(o.asns(templateSet(peer)))
 	case "start":
 		return "^"
 	case "end":
@@ -240,9 +267,9 @@ func (m *mRE) goRE(o *oracle, peer types.ASN, path []types.ASN) string {
 }
 
 // atomMatchesAS reports whether the single-AS atom m (an "asn", "any",
-// "peer", "set" or "class" mRE — never "alt"/"seq"/a quantifier) accepts a,
-// straight from the model (o.asns, the literal peer and AS values), never
-// from parsed text or engine code.
+// "peer", "set", "tmpl" or "class" mRE — never "alt"/"seq"/a quantifier)
+// accepts a, straight from the model (o.asns, the literal peer and AS
+// values), never from parsed text or engine code.
 func atomMatchesAS(m *mRE, o *oracle, peer, a types.ASN) bool {
 	switch m.kind {
 	case "asn":
@@ -253,6 +280,8 @@ func atomMatchesAS(m *mRE, o *oracle, peer, a types.ASN) bool {
 		return a == peer
 	case "set":
 		return containsASN(o.asns(m.set), a)
+	case "tmpl":
+		return containsASN(o.asns(templateSet(peer)), a)
 	case "class":
 		in := containsASN(m.cls, a) || m.clsAny || (m.clsSet != "" && containsASN(o.asns(m.clsSet), a))
 		return in != m.neg
@@ -387,7 +416,7 @@ func (g *filterGen) filter(depth int) *mFilter {
 		}
 	}
 	op := modelOps[r.IntN(len(modelOps))]
-	switch r.IntN(9) {
+	switch r.IntN(10) {
 	case 0:
 		return &mFilter{kind: "any"}
 	case 1:
@@ -411,11 +440,14 @@ func (g *filterGen) filter(depth int) *mFilter {
 			cs = append(cs, modelCommunities[r.IntN(len(modelCommunities))])
 		}
 		return &mFilter{kind: "comm", comm: cs, eq: r.IntN(3) == 0}
+	case 9:
+		return &mFilter{kind: "tmpl", op: op}
+	default:
+		if len(g.fltrs) == 0 {
+			return &mFilter{kind: "any"}
+		}
+		return &mFilter{kind: "fltr", set: g.fltrs[r.IntN(len(g.fltrs))].name}
 	}
-	if len(g.fltrs) == 0 {
-		return &mFilter{kind: "any"}
-	}
-	return &mFilter{kind: "fltr", set: g.fltrs[r.IntN(len(g.fltrs))].name}
 }
 
 func (g *filterGen) re(depth int) *mRE {
@@ -435,7 +467,7 @@ func (g *filterGen) re(depth int) *mRE {
 func (g *filterGen) reAtom(depth int) *mRE {
 	r := g.r
 	var a *mRE
-	switch r.IntN(6) {
+	switch r.IntN(7) {
 	case 0, 1:
 		a = &mRE{kind: "asn", as: types.ASN(firstAS + r.IntN(4))}
 	case 2:
@@ -444,13 +476,15 @@ func (g *filterGen) reAtom(depth int) *mRE {
 		a = &mRE{kind: "peer"}
 	case 4:
 		a = g.reClass()
-	default:
+	case 5:
 		a = &mRE{kind: "any"}
 		if len(g.asSets) > 0 {
 			a = &mRE{kind: "set", set: g.asSets[r.IntN(len(g.asSets))]}
 		}
+	default:
+		a = &mRE{kind: "tmpl"}
 	}
-	// a is still a single-AS atom here (asn, any, peer, class or set): a
+	// a is still a single-AS atom here (asn, any, peer, class, set or tmpl): a
 	// same-AS repetition ("~*", "~+", "~{m,n}") applies only to one of those,
 	// since every repetition must be the identical AS (RFC 2622 §5.4) — once
 	// wrapped in "alt" below it may span more than one AS per position, so it
@@ -532,6 +566,8 @@ func (g *filterGen) accepts(f *mFilter, rt routemodel.Route, peer types.ASN) boo
 		return in(g.o.routes(f.as), f.op)
 	case "set":
 		return in(g.prefixes(f.set), f.op)
+	case "tmpl":
+		return in(g.prefixes(templateSet(peer)), f.op)
 	case "peer":
 		return in(g.o.routes(peer), f.op)
 	case "re":
@@ -598,7 +634,7 @@ func TestModelNormalizeFilter(t *testing.T) {
 	ctx := context.Background()
 	for seed := uint64(0); seed < 400; seed++ {
 		r := rand.New(rand.NewPCG(seed, 11))
-		m := randomModel(r, false)
+		m := withTemplateSets(r, randomModel(r, false))
 		o := newOracle(m)
 		g := newFilterGen(r, o)
 		texts := append(m.texts(r), g.filterSets(3)...)
@@ -680,7 +716,7 @@ func TestModelMaxConjuncts(t *testing.T) {
 	checked := 0
 	for seed := uint64(0); seed < 700; seed++ {
 		r := rand.New(rand.NewPCG(seed, 13))
-		m := randomModel(r, false)
+		m := withTemplateSets(r, randomModel(r, false))
 		o := newOracle(m)
 		g := newFilterGen(r, o)
 		src := resolve.NewMemSource(decodeAll(t, m.texts(r)), "RIPE", "RADB")

@@ -3,6 +3,8 @@ package rpslq
 import (
 	"strings"
 	"testing"
+
+	"github.com/rkolesnichenko/rpsl/resolve/internal/buildinfo"
 )
 
 func TestGetopt(t *testing.T) {
@@ -125,7 +127,8 @@ func splitArgs(s string) []string {
 
 func TestVersion(t *testing.T) {
 	code, out, _ := rpslq(t, "-v")
-	if code != 0 || !strings.HasPrefix(out, "rpslq ") {
-		t.Errorf("-v: exit %d, %q", code, out)
+	want := "rpslq " + buildinfo.Version() + "\n"
+	if code != 0 || out != want {
+		t.Errorf("-v: exit %d, %q; want exit 0, %q", code, out, want)
 	}
 }

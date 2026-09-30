@@ -1,0 +1,133 @@
+!
+no access-list 150
+access-list 150 permit ip 10.1.0.0   0.0.0.0   255.255.0.0   0.0.0.0
+access-list 150 permit ip 10.10.0.0   0.1.0.0   255.255.0.0   0.0.0.0
+access-list 150 permit ip 10.10.1.0   0.0.0.0   255.255.255.0   0.0.0.0
+access-list 150 permit ip 10.12.0.0   0.0.0.0   255.255.0.0   0.0.0.0
+access-list 150 deny ip 0.0.0.0 255.255.255.255 0.0.0.0 255.255.255.255
+!
+no route-map AS2-IN-1
+!
+route-map AS2-IN-1 permit 1
+ match ip address 150
+ set local-preference 990
+ set metric 5
+ set community  1:100 additive
+exit
+!
+no access-list 151
+access-list 151 permit ip 10.2.0.0   0.0.0.0   255.255.0.0   0.0.0.0
+access-list 151 deny ip 0.0.0.0 255.255.255.255 0.0.0.0 255.255.255.255
+!
+route-map AS2-IN-1 permit 2
+ match ip address 151
+exit
+!
+no access-list 152
+access-list 152 deny ip 0.0.0.0   0.255.255.255   255.0.0.0   0.255.255.255
+access-list 152 deny ip 10.0.0.0   0.255.255.255   255.0.0.0   0.255.255.255
+access-list 152 deny ip 127.0.0.0   0.255.255.255   255.0.0.0   0.255.255.255
+access-list 152 permit ip 0.0.0.0 255.255.255.255 0.0.0.0 255.255.255.255
+!
+route-map AS2-IN-1 permit 3
+ match ip address 152
+exit
+!
+router bgp 1
+!
+ neighbor 10.0.0.2 remote-as 2
+ neighbor 10.0.0.2 route-map AS2-IN-1 in
+!
+exit
+!
+no access-list 153
+access-list 153 permit ip 0.0.0.0   0.0.0.0   0.0.0.0   0.0.0.0
+access-list 153 permit ip 10.10.0.0   0.0.0.0   255.255.0.0   0.0.0.0
+access-list 153 permit ip 10.10.1.0   0.0.0.0   255.255.255.0   0.0.0.0
+access-list 153 permit ip 10.13.0.0   0.0.0.0   255.255.0.0   0.0.0.0
+access-list 153 permit ip 10.21.0.0   0.0.255.0   255.255.255.0   0.0.0.0
+access-list 153 permit ip 10.22.0.0   0.0.0.0   255.255.0.0   0.0.0.0
+access-list 153 deny ip 0.0.0.0 255.255.255.255 0.0.0.0 255.255.255.255
+!
+no route-map AS3-IN-2
+!
+route-map AS3-IN-2 permit 1
+ match ip address 153
+ set local-preference 980
+exit
+!
+no access-list 154
+access-list 154 permit ip 10.3.0.0   0.0.0.0   255.255.0.0   0.0.0.0
+access-list 154 deny ip 0.0.0.0 255.255.255.255 0.0.0.0 255.255.255.255
+!
+route-map AS3-IN-2 permit 2
+ match ip address 154
+exit
+!
+route-map AS3-IN-2 permit 3
+ match ip address 152
+exit
+!
+router bgp 1
+!
+ neighbor 10.0.0.3 remote-as 3
+ neighbor 10.0.0.3 route-map AS3-IN-2 in
+!
+exit
+!
+no route-map AS4-IN-3
+!
+route-map AS4-IN-3 permit 1
+ match ip address 152
+exit
+!
+no ip as-path access-list  50
+ip as-path access-list 50 permit ^_4(_(1|10|11|12|14))*$
+!
+ip bgp-community new-format
+!
+no ip community-list 50
+ip community-list 50 permit 4:1 
+!
+route-map AS4-IN-3 permit 2
+ match as-path 50
+ match community 50
+exit
+!
+router bgp 1
+!
+ neighbor 10.0.0.4 remote-as 4
+ neighbor 10.0.0.4 route-map AS4-IN-3 in
+!
+exit
+!
+no route-map AS5-IN-4
+!
+route-map AS5-IN-4 permit 1
+ match ip address 152
+exit
+!
+no access-list 155
+access-list 155 permit ip 10.5.0.0   0.0.0.0   255.255.0.0   0.0.0.0
+access-list 155 deny ip 0.0.0.0 255.255.255.255 0.0.0.0 255.255.255.255
+!
+route-map AS5-IN-4 permit 2
+ match ip address 155
+ set as-path prepend 1 1 
+exit
+!
+no ip community-list 51
+ip community-list 51 deny 5:666
+ip community-list 51 permit internet
+!
+route-map AS5-IN-4 permit 3
+ match community 51
+ set as-path prepend 1 1 
+exit
+!
+router bgp 1
+!
+ neighbor 10.0.0.5 remote-as 5
+ neighbor 10.0.0.5 route-map AS5-IN-4 in
+!
+exit

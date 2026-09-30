@@ -11,7 +11,6 @@ import (
 	"io"
 	"net/netip"
 	"os"
-	"runtime/debug"
 	"slices"
 	"sort"
 	"strconv"
@@ -21,6 +20,7 @@ import (
 
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/backend"
+	"github.com/rkolesnichenko/rpsl/resolve/internal/buildinfo"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/filtergen"
 	"github.com/rkolesnichenko/rpsl/resolve/irrd"
 	"github.com/rkolesnichenko/rpsl/resolve/rpki"
@@ -433,7 +433,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return exitUsage
 	case errors.Is(err, errVersion):
-		fmt.Fprintf(stdout, "rpslq %s\n", version())
+		fmt.Fprintf(stdout, "rpslq %s\n", buildinfo.Version())
 		return exitOK
 	case err != nil:
 		fmt.Fprintln(stderr, "rpslq:", err)
@@ -598,21 +598,6 @@ func parseExcept(args []string) (resolve.Exclusion, error) {
 		ex.Sets = append(ex.Sets, n)
 	}
 	return ex, nil
-}
-
-// version is the rpsl module rpslq was built from.
-func version() string {
-	if bi, ok := debug.ReadBuildInfo(); ok {
-		if bi.Main.Path == "github.com/rkolesnichenko/rpsl/resolve" && bi.Main.Version != "" {
-			return bi.Main.Version
-		}
-		for _, d := range bi.Deps {
-			if d.Path == "github.com/rkolesnichenko/rpsl/resolve" {
-				return d.Version
-			}
-		}
-	}
-	return "(devel)"
 }
 
 // backendT is the source the flags describe: the default one, and the same

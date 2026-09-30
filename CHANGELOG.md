@@ -9,6 +9,51 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+## [0.22.0] - Unreleased
+
+### Added
+
+- `resolve/rtconfig`: router configuration from an evaluated `peval.Policy` — Cisco IOS/IOS-XE,
+  Junos, Cisco IOS-XR and BIRD 2 — what IRRToolSet's `RtConfig` does, on this engine.
+  `Generator.WriteImport`/`WriteExport`/`WriteDefault`/`WritePrefixList`/`WriteASPathList`/
+  `WriteNetworks` write to an `io.Writer`, all-or-nothing; `WriteSessions` writes BIRD's
+  per-neighbour `protocol bgp` blocks, once, after every other call. `Capabilities()` reports
+  what each vendor can express; a construct it cannot is an `*UnsupportedError` wrapping
+  `ErrUnsupported`, naming one of the `Cause*` constants.
+  Among what it refuses rather than write a line a router would reject or misread: a `next-hop`
+  of the other family than the session's, or with a zone; a route-map, policy or filter name the
+  `Generator` has already written (a `MapName` pattern with fewer than two `%d`, which on IOS
+  would rebind the first neighbour to the second's policy); and, on IOS, an as-path access-list
+  numbered past 500. A conjunct holding `NOT community()` matches no route and gets no entry.
+- `rpslconf` template mode: reads an IRRToolSet-style `@RtConfig` template from stdin and writes
+  router configuration for the sessions and lists it names; `-config` chooses the dialect. `-v`
+  prints the binary's version (`rpslq` gains the same flag).
+- `rpslconf` release binaries, alongside `rpslq`'s, for every platform `scripts/release.sh`
+  already built `rpslq` for.
+- `peval.Why*` constants and `peval.Whys()`: `Undecided.Why`'s values are now a stable,
+  documented set rather than free text.
+- `resolve.NewASNSet`, for building an `ASNSet` from a fixed list of ASNs.
+- `irrtest.WithLegacyClasses`, so the test IRRd answers IRRd 2/3's `!man` query, which
+  IRRToolSet's `rtconfig` and `peval` read aut-nums with.
+- `scripts/build-irrtoolset.sh`, which builds IRRToolSet 5.1.3's `rtconfig` and `peval` for the
+  differential tests (natively on Linux, in Docker elsewhere) and installs them for `PATH`; CI
+  runs it so the differentials execute on every push.
+- `FuzzTranslateRegexp` (`resolve/rtconfig`) and `FuzzParseTemplate` (`resolve/internal/rpslconf`):
+  the fuzz targets are now 40.
+
+### Changed
+
+- `Undecided.Why`'s values are now the `Why*` constants. They are the same strings, so no
+  consumer comparing them changes behavior.
+
+### Fixed
+
+- `NormalizeFilter`'s depth limit no longer depends on the order a memo was filled: reusing a
+  filter-set's inlined normal form now re-checks `MaxDepth` against how deep that inlining
+  actually reached, not just the depth of the call that first computed it.
+- Its per-conjunct test cap (`MaxConjuncts`) is now counted after the two sides' prefix ranges
+  are intersected, not before.
+
 ## [0.21.0] - 2026-09-30
 
 ### Added

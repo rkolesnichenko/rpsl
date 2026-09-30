@@ -1,0 +1,53 @@
+!
+no access-list 150
+access-list 150 permit ip 10.1.0.0   0.0.0.0   255.255.0.0   0.0.0.0
+access-list 150 permit ip 10.10.0.0   0.1.0.0   255.255.0.0   0.0.0.0
+access-list 150 permit ip 10.10.1.0   0.0.0.0   255.255.255.0   0.0.0.0
+access-list 150 permit ip 10.12.0.0   0.0.0.0   255.255.0.0   0.0.0.0
+access-list 150 deny ip 0.0.0.0 255.255.255.255 0.0.0.0 255.255.255.255
+!
+no route-map MyMap_2_1
+!
+route-map MyMap_2_1 permit 1
+ match ip address 150
+ set metric 10
+ set community  1:200 additive
+exit
+!
+router bgp 1
+!
+ neighbor 10.0.0.2 remote-as 2
+ neighbor 10.0.0.2 route-map MyMap_2_1 out
+!
+exit
+Warning: filter "MyMap_3_2" matches ANY/NOT ANY
+!
+no route-map MyMap_3_2
+!
+route-map MyMap_3_2 permit 1
+exit
+!
+router bgp 1
+!
+ neighbor 10.0.0.3 remote-as 3
+ neighbor 10.0.0.3 route-map MyMap_3_2 out
+!
+exit
+!
+no access-list 151
+access-list 151 permit ip 10.1.0.0   0.0.0.0   255.255.0.0   0.0.0.0
+access-list 151 deny ip 0.0.0.0 255.255.255.255 0.0.0.0 255.255.255.255
+!
+no route-map MyMap_5_3
+!
+route-map MyMap_5_3 permit 1
+ match ip address 151
+ set as-path prepend 1 1 1 
+exit
+!
+router bgp 1
+!
+ neighbor 10.0.0.5 remote-as 5
+ neighbor 10.0.0.5 route-map MyMap_5_3 out
+!
+exit

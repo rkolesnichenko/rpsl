@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/netip"
 	"regexp"
+	"regexp/syntax"
 	"strings"
 	"sync"
 
@@ -129,13 +130,30 @@ func compile(expr string) (*regexp.Regexp, error) {
 	}
 	re, err := regexp.Compile(expr)
 	if err != nil {
-		if strings.Contains(err.Error(), "repeat") {
-			return nil, ErrTooComplex
+		if tooComplex(err) {
+			return nil, fmt.Errorf("%w: %v", ErrTooComplex, err)
 		}
 		return nil, err
 	}
 	cache.Store(expr, re)
 	return re, nil
+}
+
+// tooComplex reports whether err is a regexp/syntax error caused by the built
+// expression's size rather than its shape: too many repetitions in one {m,n}
+// (syntax.ErrInvalidRepeatSize), or too many overall once nested repetitions
+// are multiplied out (syntax.ErrLarge) — RFC 2622 §5.4 places no bound on a
+// {m,n} count, and quant only checks one repeat node's own Min/Max against
+// 1000, not the product of nesting one repeat inside another (0{1000}{1000}
+// asks Go to build a million copies of its inner group). Matched on the
+// syntax error's Code, which is part of regexp/syntax's documented API, not
+// on regexp.Compile's message text, which is not.
+func tooComplex(err error) bool {
+	var se *syntax.Error
+	if !errors.As(err, &se) {
+		return false
+	}
+	return se.Code == syntax.ErrInvalidRepeatSize || se.Code == syntax.ErrLarge
 }
 
 func encode(path []types.ASN) string {

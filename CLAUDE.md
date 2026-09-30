@@ -41,11 +41,15 @@ resolve → object → policy → types → ast → lexer (never the reverse).
   with the local directories, so edits are seen across modules at once. Bump them only when releasing.
 - `Diagnostic`/`Severity` live in the `ast` module (so `object` can emit them); `rpsl` re-exports via aliases.
 - Net-using Source backends are isolated in `resolve/` sub-packages (irrd/whois/rdap/nrtm4) to keep core `resolve` socket-free.
-- `resolve/peval` (policy evaluation for one BGP session) sits beside `resolve`, pure like it — no
-  `net` either. `resolve/internal/backend` (shared server/dump opening for rpslq and rpslconf),
-  `resolve/internal/routemodel` (test-only AS-path-regexp-vs-path oracle) and
-  `resolve/internal/rpslconf` (the `rpslconf` command's logic; `resolve/cmd/rpslconf` is the shim)
-  are internal packages alongside it.
+- `resolve/peval` (policy evaluation for one BGP session) and `resolve/rtconfig` (router
+  configuration from an evaluated policy: Cisco IOS/IOS-XE, Junos, Cisco IOS-XR, BIRD 2) sit
+  beside `resolve`, pure like it — no `net` either. `resolve/internal/backend` (shared
+  server/dump opening for rpslq and rpslconf), `resolve/internal/routemodel` (test-only
+  AS-path-regexp-vs-path oracle), `resolve/internal/cfgsim` (test-only: reads router
+  configuration and decides routes against it, the semantic oracle for `rtconfig`),
+  `resolve/internal/buildinfo` (the version `-v` prints, for rpslq and rpslconf) and
+  `resolve/internal/rpslconf` (the `rpslconf` command's logic, both modes; `resolve/cmd/rpslconf`
+  is the shim) are internal packages alongside it.
 - Tests use in-process fake servers over a localhost listener + a `Dial` hook (no real network);
   the bgpq4 differential runs bgpq4 against an in-process IRRd (`resolve/internal/irrtest`) when bgpq4
   is installed; the snapshot goldens are its checked-in output; a live diff is opt-in via env vars.
@@ -162,9 +166,29 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   - `EvalFilter` success ⇒ at most one pure conjunct.
   - Only test code matches a regexp against a path: `resolve/internal/routemodel` and the filter
     model's own Go translation (`goRE` in resolve/filter_model_test.go).
-  - The filter model runs over MemSource only, with no set templates and no set reaching AS-ANY;
-    the policy model covers import:/mp-import: only (MemSource, KeepPolicy Corpus, irrd, whois).
-    Export, via and default have table tests.
+  - The filter model runs over MemSource only, with no set reaching AS-ANY; the policy model
+    covers import:, export:, import-via: and default:, each with its mp- form (MemSource,
+    KeepPolicy Corpus, irrd, whois). export-via: has table tests only.
+- **Router configuration (`resolve/rtconfig`) never approximates.**
+  - `ErrUnsupported` (an `*UnsupportedError` naming the vendor, a `Cause*` and the term) is
+    refused before anything is written; `Write*` is all-or-nothing — the whole configuration, or
+    none of it and the error.
+  - Negations stay inside a clause's own list (a deny entry in its prefix/path/community list),
+    never a separate deny rule at the policy level, so a route a negation rejects simply fails
+    that clause's match and falls through to the next one.
+  - Junos route-filters are checked by longest match, not first match, so `junosGroups` splits a
+    clause's ranges into disjoint groups (no range nests another) and writes one term per group.
+  - Every printer ends its policy with an explicit reject (IOS's numbered `deny`, Junos's
+    catch-rest term, IOS-XR's bare `drop`, BIRD's trailing `reject;`), since the vendors' own
+    default behavior when nothing matches differs.
+  - BIRD needs parentheses around every test (`&&`/`||`/`=`/`~` share one precedence) and cannot
+    merge two configuration blocks for one `protocol bgp`, so `WriteImport`/`WriteExport` only
+    record a neighbour's filter names and `WriteSessions` writes one `protocol bgp` per neighbour,
+    once, after every other call.
+  - `resolve/internal/cfgsim` is the semantic oracle: it reads what `rtconfig` writes — and what
+    IRRToolSet's `rtconfig` writes, for the differential — and decides synthetic routes against
+    it, matching AS-path regexps against paths (test-only, like routemodel), so it must model
+    each vendor's documented semantics, including rtconfig's own Junos policy-chain OR (D12).
 
 ## Scope guardrails
 
@@ -182,7 +206,7 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   (all six modules incl. examples/bulk-ripe under -race, gofmt, invariants) with
   `scripts/check.sh`; `FUZZTIME=15s scripts/check.sh` also runs every fuzz target.
 - `go test -run 'TestRoundTrip|TestStreamRoundTrip' .` — the lossless guard (root module).
-- Fuzz (38 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
+- Fuzz (40 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
   FuzzFormat (ast); FuzzParseSetName, FuzzParseRangeOperator, FuzzParsePrefixRange,
   FuzzParseRouterID, FuzzParseSetRef (types); FuzzParseStream, FuzzDecode (root);
   FuzzParseSrcMember (object); FuzzParseImport,
@@ -192,7 +216,8 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   FuzzParseMPFilter (policy);
   FuzzReadFrame, FuzzParseMembers, FuzzParseRegistries (resolve/irrd); FuzzScanResponse (resolve/whois);
   FuzzAggregate (resolve/internal/filtergen); FuzzReadJSON, FuzzApplySLURM (resolve/rpki);
-  FuzzParseNotification, FuzzReadDelta (resolve/nrtm4); FuzzCorpusDelete, FuzzNormalizeFilter (resolve).
+  FuzzParseNotification, FuzzReadDelta (resolve/nrtm4); FuzzCorpusDelete, FuzzNormalizeFilter (resolve);
+  FuzzTranslateRegexp (resolve/rtconfig); FuzzParseTemplate (resolve/internal/rpslconf).
 - Never slice a string at an offset found in a transformed copy of it (`strings.ToUpper` can
   lengthen UTF-8): v0.19.0 panicked on "ɐ" (2 bytes) → "Ɐ" (3). Match case-insensitively in place.
 - Opt-in: `RPSL_REALDATA=$PWD/.data go test -run TestRealData ./examples/bulk-ripe/bulk`
@@ -218,23 +243,35 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   entry as RPSL notation, `-c` sets concurrent queries in flight.
   Its IRRd queries use `irrd.Source.Pipeline` (one connection, many queries in flight).
 - `rpslconf` (resolve/cmd/rpslconf; logic in resolve/internal/rpslconf) is IRRToolSet's
-  `RtConfig`/`peval` on this engine: this release has peval mode only (`-e`, `NormalFilter.String()`
-  output); template mode (`@RtConfig` commands, the vendor printers) is v0.22.0. See docs/rpslconf.md.
-  `TestPevalMatchesIRRToolSet` (resolve/peval_irrtoolset_test.go) runs when `peval` is on PATH
-  (`brew install irrtoolset`; the arm64 bottle takes its server only from
-  `IRR_HOST`/`IRR_PORT`/`IRR_SOURCES`), against the shapes IRRToolSet gets right; divergences are
-  pinned in resolve/testdata/rtconfig/divergences.md.
+  `RtConfig`/`peval` on this engine, with both modes: template mode (default; reads an
+  `@RtConfig` template from stdin, `-config` chooses cisco/junos/ciscoxr/bird) and peval mode
+  (`-e`, `NormalFilter.String()` output). See docs/rpslconf.md.
+  `TestPevalMatchesIRRToolSet` (resolve/peval_irrtoolset_test.go) and the rtconfig differential
+  (`TestRtconfigMatches`, `TestRtconfigGoldens`, resolve/rtconfig_irrtoolset_test.go) run when
+  `peval`/`rtconfig` are on PATH — `scripts/build-irrtoolset.sh` builds IRRToolSet 5.1.3 from
+  source (CI does; natively on Linux, in Docker elsewhere) and installs them there, or
+  `brew install irrtoolset` also gives both binaries, but its `rtconfig`'s arm64 build ignores
+  its command line and always writes Cisco — the differential probes each vendor by its output
+  and compares only the ones a given build actually produces. `RPSL_RTCONFIG_UPDATE=1` rewrites the rtconfig goldens
+  (resolve/testdata/rtconfig/golden) from a live `rtconfig`; divergences D1–D18 are recorded (all but the run-to-run D18 pinned) in
+  resolve/testdata/rtconfig/divergences.md. `bird -p` (resolve/internal/cfgsim.BIRDSyntax) checks
+  a BIRD writer's output against the real parser when `bird` is installed; it is skipped otherwise.
 - Releasing: `scripts/release.sh vX.Y.Z` does RELEASING.md's steps (tag order lexer/types → ast →
   root → resolve), waits for the proxy, verifies from an empty module cache, and resumes after a
-  failure; it also builds rpslq's binaries (5 platforms, from the published module) and attaches
-  them to the GitHub release. `docs/rpslq.md` is rpslq's page for bgpq4 users. Rehearse first with
+  failure; it also builds rpslq's and rpslconf's binaries (5 platforms each, from the published
+  module) and attaches them to the GitHub release. `docs/rpslq.md` is rpslq's page for bgpq4
+  users. Rehearse first with
   `scripts/release-dryrun.sh` (runs release.sh against a bare repo and
   a local proxy; publishes nothing) — alone, not beside check.sh. Never query the proxy for an
   unpushed tag: it caches the miss for ~30 minutes.
 - Performance: `scripts/bench.sh [ref]` compares benchmarks with a ref (default: latest tag).
 - Leaf isolation: `cd types && go list -deps ./... | grep rkolesnichenko` must show only itself.
-- Engine purity: `cd resolve && go list -deps . ./peval` must NOT include `net` (sockets live
-  only in resolve/irrd, resolve/whois, resolve/rdap).
+- Engine purity: `cd resolve && go list -deps . ./peval ./rtconfig` must NOT include `net`
+  (sockets live only in resolve/irrd, resolve/whois, resolve/rdap).
+- A `resolve`-module test that reads a file outside `resolve/` (a docs/*.md contract, such as
+  `TestRpslconfDocs`) skips when `../../go.work` is absent: `resolve` publishes on its own, and
+  release.sh step 6 tests that published zip from an empty module cache, where nothing outside
+  the module exists to read.
 - IRRd wire framing: `A<len>\n<payload>C\n` where `<len>` *includes* the payload's trailing
   newline (see `resolve/irrd/readframe_test.go`). After ReadFull(payload), the next ReadString
   consumes the `C\n` status line directly — there is no separator newline to skip.

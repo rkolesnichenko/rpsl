@@ -46,6 +46,7 @@ func FuzzNormalizeFilter(f *testing.F) {
 		"FLTR-RE", "FLTR-LOOP", "PeerAS^+", "NOT (AS-A OR RS-B)", "<[AS65001 - AS65003]~* $>",
 		"community == {1:1, 1:2}", "RS-B^24-32 AND NOT <AS65002>", "AS-ANY",
 		"<[^AS65001 AS65002]>", "<AS65001~+ AS65002~{1,2}>",
+		"CommunitY(>)", // an error: its recovered test's argument holds a stray '>'
 	} {
 		f.Add(s)
 	}
@@ -57,7 +58,12 @@ func FuzzNormalizeFilter(f *testing.F) {
 	}
 	src := resolve.NewMemSource(objs)
 	f.Fuzz(func(t *testing.T, s string) {
-		pf, _ := policy.ParseFilter(s)
+		pf, parsed := policy.ParseFilter(s)
+		for _, d := range parsed {
+			if d.Severity >= ast.Error {
+				return // only clean parses have a meaning to preserve
+			}
+		}
 		e := &resolve.Expander{Src: src, Peer: 65002, MaxConjuncts: 64, MaxPrefixes: 1 << 12, MaxVisited: 1 << 12}
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
