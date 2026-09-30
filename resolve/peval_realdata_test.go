@@ -16,16 +16,21 @@ import (
 	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/policy"
 	"github.com/rkolesnichenko/rpsl/resolve"
+	"github.com/rkolesnichenko/rpsl/resolve/internal/cfgsim"
 	"github.com/rkolesnichenko/rpsl/resolve/peval"
+	"github.com/rkolesnichenko/rpsl/resolve/rtconfig"
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
 // TestRealDataPeval (opt-in: RPSL_REALDATA) evaluates RIPE's policies: for a
 // sample of aut-nums, import and export toward each AS their policies name,
-// in both families, over RIPE's dumps loaded with KeepPolicy. Nothing may
-// panic or fail except by a limit, a timeout or a filter that cannot be
-// normalized; the report counts clauses, Undecided terms by cause and
-// failures by kind.
+// in both families, over RIPE's dumps loaded with KeepPolicy. It also renders
+// each evaluated policy for all four rtconfig vendors and counts refusals by
+// cause. Nothing may panic or fail except by a limit, a timeout, a filter
+// that cannot be normalized, or a construct a vendor cannot express
+// (*rtconfig.UnsupportedError); a rendered configuration cfgsim cannot parse
+// is a failure. The report counts clauses, Undecided terms by cause,
+// failures by kind, and renders/refusals by vendor and cause.
 func TestRealDataPeval(t *testing.T) {
 	dir := os.Getenv("RPSL_REALDATA")
 	if dir == "" {
@@ -84,6 +89,10 @@ func TestRealDataPeval(t *testing.T) {
 	sort.Slice(targets, func(i, j int) bool { return targets[i].as < targets[j].as })
 	step := max(1, len(targets)/300)
 	v := &peval.Evaluator{Src: resolve.NewCache(l.Source(), 0)}
+	gens := map[rtconfig.Vendor]*rtconfig.Generator{}
+	for _, vendor := range rtconfig.Vendors() {
+		gens[vendor] = &rtconfig.Generator{Vendor: vendor}
+	}
 	stats := map[string]int{}
 	start := time.Now()
 	for i := 0; i < len(targets); i += step {
@@ -109,6 +118,27 @@ func TestRealDataPeval(t *testing.T) {
 						stats["clauses"] += len(p.Clauses)
 						for _, u := range p.Undecided {
 							stats["undecided: "+u.Why]++
+						}
+						for _, vendor := range rtconfig.Vendors() {
+							g := gens[vendor]
+							write := g.WriteImport
+							if export {
+								write = g.WriteExport
+							}
+							var b strings.Builder
+							err := write(&b, s, p)
+							var ue *rtconfig.UnsupportedError
+							switch {
+							case errors.As(err, &ue):
+								stats["refused: "+vendor.String()+": "+ue.Cause]++
+							case err != nil:
+								t.Errorf("AS%d toward AS%d %v export=%v, %v: %v", tg.as, peer, af, export, vendor, err)
+							default:
+								stats["rendered: "+vendor.String()]++
+								if _, err := cfgsim.Parse(vendor.String(), b.String()); err != nil {
+									t.Errorf("AS%d toward AS%d %v export=%v: our %v configuration does not parse: %v", tg.as, peer, af, export, vendor, err)
+								}
+							}
 						}
 					case errors.As(err, &tl):
 						stats["limit: "+tl.Limit.String()]++
