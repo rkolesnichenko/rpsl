@@ -61,17 +61,22 @@ func MatchJunos(re string, path []types.ASN) (bool, error) {
 				hi, _ = strconv.ParseUint(re[j+1:k], 10, 32)
 				j = k
 			}
-			if hi < lo || hi-lo > 4096 {
+			if hi < lo {
 				return false, fmt.Errorf("cfgsim: Junos range %d-%d", lo, hi)
 			}
-			b.WriteString("(?:")
-			for a := lo; a <= hi; a++ {
-				if a > lo {
-					b.WriteByte('|')
+			// A range is one term matching any AS from lo through hi
+			// (Junos OS Routing Policies, "AS Path Regular Expressions":
+			// "term1-term2", as in "(0-65003|65005-4294967294)*", which
+			// rtconfig writes). It can only ever match an AS on this path,
+			// so it is the alternation of those — "<none>", which no path
+			// string holds, when none is in range.
+			alts := []string{"<none>"}
+			for _, a := range path {
+				if uint64(a) >= lo && uint64(a) <= hi {
+					alts = append(alts, fmt.Sprintf("<%d>", uint32(a)))
 				}
-				fmt.Fprintf(&b, "<%d>", a)
 			}
-			b.WriteString(")")
+			b.WriteString("(?:" + strings.Join(alts, "|") + ")")
 			i = j
 		case c == '.':
 			b.WriteString(`(?:<[0-9]+>)`)

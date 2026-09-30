@@ -179,3 +179,24 @@ policy-options {
 		t.Errorf("an unknown then keyword parsed")
 	}
 }
+
+// rtconfig writes its warnings amid the configuration, here inside
+// policy-options; they are its diagnostics, not configuration, and are
+// skipped as ParseIOS and ParseXR skip them.
+func TestJunosSkipsRtconfigWarnings(t *testing.T) {
+	c, err := ParseJunos(`
+policy-options {
+Warning: filter "P" matches ANY/NOT ANY
+  policy-statement P {
+      term t { from { } then { accept; } }
+   }
+}
+*** Error: something rtconfig could not do
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, _, err := c.Policy("P", route("192.0.2.0/24", nil)); err != nil || !ok {
+		t.Errorf("P(192.0.2.0/24) = %v, %v; want accepted", ok, err)
+	}
+}

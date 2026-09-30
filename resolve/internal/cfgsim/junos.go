@@ -19,8 +19,19 @@ type jnode struct {
 }
 
 // jtokens splits Junos configuration text into words, quoted strings (without
-// their quotes) and the punctuation { } ; [ ].
+// their quotes) and the punctuation { } ; [ ]. A line beginning "Warning:" or
+// "***" is rtconfig's diagnostic, which it writes amid the configuration
+// (`Warning: filter "policy_3_2" matches ANY/NOT ANY` inside policy-options),
+// and is skipped, as ParseIOS and ParseXR skip it.
 func jtokens(text string) ([]string, error) {
+	var kept strings.Builder
+	for _, line := range strings.SplitAfter(text, "\n") {
+		if t := strings.TrimSpace(line); strings.HasPrefix(t, "Warning:") || strings.HasPrefix(t, "***") {
+			continue
+		}
+		kept.WriteString(line)
+	}
+	text = kept.String()
 	var toks []string
 	for i := 0; i < len(text); {
 		c := text[i]
