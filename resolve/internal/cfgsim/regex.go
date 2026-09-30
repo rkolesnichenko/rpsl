@@ -74,7 +74,7 @@ func MatchJunos(re string, path []types.ASN) (bool, error) {
 			b.WriteString(")")
 			i = j
 		case c == '.':
-			b.WriteString(`<[0-9]+>`)
+			b.WriteString(`(?:<[0-9]+>)`)
 			i++
 		case c == '(':
 			b.WriteString("(?:")
