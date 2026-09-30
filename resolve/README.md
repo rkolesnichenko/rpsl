@@ -318,6 +318,31 @@ symbolic rather than dropped, so a printer — or a human reading
 narrower approximation. `rpslconf -e` (see
 [`docs/rpslconf.md`](../docs/rpslconf.md)) exposes this on the command line.
 
+## Router configuration (`rtconfig`)
+
+`resolve/rtconfig` writes what `peval` evaluates as router configuration —
+what IRRToolSet's `RtConfig` does, on this engine — for Cisco IOS/IOS-XE,
+Junos, Cisco IOS-XR or BIRD 2:
+
+```go
+import "github.com/rkolesnichenko/rpsl/resolve/rtconfig"
+
+p, err := v.Import(ctx, s) // peval.Evaluator, as above
+g := &rtconfig.Generator{Vendor: rtconfig.IOS}
+err = g.WriteImport(os.Stdout, s, p)
+```
+
+Like the rest of the engine, it never approximates: a construct the vendor
+cannot express — `import-via:`, two AS-path regexps a clause needs both to
+match, an action the dialect has no way to set — is an
+`*rtconfig.UnsupportedError` naming the vendor, the cause and the term, and a
+`Write*` call is then all-or-nothing: it writes the whole configuration, or
+none of it. This is trimmed from a runnable `Example` test
+([`rtconfig/example_test.go`](rtconfig/example_test.go)).
+[`docs/rpslconf.md`](../docs/rpslconf.md) is `rpslconf`'s page, including
+template mode, which drives `rtconfig` from IRRToolSet's own `@RtConfig`
+command language.
+
 ## Concurrency
 
 `Expander.Concurrency` fetches a whole breadth-first level at once, which hides
