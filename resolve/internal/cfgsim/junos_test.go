@@ -151,3 +151,31 @@ policy-options {
 		}
 	}
 }
+
+// A route-filter's own action must be "accept", "reject", or absent; an
+// unrecognized one is refused rather than silently treated as no action. An
+// unknown "then" keyword is refused the same way an unknown "from" condition
+// is: at parse time (fromHandlers and thenHandlers are the one place cfgsim's
+// Junos reader knows each keyword, so nothing is silently accepted in one
+// place and silently ignored in the other).
+func TestJunosInvalidActionsRefused(t *testing.T) {
+	c, err := ParseJunos(`
+policy-options {
+    policy-statement P {
+        term t {
+            from { route-filter 10.0.0.0/8 exact frobnicate; }
+            then accept;
+        }
+    }
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.Policy("P", route("10.0.0.0/8", nil)); err == nil {
+		t.Errorf("a route-filter with an invalid action parsed")
+	}
+	if _, err := ParseJunos("policy-options { policy-statement P { term t { then frobnicate; } } }"); err == nil {
+		t.Errorf("an unknown then keyword parsed")
+	}
+}

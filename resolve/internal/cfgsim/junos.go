@@ -111,7 +111,6 @@ func listWords(words []string, n int) []string {
 
 type jroute struct {
 	p      netip.Prefix
-	typ    string
 	lo, hi int    // the lengths the match type admits
 	action string // "", "accept" or "reject"
 }
@@ -122,14 +121,145 @@ type jterm struct {
 	then []*jnode
 }
 
-// validFromWords and validThenWords are the "from" conditions and "then"
-// actions cfgsim's Junos reader understands; anything else inside
-// policy-options or a term is an error, diagnosed at parse time rather than
-// deferred to evaluation.
-var validFromWords = map[string]bool{"route-filter": true, "policy": true, "as-path": true, "community": true}
-var validThenWords = map[string]bool{
-	"accept": true, "reject": true, "local-preference": true, "metric": true,
-	"community": true, "as-path-prepend": true, "next-hop": true,
+// fromHandler evaluates one "from" condition against state s: match reports
+// whether it holds (a false match makes the term's whole, ANDed from list
+// false). rfs and chain accumulate the term's route-filters and "policy"
+// subroutine names, for from to finish evaluating once every condition has
+// run. fromHandlers is the one place cfgsim's Junos reader knows a "from"
+// condition keyword: policyOptions validates against it at parse time and
+// from dispatches through it at evaluation time, so a keyword taught to one
+// is taught to both — there is no second, hand-maintained list to fall out
+// of sync.
+type fromHandler func(c *junosConfig, w []string, s *state, rfs *[]jroute, chain *[]string) (match bool, err error)
+
+var fromHandlers = map[string]fromHandler{
+	"route-filter": func(c *junosConfig, w []string, s *state, rfs *[]jroute, chain *[]string) (bool, error) {
+		rf, err := parseRouteFilter(w)
+		if err != nil {
+			return false, err
+		}
+		*rfs = append(*rfs, rf)
+		return true, nil
+	},
+	"policy": func(c *junosConfig, w []string, s *state, rfs *[]jroute, chain *[]string) (bool, error) {
+		*chain = append(*chain, w[1:]...)
+		return true, nil
+	},
+	"as-path": func(c *junosConfig, w []string, s *state, rfs *[]jroute, chain *[]string) (bool, error) {
+		hit := false
+		for _, name := range listWords(w, 1) {
+			re, ok := c.paths[name]
+			if !ok {
+				return false, fmt.Errorf("cfgsim: junos: no as-path %q", name)
+			}
+			m, err := MatchJunos(re, s.r.Path)
+			if err != nil {
+				return false, err
+			}
+			hit = hit || m
+		}
+		return hit, nil
+	},
+	"community": func(c *junosConfig, w []string, s *state, rfs *[]jroute, chain *[]string) (bool, error) {
+		hit := false
+		for _, name := range listWords(w, 1) {
+			cs, ok := c.comms[name]
+			if !ok {
+				return false, fmt.Errorf("cfgsim: junos: no community %q", name)
+			}
+			hit = hit || s.has(cs)
+		}
+		return hit, nil
+	},
+}
+
+// thenHandler applies one "then" action to state s, returning jAccept or
+// jReject for a terminal action or jFall to fall through to the next one.
+// thenHandlers is the "then" counterpart of fromHandlers: the one place a
+// "then" action keyword is known, read by both policyOptions's parse-time
+// validation and then's dispatch.
+type thenHandler func(c *junosConfig, w []string, s *state) (int, error)
+
+var thenHandlers = map[string]thenHandler{
+	"accept": func(c *junosConfig, w []string, s *state) (int, error) {
+		if len(w) != 1 {
+			return 0, fmt.Errorf("action %q", strings.Join(w, " "))
+		}
+		return jAccept, nil
+	},
+	"reject": func(c *junosConfig, w []string, s *state) (int, error) {
+		if len(w) != 1 {
+			return 0, fmt.Errorf("action %q", strings.Join(w, " "))
+		}
+		return jReject, nil
+	},
+	"local-preference": func(c *junosConfig, w []string, s *state) (int, error) {
+		if len(w) != 2 {
+			return 0, fmt.Errorf("action %q", strings.Join(w, " "))
+		}
+		v, err := strconv.Atoi(w[1])
+		s.attrs.LocalPref = v
+		return jFall, err
+	},
+	"metric": func(c *junosConfig, w []string, s *state) (int, error) {
+		if len(w) != 2 {
+			return 0, fmt.Errorf("action %q", strings.Join(w, " "))
+		}
+		if w[1] == "igp" {
+			s.attrs.MED, s.attrs.MEDIGP = -1, true
+			return jFall, nil
+		}
+		v, err := strconv.Atoi(w[1])
+		s.attrs.MED, s.attrs.MEDIGP = v, false
+		return jFall, err
+	},
+	"community": func(c *junosConfig, w []string, s *state) (int, error) {
+		if len(w) != 3 {
+			return 0, fmt.Errorf("action %q", strings.Join(w, " "))
+		}
+		cs, ok := c.comms[w[2]]
+		if !ok {
+			return 0, fmt.Errorf("no community %q", w[2])
+		}
+		switch w[1] {
+		case "set":
+			s.comms = map[string]bool{}
+			fallthrough
+		case "add":
+			for _, x := range cs {
+				s.comms[x] = true
+			}
+		case "delete":
+			for _, x := range cs {
+				delete(s.comms, x)
+			}
+		default:
+			return 0, fmt.Errorf("community %q", w[1])
+		}
+		return jFall, nil
+	},
+	"as-path-prepend": func(c *junosConfig, w []string, s *state) (int, error) {
+		if len(w) != 2 {
+			return 0, fmt.Errorf("action %q", strings.Join(w, " "))
+		}
+		var as []types.ASN
+		for _, x := range strings.Fields(unquote(w[1])) {
+			a, err := parsePlainASN(x)
+			if err != nil {
+				return 0, err
+			}
+			as = append(as, a)
+		}
+		s.prepend(as)
+		return jFall, nil
+	},
+	"next-hop": func(c *junosConfig, w []string, s *state) (int, error) {
+		if len(w) != 2 {
+			return 0, fmt.Errorf("action %q", strings.Join(w, " "))
+		}
+		s.attrs.NextHop = w[1]
+		return jFall, nil
+	},
 }
 
 type junosConfig struct {
@@ -189,13 +319,17 @@ func (c *junosConfig) policyOptions(nodes []*jnode) error {
 				}
 				term := &jterm{name: t.words[1]}
 				for _, part := range t.block {
+					// known reads the same tables from evaluates and then
+					// dispatch through (fromHandlers, thenHandlers), so a
+					// keyword recognized here is a keyword from/then can
+					// actually handle, and vice versa.
 					var target *[]*jnode
-					var valid map[string]bool
+					var known func(string) bool
 					switch part.words[0] {
 					case "from":
-						target, valid = &term.from, validFromWords
+						target, known = &term.from, func(w string) bool { _, ok := fromHandlers[w]; return ok }
 					case "then":
-						target, valid = &term.then, validThenWords
+						target, known = &term.then, func(w string) bool { _, ok := thenHandlers[w]; return ok }
 					default:
 						return fmt.Errorf("cfgsim: junos: term %s: %q", term.name, part.words[0])
 					}
@@ -206,7 +340,7 @@ func (c *junosConfig) policyOptions(nodes []*jnode) error {
 						nodes = []*jnode{{words: part.words[1:]}}
 					}
 					for _, node := range nodes {
-						if len(node.words) == 0 || !valid[node.words[0]] {
+						if len(node.words) == 0 || !known(node.words[0]) {
 							return fmt.Errorf("cfgsim: junos: term %s: %q", term.name, strings.Join(node.words, " "))
 						}
 					}
@@ -331,52 +465,23 @@ func (c *junosConfig) run(name string, s *state, depth int) (int, error) {
 	return jFall, nil
 }
 
-// from evaluates a term's conditions. action is a chosen route-filter's own
-// action, when it has one.
+// from evaluates a term's conditions, dispatching each through fromHandlers.
+// action is a chosen route-filter's own action, when it has one.
 func (c *junosConfig) from(t *jterm, s *state, depth int) (bool, string, error) {
 	var rfs []jroute
 	var chain []string // every "policy" condition's words: Junos merges them into one
 	for _, n := range t.from {
 		w := n.words
-		switch w[0] {
-		case "route-filter":
-			rf, err := parseRouteFilter(w)
-			if err != nil {
-				return false, "", err
-			}
-			rfs = append(rfs, rf)
-		case "policy":
-			chain = append(chain, w[1:]...)
-		case "as-path":
-			hit := false
-			for _, name := range listWords(w, 1) {
-				re, ok := c.paths[name]
-				if !ok {
-					return false, "", fmt.Errorf("cfgsim: junos: no as-path %q", name)
-				}
-				m, err := MatchJunos(re, s.r.Path)
-				if err != nil {
-					return false, "", err
-				}
-				hit = hit || m
-			}
-			if !hit {
-				return false, "", nil
-			}
-		case "community":
-			hit := false
-			for _, name := range listWords(w, 1) {
-				cs, ok := c.comms[name]
-				if !ok {
-					return false, "", fmt.Errorf("cfgsim: junos: no community %q", name)
-				}
-				hit = hit || s.has(cs)
-			}
-			if !hit {
-				return false, "", nil
-			}
-		default:
+		h, ok := fromHandlers[w[0]]
+		if !ok {
 			return false, "", fmt.Errorf("cfgsim: junos: term %s: condition %q", t.name, w[0])
+		}
+		match, err := h(c, w, s, &rfs, &chain)
+		if err != nil {
+			return false, "", err
+		}
+		if !match {
+			return false, "", nil
 		}
 	}
 	if len(chain) > 0 {
@@ -477,7 +582,7 @@ func parseRouteFilter(w []string) (jroute, error) {
 	if err != nil {
 		return jroute{}, err
 	}
-	rf := jroute{p: p, typ: w[2]}
+	rf := jroute{p: p}
 	max, rest := p.Addr().BitLen(), w[3:]
 	switch w[2] {
 	case "exact":
@@ -509,8 +614,18 @@ func parseRouteFilter(w []string) (jroute, error) {
 	default:
 		return jroute{}, fmt.Errorf("cfgsim: junos: route-filter match type %q", w[2])
 	}
-	if len(rest) > 0 {
+	// A route-filter's own action is "accept", "reject", or absent; anything
+	// else, or a token left over after it, is a parse error rather than a
+	// silently ignored (and so silently accepted) trailer.
+	switch len(rest) {
+	case 0:
+	case 1:
+		if rest[0] != "accept" && rest[0] != "reject" {
+			return jroute{}, fmt.Errorf("cfgsim: junos: route-filter action %q", rest[0])
+		}
 		rf.action = rest[0]
+	default:
+		return jroute{}, fmt.Errorf("cfgsim: junos: route-filter %q: unexpected %q", strings.Join(w, " "), strings.Join(rest, " "))
 	}
 	return rf, nil
 }
@@ -536,57 +651,12 @@ func routeFilters(rfs []jroute, p netip.Prefix) (bool, string, error) {
 	return false, "", nil
 }
 
-// then applies one action; it returns jAccept or jReject for a terminal one.
+// then applies one action, dispatching through thenHandlers; it returns
+// jAccept or jReject for a terminal one.
 func (c *junosConfig) then(w []string, s *state) (int, error) {
-	switch {
-	case len(w) == 1 && w[0] == "accept":
-		return jAccept, nil
-	case len(w) == 1 && w[0] == "reject":
-		return jReject, nil
-	case len(w) == 2 && w[0] == "local-preference":
-		v, err := strconv.Atoi(w[1])
-		s.attrs.LocalPref = v
-		return jFall, err
-	case len(w) == 2 && w[0] == "metric" && w[1] == "igp":
-		s.attrs.MED, s.attrs.MEDIGP = -1, true
-	case len(w) == 2 && w[0] == "metric":
-		v, err := strconv.Atoi(w[1])
-		s.attrs.MED, s.attrs.MEDIGP = v, false
-		return jFall, err
-	case len(w) == 3 && w[0] == "community":
-		cs, ok := c.comms[w[2]]
-		if !ok {
-			return 0, fmt.Errorf("no community %q", w[2])
-		}
-		switch w[1] {
-		case "set":
-			s.comms = map[string]bool{}
-			fallthrough
-		case "add":
-			for _, x := range cs {
-				s.comms[x] = true
-			}
-		case "delete":
-			for _, x := range cs {
-				delete(s.comms, x)
-			}
-		default:
-			return 0, fmt.Errorf("community %q", w[1])
-		}
-	case len(w) == 2 && w[0] == "as-path-prepend":
-		var as []types.ASN
-		for _, x := range strings.Fields(unquote(w[1])) {
-			a, err := parsePlainASN(x)
-			if err != nil {
-				return 0, err
-			}
-			as = append(as, a)
-		}
-		s.prepend(as)
-	case len(w) == 2 && w[0] == "next-hop":
-		s.attrs.NextHop = w[1]
-	default:
+	h, ok := thenHandlers[w[0]]
+	if !ok {
 		return 0, fmt.Errorf("action %q", strings.Join(w, " "))
 	}
-	return jFall, nil
+	return h(c, w, s)
 }
