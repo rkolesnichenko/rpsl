@@ -1,0 +1,202 @@
+aut-num:    AS1
+as-name:    ONE
+descr:      spike
+member-of:  AS-FOO
+import:     from AS2 10.0.0.2 at 10.0.0.1 action pref=10; med=5; community.append(1:100); accept AS-FOO
+import:     from AS3 10.0.0.3 at 10.0.0.1 action pref=20; accept RS-BAR AND NOT {10.20.0.0/16^+}
+import:     from AS-PEERS accept PeerAS
+import:     from AS-ANY accept ANY AND NOT FLTR-BOGONS
+import:     from PRNG-IX accept AS1:AS-CUST:PeerAS
+import:     from AS4 10.0.0.4 at 10.0.0.1 accept <^AS4 AS-FOO*$> AND community(4:1)
+import:     from AS5 10.0.0.5 at 10.0.0.1 action aspath.prepend(AS1, AS1); accept AS5 OR NOT community.contains(5:666)
+import:     { from AS6 10.0.0.6 at 10.0.0.1 action pref=1; accept ANY; } refine { from AS6 10.0.0.6 at 10.0.0.1 action med=7; accept AS-FOO; }
+import:     { from AS7 10.0.0.7 at 10.0.0.1 accept AS-FOO; } except { from AS7 10.0.0.7 at 10.0.0.1 action pref=99; accept AS11; }
+export:     to AS2 10.0.0.2 at 10.0.0.1 action med=10; community.append(1:200); announce AS1 OR AS-FOO
+export:     to AS3 10.0.0.3 at 10.0.0.1 announce ANY
+export:     to AS5 10.0.0.5 at 10.0.0.1 action aspath.prepend(AS1, AS1, AS1); announce AS1
+default:    to AS2 10.0.0.2 at 10.0.0.1 action pref=100; networks ANY
+default:    to AS3 networks { 10.3.0.0/16 }
+mp-import:  afi ipv6.unicast from AS2 2001:db8::2 at 2001:db8::1 action pref=30; accept AS-FOO
+mp-import:  afi ipv6.unicast from AS3 2001:db8::3 at 2001:db8::1 accept RS-V6 AND NOT FLTR-V6
+mp-import:  afi any.unicast from AS8 10.0.0.8 at 10.0.0.1 accept AS8 AND {2001:db8:6::/48^+, 10.6.0.0/16^+}
+mp-import:  afi ipv6.unicast from AS9 2001:db8::9 at 2001:db8::1 accept AS9 AND NOT {2001:db8:9::/48^+}
+mp-export:  afi ipv6.unicast to AS2 2001:db8::2 at 2001:db8::1 action community.append(1:600); announce AS1 OR AS-FOO
+mp-export:  afi any.unicast to AS8 10.0.0.8 at 10.0.0.1 announce AS1
+import-via: AS6777 from AS15562 accept AS-FOO
+mnt-by:     MNT-X
+source:     RADB
+
+aut-num: AS2
+as-name: TWO
+import: from AS1 accept ANY
+export: to AS1 announce AS2
+mnt-by: MNT-X
+source: RADB
+
+as-set:  AS-FOO
+members: AS10, AS11, AS-BAZ
+mbrs-by-ref: ANY
+mnt-by:  MNT-X
+source:  RADB
+
+as-set:  AS-BAZ
+members: AS12, AS-FOO
+mnt-by:  MNT-X
+source:  RADB
+
+as-set:  AS-PEERS
+members: AS2, AS3
+mnt-by:  MNT-X
+source:  RADB
+
+as-set:  AS1:AS-CUST
+members: AS10, AS-BAZ
+mnt-by:  MNT-X
+source:  RADB
+
+route-set: RS-BAR
+members:   10.20.0.0/16^+, 10.21.0.0/16^24, AS10, AS-BAZ^24-26, RS-NESTED
+mp-members: 2001:db8:20::/48
+mbrs-by-ref: MNT-X
+mnt-by:    MNT-X
+source:    RADB
+
+route-set: RS-NESTED
+members:   10.22.0.0/16
+mnt-by:    MNT-X
+source:    RADB
+
+route-set: RS-V6
+mp-members: 2001:db8:30::/48^+, AS10
+mnt-by:    MNT-X
+source:    RADB
+
+filter-set: FLTR-BOGONS
+filter:     {0.0.0.0/8^+, 10.0.0.0/8^+, 127.0.0.0/8^+}
+mnt-by:     MNT-X
+source:     RADB
+
+filter-set: FLTR-V6
+mp-filter:  {2001:db8::/32^+}
+mnt-by:     MNT-X
+source:     RADB
+
+filter-set: FLTR-NESTED
+filter:     FLTR-BOGONS OR AS-FOO
+mnt-by:     MNT-X
+source:     RADB
+
+peering-set: PRNG-IX
+peering:     AS7 10.0.0.7 at 10.0.0.1
+peering:     AS8 at 10.0.0.1
+mp-peering:  AS9 2001:db8::9 at 2001:db8::1
+mnt-by:      MNT-X
+source:      RADB
+
+rtr-set: RTRS-CORE
+members: rtr1.example.net, 10.0.0.1
+mnt-by:  MNT-X
+source:  RADB
+
+inet-rtr: rtr1.example.net
+local-as: AS1
+ifaddr:   10.0.0.1 masklen 24
+interface: 2001:db8::1 masklen 64
+peer:     BGP4 10.0.0.2 asno(AS2)
+peer:     BGP4 10.0.0.3 asno(AS3)
+peer:     BGP4 10.0.0.4 asno(AS4)
+mp-peer:  BGP4 2001:db8::2 asno(AS2)
+mnt-by:   MNT-X
+source:   RADB
+
+route: 10.10.0.0/16
+origin: AS10
+mnt-by: MNT-X
+source: RADB
+
+route: 10.10.1.0/24
+origin: AS10
+mnt-by: MNT-X
+source: RADB
+
+route: 10.11.0.0/16
+origin: AS11
+mnt-by: MNT-X
+source: RADB
+
+route: 10.12.0.0/16
+origin: AS12
+mnt-by: MNT-X
+source: RADB
+
+route: 10.2.0.0/16
+origin: AS2
+mnt-by: MNT-X
+source: RADB
+
+route: 10.3.0.0/16
+origin: AS3
+mnt-by: MNT-X
+source: RADB
+
+route: 10.4.0.0/16
+origin: AS4
+mnt-by: MNT-X
+source: RADB
+
+route: 10.5.0.0/16
+origin: AS5
+mnt-by: MNT-X
+source: RADB
+
+route: 10.6.0.0/16
+origin: AS8
+mnt-by: MNT-X
+source: RADB
+
+route: 10.1.0.0/16
+origin: AS1
+mnt-by: MNT-X
+source: RADB
+
+route: 10.13.0.0/16
+origin: AS13
+member-of: RS-BAR
+mnt-by: MNT-X
+source: RADB
+
+route6: 2001:db8:10::/48
+origin: AS10
+mnt-by: MNT-X
+source: RADB
+
+route6: 2001:db8:12::/48
+origin: AS12
+mnt-by: MNT-X
+source: RADB
+
+route6: 2001:db8:1::/48
+origin: AS1
+mnt-by: MNT-X
+source: RADB
+
+route6: 2001:db8:6::/48
+origin: AS8
+mnt-by: MNT-X
+source: RADB
+
+route6: 2001:db8:9::/48
+origin: AS9
+mnt-by: MNT-X
+source: RADB
+
+route6: 2001:db8:99::/48
+origin: AS9
+mnt-by: MNT-X
+source: RADB
+
+aut-num: AS14
+as-name: FOURTEEN
+member-of: AS-FOO
+mnt-by: MNT-X
+source: RADB

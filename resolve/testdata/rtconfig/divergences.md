@@ -4,10 +4,10 @@
 `Expander.NormalizeFilter` against IRRToolSet 5.1.3's `peval` on random IPv4
 filters, served by the in-process IRRd in `internal/irrtest`. A throwaway
 spike (design doc §3) found ten IRRToolSet bugs running `rtconfig` and
-`peval` together against it; they are pinned here so later rtconfig-
-differential work (design §9 item 4) reuses the same numbering instead of
-rediscovering them, and so a fix on either side is caught by a test instead
-of passing unnoticed.
+`peval` together against it (D1–D10); writing v0.22's plan found three more
+(D11–D13), and the rtconfig differential (`resolve/rtconfig_irrtoolset_test.go`)
+three after that (D14–D16). They are pinned here, and each by a test, so a fix
+on either side is caught instead of passing unnoticed.
 
 | # | Input | rtconfig/peval does | Correct |
 | --- | --- | --- | --- |
@@ -20,11 +20,63 @@ of passing unnoticed.
 | D7 | `configureRouter` | drops router-specific clauses | deferred (design §8) |
 | D8 | `importGroup` with a template | empty policy | deferred (design §8) |
 | D9 | exit status | 0 after "no object for AS1" | non-zero |
-| D10 | peval prints `AS2-AS3`, PeerAS as `AS4294967295` | not re-parseable | `NormalFilter.String` parses back |
+| D10 | peval prints an AS range as `AS10-AS12`; rtconfig names an unbound PeerAS `AS4294967295`, even in its queries (`!iAS1:AS-CUST:AS4294967295,1`) | not re-parseable; a query for a set that cannot exist | `NormalFilter.String` parses back |
+| D11 | IOS-XR, `NOT community.contains(5:666)` | `community matches-any <*> and not …`: refuses a route with no community | accepted, as rtconfig's own IOS rendering does |
+| D12 | Junos, a clause with a community test and a prefix list | two `from policy` subroutines, a Junos policy chain: the community test decides alone (unless `-junos_and_not_or`) | both must hold |
+| D13 | a session the aut-num has no policy for | a warning, and no policy: the neighbour keeps the router's default | a policy that refuses everything |
+| D14 | IOS-XR, a clause that is ANY (`announce ANY`) or NOT ANY | `drop` (then `done`), which ends the policy: ANY refuses every route, NOT ANY also the routes a later clause accepts | ANY: `done`; NOT ANY: nothing |
+| D15 | IOS, a session whose policy denotes no route (`accept NOT ANY`, an AS with no routes) | `neighbor … route-map MyMap_2_1 in`, with no `route-map MyMap_2_1` written or cleared: what the router already holds under that name decides | a route-map that denies |
+| D16 | IOS-XR, a clause whose only AS-path regexp is negated (`NOT <AS65004>`) | an `as-path-set` holding `permit .*`, which is not RPL (its elements are `ios-regex`, `length`, …): the configuration does not load | `not as-path in …` alone |
 
-D5–D9 are rtconfig/config-generation bugs with no peval-side test yet; they
-are listed here only so this file matches the design doc's numbering when a
-later task (the rtconfig differential, design §9 item 4) adds one.
+## Where each is pinned
+
+Each test fails when its divergence goes away, on either side.
+
+| # | Pinned by |
+| --- | --- |
+| D1 | `TestPevalDivergences/D1`; `pevalSafe` keeps it out of `TestPevalMatchesIRRToolSet` |
+| D2 | `TestRtconfigGoldens` (import-v4, 10.0.0.3, all three vendors); `TestPevalDivergences/D2` |
+| D3 | `TestPevalDivergences/D3` |
+| D4 | `TestRtconfigDivergences/D4`; `TestImportIPv6SessionIgnoresLegacyImport` (resolve/peval) |
+| D5 | `TestRtconfigDivergences/D5` |
+| D6 | `TestRtconfigDivergences/D6`; `TestTemplateModeVendors` (resolve/internal/rpslconf) |
+| D7 | `TestRtconfigDivergences/D7` |
+| D8 | `TestRtconfigDivergences/D8+D10` |
+| D9 | `TestRtconfigDivergences/D9`; `TestTemplateModeErrors` |
+| D10 | `TestRtconfigDivergences/D8+D10`; `TestPevalDivergences/D10` |
+| D11 | `TestRtconfigGoldens` (import-v4, ciscoxr, 10.0.0.5); `TestXRReadsRtconfig` (cfgsim) |
+| D12 | `TestRtconfigDivergences/D12`; `TestJunosPolicyChains` (cfgsim) |
+| D13 | `TestRtconfigDivergences/D13`; `TestEmptyPolicyRejects` (resolve/rtconfig) |
+| D14 | `TestRtconfigGoldens` (export-v4, ciscoxr, 10.0.0.3: ANY); `TestRtconfigDivergences/D14` (NOT ANY before a clause that accepts) |
+| D15 | `TestRtconfigDivergences/D15` |
+| D16 | `TestRtconfigDivergences/D16` |
+
+## rtconfig (`TestRtconfigMatches`, `TestRtconfigGoldens`)
+
+The random differential draws only what rtconfig renders correctly:
+- IPv4 policies over prefix lists and bare AS numbers;
+- NOT over prefix lists only;
+- AS-path regexps over AS numbers;
+- positive community tests;
+- Junos with `-junos_and_not_or`.
+
+Three shapes it draws are wrong on one vendor, and are set aside for that
+vendor only, counted in the test's log:
+- **D14** on IOS-XR: a policy with a clause that `peval` finds ANY, or NOT ANY
+  before another clause (about half the seeds: `pevalFilter` draws ANY often);
+- **D15** on IOS: rtconfig attached a route-map it never wrote, and rpslconf's
+  policy must then accept none of the routes;
+- **D16** on IOS-XR: a policy with a negated regexp.
+
+D13 is handled like D15: when rtconfig attaches nothing, rpslconf must accept
+nothing.
+
+`TestRtconfigGoldens` compares rtconfig's checked-in output for two fixed templates with rpslconf's, so it runs without rtconfig. With rtconfig installed, it also holds rtconfig to its goldens; `RPSL_RTCONFIG_UPDATE=1` rewrites them.
+
+rtconfig writes its warnings to stderr and its configuration to stdout, one
+line at a time, and the goldens keep the two in that order. The Docker
+wrappers `scripts/build-irrtoolset.sh` installs join stderr to stdout inside
+the container, since docker relays the two apart and reorders them.
 
 ## peval (`TestPevalMatchesIRRToolSet`)
 
