@@ -322,8 +322,14 @@ func (t translator) junosExpr(e policy.ASPathExpr) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if strings.Contains(s, " ") && !(strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")")) {
-			s = "(" + s + ")" // a quantifier binds to one atom; group anything longer
+		// A quantifier binds to one atom or a "(...)" group. ASPathAlt and
+		// ASPathSeq already wrap their own rendering in parens, so they need no
+		// extra group; a nested ASPathRepeat (AS1{2,3}* — checked for a single
+		// AS by repeatInner/CauseSameAS above) does not, and stacking a second
+		// quantifier directly onto its rendering (e.g. "1{2,3}*") is invalid
+		// Junos as-path-regex syntax, so it is grouped here.
+		if !singleAtom(inner) && !(strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")")) {
+			s = "(" + s + ")"
 		}
 		return s + quantifier(x), nil
 	}

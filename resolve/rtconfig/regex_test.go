@@ -47,6 +47,12 @@ func TestTranslatePath(t *testing.T) {
 		{"^$", "^$", "()", "[= =]"},
 		{"^. .* AS-ANY$", "^_[0-9]+(_[0-9]+)*_[0-9]+$", ". .* .", "[= ? * ? =]"},
 		{"(AS1 | ^AS2)", "(_1|^_2)_", "", ""},
+		// FuzzTranslateRegexp found this shape ("^AS1{2,3}*0"): a repeat
+		// nested directly under another repeat. Junos wrote "1{2,3}*" (no
+		// group around the nested quantifier), which Junos's as-path-regex
+		// rejects as a stacked quantifier the same way Go's regexp package
+		// does ("invalid nested repetition operator").
+		{"AS1{2,3}*", "(_1_1(_1)?)*_", ".* (1{2,3})* .*", ""},
 	} {
 		for _, v := range []struct {
 			vendor Vendor
