@@ -9,6 +9,8 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-09-30
+
 ### Added
 
 - `resolve.NormalizeFilter`: a filter in disjunctive normal form — prefix ranges for what can be
@@ -897,7 +899,8 @@ The first release. There is no earlier version to migrate from.
   values do; a few common RP-attributes have typed helpers.
 - **`rdap` is not a `Source`.** RDAP serves registration data, not IRR sets.
 
-[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.20.1...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.20.1...v0.21.0
 [0.20.1]: https://github.com/rkolesnichenko/rpsl/compare/v0.20.0...v0.20.1
 [0.20.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.19.1...v0.20.0
 [0.19.1]: https://github.com/rkolesnichenko/rpsl/compare/v0.19.0...v0.19.1
