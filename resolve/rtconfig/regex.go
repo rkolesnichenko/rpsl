@@ -108,6 +108,29 @@ func sortASNs(as []types.ASN) {
 
 func num(a types.ASN) string { return strconv.FormatUint(uint64(a), 10) }
 
+// runs groups sorted, deduplicated asns into inclusive runs: three or more
+// consecutive numbers collapse into one [lo, hi] run, everything else comes
+// out as a run of one (lo == hi). Junos and BIRD 2 both write a run of three
+// or more as a range and everything else as a single number; they differ
+// only in the range and join tokens, so both renderers share this grouping.
+func runs(asns []types.ASN) [][2]types.ASN {
+	var out [][2]types.ASN
+	for i := 0; i < len(asns); {
+		j := i
+		for j+1 < len(asns) && asns[j+1] == asns[j]+1 {
+			j++
+		}
+		if j-i >= 2 {
+			out = append(out, [2]types.ASN{asns[i], asns[j]})
+			i = j + 1
+			continue
+		}
+		out = append(out, [2]types.ASN{asns[i], asns[i]})
+		i++
+	}
+	return out
+}
+
 // singleAtom reports whether e names one position (an AS, a set, a class or
 // any AS).
 func singleAtom(e policy.ASPathExpr) bool {
@@ -321,19 +344,12 @@ func junosAlt(asns []types.ASN) string {
 		return "0"
 	}
 	var parts []string
-	for i := 0; i < len(asns); {
-		j := i
-		for j+1 < len(asns) && asns[j+1] == asns[j]+1 {
-			j++
+	for _, r := range runs(asns) {
+		if r[0] == r[1] {
+			parts = append(parts, num(r[0]))
+			continue
 		}
-		switch {
-		case j-i >= 2:
-			parts = append(parts, num(asns[i])+"-"+num(asns[j]))
-			i = j + 1
-		default:
-			parts = append(parts, num(asns[i]))
-			i++
-		}
+		parts = append(parts, num(r[0])+"-"+num(r[1]))
 	}
 	if len(parts) == 1 {
 		return parts[0]
@@ -425,18 +441,12 @@ func (t translator) birdTerm(e policy.ASPathExpr) (string, error) {
 		return num(asns[0]), nil
 	}
 	var parts []string
-	for i := 0; i < len(asns); {
-		j := i
-		for j+1 < len(asns) && asns[j+1] == asns[j]+1 {
-			j++
-		}
-		if j-i >= 2 {
-			parts = append(parts, num(asns[i])+".."+num(asns[j]))
-			i = j + 1
+	for _, r := range runs(asns) {
+		if r[0] == r[1] {
+			parts = append(parts, num(r[0]))
 			continue
 		}
-		parts = append(parts, num(asns[i]))
-		i++
+		parts = append(parts, num(r[0])+".."+num(r[1]))
 	}
 	return "[" + strings.Join(parts, ", ") + "]", nil
 }
