@@ -38,6 +38,9 @@ Every layer ships. Until v1.0.0, a minor version may change the API; the
 | `auth` | Who may create, modify or delete an object, under the RIPE Database's and IRRd's rules (`auth.RIPE`, `auth.IRRd`), with lookups and cryptography injected | shipped |
 | Registry-scoped members | `src-members:` (draft-ietf-grow-rpsl-registry-scoped-members): a scoped `types.SetRef`, decoded and validated on as-set and route-set, resolved by every `Source` backend, with no cascade | shipped |
 | `resolve.PolicySource` | A sibling of `Source` serving aut-nums and inet-rtrs, scoped the same way, over `MemSource`, `Corpus` (`KeepPolicy`), `DumpLoader`, `nrtm4.Client`, `irrd`, `whois`, `Cache` and `rpki.Filter` | shipped |
+| `resolve.NormalizeFilter` + `Expander.Peer` | A filter evaluated to disjunctive normal form for a bound peer (PeerAS, `AS1:AS-CUST:PeerAS`): prefix ranges for what can be enumerated, AS-path regexps and community tests kept symbolic, capped by `Expander.MaxConjuncts` | shipped |
+| `resolve/peval` | An aut-num's import, export, via and default policies evaluated for one BGP session into ordered clauses of normalized filter and actions, with undecidable terms reported rather than guessed | shipped |
+| `rpslconf -e` | Policy evaluation on the command line — IRRToolSet's `peval` on this engine (`resolve/cmd/rpslconf`); template mode and the vendor printers follow in v0.22.0 | shipped |
 
 RFC 4012 (RPSLng) is supported: `mp-import`/`mp-export`/`mp-default`, the `afi`
 dictionary and `afi`-scoped policies (`Import`/`Export`/`Default`/`Except`/
@@ -363,11 +366,11 @@ FUZZTIME=15s scripts/check.sh  # ... plus every fuzz target (what CI runs)
   `FuzzParseFilter`, `FuzzParsePeering`, `FuzzParseInject`,
   `FuzzParseComponents`, `FuzzParseAggrMtd`, `FuzzParseIfaddr`,
   `FuzzParseInterface`, `FuzzParsePeer`, `FuzzParseRPAttribute`,
-  `FuzzParseTypedef`, `FuzzParseProtocol`, `FuzzFilterString` (policy);
+  `FuzzParseTypedef`, `FuzzParseProtocol`, `FuzzFilterString`, `FuzzParseMPFilter` (policy);
   `FuzzReadFrame`, `FuzzParseMembers`, `FuzzParseRegistries` (resolve/irrd); `FuzzScanResponse`
   (resolve/whois); `FuzzReadJSON`, `FuzzApplySLURM` (resolve/rpki);
   `FuzzParseNotification`, `FuzzReadDelta` (resolve/nrtm4);
-  `FuzzAggregate` (resolve/internal/filtergen); `FuzzCorpusDelete` (resolve).
+  `FuzzAggregate` (resolve/internal/filtergen); `FuzzCorpusDelete`, `FuzzNormalizeFilter` (resolve).
 - **Real data (opt-in)** — `scripts/fetch-irr-dumps.sh` downloads the public
   dumps of RIPE, APNIC, ARIN, AFRINIC, LACNIC, RADB and the ten IRRs RADB
   mirrors (about 13.3 million objects); `RPSL_REALDATA=$PWD/.data go test -run TestRealData ./examples/bulk-ripe/bulk`

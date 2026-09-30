@@ -41,6 +41,11 @@ resolve → object → policy → types → ast → lexer (never the reverse).
   with the local directories, so edits are seen across modules at once. Bump them only when releasing.
 - `Diagnostic`/`Severity` live in the `ast` module (so `object` can emit them); `rpsl` re-exports via aliases.
 - Net-using Source backends are isolated in `resolve/` sub-packages (irrd/whois/rdap/nrtm4) to keep core `resolve` socket-free.
+- `resolve/peval` (policy evaluation for one BGP session) sits beside `resolve`, pure like it — no
+  `net` either. `resolve/internal/backend` (shared server/dump opening for rpslq and rpslconf),
+  `resolve/internal/routemodel` (test-only AS-path-regexp-vs-path oracle) and
+  `resolve/internal/rpslconf` (the `rpslconf` command's logic; `resolve/cmd/rpslconf` is the shim)
+  are internal packages alongside it.
 - Tests use in-process fake servers over a localhost listener + a `Dial` hook (no real network);
   the bgpq4 differential runs bgpq4 against an in-process IRRd (`resolve/internal/irrtest`) when bgpq4
   is installed; the snapshot goldens are its checked-in output; a live diff is opt-in via env vars.
@@ -106,7 +111,11 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   PeerAS, community tests and AS-path regexps. Never answer one of those with an empty set.
 - **`Expander.Exclude`** (bgpq4's EXCEPT): an excluded set is skipped in discovery (never
   fetched or Missing), an excluded AS is never fetched for routes; the named top set is always
-  expanded. Checked against the model oracle over every backend.
+  expanded. Checked against the model oracle over every backend. Exclusion never widens a
+  normalized filter: it applies only where it narrows what a filter accepts — positive literals,
+  and the Sets of a positive PathMatch. Under NOT (negated literals, and the Sets of a negated
+  PathMatch), `NormalizeFilter` evaluates with Exclude cleared, so an excluded AS or set cannot
+  drop out of a deny side and become accepted.
 - **`Expander.Concurrency` must not change a result.** Discovery fetches a whole breadth-first
   level at once and merges in the level's own order; `TestConcurrencyDoesNotChangeResults`
   compares serial and parallel over 200 random graphs.
@@ -137,6 +146,15 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   answer from another registry. `Corpus.SourceOf` restricts unscoped lookups and routes only.
 - **`PolicySource`**: `Corpus.KeepPolicy` holds aut-nums and inet-rtrs as text (95 MB for RIPE),
   decoded per call — never decoded in memory (707 MB).
+- **Policy evaluation (`resolve/peval`) never guesses.**
+  - A term whose peering names a router the session does not give, a peering regexp, or a
+    non-BGP4 protocol goes to `Undecided`.
+  - An AS mismatch is no match, whatever the routers.
+  - `NormalizeFilter` keeps regexps and community tests symbolic.
+  - Negations stay inside a conjunct (`NotPrefixes`, `Negated`).
+  - A filter-set holding a regexp is inlined, or refused with an operator or on a cycle.
+  - `EvalFilter` success ⇒ one pure conjunct.
+  - `resolve/internal/routemodel` is test-only and the only regexp-vs-path matcher.
 
 ## Scope guardrails
 
@@ -154,16 +172,17 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   (all six modules incl. examples/bulk-ripe under -race, gofmt, invariants) with
   `scripts/check.sh`; `FUZZTIME=15s scripts/check.sh` also runs every fuzz target.
 - `go test -run 'TestRoundTrip|TestStreamRoundTrip' .` — the lossless guard (root module).
-- Fuzz (36 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
+- Fuzz (38 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
   FuzzFormat (ast); FuzzParseSetName, FuzzParseRangeOperator, FuzzParsePrefixRange,
   FuzzParseRouterID, FuzzParseSetRef (types); FuzzParseStream, FuzzDecode (root);
   FuzzParseSrcMember (object); FuzzParseImport,
   FuzzParseASPathRegexp, FuzzParseFilter, FuzzParsePeering, FuzzParseInject,
   FuzzParseComponents, FuzzParseAggrMtd, FuzzParseIfaddr, FuzzParseInterface, FuzzParsePeer,
-  FuzzParseRPAttribute, FuzzParseTypedef, FuzzParseProtocol, FuzzFilterString (policy);
+  FuzzParseRPAttribute, FuzzParseTypedef, FuzzParseProtocol, FuzzFilterString,
+  FuzzParseMPFilter (policy);
   FuzzReadFrame, FuzzParseMembers, FuzzParseRegistries (resolve/irrd); FuzzScanResponse (resolve/whois);
   FuzzAggregate (resolve/internal/filtergen); FuzzReadJSON, FuzzApplySLURM (resolve/rpki);
-  FuzzParseNotification, FuzzReadDelta (resolve/nrtm4); FuzzCorpusDelete (resolve).
+  FuzzParseNotification, FuzzReadDelta (resolve/nrtm4); FuzzCorpusDelete, FuzzNormalizeFilter (resolve).
 - Never slice a string at an offset found in a transformed copy of it (`strings.ToUpper` can
   lengthen UTF-8): v0.19.0 panicked on "ɐ" (2 bytes) → "Ɐ" (3). Match case-insensitively in place.
 - Opt-in: `RPSL_REALDATA=$PWD/.data go test -run TestRealData ./examples/bulk-ripe/bulk`
@@ -175,7 +194,9 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   routes vs NTT's VRPs; RADB's and NTT's filtered exports ≤1% invalid) and, with `RPSL_LIVE=1`
   too, `-run TestLive ./resolve/rpki` (Validate vs what RADB hides; pseudo-object rendering);
   `RPSL_LIVE=1 go test -run TestLiveRIPE ./resolve/nrtm4` (RIPE's NRTMv4 signature and newest delta),
-  `RPSL_LIVE_NRTM=1 … -run TestLiveRIPEMirror` (a full RIPE mirror, ~400 MB).
+  `RPSL_LIVE_NRTM=1 … -run TestLiveRIPEMirror` (a full RIPE mirror, ~400 MB);
+  `RPSL_REALDATA=$PWD/.data go test -run TestRealDataPeval ./resolve` (a sample of RIPE's
+  aut-nums, import/export evaluated toward every named peer in both families).
 - `rpslq` (resolve/cmd/rpslq; logic in resolve/internal/rpslq, formats in resolve/internal/filtergen)
   is bgpq4 on this engine: bgpq4's getopt command line, every vendor/kind/shape, and -A as a
   node-for-node port of bgpq4's radix tree (filtergen/tree.go) — don't "improve" its
@@ -186,6 +207,13 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   (`-P` and `-c` are rpslq's two short exceptions, kept for compatibility): `-P` writes each
   entry as RPSL notation, `-c` sets concurrent queries in flight.
   Its IRRd queries use `irrd.Source.Pipeline` (one connection, many queries in flight).
+- `rpslconf` (resolve/cmd/rpslconf; logic in resolve/internal/rpslconf) is IRRToolSet's
+  `RtConfig`/`peval` on this engine: this release has peval mode only (`-e`, `NormalFilter.String()`
+  output); template mode (`@RtConfig` commands, the vendor printers) is v0.22.0. See docs/rpslconf.md.
+  `TestPevalMatchesIRRToolSet` (resolve/peval_irrtoolset_test.go) runs when `peval` is on PATH
+  (`brew install irrtoolset`; the arm64 bottle takes its server only from
+  `IRR_HOST`/`IRR_PORT`/`IRR_SOURCES`), against the shapes IRRToolSet gets right; divergences are
+  pinned in resolve/testdata/rtconfig/divergences.md.
 - Releasing: `scripts/release.sh vX.Y.Z` does RELEASING.md's steps (tag order lexer/types → ast →
   root → resolve), waits for the proxy, verifies from an empty module cache, and resumes after a
   failure; it also builds rpslq's binaries (5 platforms, from the published module) and attaches
@@ -195,8 +223,8 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   unpushed tag: it caches the miss for ~30 minutes.
 - Performance: `scripts/bench.sh [ref]` compares benchmarks with a ref (default: latest tag).
 - Leaf isolation: `cd types && go list -deps ./... | grep rkolesnichenko` must show only itself.
-- Engine purity: `cd resolve && go list -deps .` must NOT include `net` (sockets live only
-  in resolve/irrd, resolve/whois, resolve/rdap).
+- Engine purity: `cd resolve && go list -deps . ./peval` must NOT include `net` (sockets live
+  only in resolve/irrd, resolve/whois, resolve/rdap).
 - IRRd wire framing: `A<len>\n<payload>C\n` where `<len>` *includes* the payload's trailing
   newline (see `resolve/irrd/readframe_test.go`). After ReadFull(payload), the next ReadString
   consumes the `C\n` status line directly — there is no separator newline to skip.

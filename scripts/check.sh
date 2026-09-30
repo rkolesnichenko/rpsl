@@ -60,8 +60,8 @@ done
 step "tools: scripts/mkproxy builds and vets"
 (cd scripts/mkproxy && GOWORK=off go build -o /dev/null . && GOWORK=off go vet .) || bad "scripts/mkproxy"
 
-step "engine purity: the core resolve package does not import net"
-if (cd resolve && go list -deps .) | grep -qx net; then bad "resolve imports net"; fi
+step "engine purity: resolve and resolve/peval do not import net"
+if (cd resolve && go list -deps . ./peval) | grep -qx net; then bad "resolve or resolve/peval imports net"; fi
 
 bin=$(go env GOPATH)/bin
 for tool in staticcheck govulncheck; do
