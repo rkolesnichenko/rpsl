@@ -332,6 +332,7 @@ type filterGen struct {
 	asSets []string // as-set names a regexp may name
 	fltrs  []mFltr
 	memo   map[string][]netip.Prefix
+	v4only bool // prefix lists from IPv4 only (legacy import:)
 }
 
 func newFilterGen(r *rand.Rand, o *oracle) *filterGen {
@@ -390,7 +391,11 @@ func (g *filterGen) filter(depth int) *mFilter {
 	case 0:
 		return &mFilter{kind: "any"}
 	case 1:
-		p := samplePrefixes[r.IntN(len(samplePrefixes)-3)]
+		pool := samplePrefixes[:len(samplePrefixes)-3]
+		if g.v4only {
+			pool = moreSpecifics(v4Universe, 29, 32)
+		}
+		p := pool[r.IntN(len(pool))]
 		return &mFilter{kind: "pfx", pfx: p, op: pfxOp(op, p)}
 	case 2:
 		return &mFilter{kind: "as", as: types.ASN(firstAS + r.IntN(4)), op: op}
