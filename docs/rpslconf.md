@@ -263,9 +263,12 @@ these exact bytes.
 
 `prefix_acl_no`, `aspath_acl_no`, `community_acl_no` and
 `cisco_access_list_no` (below) must be set before the first
-`access_list`/`aspath_access_list`/`import`/`export`/`default` command: lists
-and maps are numbered across the whole template, so `rpslconf` refuses a
-numbering knob set after one has already been written.
+`import`, `export`, `access_list` or `aspath_access_list` command: each of
+those four writes a numbered list or map, and `rpslconf` refuses a numbering
+knob set after one has already been written. `default`, `printprefixes`,
+`printprefixranges`, `networks` and `v6networks` write nothing numbered, so
+they never fix the numbering — a `set` of a numbering knob is still allowed
+after any of them.
 
 | Knob | Default | Sets |
 | --- | --- | --- |
@@ -296,8 +299,9 @@ a correct rendering to; the rest have no oracle either.
 operators — `%p` the range's address, `%l` its prefix length, `%L` the
 address size minus the length, `%n`/`%m` the range's low/high length window,
 `%k`/`%K` the mask and its inverse, `%%` a literal `%` — and `\` escapes
-(`\n`, `\t`, `\\`). Both commands' filter must normalize to prefix ranges
-alone: one conjunct, no AS-path regexp, community test or `NOT`; anything
+(`\n`, `\t`, `\\`). Both commands' filter must normalize to at most one
+conjunct of prefix ranges, with no AS-path regexp, community test or `NOT` —
+even a negated range; a filter matching nothing prints nothing, and anything
 else is refused.
 
 ## Sessions and BIRD
@@ -386,15 +390,18 @@ and AS numbers.
 
 ## Exit status
 
-0 on success, in either mode. 1 on any error: a filter that fails to parse or
-normalize, `PeerAS` with no `-peer`, a limit or a timeout, a server
-`rpslconf` cannot reach, a template's `import`/`export`/`default` naming an
+0 on success, in either mode. 1 on any error once the command line itself
+parses: a filter that fails to parse or normalize, `PeerAS` with no `-peer`,
+a limit or a timeout, a server `rpslconf` cannot reach, a malformed
+`@RtConfig` line, a template's `import`/`export`/`default` naming an
 aut-num that does not exist (D9, below), or a construct a vendor's printer
-refuses (`*rtconfig.UnsupportedError`). 2 on a command line `rpslconf` cannot
-use (an unknown flag, `-peer` outside peval mode, a malformed `@RtConfig`
-line). A term `peval` cannot decide, and a set a filter names that is not
-found, are warnings on stderr rather than failures: neither stops the rest
-of the template from running.
+refuses (`*rtconfig.UnsupportedError`). 2 on the command line itself: an
+unknown or malformed flag, an unexpected positional argument (the template
+is always read from stdin, never named on the command line), an unknown
+`-config` vendor, `-peer` given outside peval mode, or a `-peer` value that
+is not an AS number. A term `peval` cannot decide, and a set a filter names
+that is not found, are warnings on stderr rather than failures: neither
+stops the rest of the template from running.
 
 ## What a vendor cannot say
 
