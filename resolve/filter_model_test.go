@@ -707,3 +707,55 @@ func TestModelMaxConjuncts(t *testing.T) {
 		t.Fatalf("only %d filters needed two conjuncts or more", checked)
 	}
 }
+
+// Exclude only ever narrows what a filter accepts: normalized with a random
+// Expander.Exclude, every route the normal form accepts is one the model
+// accepts without it — through NOT, AS-path regexps (a set inside "[^…]" as
+// well) and filter-sets.
+func TestModelNormalizeExclude(t *testing.T) {
+	ctx := context.Background()
+	narrowed := 0
+	for seed := uint64(0); seed < 500; seed++ {
+		r := rand.New(rand.NewPCG(seed, 19))
+		m := randomModel(r, false)
+		o := newOracle(m)
+		g := newFilterGen(r, o)
+		texts := append(m.texts(r), g.filterSets(3)...)
+		src := resolve.NewMemSource(decodeAll(t, texts), "RIPE", "RADB")
+		peer := types.ASN(firstAS + 1)
+		ex := randomExclusion(r, m)
+		rx := rand.New(rand.NewPCG(seed, 23)) // apart from r, so it does not change the filters r draws
+		for _, x := range g.fltrs {
+			if rx.IntN(4) == 0 {
+				n, _ := types.ParseSetName(x.name)
+				ex.Sets = append(ex.Sets, n)
+			}
+		}
+		e := &resolve.Expander{Src: src, Peer: peer, Exclude: ex}
+		for i := 0; i < 12; i++ {
+			f := g.filter(3)
+			label := fmt.Sprintf("seed %d: exclude %v: %s", seed, ex, f.text())
+			nf, err := e.NormalizeFilter(ctx, mustParseFilter(t, label, f.text()))
+			if err != nil {
+				t.Fatalf("%s: NormalizeFilter: %v", label, err)
+			}
+			for j := 0; j < 150; j++ {
+				rt := randomRoute(r, peer)
+				got, err := routemodel.Match(nf, rt)
+				if err != nil {
+					t.Fatalf("%s: %v", label, err)
+				}
+				want := g.accepts(f, rt, peer)
+				if got && !want {
+					t.Fatalf("%s: route %v: the normal form %s accepts it; without Exclude the model refuses it", label, rt, nf)
+				}
+				if want && !got {
+					narrowed++
+				}
+			}
+		}
+	}
+	if narrowed == 0 {
+		t.Fatal("Exclude never left out a route the model accepts")
+	}
+}

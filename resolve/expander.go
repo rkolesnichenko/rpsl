@@ -44,7 +44,7 @@ type Expander struct {
 	MaxDepth     int       // cap on a set's shortest nesting distance from the top (default 32)
 	MaxPrefixes  int       // cap on output prefixes, or ranges for ExpandPrefixRanges (default 1<<20)
 	MaxVisited   int       // cap on distinct sets fetched and on evaluation visits (default 1<<17)
-	MaxConjuncts int       // cap on the conjuncts of any disjunction NormalizeFilter builds (default 1<<12)
+	MaxConjuncts int       // cap on the conjuncts of any disjunction, and the tests of any conjunct, NormalizeFilter builds (default 1<<12)
 	AFI          types.AFI // address-family constraint; Unspecified/Any = both
 	// Concurrency is how many sets, or ASes, may be fetched at once. Zero and
 	// one both fetch one at a time. Discovery is breadth-first, and a whole
@@ -69,8 +69,11 @@ type Expander struct {
 // aut-num members, and the set and AS references inside a filter-set), but
 // never to the set an Expand call names, which is expanded as asked; nor, in
 // EvalFilter, to the terms of the filter passed in. A set excluded and also
-// reachable another way stays out. Under NOT, in NormalizeFilter, an excluded
-// set or AS is not left out, so exclusion never widens what a filter accepts.
+// reachable another way stays out. NormalizeFilter applies it only to the
+// positive prefix literals of a filter: under NOT, and in every AS-path
+// regexp's sets, an excluded set or AS is not left out, so exclusion never
+// widens what a filter accepts. peval never applies it to peering or router
+// matching, only to clause filters.
 type Exclusion struct {
 	Sets []types.SetName
 	ASNs []types.ASN

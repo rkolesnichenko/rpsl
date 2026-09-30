@@ -3,6 +3,7 @@ package resolve
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -213,14 +214,127 @@ func TestNormalizeExcludeUnderNot(t *testing.T) {
 		t.Errorf("NOT <AS-A>: Sets[AS-A] = %v, want AS1 and AS2", set.List())
 	}
 
-	// The positive form still excludes it, as TestNormalizeRegexps checks for
-	// an Expander with no Exclude.
-	nf, err = e.NormalizeFilter(ctx, mustFilter(t, "<AS-A>"))
-	if err != nil {
-		t.Fatal(err)
+	// The positive form keeps it too (F2 of the final review): Exclude never
+	// reaches inside an AS-path regexp, in either polarity. A set inside
+	// "[^…]" is on the rejecting side even in a positive regexp, so leaving
+	// AS1 out of AS-A there would make <[^AS-A]> and <^[^AS-A]*$> accept a
+	// path through AS1 that they reject without Exclude. This used to assert
+	// Sets[AS-A] = {AS2}.
+	for _, f := range []string{"<AS-A>", "<[^AS-A]>", "<^[^AS-A]*$>"} {
+		nf, err = e.NormalizeFilter(ctx, mustFilter(t, f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		set = nf.Conjuncts[0].Paths[0].Sets[mustSet(t, "AS-A")]
+		if !set.Has(1) || !set.Has(2) || set.Len() != 2 {
+			t.Errorf("%s: Sets[AS-A] = %v, want AS1 and AS2", f, set.List())
+		}
 	}
-	set = nf.Conjuncts[0].Paths[0].Sets[mustSet(t, "AS-A")]
-	if set.Has(1) || !set.Has(2) || set.Len() != 1 {
-		t.Errorf("<AS-A>: Sets[AS-A] = %v, want just AS2", set.List())
+}
+
+// andChain is the final review's probe: FLTR-L0 … FLTR-L<levels>, each level
+// the 4-way AND of the next, the last <AS1>. Inlined naively it is 4^levels
+// copies of one test in one conjunct (10 levels: 1,048,576 paths, 1.6 GB).
+func andChain(levels int) []string {
+	var texts []string
+	for k := 0; k < levels; k++ {
+		next := fmt.Sprintf("FLTR-L%d", k+1)
+		texts = append(texts, fltrSet(fmt.Sprintf("FLTR-L%d", k), next+" AND "+next+" AND "+next+" AND "+next))
+	}
+	return append(texts, fltrSet(fmt.Sprintf("FLTR-L%d", levels), "<AS1>"))
+}
+
+// TestNormalizeRepeatedFilterSets is F1 of the final review: a filter-set
+// referenced many times is inlined once per polarity, and a test repeated in
+// a conjunct is kept once, so the probe is one conjunct of one path.
+func TestNormalizeRepeatedFilterSets(t *testing.T) {
+	for _, levels := range []int{10, 20} {
+		t.Run(fmt.Sprint(levels), func(t *testing.T) {
+			// Each level nests two deep (the set, then its AND), so 20 levels
+			// need more than the default MaxDepth.
+			e := &Expander{Src: corpus(t, andChain(levels)...), AFI: types.AFIv4, MaxDepth: 4 * levels}
+			nf, err := e.NormalizeFilter(context.Background(), mustFilter(t, "FLTR-L0"))
+			if err != nil || len(nf.Conjuncts) != 1 || len(nf.Conjuncts[0].Paths) != 1 || nf.String() != "<AS1>" {
+				t.Fatalf("NormalizeFilter(FLTR-L0) = %q (%d conjuncts), %v; want one conjunct of one path, <AS1>", nf.String(), len(nf.Conjuncts), err)
+			}
+			// Negated, each AND is a union of four equal disjunctions, which
+			// only finish deduplicates: MaxConjuncts refuses it, quickly.
+			var tl *SetTooLargeError
+			if _, err := e.NormalizeFilter(context.Background(), mustFilter(t, "NOT FLTR-L0")); !errors.As(err, &tl) || tl.Limit != LimitConjuncts {
+				t.Errorf("NormalizeFilter(NOT FLTR-L0): err %v, want *SetTooLargeError{Limit: LimitConjuncts}", err)
+			}
+			allocs := testing.AllocsPerRun(1, func() {
+				if _, err := e.NormalizeFilter(context.Background(), mustFilter(t, "FLTR-L0")); err != nil {
+					t.Fatal(err)
+				}
+			})
+			if allocs > float64(2000*levels) {
+				t.Errorf("NormalizeFilter(FLTR-L0) over %d levels: %.0f allocations", levels, allocs)
+			}
+		})
+	}
+	e := &Expander{Src: normCorpus(t), AFI: types.AFIv4}
+	normalizes(t, e, map[string]string{
+		"<AS1> AND <AS1>":                             "<AS1>",
+		"<AS1> AND NOT <AS1>":                         "<AS1> AND NOT <AS1>",
+		"community(1:2) AND community(1:2) AND <AS1>": "<AS1> AND community(1:2)",
+		"(FLTR-RE AND FLTR-RE) OR FLTR-RE":            "{10.1.0.0/16} AND <^ AS1 $>",
+	})
+}
+
+// binaryTree is filter-sets FLTR-T (the root) down to 2^levels leaves, each a
+// distinct regexp <AS1>, <AS2>, …, joined by AND: its one conjunct genuinely
+// holds 2^levels tests.
+func binaryTree(levels int) []string {
+	var texts []string
+	var walk func(name string, k int)
+	leaf := 0
+	walk = func(name string, k int) {
+		if k == levels {
+			leaf++
+			texts = append(texts, fltrSet(name, fmt.Sprintf("<AS%d>", leaf)))
+			return
+		}
+		texts = append(texts, fltrSet(name, name+"-0 AND "+name+"-1"))
+		walk(name+"-0", k+1)
+		walk(name+"-1", k+1)
+	}
+	walk("FLTR-T", 0)
+	return texts
+}
+
+// A conjunct over MaxConjuncts tests is refused, and every step of the
+// normalization is charged against MaxVisited: a filter whose tests multiply
+// is a *SetTooLargeError, never a runaway.
+func TestNormalizeBoundsTests(t *testing.T) {
+	src := corpus(t, binaryTree(5)...) // 63 filter-sets, 32 leaves
+	ctx := context.Background()
+	f := mustFilter(t, "FLTR-T")
+	nf, peak, err := NormalizePeak(&Expander{Src: src}, ctx, f)
+	if err != nil || len(nf.Conjuncts) != 1 || len(nf.Conjuncts[0].Paths) != 32 || peak != 32 {
+		t.Fatalf("NormalizeFilter(FLTR-T) = %d conjuncts, peak %d, %v; want one of 32 paths, peak 32", len(nf.Conjuncts), peak, err)
+	}
+	if _, err := (&Expander{Src: src, MaxConjuncts: 32}).NormalizeFilter(ctx, f); err != nil {
+		t.Errorf("MaxConjuncts 32: %v", err)
+	}
+	var tl *SetTooLargeError
+	_, err = (&Expander{Src: src, MaxConjuncts: 31}).NormalizeFilter(ctx, f)
+	if !errors.As(err, &tl) || tl.Limit != LimitConjuncts {
+		t.Errorf("MaxConjuncts 31: err %v, want *SetTooLargeError{Limit: LimitConjuncts}", err)
+	}
+	// Fetching the 63 sets alone is 63 visits; normalizing them is more.
+	_, err = (&Expander{Src: src, MaxVisited: 100}).NormalizeFilter(ctx, f)
+	if !errors.As(err, &tl) || tl.Limit != LimitVisited {
+		t.Errorf("MaxVisited 100: err %v, want *SetTooLargeError{Limit: LimitVisited}", err)
+	}
+	// Thirteen levels of distinct leaves under the default limits.
+	deep := &Expander{Src: corpus(t, binaryTree(13)...)}
+	if _, err := deep.NormalizeFilter(ctx, f); !errors.As(err, &tl) || tl.Limit != LimitConjuncts && tl.Limit != LimitVisited {
+		t.Errorf("a tree of 8,192 distinct leaves: err %v, want *SetTooLargeError", err)
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := (&Expander{Src: src}).NormalizeFilter(cancelled, f); !errors.Is(err, context.Canceled) {
+		t.Errorf("a cancelled context: err %v", err)
 	}
 }
