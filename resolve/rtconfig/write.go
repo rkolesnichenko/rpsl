@@ -30,6 +30,8 @@ func (g *Generator) writer() (vendorWriter, error) {
 	switch g.Vendor {
 	case IOS:
 		return iosWriter{}, nil
+	case Junos:
+		return junosWriter{}, nil
 	}
 	if g.Vendor == 0 {
 		return nil, errNoVendor
