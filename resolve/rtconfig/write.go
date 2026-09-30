@@ -148,17 +148,10 @@ func (g *Generator) WriteASPathList(w io.Writer, m resolve.PathMatch) error {
 }
 
 // WriteNetworks writes the network statements that originate prefixes, as
-// rtconfig's networks and v6networks commands do. This checks the vendor's
-// capability before requiring a working vendorWriter, so a vendor whose
-// writer does not exist yet (Tasks 10, 12, 14) still refuses correctly rather
-// than reporting a generic "no writer" error.
+// rtconfig's networks and v6networks commands do. See the capability table
+// for vendors; a vendor's networks method decides whether it can express
+// them, as its defaults method decides for WriteDefault.
 func (g *Generator) WriteNetworks(w io.Writer, prefixes []netip.Prefix) error {
-	if g.Vendor == 0 {
-		return errNoVendor
-	}
-	if !g.supports(FeatureNetworks) {
-		return unsupported(g.Vendor, CauseNetworks, "networks")
-	}
 	vw, err := g.writer()
 	if err != nil {
 		return err

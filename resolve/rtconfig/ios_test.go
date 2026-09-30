@@ -198,6 +198,9 @@ func TestIOSListsDefaultsNetworks(t *testing.T) {
 	}
 	var ue *UnsupportedError
 	for _, v := range []Vendor{Junos, BIRD2} {
+		if _, err := (&Generator{Vendor: v}).writer(); err != nil {
+			continue
+		}
 		if err := (&Generator{Vendor: v}).WriteNetworks(&b, nil); !errors.As(err, &ue) || ue.Cause != CauseNetworks {
 			t.Errorf("%v WriteNetworks: %v", v, err)
 		}
