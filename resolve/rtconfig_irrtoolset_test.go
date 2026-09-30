@@ -735,7 +735,9 @@ func TestPevalDivergences(t *testing.T) {
 			t.Skipf("peval echoes nothing: not the Linux build (it answers %q)", answer)
 		case !slices.Contains(d17Arches, runtime.GOARCH):
 			t.Skipf("D17 is pinned on the Linux build for %v, not %s; peval answers %q", d17Arches, runtime.GOARCH, answer)
-		case !strings.Contains(answer, "10.0.0.0/31"):
+		case answer == "NOT ANY":
+			// Its wrong answers vary from run to run (/31s, /32s, /33s), so
+			// only the right one tells D17 is gone.
 			t.Errorf("D17 is gone: the Linux build answers %s with %q", filter, answer)
 		}
 	})
