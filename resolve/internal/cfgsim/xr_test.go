@@ -160,3 +160,152 @@ router bgp 1
 		t.Errorf("a missing prefix-set evaluated")
 	}
 }
+
+// TestXREdgeCases covers oracle gaps the fixture and TestXRPolicyLanguage
+// don't exercise: an empty community-set under matches-any/matches-every, an
+// uncontested "set med igp-cost", prefix-set "eq n" and a bare "ge n" (no
+// "le"), an as-path-set element whose quoted ios-regex contains a comma, a
+// non-additive "set community" over a route that already carries other
+// communities, and the "prepend as-path A N" bound on N.
+func TestXREdgeCases(t *testing.T) {
+	const text = `
+prefix-set p2
+  10.0.0.0/8 eq 16,
+  192.0.2.0/24 ge 26
+end-set
+!
+prefix-set pall
+  0.0.0.0/0 le 32
+end-set
+!
+as-path-set a2
+  ios-regex '^_1(_2){1,3}$',
+  ios-regex '^_9_$'
+end-set
+!
+community-set cempty
+end-set
+!
+route-policy REVERY
+  if community matches-every cempty then
+    done
+  endif
+end-policy
+!
+route-policy RANY
+  if community matches-any cempty then
+    done
+  endif
+end-policy
+!
+route-policy RMED
+  if destination in pall then
+    set med igp-cost
+    done
+  endif
+end-policy
+!
+route-policy RWIN
+  if destination in p2 then
+    done
+  endif
+end-policy
+!
+route-policy RPATH
+  if as-path in a2 then
+    done
+  endif
+end-policy
+!
+route-policy RCOMM
+  if destination in pall then
+    set community (9:9)
+    done
+  endif
+end-policy
+!
+route-policy RPREPEND0
+  if destination in pall then
+    prepend as-path 1 0
+    done
+  endif
+end-policy
+!
+route-policy RPREPEND65
+  if destination in pall then
+    prepend as-path 1 65
+    done
+  endif
+end-policy
+`
+	c, err := ParseXR(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. matches-every over an empty set is vacuously true; matches-any over
+	// an empty set is always false — whether or not the route carries a
+	// community.
+	for _, r := range []Route{route("192.0.2.0/24", nil), route("192.0.2.0/24", nil, "1:1")} {
+		if ok, _, err := c.Policy("REVERY", r); err != nil || !ok {
+			t.Errorf("REVERY(%v) = %v, %v; want true", r, ok, err)
+		}
+		if ok, _, err := c.Policy("RANY", r); err != nil || ok {
+			t.Errorf("RANY(%v) = %v, %v; want false", r, ok, err)
+		}
+	}
+
+	// 2. "set med igp-cost" with nothing after it to override MED: MEDIGP
+	// must land in the final Attrs.
+	if ok, a, err := c.Policy("RMED", route("192.0.2.0/24", nil)); err != nil || !ok ||
+		!reflect.DeepEqual(a, Attrs{LocalPref: -1, MED: -1, MEDIGP: true}) {
+		t.Errorf("RMED = %v %+v, %v; want true {LocalPref:-1 MED:-1 MEDIGP:true}", ok, a, err)
+	}
+
+	// 3. prefix-set "eq n" and a bare "ge n" (no "le") windows: one route
+	// inside and one outside each.
+	for _, x := range []struct {
+		p      string
+		accept bool
+	}{
+		{"10.5.0.0/16", true},    // eq 16: exactly a /16 inside 10.0.0.0/8
+		{"10.5.0.0/24", false},   // eq 16: wrong length
+		{"192.0.2.128/28", true}, // ge 26, no le: /28 is in the window
+		{"192.0.2.0/25", false},  // ge 26, no le: /25 is short of it
+	} {
+		if ok, _, err := c.Policy("RWIN", route(x.p, nil)); err != nil || ok != x.accept {
+			t.Errorf("RWIN(%s) = %v, %v; want %v", x.p, ok, err, x.accept)
+		}
+	}
+
+	// 4. splitElements must not split inside the quoted ios-regex (its
+	// "{1,3}" comma is not an element separator), and the surviving element
+	// must still work as a regexp: one path it matches, one it doesn't.
+	for _, x := range []struct {
+		path   []types.ASN
+		accept bool
+	}{
+		{[]types.ASN{1, 2}, true},
+		{[]types.ASN{1, 2, 2, 2, 2}, false}, // one rep more than {1,3} allows
+	} {
+		if ok, _, err := c.Policy("RPATH", route("192.0.2.0/24", x.path)); err != nil || ok != x.accept {
+			t.Errorf("RPATH(%v) = %v, %v; want %v", x.path, ok, err, x.accept)
+		}
+	}
+
+	// 5. "set community (x)" without "additive" replaces the route's
+	// communities, it does not add to them.
+	if ok, a, err := c.Policy("RCOMM", route("192.0.2.0/24", nil, "1:1", "2:2")); err != nil || !ok ||
+		!reflect.DeepEqual(a, Attrs{LocalPref: -1, MED: -1, Communities: []string{"9:9"}}) {
+		t.Errorf("RCOMM = %v %+v, %v; want true {LocalPref:-1 MED:-1 Communities:[9:9]}", ok, a, err)
+	}
+
+	// 6. "prepend as-path A N": N outside 1..64 is an error from Policy(),
+	// not a silent no-op or a parse-time failure.
+	if _, _, err := c.Policy("RPREPEND0", route("192.0.2.0/24", nil)); err == nil {
+		t.Errorf("prepend count 0 did not error")
+	}
+	if _, _, err := c.Policy("RPREPEND65", route("192.0.2.0/24", nil)); err == nil {
+		t.Errorf("prepend count 65 did not error")
+	}
+}
