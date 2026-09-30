@@ -41,6 +41,7 @@ type DB struct {
 
 	noSerialRange bool // refuse "!j", as a server without it does (WithoutSerialRange)
 	serialHangups int  // "!j" commands answered by hanging up; < 0: every one (WithSerialRangeHangups)
+	legacyClasses bool // accept IRRd 2/3's !m class abbreviations (WithLegacyClasses)
 
 	mu   sync.Mutex
 	cmds []string
@@ -87,6 +88,11 @@ func (db *DB) Add(o *ast.Object, text string) {
 		if a, ok := o.GetFirst("origin"); ok {
 			if as, err := types.ParseASN(strings.TrimSpace(a.Value)); err == nil {
 				db.byOrigin[as] = append(db.byOrigin[as], i)
+				// A route's primary key is its prefix and origin run together
+				// (as resolve.Corpus keys it), which is what WithLegacyClasses'
+				// "rt" abbreviation, and IRRd 2/3's "prefix-ASn" wire form, name.
+				rk := e.class + " " + e.key + as.String()
+				db.byKey[rk] = append(db.byKey[rk], i)
 			}
 		}
 	}
@@ -117,6 +123,15 @@ func (db *DB) WithoutSerialRange() *DB {
 // server that does not know the command might — and returns db.
 func (db *DB) WithSerialRangeHangups(n int) *DB {
 	db.serialHangups = n
+	return db
+}
+
+// WithLegacyClasses makes the IRRd server accept IRRd 2/3's "!m" class
+// abbreviations — "an" (aut-num), "ir" (inet-rtr), "rt" (route, keyed
+// "prefix-ASn") — which IRRd 4 answers D. IRRToolSet asks for aut-nums with
+// "!man,ASn". It returns db.
+func (db *DB) WithLegacyClasses() *DB {
+	db.legacyClasses = true
 	return db
 }
 
@@ -658,6 +673,16 @@ func (db *DB) irrdConn(c net.Conn) {
 			}
 		case strings.HasPrefix(cmd, "!m"):
 			class, key, _ := strings.Cut(cmd[2:], ",")
+			if db.legacyClasses {
+				switch class {
+				case "an":
+					class = "aut-num"
+				case "ir":
+					class = "inet-rtr"
+				case "rt":
+					class, key = "route", strings.ReplaceAll(key, "-", "")
+				}
+			}
 			if e, ok := db.find(sel, strings.ToLower(class), key); ok {
 				frame(c, strings.TrimRight(db.text(e), "\n"))
 			} else {

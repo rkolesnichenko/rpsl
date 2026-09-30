@@ -63,3 +63,28 @@ func TestRIPEStyleQueryOnIRRdPort(t *testing.T) {
 		t.Errorf("-K -r -i origin AS9 answered %q", got)
 	}
 }
+
+// IRRToolSet asks for an aut-num with IRRd 2/3's "!man,ASn", which IRRd 4
+// answers D; WithLegacyClasses answers it, and "!mir" and "!mrt" too.
+func TestLegacyClasses(t *testing.T) {
+	objs := []string{
+		"aut-num: AS1\nas-name: ONE\nsource: RIPE\n",
+		"inet-rtr: r1.example.net\nlocal-as: AS1\nifaddr: 192.0.2.1 masklen 24\nsource: RIPE\n",
+		"route: 10.1.0.0/16\norigin: AS1\nsource: RIPE\n",
+	}
+	modern := New(objs...).IRRd(t)
+	if got := talk(t, modern, "!!", "!man,AS1", "q"); !strings.HasPrefix(got, "D\n") {
+		t.Errorf("without WithLegacyClasses, !man,AS1 answered %q; IRRd 4 answers D", got)
+	}
+	legacy := New(objs...).WithLegacyClasses().IRRd(t)
+	for cmd, want := range map[string]string{
+		"!man,AS1":             "aut-num: AS1",
+		"!mir,r1.example.net":  "inet-rtr: r1.example.net",
+		"!mrt,10.1.0.0/16-AS1": "route: 10.1.0.0/16",
+		"!maut-num,AS1":        "aut-num: AS1",
+	} {
+		if got := talk(t, legacy, "!!", cmd, "q"); !strings.Contains(got, want) {
+			t.Errorf("with WithLegacyClasses, %s answered %q", cmd, got)
+		}
+	}
+}
