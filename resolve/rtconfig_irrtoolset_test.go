@@ -47,20 +47,31 @@ import (
 var commSetName = regexp.MustCompile(`commset[0-9]+`)
 
 // withoutCommSets drops IOS-XR community-set blocks and numbers from rtconfig's
-// output: which number a set gets, and whether its members are written, vary
-// from run to run of one binary (D18), while the rest of the text does not.
+// output, with the end-set lines it writes with no set before them and blank
+// lines: which number a set gets, whether its members are written, and stray
+// end-set lines vary from run to run of one binary (D18), while the rest of
+// the text does not.
 func withoutCommSets(s string) string {
 	var b strings.Builder
-	in := false
+	block := "" // the kind of set being read: "prefix-set", "community-set" or ""
 	for _, line := range strings.SplitAfter(s, "\n") {
+		trimmed := strings.TrimSpace(line)
 		switch {
-		case strings.HasPrefix(line, "community-set "):
-			in = true
-		case in:
-			in = strings.TrimSpace(line) != "end-set"
-		default:
-			b.WriteString(commSetName.ReplaceAllString(line, "commset"))
+		case trimmed == "":
+			continue
+		case strings.HasPrefix(line, "community-set "), strings.HasPrefix(line, "prefix-set "):
+			block, _, _ = strings.Cut(line, " ")
+		case trimmed == "end-set":
+			wasPrefix := block == "prefix-set"
+			block = ""
+			if !wasPrefix {
+				continue
+			}
 		}
+		if block == "community-set" {
+			continue
+		}
+		b.WriteString(commSetName.ReplaceAllString(line, "commset"))
 	}
 	return b.String()
 }
