@@ -20,6 +20,11 @@ same version (see [RELEASING.md](RELEASING.md)).
   per-neighbour `protocol bgp` blocks, once, after every other call. `Capabilities()` reports
   what each vendor can express; a construct it cannot is an `*UnsupportedError` wrapping
   `ErrUnsupported`, naming one of the `Cause*` constants.
+  Among what it refuses rather than write a line a router would reject or misread: a `next-hop`
+  of the other family than the session's, or with a zone; a route-map, policy or filter name the
+  `Generator` has already written (a `MapName` pattern with fewer than two `%d`, which on IOS
+  would rebind the first neighbour to the second's policy); and, on IOS, an as-path access-list
+  numbered past 500. A conjunct holding `NOT community()` matches no route and gets no entry.
 - `rpslconf` template mode: reads an IRRToolSet-style `@RtConfig` template from stdin and writes
   router configuration for the sessions and lists it names; `-config` chooses the dialect. `-v`
   prints the binary's version (`rpslq` gains the same flag).
@@ -43,24 +48,6 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ### Fixed
 
-- `resolve/rtconfig` refuses a `next-hop` action whose address is not of the session's family
-  (`next-hop = 192.0.2.1` in an `mp-import: afi any.unicast` evaluated for an IPv6 session) with
-  `CauseActionValue`, instead of writing it into the policy: IOS rejected the
-  `set ipv6 next-hop` line on load but kept the entry, which then accepted routes with their
-  next-hop unchanged. A next-hop with a zone (`fe80::1%eth0`) is refused the same way.
-  `next-hop = self` is unaffected.
-- `resolve/rtconfig` writes no entry for a conjunct holding `NOT community()` (or
-  `NOT community.contains()`): a route carries each of no communities, so the negated test
-  holds for none. It used to write a community list of no values, which no vendor accepts (BIRD
-  `if !() then`, Junos `members [ ]`). `community == {}` keeps its meaning: BIRD writes it, the
-  others refuse it as an exact match.
-- `rtconfig.Generator` refuses, with a plain error, to write a route-map, policy or filter whose
-  name it has already written, as a `MapName`/`JunosPolicyName` pattern with fewer than two `%d`
-  produces (`cisco_map_name = "AS%d-IN"` for import and export to one peer). IOS's
-  `no route-map` before the second map used to leave the first neighbour on the second's policy.
-- On IOS, `rtconfig.Generator` refuses, with a plain error and before writing anything, a write
-  that would number an as-path access-list past 500, the highest IOS takes, instead of writing a
-  line IOS rejects.
 - `NormalizeFilter`'s depth limit no longer depends on the order a memo was filled: reusing a
   filter-set's inlined normal form now re-checks `MaxDepth` against how deep that inlining
   actually reached, not just the depth of the call that first computed it.
