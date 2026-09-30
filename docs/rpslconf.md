@@ -89,9 +89,12 @@ these; each is a pinned divergence, not an oversight:
   (and a v6 filter-set) prefix by prefix, without a cap — in effect,
   forever, for anything wider than a few bits. `rpslconf` keeps a range as a
   range (D3).
-- **Exit status.** IRRToolSet's `peval` exits 0 even after "no object found
-  for AS1" — a script cannot tell success from failure by the exit code.
-  `rpslconf` exits non-zero on any evaluation error (D9).
+- **Exit status.** IRRToolSet exits 0 even after it fails — rtconfig after
+  "no object for AS1" (D9) — so a script cannot tell success from failure by
+  the exit code. `rpslconf -e` exits 1 on an error (a filter that does not
+  parse, an unbound `PeerAS`, a limit, a server it cannot reach) and 2 on a
+  bad command line; a set it cannot find is a warning on stderr, since the
+  set denotes nothing. D9 itself, about template mode, arrives with it.
 - **Output that reads back.** IRRToolSet's `peval` prints AS ranges as
   `AS2-AS3` and an unbound `PeerAS` as `AS4294967295`, neither of which RPSL
   or this library's own parser accepts. `NormalFilter.String()` always
@@ -107,9 +110,9 @@ Each of D1–D10 is listed, with the input that shows it, in
 No test yet runs IRRToolSet to show one of them: D1 and D2 are kept out of
 the differential below (its `pevalSafe` allow-list refuses the shapes that
 trigger them) rather than compared. `rpslconf`'s own side is held for some:
-D4 by `TestImportIPv6SessionIgnoresLegacyImport` (`resolve/peval`), D9 by
-`TestPevalMode`'s exit codes, and D10 by the model tests, which parse every
-normal form back. D3 and D5–D8 have no test; D5–D8 belong to template mode.
+D4 by `TestImportIPv6SessionIgnoresLegacyImport` (`resolve/peval`), and D10
+by the model tests, which parse every normal form back. D3 and D5–D9 have no
+test; D5–D9 belong to template mode.
 `TestPevalMatchesIRRToolSet` (`resolve/peval_irrtoolset_test.go`) runs
 IRRToolSet's `peval` itself against random filters and compares it with
 `NormalizeFilter`, but only on the shapes IRRToolSet gets right — prefix
