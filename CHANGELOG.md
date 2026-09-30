@@ -47,7 +47,8 @@ same version (see [RELEASING.md](RELEASING.md)).
   (`next-hop = 192.0.2.1` in an `mp-import: afi any.unicast` evaluated for an IPv6 session) with
   `CauseActionValue`, instead of writing it into the policy: IOS rejected the
   `set ipv6 next-hop` line on load but kept the entry, which then accepted routes with their
-  next-hop unchanged. `next-hop = self` is unaffected.
+  next-hop unchanged. A next-hop with a zone (`fe80::1%eth0`) is refused the same way.
+  `next-hop = self` is unaffected.
 - `resolve/rtconfig` writes no entry for a conjunct holding `NOT community()` (or
   `NOT community.contains()`): a route carries each of no communities, so the negated test
   holds for none. It used to write a community list of no values, which no vendor accepts (BIRD

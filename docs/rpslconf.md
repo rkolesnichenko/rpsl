@@ -444,7 +444,7 @@ A printer never approximates: a construct a vendor's configuration cannot expres
 | `a community that is neither a:b nor a well-known one` | large and extended communities are not typed yet |
 | `an exact community match (community == {…})` | where the vendor has no exact match, or cannot combine one with other tests |
 | `an action other than pref, med, community, aspath.prepend and next-hop` | another RP-attribute |
-| `an action value the vendor cannot set` | `med = igp_cost` or `next-hop = self` where the vendor has none, a pref or med that is not a number, a next-hop address of the other family than the session's (an IPv4 next-hop on an IPv6 session, or the reverse), `community = {}` on Junos |
+| `an action value the vendor cannot set` | `med = igp_cost` or `next-hop = self` where the vendor has none, a pref or med that is not a number, a next-hop address of the other family than the session's (an IPv4 next-hop on an IPv6 session, or the reverse) or with a zone (`fe80::1%eth0`), `community = {}` on Junos |
 | `a pref above MaxPreference` | pref N becomes local-preference MaxPreference−N, which would be negative |
 | `a default: the vendor has no configuration for` | every vendor but IOS; on IOS, a default with actions, or with networks other than exact IPv4 prefixes (D6) |
 | `networks the vendor has no configuration for` | Junos and BIRD |
