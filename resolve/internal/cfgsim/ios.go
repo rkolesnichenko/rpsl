@@ -358,21 +358,27 @@ func (c *iosConfig) aclPermits(name string, p netip.Prefix) bool {
 	return false
 }
 
+// covers reports whether the entry's prefix and length window contain p: an
+// IOS prefix-list entry, or an IOS-XR prefix-set element.
+func (e plEntry) covers(p netip.Prefix) bool {
+	if e.p.Addr().Is4() != p.Addr().Is4() || p.Bits() < e.p.Bits() || !e.p.Contains(p.Addr()) {
+		return false
+	}
+	lo, hi := e.p.Bits(), e.p.Bits()
+	switch {
+	case e.ge > 0 && e.le > 0:
+		lo, hi = e.ge, e.le
+	case e.ge > 0:
+		lo, hi = e.ge, p.Addr().BitLen()
+	case e.le > 0:
+		hi = e.le
+	}
+	return p.Bits() >= lo && p.Bits() <= hi
+}
+
 func (c *iosConfig) plPermits(key string, p netip.Prefix) bool {
 	for _, e := range c.pls[key] {
-		if e.p.Addr().Is4() != p.Addr().Is4() || p.Bits() < e.p.Bits() || !e.p.Contains(p.Addr()) {
-			continue
-		}
-		lo, hi := e.p.Bits(), e.p.Bits()
-		switch {
-		case e.ge > 0 && e.le > 0:
-			lo, hi = e.ge, e.le
-		case e.ge > 0:
-			lo, hi = e.ge, p.Addr().BitLen()
-		case e.le > 0:
-			hi = e.le
-		}
-		if p.Bits() >= lo && p.Bits() <= hi {
+		if e.covers(p) {
 			return e.permit
 		}
 	}

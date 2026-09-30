@@ -1,0 +1,170 @@
+
+prefix-set pl150-deny
+end-set
+
+prefix-set pl150-permit
+  10.1.0.0/16,
+  10.10.0.0/15 ge 16 le 16,
+  10.10.1.0/24,
+  10.12.0.0/16
+end-set
+
+prefix-set pl151-deny
+end-set
+
+prefix-set pl151-permit
+  10.2.0.0/16
+end-set
+
+prefix-set pl152-permit
+  0.0.0.0/0 le 32
+end-set
+
+prefix-set pl152-deny
+  0.0.0.0/8 le 32,
+  10.0.0.0/8 le 32,
+  127.0.0.0/8 le 32
+end-set
+
+exit
+!
+route-policy AS2-IN-1
+if destination in pl150-permit and not destination in pl150-deny then
+ set local-preference 990
+ set med 5
+ set community (1:100) additive
+ done
+endif
+if destination in pl151-permit and not destination in pl151-deny then
+ done
+endif
+if destination in pl152-permit and not destination in pl152-deny then
+ done
+endif
+end-policy
+!
+router bgp 1
+!
+ neighbor 10.0.0.2
+ remote-as 2
+  address-family ipv4 unicast
+   route-policy AS2-IN-1 in
+exit
+
+prefix-set pl153-deny
+end-set
+
+prefix-set pl153-permit
+  0.0.0.0/0,
+  10.10.0.0/16,
+  10.10.1.0/24,
+  10.13.0.0/16,
+  10.21.0.0/16 ge 24 le 24,
+  10.22.0.0/16
+end-set
+
+prefix-set pl154-deny
+end-set
+
+prefix-set pl154-permit
+  10.3.0.0/16
+end-set
+
+exit
+!
+route-policy AS3-IN-2
+if destination in pl153-permit and not destination in pl153-deny then
+ set local-preference 980
+ done
+endif
+if destination in pl154-permit and not destination in pl154-deny then
+ done
+endif
+if destination in pl152-permit and not destination in pl152-deny then
+ done
+endif
+end-policy
+!
+router bgp 1
+!
+ neighbor 10.0.0.3
+ remote-as 3
+  address-family ipv4 unicast
+   route-policy AS3-IN-2 in
+exit
+
+exit
+as-path-set as-set50-permit
+ ios-regex '^_4(_(1|10|11|12|14))*$'
+end-set
+
+as-path-set as-set50-deny
+end-set
+
+community-set commset50-permit
+4:1
+end-set
+
+community-set commset50-deny
+end-set
+
+exit
+!
+route-policy AS4-IN-3
+if destination in pl152-permit and not destination in pl152-deny then
+ done
+endif
+if as-path in as-set50-permit and not as-path in as-set50-deny then
+ if community matches-any commset50-permit and not community matches-any commset50-deny then
+  done
+ endif
+endif
+end-policy
+!
+router bgp 1
+!
+ neighbor 10.0.0.4
+ remote-as 4
+  address-family ipv4 unicast
+   route-policy AS4-IN-3 in
+exit
+
+prefix-set pl155-deny
+end-set
+
+prefix-set pl155-permit
+  10.5.0.0/16
+end-set
+
+community-set commset51-deny
+  5:666
+end-set
+
+community-set commset51-permit
+  *
+end-set
+
+exit
+!
+route-policy AS5-IN-4
+if destination in pl152-permit and not destination in pl152-deny then
+ done
+endif
+if destination in pl155-permit and not destination in pl155-deny then
+  prepend as-path 1 2
+ done
+endif
+if community matches-any commset51-permit and not community matches-any commset51-deny then
+  prepend as-path 1 2
+ done
+endif
+end-policy
+!
+router bgp 1
+!
+ neighbor 10.0.0.5
+ remote-as 5
+  address-family ipv4 unicast
+   route-policy AS5-IN-4 in
+exit
+
