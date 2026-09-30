@@ -28,6 +28,11 @@ var fuzzPaths = func() [][]types.ASN {
 	return append(paths, []types.ASN{1, 1, 1, 1}, []types.ASN{2, 10, 11, 10, 1}, []types.ASN{1, 2, 1, 2, 1, 2})
 }()
 
+// FuzzTranslateRegexp: no AS-path regexp panics the translator; one a vendor
+// translates is refused only with ErrUnsupported, and the translation matches,
+// under that dialect's own matcher (cfgsim), exactly the fuzzPaths the RFC
+// matcher (routemodel) says the regexp matches, its sets bound to AS10 and
+// AS11 and PeerAS to AS2.
 func FuzzTranslateRegexp(f *testing.F) {
 	for _, s := range []string{
 		"AS1", "^AS1$", "^AS1 .* AS2$", "^AS1 AS-FOO$", "^AS-EMPTY", "^AS1+$", "^(AS1 | AS2) .+$",

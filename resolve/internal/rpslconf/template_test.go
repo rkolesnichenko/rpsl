@@ -99,6 +99,10 @@ func TestParseTemplateRefuses(t *testing.T) {
 	}
 }
 
+// FuzzParseTemplate: no template text panics the reader; its items add up to
+// the text (a prefix of it, on an error), each command's raw text
+// parses back to the same command, and only a known command or knob, under its
+// current name, is accepted.
 func FuzzParseTemplate(f *testing.F) {
 	for _, s := range []string{
 		"@RtConfig import AS1 10.0.0.1 AS2 10.0.0.2\n", "x\n@rtconfig set cisco_map_name = \"M_%d_%d\"\n",
