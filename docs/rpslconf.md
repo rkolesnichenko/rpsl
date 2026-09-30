@@ -283,6 +283,11 @@ after any of them.
 | `cisco_max_preference` | 1000 | pref *N* becomes local-preference *max−N*; a pref above it is refused (`CausePref`) |
 | `sources` | the server's own precedence | the registries queried from here on; reopens the connection |
 
+cisco numbers its as-path access-lists 1 to 500, as IOS does: a command
+that would write `ip as-path access-list 501` or above fails, writing
+nothing, with exit status 1. The other vendors name their AS-path lists and
+have no such limit.
+
 Junos's `import` and `export` take no numbering knob: the as-paths,
 communities and subroutine policies a policy-statement uses are named after
 it (`<policy>-path-N`, `<policy>-comm-N`, `<policy>-sub-N`), N counting from

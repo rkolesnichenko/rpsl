@@ -67,6 +67,15 @@ func (g *Generator) writeSession(w io.Writer, s peval.Session, p peval.Policy, e
 	if err != nil {
 		return err
 	}
+	lists := 0
+	for _, e := range pl.entries {
+		if len(e.paths) > 0 {
+			lists++
+		}
+	}
+	if err := g.checkPathLists(lists); err != nil {
+		return err
+	}
 	name, err := g.nextMapName(s.Peer)
 	if err != nil {
 		return err
@@ -102,6 +111,25 @@ func (g *Generator) nextMapName(peer types.ASN) (string, error) {
 	g.maps++
 	g.mapNames[name] = true
 	return name, nil
+}
+
+// maxIOSPathList is the highest number an IOS as-path access-list takes.
+const maxIOSPathList = 500
+
+// checkPathLists refuses, before anything is written, a write that would
+// number n more as-path access-lists past the ones IOS has (ruling R22): IOS
+// rejects "ip as-path access-list 501" on load. The other vendors name their
+// AS-path lists and have no such limit.
+func (g *Generator) checkPathLists(n int) error {
+	if g.Vendor != IOS || n == 0 {
+		return nil
+	}
+	first := g.names().ASPathACLNo + g.pathLists
+	if first < 1 || first+n-1 > maxIOSPathList {
+		return fmt.Errorf("rtconfig: cisco numbers as-path access-lists 1 to %d; this needs %d to %d (aspath_acl_no %d)",
+			maxIOSPathList, first, first+n-1, g.names().ASPathACLNo)
+	}
+	return nil
 }
 
 // WriteDefault writes the default routes the defaults d evaluates for s, as
@@ -160,6 +188,9 @@ func (g *Generator) WriteASPathList(w io.Writer, m resolve.PathMatch) error {
 	}
 	re, err := g.translatePath(m, m.RE.String())
 	if err != nil {
+		return err
+	}
+	if err := g.checkPathLists(1); err != nil {
 		return err
 	}
 	var b strings.Builder

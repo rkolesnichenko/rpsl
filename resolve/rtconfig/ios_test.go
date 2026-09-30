@@ -194,3 +194,41 @@ func TestIOSListsDefaultsNetworks(t *testing.T) {
 		}
 	}
 }
+
+// IOS numbers as-path access-lists 1 to 500 (ruling R22): a number past it is
+// refused with a plain error, before anything is written, rather than written
+// as a line IOS rejects. The other vendors name their AS-path lists and have
+// no such limit.
+func TestIOSASPathListLimit(t *testing.T) {
+	_, pp := fixturePolicy(t, "from AS2 accept <^AS2>")
+	m := pp.Clauses[0].Filter.Conjuncts[0].Paths[0]
+	g := &Generator{Vendor: IOS, Names: Naming{ASPathACLNo: 499}}
+	var b bytes.Buffer
+	for _, want := range []string{"499", "500"} {
+		b.Reset()
+		if err := g.WriteASPathList(&b, m); err != nil || !strings.Contains(b.String(), "ip as-path access-list "+want+" permit") {
+			t.Fatalf("list %s: %v\n%s", want, err, b.String())
+		}
+	}
+	b.Reset()
+	err := g.WriteASPathList(&b, m)
+	if err == nil || errors.Is(err, ErrUnsupported) || b.Len() > 0 {
+		t.Errorf("list 501: err %v, wrote %q; want a plain error and nothing written", err, b.String())
+	}
+
+	s, p := fixturePolicy(t, "from AS2 accept <^AS2>", "from AS2 accept <^AS2 AS3>", "from AS2 accept <AS2 AS3>")
+	g = &Generator{Vendor: IOS, Names: Naming{ASPathACLNo: 499}}
+	b.Reset()
+	if err := g.WriteImport(&b, s, p); err == nil || errors.Is(err, ErrUnsupported) || b.Len() > 0 {
+		t.Errorf("an import needing lists 499-501: err %v, wrote %q; want a plain error and nothing written", err, b.String())
+	}
+	if err := g.WriteImport(&b, s, pp); err != nil {
+		t.Errorf("an import needing list 499 after the refusal: %v", err)
+	}
+	for _, v := range []Vendor{Junos, IOSXR, BIRD2} {
+		g := &Generator{Vendor: v, Names: Naming{ASPathACLNo: 600}}
+		if err := g.WriteASPathList(&b, m); err != nil {
+			t.Errorf("%v list 600: %v", v, err)
+		}
+	}
+}

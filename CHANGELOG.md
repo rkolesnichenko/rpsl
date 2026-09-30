@@ -57,6 +57,9 @@ same version (see [RELEASING.md](RELEASING.md)).
   name it has already written, as a `MapName`/`JunosPolicyName` pattern with fewer than two `%d`
   produces (`cisco_map_name = "AS%d-IN"` for import and export to one peer). IOS's
   `no route-map` before the second map used to leave the first neighbour on the second's policy.
+- On IOS, `rtconfig.Generator` refuses, with a plain error and before writing anything, a write
+  that would number an as-path access-list past 500, the highest IOS takes, instead of writing a
+  line IOS rejects.
 - `NormalizeFilter`'s depth limit no longer depends on the order a memo was filled: reusing a
   filter-set's inlined normal form now re-checks `MaxDepth` against how deep that inlining
   actually reached, not just the depth of the call that first computed it.
