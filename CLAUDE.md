@@ -86,6 +86,9 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   `bgpq4 -j`. Divergence = a bug to root-cause (possibly in bgpq4).
 - **Fuzz** (`go test -fuzz`) the lexer and policy parser. Must never panic.
 - **Property tests** for the engine: synthetic cyclic/deep set graphs verify cycle handling and limits.
+- **Real data before "done"**: fixtures hold what the RFC says and registries write something else.
+  Before calling a task done, run the opt-in real-data or live test that covers the changed code
+  (Commands, below), and check one count and its denominator by hand against the dump.
 
 ## Engine correctness traps — get these right (design §8, §10)
 
