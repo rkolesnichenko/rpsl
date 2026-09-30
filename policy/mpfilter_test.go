@@ -21,6 +21,10 @@ func TestParseMPFilter(t *testing.T) {
 		{"AFI IPV6.UNICAST AS1", "[ipv6.unicast]", "AS1", false},
 		{"afi AS-FOO", "[]", "AS-FOO", true}, // empty afi list
 		{"afi", "[]", "", true},
+		// The afi list is read greedily: "any" not last is a family, and the
+		// filter "AND AS1" that follows is diagnosed (its best-effort AST
+		// is the empty term the AND found, OR AS1).
+		{"afi ipv4 any AND AS1", "[ipv4 any]", " OR AS1", true},
 	} {
 		afis, f, diags := ParseMPFilter(c.in)
 		errs := false

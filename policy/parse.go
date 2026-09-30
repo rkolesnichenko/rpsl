@@ -162,7 +162,11 @@ func parseFilterValue(s string) (Filter, *parser) {
 // address families (nil with no afi clause), the filter and diagnostics; it
 // never panics. The afi list ends at the first word that is not an address
 // family, and at an "any" that is the value's last word, which is the filter
-// ANY: "afi ipv4 any" is ipv4 and ANY.
+// ANY: "afi ipv4 any" is ipv4 and ANY. Otherwise it is read greedily, so an
+// "any" followed by more words is a family: "afi ipv4 any AND AS1" is the
+// families ipv4 and any, and a filter starting with AND, which is diagnosed.
+// Write "afi ipv4 ANY AND AS1" as "afi ipv4 AS1", or put the filter in
+// parentheses: "afi ipv4 (ANY AND AS1)".
 func ParseMPFilter(s string) ([]types.AddrFamily, Filter, []ast.Diagnostic) {
 	afis, f, p := parseMPFilterValue(s)
 	return afis, f, p.diags
