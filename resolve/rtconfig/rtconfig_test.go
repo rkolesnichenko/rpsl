@@ -1,7 +1,10 @@
 package rtconfig
 
 import (
+	"bytes"
 	"errors"
+	"net/netip"
+	"strings"
 	"testing"
 )
 
@@ -96,6 +99,57 @@ func TestParseCommunity(t *testing.T) {
 	} {
 		if got := c.comm.spell(c.v); got != c.want {
 			t.Errorf("%v.spell(%v) = %q, want %q", c.comm, c.v, got, c.want)
+		}
+	}
+}
+
+// A name pattern with fewer than two %d can name two maps alike (ruling R22):
+// import and export for one peer, or one direction for two sessions. IOS's
+// "no route-map NAME" before the second would give the first neighbour the
+// second's policy, so a Generator refuses — with a plain error, not an
+// *UnsupportedError — to write a name it has written, and writes nothing.
+func TestDuplicateMapName(t *testing.T) {
+	s, p := fixturePolicy(t, "from AS2 accept AS2")
+	s3 := s
+	s3.Peer, s3.PeerRtr = 3, netip.MustParseAddr("10.0.0.3")
+	for _, v := range Vendors() {
+		for _, pattern := range []string{"mymap", "map-%d"} {
+			g := &Generator{Vendor: v, Names: Naming{MapName: pattern, JunosPolicyName: pattern}}
+			var b bytes.Buffer
+			if err := g.WriteImport(&b, s, p); err != nil {
+				t.Fatalf("%v %s: first map: %v", v, pattern, err)
+			}
+			b.Reset()
+			err := g.WriteExport(&b, s, p)
+			if pattern == "mymap" && err == nil {
+				// "mymap" also collides across sessions; "map-%d" does not.
+				t.Errorf("%v %s: a second map of one name was written:\n%s", v, pattern, b.String())
+			}
+			if err == nil {
+				continue
+			}
+			if errors.Is(err, ErrUnsupported) || b.Len() > 0 || !strings.Contains(err.Error(), "already written") {
+				t.Errorf("%v %s: err %v, wrote %q; want a plain error and nothing written", v, pattern, err, b.String())
+			}
+			if err := g.WriteImport(&b, s3, p); pattern == "map-%d" && err != nil {
+				t.Errorf("%v %s: another peer's map: %v", v, pattern, err)
+			}
+		}
+		// Import and export for one peer under map-%d share "map-2".
+		g := &Generator{Vendor: v, Names: Naming{MapName: "map-%d", JunosPolicyName: "map-%d"}}
+		var b bytes.Buffer
+		if err := g.WriteImport(&b, s, p); err != nil {
+			t.Fatal(err)
+		}
+		if err := g.WriteExport(&b, s, p); err == nil {
+			t.Errorf("%v map-%%d: import and export for one peer both named map-2", v)
+		}
+		// The default pattern never collides.
+		g = &Generator{Vendor: v}
+		for i := 0; i < 3; i++ {
+			if err := g.WriteImport(&b, s, p); err != nil {
+				t.Errorf("%v default names, map %d: %v", v, i+1, err)
+			}
 		}
 	}
 }

@@ -75,7 +75,10 @@ func DefaultNaming() Naming {
 
 // Generator writes configuration for one vendor. It numbers maps and lists
 // across calls, as rtconfig does across one template, so it is not safe for
-// concurrent use. Set Vendor before use.
+// concurrent use. Set Vendor before use. It refuses, with an error that is
+// not an *UnsupportedError, to write a second route-map, policy or filter of
+// a name it has already written, as a MapName or JunosPolicyName pattern with
+// fewer than two %d can produce.
 type Generator struct {
 	Vendor Vendor
 	// MaxPreference maps RPSL's pref N to local-preference MaxPreference−N,
@@ -85,6 +88,8 @@ type Generator struct {
 	Names         Naming
 
 	maps, prefixLists, pathLists, commLists, accessLists int // how many of each written so far
+
+	mapNames map[string]bool // the route-map, policy and filter names written so far
 
 	birdSessions []*birdSession // BIRD: the neighbours attached so far, for WriteSessions
 }

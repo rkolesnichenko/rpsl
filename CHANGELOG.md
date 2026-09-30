@@ -53,6 +53,10 @@ same version (see [RELEASING.md](RELEASING.md)).
   holds for none. It used to write a community list of no values, which no vendor accepts (BIRD
   `if !() then`, Junos `members [ ]`). `community == {}` keeps its meaning: BIRD writes it, the
   others refuse it as an exact match.
+- `rtconfig.Generator` refuses, with a plain error, to write a route-map, policy or filter whose
+  name it has already written, as a `MapName`/`JunosPolicyName` pattern with fewer than two `%d`
+  produces (`cisco_map_name = "AS%d-IN"` for import and export to one peer). IOS's
+  `no route-map` before the second map used to leave the first neighbour on the second's policy.
 - `NormalizeFilter`'s depth limit no longer depends on the order a memo was filled: reusing a
   filter-set's inlined normal form now re-checks `MaxDepth` against how deep that inlining
   actually reached, not just the depth of the call that first computed it.

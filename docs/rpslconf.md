@@ -289,6 +289,14 @@ it (`<policy>-path-N`, `<policy>-comm-N`, `<policy>-sub-N`), N counting from
 1 within that policy. bird's `import` and `export` write their tests inline
 in the filter and name no list.
 
+A `cisco_map_name` or `junos_policy_name` pattern with fewer than two `%d`
+(`AS%d-IN`, `mymap`) can give two maps one name: import and export for one
+peer, or one direction for two peers. The second would replace the first —
+IOS's `no route-map NAME` before it included — leaving the first neighbour
+on the second's policy, so `rpslconf` refuses to write a route-map, policy or
+filter whose name it has already written: the command fails with
+`a map named "AS2-IN" is already written` and exit status 1.
+
 A `set` of `0` means the default, since `Naming`'s zero fields take
 `DefaultNaming()`'s — the same rule `resolve/rtconfig.Generator.Names` follows
 for a caller driving it directly.

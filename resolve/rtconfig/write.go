@@ -67,7 +67,10 @@ func (g *Generator) writeSession(w io.Writer, s peval.Session, p peval.Policy, e
 	if err != nil {
 		return err
 	}
-	name := g.nextMapName(s.Peer)
+	name, err := g.nextMapName(s.Peer)
+	if err != nil {
+		return err
+	}
 	var b strings.Builder
 	vw.policy(g, &b, name, pl)
 	if s.PeerRtr.IsValid() {
@@ -78,15 +81,27 @@ func (g *Generator) writeSession(w io.Writer, s peval.Session, p peval.Policy, e
 }
 
 // nextMapName names the next route-map or policy: the vendor's pattern with
-// the peer AS and the count of maps written.
-func (g *Generator) nextMapName(peer types.ASN) string {
+// the peer AS and the count of maps written. A name already written is an
+// error (ruling R22): a pattern with fewer than two %d names two maps alike —
+// import and export for one peer, or two sessions — and the second would
+// replace the first, IOS's "no route-map" before it included, so the first
+// neighbour would silently take the second's policy.
+func (g *Generator) nextMapName(peer types.ASN) (string, error) {
 	n := g.names()
 	pattern := n.MapName
 	if g.Vendor == Junos {
 		pattern = n.JunosPolicyName
 	}
+	name := expand(pattern, int(peer), g.maps+1)
+	if g.mapNames[name] {
+		return "", fmt.Errorf("rtconfig: a map named %q is already written (name pattern %q)", name, pattern)
+	}
+	if g.mapNames == nil {
+		g.mapNames = map[string]bool{}
+	}
 	g.maps++
-	return expand(pattern, int(peer), g.maps)
+	g.mapNames[name] = true
+	return name, nil
 }
 
 // WriteDefault writes the default routes the defaults d evaluates for s, as
