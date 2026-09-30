@@ -33,8 +33,8 @@ func (l *listFlag) Set(s string) error { *l = append(*l, s); return nil }
 func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("rpslconf", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	host := fs.String("h", "whois.radb.net", "IRR server `host`")
-	port := fs.String("p", "43", "IRR server `port`")
+	host := fs.String("h", "whois.radb.net", "IRR server `host`, or host:port")
+	port := fs.String("p", "43", "IRR server `port`, when -h names none")
 	sources := fs.String("s", "", "registries to query, comma-separated, in precedence order (default: the server's)")
 	useWhois := fs.Bool("whois", false, "query with the whois protocol instead of IRRd's")
 	var dumps listFlag
@@ -67,7 +67,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if failed {
 		return 1
 	}
-	b, err := backend.Open(backend.Options{Host: net.JoinHostPort(*host, *port), Sources: *sources,
+	b, err := backend.Open(backend.Options{Host: hostPort(*host, *port), Sources: *sources,
 		Whois: *useWhois, Dumps: dumps, Conns: 8})
 	if err != nil {
 		fmt.Fprintf(stderr, "rpslconf: %v\n", err)
@@ -90,6 +90,15 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 	fmt.Fprintln(stdout, nf.String())
 	return 0
+}
+
+// hostPort is the server address: host as given when it carries a port of
+// its own (host:port, [v6]:port), else host joined with port.
+func hostPort(host, port string) string {
+	if _, _, err := net.SplitHostPort(host); err == nil {
+		return host
+	}
+	return net.JoinHostPort(host, port)
 }
 
 // afiOf is the address family an afi list constrains a filter to: IPv4 or

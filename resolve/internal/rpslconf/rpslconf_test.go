@@ -64,8 +64,15 @@ func TestPevalMode(t *testing.T) {
 func TestPevalModeOverIRRd(t *testing.T) {
 	db := irrtest.New(texts...).WithSources("RIPE")
 	host, port, _ := net.SplitHostPort(db.IRRd(t))
-	code, out, errOut := run(t, "-h", host, "-p", port, "-s", "RIPE", "-e", "afi ipv4.unicast AS-A")
-	if code != 0 || out != "{10.1.0.0/16, 10.2.0.0/16}\n" {
-		t.Errorf("rpslconf over IRRd = %d, %q, stderr %q", code, out, errOut)
+	for _, args := range [][]string{
+		{"-h", host, "-p", port},
+		// -h with a port of its own takes it, and -p is ignored.
+		{"-h", net.JoinHostPort(host, port)},
+		{"-h", net.JoinHostPort(host, port), "-p", "1"},
+	} {
+		code, out, errOut := run(t, append(args, "-s", "RIPE", "-e", "afi ipv4.unicast AS-A")...)
+		if code != 0 || out != "{10.1.0.0/16, 10.2.0.0/16}\n" {
+			t.Errorf("rpslconf %q over IRRd = %d, %q, stderr %q", args, code, out, errOut)
+		}
 	}
 }
