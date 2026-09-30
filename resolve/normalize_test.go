@@ -338,3 +338,48 @@ func TestNormalizeBoundsTests(t *testing.T) {
 		t.Errorf("a cancelled context: err %v", err)
 	}
 }
+
+// The memo of inlined filter-sets keeps each set's height, so MaxDepth holds
+// the same whichever order the terms come in.
+func TestNormalizeMaxDepthIsOrderIndependent(t *testing.T) {
+	src := corpus(t,
+		fltrSet("FLTR-A", "<AS1>"),
+		fltrSet("FLTR-N3", "FLTR-A"),
+		fltrSet("FLTR-N2", "FLTR-N3"),
+		fltrSet("FLTR-N1", "FLTR-N2"),
+		fltrSet("FLTR-N0", "FLTR-N1"),
+	)
+	e := &Expander{Src: src, AFI: types.AFIv4, MaxDepth: 5}
+	var errs []string
+	for _, filter := range []string{"FLTR-N0 OR FLTR-A", "FLTR-A OR FLTR-N0"} {
+		_, err := e.NormalizeFilter(context.Background(), mustFilter(t, filter))
+		var tl *SetTooLargeError
+		if !errors.As(err, &tl) || tl.Limit != LimitDepth {
+			t.Errorf("NormalizeFilter(%s) at MaxDepth 5: err %v, want LimitDepth", filter, err)
+		}
+		errs = append(errs, fmt.Sprint(err))
+	}
+	deep := &Expander{Src: src, AFI: types.AFIv4, MaxDepth: 32}
+	for _, filter := range []string{"FLTR-N0 OR FLTR-A", "FLTR-A OR FLTR-N0"} {
+		if nf, err := deep.NormalizeFilter(context.Background(), mustFilter(t, filter)); err != nil || nf.String() != "<AS1>" {
+			t.Errorf("NormalizeFilter(%s) at MaxDepth 32 = %q, %v; want <AS1>", filter, nf, err)
+		}
+	}
+}
+
+// The test cap counts only conjuncts that survive the prefix intersection.
+func TestNormalizeTestCapAfterIntersection(t *testing.T) {
+	src := corpus(t,
+		fltrSet("FLTR-P", "{10.1.0.0/16} AND <AS1> AND <AS2>"),
+		fltrSet("FLTR-Q", "{10.2.0.0/16} AND <AS3>"),
+	)
+	ctx := context.Background()
+	f := mustFilter(t, "FLTR-P AND FLTR-Q")
+	nf, peak, err := NormalizePeak(&Expander{Src: src, AFI: types.AFIv4, MaxConjuncts: 2}, ctx, f)
+	if err != nil || nf.String() != "NOT ANY" {
+		t.Fatalf("FLTR-P AND FLTR-Q at MaxConjuncts 2 = %q, %v; want NOT ANY", nf, err)
+	}
+	if peak > 2 {
+		t.Errorf("peak %d counts a conjunct that was dropped", peak)
+	}
+}
