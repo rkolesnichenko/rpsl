@@ -24,9 +24,9 @@ type setOps struct {
 	nextHopSelf  bool
 }
 
-// compileActions reads a clause's actions (RFC 2622 §9) in order. term names
-// the clause in errors.
-func (g *Generator) compileActions(acts []policy.Action, term string) (setOps, error) {
+// compileActions reads a clause's actions (RFC 2622 §9) in order, for a
+// session of family afi. term names the clause in errors.
+func (g *Generator) compileActions(acts []policy.Action, afi types.AFI, term string) (setOps, error) {
 	ops := setOps{localPref: -1, med: -1}
 	for _, a := range acts {
 		switch {
@@ -72,7 +72,11 @@ func (g *Generator) compileActions(acts []policy.Action, term string) (setOps, e
 				continue
 			}
 			addr, err := netip.ParseAddr(v)
-			if err != nil {
+			if err != nil || addr.Is4() != (afi == types.AFIv4) {
+				// A next-hop of the other family is no next-hop for this
+				// session: IOS rejects "set ipv6 next-hop 192.0.2.1" on load
+				// but keeps the entry, which then leaves routes' next-hop as
+				// it was.
 				return ops, unsupported(g.Vendor, CauseActionValue, a.String())
 			}
 			ops.nextHop, ops.nextHopSelf = addr, false

@@ -8,6 +8,7 @@ import (
 
 	"github.com/rkolesnichenko/rpsl/ast"
 	"github.com/rkolesnichenko/rpsl/policy"
+	"github.com/rkolesnichenko/rpsl/types"
 )
 
 // actions parses "action …" text the way an import: carries it.
@@ -78,7 +79,7 @@ func TestCompileActions(t *testing.T) {
 		{"next-hop = 192.0.2.1;", "nh=192.0.2.1"},
 		{"next-hop = self;", "nh=self"},
 	} {
-		ops, err := g.compileActions(actions(t, c.in), c.in)
+		ops, err := g.compileActions(actions(t, c.in), types.AFIv4, c.in)
 		if err != nil || ops.summary() != c.want {
 			t.Errorf("compileActions(%s) = %q, %v; want %q", c.in, ops.summary(), err, c.want)
 		}
@@ -88,22 +89,44 @@ func TestCompileActions(t *testing.T) {
 func TestCompileActionsRefuses(t *testing.T) {
 	for _, c := range []struct {
 		v     Vendor
+		afi   types.AFI
 		in    string
 		cause string
 	}{
-		{Junos, "pref = 1001;", CausePref},
-		{Junos, "dpa = 5;", CauseAction},
-		{Junos, "community.append(1:2:3);", CauseCommunityForm},
-		{Junos, "med = abc;", CauseActionValue},
-		{BIRD2, "med = igp_cost;", CauseActionValue},
-		{IOS, "next-hop = self;", CauseActionValue},
-		{BIRD2, "next-hop = self;", CauseActionValue},
+		{Junos, types.AFIv4, "pref = 1001;", CausePref},
+		{Junos, types.AFIv4, "dpa = 5;", CauseAction},
+		{Junos, types.AFIv4, "community.append(1:2:3);", CauseCommunityForm},
+		{Junos, types.AFIv4, "med = abc;", CauseActionValue},
+		{BIRD2, types.AFIv4, "med = igp_cost;", CauseActionValue},
+		{IOS, types.AFIv4, "next-hop = self;", CauseActionValue},
+		{BIRD2, types.AFIv4, "next-hop = self;", CauseActionValue},
+		// A next-hop of the other family than the session's.
+		{IOS, types.AFIv6, "next-hop = 192.0.2.1;", CauseActionValue},
+		{Junos, types.AFIv6, "next-hop = 192.0.2.1;", CauseActionValue},
+		{IOSXR, types.AFIv4, "next-hop = 2001:db8::1;", CauseActionValue},
+		{BIRD2, types.AFIv4, "next-hop = 2001:db8::1;", CauseActionValue},
+		// Junos sets a named community's members, and one has at least one.
+		{Junos, types.AFIv4, "community = {};", CauseActionValue},
 	} {
 		g := &Generator{Vendor: c.v}
-		_, err := g.compileActions(actions(t, c.in), c.in)
+		_, err := g.compileActions(actions(t, c.in), c.afi, c.in)
 		var ue *UnsupportedError
 		if !errors.As(err, &ue) || ue.Cause != c.cause || ue.Vendor != c.v {
-			t.Errorf("%v compileActions(%s): err %v, want cause %q", c.v, c.in, err, c.cause)
+			t.Errorf("%v %v compileActions(%s): err %v, want cause %q", c.v, c.afi, c.in, err, c.cause)
+		}
+	}
+	// The other vendors write community = {} as deleting every community.
+	for _, v := range []Vendor{IOS, IOSXR, BIRD2} {
+		ops, err := (&Generator{Vendor: v}).compileActions(actions(t, "community = {};"), types.AFIv4, "community = {};")
+		if err != nil || ops.summary() != "set=" {
+			t.Errorf("%v community = {}: %q, %v", v, ops.summary(), err)
+		}
+	}
+	for _, afi := range []types.AFI{types.AFIv4, types.AFIv6} {
+		for _, v := range []Vendor{Junos, IOSXR} {
+			if _, err := (&Generator{Vendor: v}).compileActions(actions(t, "next-hop = self;"), afi, "next-hop = self;"); err != nil {
+				t.Errorf("%v %v next-hop = self: %v", v, afi, err)
+			}
 		}
 	}
 }

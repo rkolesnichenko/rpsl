@@ -43,6 +43,11 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ### Fixed
 
+- `resolve/rtconfig` refuses a `next-hop` action whose address is not of the session's family
+  (`next-hop = 192.0.2.1` in an `mp-import: afi any.unicast` evaluated for an IPv6 session) with
+  `CauseActionValue`, instead of writing it into the policy: IOS rejected the
+  `set ipv6 next-hop` line on load but kept the entry, which then accepted routes with their
+  next-hop unchanged. `next-hop = self` is unaffected.
 - `NormalizeFilter`'s depth limit no longer depends on the order a memo was filled: reusing a
   filter-set's inlined normal form now re-checks `MaxDepth` against how deep that inlining
   actually reached, not just the depth of the call that first computed it.

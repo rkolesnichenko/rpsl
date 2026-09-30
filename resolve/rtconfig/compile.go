@@ -75,7 +75,7 @@ func (g *Generator) compile(s peval.Session, p peval.Policy) (plan, error) {
 		if c.Remote != nil {
 			return pl, unsupported(g.Vendor, CauseVia, term)
 		}
-		ops, err := g.compileActions(c.Actions, term)
+		ops, err := g.compileActions(c.Actions, pl.family, term)
 		if err != nil {
 			return pl, err
 		}

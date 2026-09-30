@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rkolesnichenko/rpsl/resolve/peval"
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
@@ -143,4 +144,39 @@ func contains(vs []Vendor, v Vendor) bool {
 		}
 	}
 	return false
+}
+
+// A next-hop of the other family than the session's is refused: IOS, for one,
+// rejects "set ipv6 next-hop 192.0.2.1" on load but keeps the entry, which then
+// accepts routes with their next-hop unchanged. next-hop = self has no family.
+func TestCompileNextHopFamily(t *testing.T) {
+	for _, c := range []struct {
+		s    peval.Session
+		imp  string
+		want bool // compiles
+	}{
+		{v6Session, "mp-import: afi any.unicast from AS2 action next-hop = 192.0.2.1; accept ANY", false},
+		{v4Session, "mp-import: afi any.unicast from AS2 action next-hop = 2001:db8::1; accept ANY", false},
+		{v4Session, "mp-import: afi any.unicast from AS2 action next-hop = 192.0.2.1; accept ANY", true},
+		{v6Session, "mp-import: afi any.unicast from AS2 action next-hop = 2001:db8::1; accept ANY", true},
+		{v6Session, "mp-import: afi any.unicast from AS2 action next-hop = ::ffff:192.0.2.1; accept ANY", true},
+	} {
+		for _, v := range Vendors() {
+			s, p := fixturePolicyFor(t, c.s, c.imp)
+			_, err := (&Generator{Vendor: v}).compile(s, p)
+			var ue *UnsupportedError
+			switch {
+			case c.want && err != nil:
+				t.Errorf("%v %v %s: %v", v, c.s.AF, c.imp, err)
+			case !c.want && (!errors.As(err, &ue) || ue.Cause != CauseActionValue || ue.Vendor != v):
+				t.Errorf("%v %v %s: err %v, want cause %q", v, c.s.AF, c.imp, err, CauseActionValue)
+			}
+		}
+	}
+	for _, v := range []Vendor{Junos, IOSXR} {
+		s, p := fixturePolicyFor(t, v6Session, "mp-import: afi any.unicast from AS2 action next-hop = self; accept ANY")
+		if _, err := (&Generator{Vendor: v}).compile(s, p); err != nil {
+			t.Errorf("%v next-hop = self on ipv6: %v", v, err)
+		}
+	}
 }
