@@ -43,10 +43,14 @@ EOF
 		cat >"$prefix/bin/$tool" <<EOF
 #!/bin/sh
 # IRRToolSet 5.1.3's $tool, built by scripts/build-irrtoolset.sh, run in Docker.
+# Its stderr joins its stdout inside the container: docker relays the two
+# separately and would move its warnings among the configuration lines at
+# random, where a native run keeps them in the order it writes them.
 host=\${IRR_HOST:-}
 case \$host in 127.0.0.1|localhost|::1) host=host.docker.internal ;; esac
 exec docker run --rm -i --add-host=host.docker.internal:host-gateway \\
-	-e IRR_HOST="\$host" -e IRR_PORT="\${IRR_PORT:-}" -e IRR_SOURCES="\${IRR_SOURCES:-}" $image $tool "\$@"
+	-e IRR_HOST="\$host" -e IRR_PORT="\${IRR_PORT:-}" -e IRR_SOURCES="\${IRR_SOURCES:-}" \\
+	$image sh -c '"\$0" "\$@" 2>&1' $tool "\$@"
 EOF
 		chmod +x "$prefix/bin/$tool"
 	done
