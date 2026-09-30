@@ -112,10 +112,11 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
 - **`Expander.Exclude`** (bgpq4's EXCEPT): an excluded set is skipped in discovery (never
   fetched or Missing), an excluded AS is never fetched for routes; the named top set is always
   expanded. Checked against the model oracle over every backend. Exclusion never widens a
-  normalized filter: it applies only where it narrows what a filter accepts — positive literals,
-  and the Sets of a positive PathMatch. Under NOT (negated literals, and the Sets of a negated
-  PathMatch), `NormalizeFilter` evaluates with Exclude cleared, so an excluded AS or set cannot
-  drop out of a deny side and become accepted.
+  normalized filter: `NormalizeFilter` applies it to positive prefix literals only. Negated
+  literals and every PathMatch's Sets (either polarity — `<[^AS-A]>` rejects with AS-A) are
+  evaluated with Exclude cleared, so an excluded AS or set cannot drop out of a deny side and
+  become accepted. `peval` never applies it to peering or router matching (an excluded set on
+  the right of an EXCEPT would widen the peering), only to clause filters.
 - **`Expander.Concurrency` must not change a result.** Discovery fetches a whole breadth-first
   level at once and merges in the level's own order; `TestConcurrencyDoesNotChangeResults`
   compares serial and parallel over 200 random graphs.
@@ -152,9 +153,15 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   - An AS mismatch is no match, whatever the routers.
   - `NormalizeFilter` keeps regexps and community tests symbolic.
   - Negations stay inside a conjunct (`NotPrefixes`, `Negated`).
-  - A filter-set holding a regexp is inlined, or refused with an operator or on a cycle.
-  - `EvalFilter` success ⇒ one pure conjunct.
-  - `resolve/internal/routemodel` is test-only and the only regexp-vs-path matcher.
+  - A filter-set holding a regexp is inlined once per polarity (memoized), or refused with an
+    operator or on a cycle; a test repeated in a conjunct is kept once; every step is charged
+    against MaxVisited, and MaxConjuncts caps both a disjunction's conjuncts and a conjunct's tests.
+  - `EvalFilter` success ⇒ at most one pure conjunct.
+  - Only test code matches a regexp against a path: `resolve/internal/routemodel` and the filter
+    model's own Go translation (`goRE` in resolve/filter_model_test.go).
+  - The filter model runs over MemSource only, with no set templates and no set reaching AS-ANY;
+    the policy model covers import:/mp-import: only (MemSource, KeepPolicy Corpus, irrd, whois).
+    Export, via and default have table tests.
 
 ## Scope guardrails
 

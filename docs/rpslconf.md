@@ -35,8 +35,12 @@ than a fixed AS; without `-peer`, a filter that uses `PeerAS` fails.
 
 A leading `afi <list>` clause, exactly as `mp-import:`/`mp-export:` write it,
 selects the address family the expansion runs in (`afi ipv6.unicast
-AS-EXAMPLE`); a filter with no `afi` clause is evaluated for IPv4, as
-IRRToolSet's `peval` reads one. A *SAFI* in the list does not narrow anything
+AS-EXAMPLE`); a filter with no `afi` clause is evaluated for both families,
+IPv4 and IPv6 — unlike IRRToolSet's `peval`, which reads one as
+`ipv4.unicast`. Write `afi ipv4.unicast` for IRRToolSet's reading. The list is
+read greedily: `afi ipv4 any` is IPv4 and the filter `ANY`, but in
+`afi ipv4 any AND AS1` the `any` is a family and the filter `AND AS1` an
+error; write `afi ipv4 (ANY AND AS1)`. A *SAFI* in the list does not narrow anything
 — RPSL has no way to say a set member is multicast-only — so `ipv4.multicast`
 means the same as `ipv4.unicast` here.
 
@@ -98,9 +102,14 @@ these; each is a pinned divergence, not an oversight:
   out of the printed filter — dropping it would make the filter look more
   permissive, or more restrictive, than it is.
 
-Each of D1–D10 is pinned by a test and listed, with the input that shows
-it, in
+Each of D1–D10 is listed, with the input that shows it, in
 [`resolve/testdata/rtconfig/divergences.md`](../resolve/testdata/rtconfig/divergences.md).
+No test yet runs IRRToolSet to show one of them: D1 and D2 are kept out of
+the differential below (its `pevalSafe` allow-list refuses the shapes that
+trigger them) rather than compared. `rpslconf`'s own side is held for some:
+D4 by `TestImportIPv6SessionIgnoresLegacyImport` (`resolve/peval`), D9 by
+`TestPevalMode`'s exit codes, and D10 by the model tests, which parse every
+normal form back. D3 and D5–D8 have no test; D5–D8 belong to template mode.
 `TestPevalMatchesIRRToolSet` (`resolve/peval_irrtoolset_test.go`) runs
 IRRToolSet's `peval` itself against random filters and compares it with
 `NormalizeFilter`, but only on the shapes IRRToolSet gets right — prefix
@@ -117,8 +126,8 @@ Flags use IRRToolSet's single-dash style, read with Go's `flag` package
 
 | Flag | Meaning |
 | --- | --- |
-| `-h` | host (default `whois.radb.net`) |
-| `-p` | port (default 43) |
+| `-h` | host, or `host:port` (default `whois.radb.net`) |
+| `-p` | port, when `-h` names none (default 43) |
 | `-s` | sources |
 | `-whois` | query over whois instead of IRRd |
 | `-dump FILE` | read a dump instead of a server; repeatable |
