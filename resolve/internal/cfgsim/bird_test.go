@@ -108,8 +108,17 @@ func TestBIRDSyntax(t *testing.T) {
 	if err != nil {
 		t.Errorf("bird -p refuses the sample: %v", err)
 	}
-	if BIRDSyntax("filter X { frob; }\n") == nil {
-		t.Errorf("bird -p accepted nonsense")
+	// Lists alone, as WritePrefixList and WriteASPathList write them, name no
+	// protocol, which bird -p refuses on its own: BIRDSyntax supplies one.
+	lists := "filter pl100 {\n  if (net ~ [ 10.0.0.0/8{16,24} ]) then accept;\n  reject;\n}\n" +
+		"define pl101 = [ 10.0.0.0/8{16,24} ];\n"
+	if err := BIRDSyntax(lists); err != nil {
+		t.Errorf("bird -p refuses lists without a protocol: %v", err)
+	}
+	for _, bad := range []string{"filter X { frob; }\n", "filter X { frob; }\n" + birdSample} {
+		if BIRDSyntax(bad) == nil {
+			t.Errorf("bird -p accepted nonsense %q", bad)
+		}
 	}
 }
 

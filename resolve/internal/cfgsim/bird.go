@@ -663,8 +663,11 @@ var ErrNoBIRD = errors.New("cfgsim: bird is not installed")
 var birdChecked sync.Map // text → string: "" when bird -p accepted it, its complaint otherwise
 
 // BIRDSyntax runs "bird -p" (parse the configuration and exit) over text with
-// a router id added, and returns its complaint. The answer for a text is
-// cached, since tests simulate one configuration many times.
+// a router id added — and, when text defines no protocol of its own, a
+// "protocol device", since bird -p refuses a configuration without one (lists
+// alone, as WritePrefixList writes them, have none) — and returns its
+// complaint. The answer for a text is cached, since tests simulate one
+// configuration many times.
 func BIRDSyntax(text string) error {
 	bin, err := exec.LookPath("bird")
 	if err != nil {
@@ -682,7 +685,11 @@ func BIRDSyntax(text string) error {
 	}
 	defer os.RemoveAll(dir)
 	conf := filepath.Join(dir, "bird.conf")
-	if err := os.WriteFile(conf, []byte("router id 10.0.0.1;\n"+text), 0o600); err != nil {
+	head := "router id 10.0.0.1;\n"
+	if !hasProtocol(text) {
+		head += "protocol device {}\n"
+	}
+	if err := os.WriteFile(conf, []byte(head+text), 0o600); err != nil {
 		return err
 	}
 	complaint := ""
@@ -694,4 +701,14 @@ func BIRDSyntax(text string) error {
 		return nil
 	}
 	return errors.New(complaint)
+}
+
+// hasProtocol reports whether a line of text begins a protocol definition.
+func hasProtocol(text string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		if f := strings.Fields(line); len(f) > 0 && f[0] == "protocol" {
+			return true
+		}
+	}
+	return false
 }
