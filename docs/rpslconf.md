@@ -592,10 +592,16 @@ listed here in numeric order regardless of which mode it belongs to.
   The Linux build (`scripts/build-irrtoolset.sh`) instead enumerates
   prefixes, some of them invalid (`10.0.0.4/33`), with no consistent
   pattern. `NormalizeFilter` always answers `NOT ANY` for such a window.
+- **D18 — IOS-XR community-sets vary from run to run on the Linux build.**
+  For D11's shape (`NOT community.contains(5:666)`), one `rtconfig` binary
+  names the community-sets differently from one run to the next, and
+  sometimes writes the deny set with no members, so the clause accepts the
+  routes it should refuse. `rpslconf` writes the same configuration every
+  run. D18 does not show on every run, so no test can pin it.
 
 Each is listed, with the input that shows it, in
 [`resolve/testdata/rtconfig/divergences.md`](../resolve/testdata/rtconfig/divergences.md),
-which also says where every one is pinned by a test — so a fix on either side
+which also says where each is pinned by a test (all but D18) — so a fix on either side
 is caught rather than passing unnoticed. D1 and D2 (and, on the Linux build,
 D17) are also kept out of `TestPevalMatchesIRRToolSet`'s comparison rather
 than compared, since IRRToolSet's own bug there would fail the test for

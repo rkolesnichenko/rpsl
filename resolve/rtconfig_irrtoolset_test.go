@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -42,6 +43,28 @@ import (
 // CI builds them); the goldens keep TestRtconfigGoldens comparing without.
 
 // squeezeBlank collapses runs of blank lines to one, as the goldens are kept.
+// commSetName matches the names rtconfig gives IOS-XR community-sets.
+var commSetName = regexp.MustCompile(`commset[0-9]+`)
+
+// withoutCommSets drops IOS-XR community-set blocks and numbers from rtconfig's
+// output: which number a set gets, and whether its members are written, vary
+// from run to run of one binary (D18), while the rest of the text does not.
+func withoutCommSets(s string) string {
+	var b strings.Builder
+	in := false
+	for _, line := range strings.SplitAfter(s, "\n") {
+		switch {
+		case strings.HasPrefix(line, "community-set "):
+			in = true
+		case in:
+			in = strings.TrimSpace(line) != "end-set"
+		default:
+			b.WriteString(commSetName.ReplaceAllString(line, "commset"))
+		}
+	}
+	return b.String()
+}
+
 // firstDiff shows where want and got first differ: a few lines of each
 // from there, so a failure in CI says what changed.
 func firstDiff(want, got string) string {
@@ -252,7 +275,10 @@ func TestRtconfigGoldens(t *testing.T) {
 						t.Fatal(err)
 					}
 					theirs = fresh
-				case fresh != theirs:
+				case fresh == theirs:
+				case vendor == "ciscoxr" && withoutCommSets(fresh) == withoutCommSets(theirs):
+					t.Logf("%s: D18, rtconfig's community-sets differ from %s this run:\n%s", label, path, firstDiff(theirs, fresh))
+				default:
 					t.Errorf("%s: rtconfig no longer writes %s; if that is expected, rerun with RPSL_RTCONFIG_UPDATE=1 and review the diff\n%s", label, path, firstDiff(theirs, fresh))
 				}
 			}

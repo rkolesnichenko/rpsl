@@ -7,8 +7,9 @@ spike (design doc §3) found ten IRRToolSet bugs running `rtconfig` and
 `peval` together against it (D1–D10); writing v0.22's plan found three more
 (D11–D13), and the rtconfig differential (`resolve/rtconfig_irrtoolset_test.go`)
 three after that (D14–D16), and running the peval differential against the
-Linux build one more (D17). They are pinned here, and each by a test, so a fix
-on either side is caught instead of passing unnoticed.
+Linux build one more (D17), and CI one more (D18). They are pinned here, and
+each but D18 by a test, so a fix on either side is caught instead of passing
+unnoticed; D18 does not show on every run, so no test can pin it.
 
 | # | Input | rtconfig/peval does | Correct |
 | --- | --- | --- | --- |
@@ -29,6 +30,7 @@ on either side is caught instead of passing unnoticed.
 | D15 | IOS, a session whose policy denotes no route (`accept NOT ANY`, an AS with no routes) | `neighbor … route-map MyMap_2_1 in`, with no `route-map MyMap_2_1` written or cleared: what the router already holds under that name decides | a route-map that denies |
 | D16 | IOS-XR, a clause whose only AS-path regexp is negated (`NOT <AS65004>`) | an `as-path-set` holding `permit .*`, which is not RPL (its elements are `ios-regex`, `length`, …): the configuration does not load | `not as-path in …` alone |
 | D17 | peval, IPv4 routes under a range-operator window beyond /32 (`AS65001^127-128`, `^126`, `^40`) | the Linux build (`scripts/build-irrtoolset.sh`, -O0; seen on aarch64 and on x86-64, both in Docker, the latter emulated) enumerates prefixes: `({10.0.0.0/31, 10.0.0.2/31})` or `({10.0.0.0/32, …, 10.0.0.3/32})` for a /30, or invalid ones (`10.0.0.4/33`, `138.0.0.4/33`), differing from run to run, with no pattern (`^33` and `^65` come out right); the Homebrew bottle answers `NOT ANY` | `NOT ANY`: no IPv4 prefix is longer than /32 |
+| D18 | IOS-XR, a clause with `NOT community.contains(5:666)` (D11's shape) | the Linux build names the clause's community-sets from one run of one binary to the next (`commset51` in one, `commset21904` in another) and sometimes writes the deny set with no members, so the clause accepts routes carrying 5:666: seen in CI on x86-64, the same cached binary right in one job and wrong in the next | the same sets every run, with their members |
 
 ## Where each is pinned
 
@@ -53,6 +55,7 @@ Each test fails when its divergence goes away, on either side.
 | D15 | `TestRtconfigDivergences/D15` |
 | D16 | `TestRtconfigDivergences/D16` |
 | D17 | `TestPevalDivergences/D17`, on the Linux build (told by its echo, not by its answer) on the architectures seen (`d17Arches`: arm64, amd64), failing only when it answers `NOT ANY`, since its wrong answers vary; skipped on the bottle, which answers correctly; `pevalSafe` keeps it out of `TestPevalMatchesIRRToolSet` |
+| D18 | not pinned: it does not happen on every run. `TestRtconfigGoldens` compares IOS-XR's live output with its golden apart from community-set blocks and numbers (`withoutCommSets`), and logs a D18 difference instead of failing on it |
 
 ## rtconfig (`TestRtconfigMatches`, `TestRtconfigGoldens`)
 
