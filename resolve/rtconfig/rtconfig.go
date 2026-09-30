@@ -85,6 +85,8 @@ type Generator struct {
 	Names         Naming
 
 	maps, prefixLists, pathLists, commLists, accessLists int // how many of each written so far
+
+	birdSessions []*birdSession // BIRD: the neighbours attached so far, for WriteSessions
 }
 
 func (g *Generator) maxPref() int {

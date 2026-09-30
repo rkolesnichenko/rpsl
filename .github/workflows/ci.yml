@@ -40,6 +40,10 @@ jobs:
           test "$(git rev-parse HEAD)" = 28232089197ab4582d99da1c3b048259d3dbef70
           ./bootstrap >/dev/null && ./configure --quiet && make --quiet && sudo make install >/dev/null
           bgpq4 -v
+      # BIRD 2, for "bird -p": every BIRD configuration the rtconfig tests
+      # write must parse (cfgsim.BIRDSyntax skips when bird is absent).
+      - name: Install BIRD 2
+        run: sudo apt-get install -y bird2 && command -v bird
       - name: Install staticcheck and govulncheck
         if: matrix.go == 'stable'
         run: |

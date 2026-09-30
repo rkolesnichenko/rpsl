@@ -1,6 +1,7 @@
 package rtconfig
 
 import (
+	"errors"
 	"io"
 	"net/netip"
 	"testing"
@@ -14,6 +15,11 @@ import (
 // session's neighbour uses.
 func simulate(t *testing.T, v Vendor, text string, s peval.Session, export bool, r cfgsim.Route) (bool, cfgsim.Attrs) {
 	t.Helper()
+	if v == BIRD2 {
+		if err := cfgsim.BIRDSyntax(text); err != nil && !errors.Is(err, cfgsim.ErrNoBIRD) {
+			t.Fatalf("bird -p refuses the configuration: %v\n%s", err, text)
+		}
+	}
 	c, err := cfgsim.Parse(v.String(), text)
 	if err != nil {
 		t.Fatalf("%v config does not parse: %v\n%s", v, err, text)

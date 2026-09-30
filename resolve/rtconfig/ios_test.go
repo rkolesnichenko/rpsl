@@ -73,9 +73,6 @@ router bgp 1
 // Refusing a construct writes nothing, and uses up no names.
 func TestWriteIsAllOrNothing(t *testing.T) {
 	for _, v := range Vendors() {
-		if _, err := (&Generator{Vendor: v}).writer(); err != nil {
-			continue
-		}
 		g := &Generator{Vendor: v}
 		s, p := fixturePolicy(t,
 			"from AS2 accept AS2",
@@ -99,9 +96,6 @@ func TestWriteIsAllOrNothing(t *testing.T) {
 // negations stay inside lists, never become a deny entry of the map.
 func TestFallThrough(t *testing.T) {
 	for _, v := range Vendors() {
-		if _, err := (&Generator{Vendor: v}).writer(); err != nil {
-			continue
-		}
 		s, p := fixturePolicy(t,
 			"from AS2 accept {10.0.0.0/8^+} AND NOT {10.2.0.0/16^+} AND NOT <AS666> AND NOT community(6:6)",
 			"from AS2 action pref = 5; accept ANY",
@@ -130,9 +124,6 @@ func TestFallThrough(t *testing.T) {
 // everything — not the vendor's default.
 func TestEmptyPolicyRejects(t *testing.T) {
 	for _, v := range Vendors() {
-		if _, err := (&Generator{Vendor: v}).writer(); err != nil {
-			continue
-		}
 		s, p := fixturePolicy(t, "from AS3 accept ANY")
 		if len(p.Clauses) != 0 {
 			t.Fatalf("fixture: %d clauses", len(p.Clauses))
@@ -198,9 +189,6 @@ func TestIOSListsDefaultsNetworks(t *testing.T) {
 	}
 	var ue *UnsupportedError
 	for _, v := range []Vendor{Junos, BIRD2} {
-		if _, err := (&Generator{Vendor: v}).writer(); err != nil {
-			continue
-		}
 		if err := (&Generator{Vendor: v}).WriteNetworks(&b, nil); !errors.As(err, &ue) || ue.Cause != CauseNetworks {
 			t.Errorf("%v WriteNetworks: %v", v, err)
 		}
