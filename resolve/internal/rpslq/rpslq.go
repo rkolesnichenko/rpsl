@@ -5,13 +5,10 @@
 package rpslq
 
 import (
-	"bufio"
-	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/netip"
 	"os"
 	"runtime/debug"
@@ -23,10 +20,10 @@ import (
 	"time"
 
 	"github.com/rkolesnichenko/rpsl/resolve"
+	"github.com/rkolesnichenko/rpsl/resolve/internal/backend"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/filtergen"
 	"github.com/rkolesnichenko/rpsl/resolve/irrd"
 	"github.com/rkolesnichenko/rpsl/resolve/rpki"
-	"github.com/rkolesnichenko/rpsl/resolve/whois"
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
@@ -618,9 +615,11 @@ func version() string {
 	return "(devel)"
 }
 
-// backend is the source the flags describe: the default one, and the same
-// backend restricted to one registry, for bgpq4's SOURCE::OBJECT.
-type backend struct {
+// backendT is the source the flags describe: the default one, and the same
+// backend restricted to one registry, for bgpq4's SOURCE::OBJECT. Opening it
+// is internal/backend's job, shared with rpslconf; backendT.src stays a plain
+// resolve.Source since rpslq never reads policy objects.
+type backendT struct {
 	src      resolve.Source
 	restrict func(registry string) resolve.Source
 	close    func()
@@ -628,7 +627,7 @@ type backend struct {
 
 // filter makes the backend, and each registry-restricted one, RPKI-aware:
 // the routes vrps make invalid are left out, and traced when trace is set.
-func (be *backend) filter(vrps *rpki.VRPs, trace *tracer) {
+func (be *backendT) filter(vrps *rpki.VRPs, trace *tracer) {
 	wrap := func(src resolve.Source, label string) resolve.Source {
 		f := &rpki.Filter{Src: src, VRPs: vrps}
 		if trace != nil {
@@ -664,96 +663,25 @@ func loadVRPs(file, slurm string) (*rpki.VRPs, error) {
 
 // readInput reads a file named on the command line — a dump, VRPs, SLURM —
 // through gzip when it is gzipped, naming it in any error but opening's.
-func readInput(name string, fn func(io.Reader) error) error {
-	f, err := os.Open(name)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	r, err := maybeGzip(f)
-	if err == nil {
-		err = fn(r)
-	}
-	if err != nil {
-		return fmt.Errorf("%s: %w", name, err)
-	}
-	return nil
-}
+func readInput(name string, fn func(io.Reader) error) error { return backend.ReadInput(name, fn) }
 
 // source builds the backend the flags describe. With vrps, a dump backend
 // holds their pseudo route objects too, as the registry RPKI. srcMembers sets
-// irrd.Source.SrcMembers on every IRRd connection it opens.
-func source(host, sources string, useWhois bool, files []string, conns int, srcMembers bool, vrps *rpki.VRPs) (*backend, error) {
-	var prio []string
-	for _, s := range strings.Split(sources, ",") {
-		if s = strings.TrimSpace(s); s != "" {
-			prio = append(prio, strings.ToUpper(s))
-		}
+// irrd.Source.SrcMembers on every IRRd connection it opens. Opening itself is
+// internal/backend's job, shared with rpslconf; this wraps it in rpslq's own
+// backendT, whose src stays a plain resolve.Source.
+func source(host, sources string, useWhois bool, files []string, conns int, srcMembers bool, vrps *rpki.VRPs) (*backendT, error) {
+	b, err := backend.Open(backend.Options{Host: host, Sources: sources, Whois: useWhois, Dumps: files,
+		Conns: conns, SrcMembers: srcMembers, VRPs: vrps})
+	if err != nil {
+		return nil, err
 	}
-	if len(files) > 0 {
-		l := &resolve.DumpLoader{Sources: prio}
-		for _, name := range files {
-			if err := readInput(name, l.Read); err != nil {
-				return nil, err
-			}
-		}
-		if vrps != nil {
-			vrps.AddTo(l.Corpus())
-		}
-		// -S chooses the registries, as it does for a server ("!s"): only
-		// those, in that order; without it, every registry in the dumps.
-		var all *resolve.MemSource
-		if len(prio) > 0 {
-			all = l.SourceOf(prio...)
-		} else {
-			all = l.Source()
-		}
-		return &backend{
-			src:      all,
-			restrict: func(reg string) resolve.Source { return l.SourceOf(reg) },
-			close:    func() {},
-		}, nil
-	}
-	if _, _, err := net.SplitHostPort(host); err != nil {
-		host = net.JoinHostPort(host, "43")
-	}
-	if useWhois {
-		return &backend{
-			src:      &whois.Source{Addr: host, Sources: prio},
-			restrict: func(reg string) resolve.Source { return &whois.Source{Addr: host, Sources: []string{reg}} },
-			close:    func() {},
-		}, nil
-	}
-	// One connection, its queries pipelined, as bgpq4 queries an IRRd; a
-	// registry-restricted source is a connection of its own.
-	all := []*irrd.Source{{Addr: host, Sources: prio, Pipeline: conns, MaxConns: 1, SrcMembers: srcMembers}}
-	return &backend{
-		src: all[0],
-		restrict: func(reg string) resolve.Source {
-			s := &irrd.Source{Addr: host, Sources: []string{reg}, Pipeline: conns, MaxConns: 1, SrcMembers: srcMembers}
-			all = append(all, s)
-			return s
-		},
-		close: func() {
-			for _, s := range all {
-				s.Close()
-			}
-		},
-	}, nil
+	return &backendT{src: b.Src, restrict: func(reg string) resolve.Source { return b.Restrict(reg) }, close: b.Close}, nil
 }
 
 // maxWhoisConns caps the connections rpslq opens over whois, which has no
 // pipelining: each query is a connection of its own.
 const maxWhoisConns = 4
-
-// maybeGzip reads r through gzip when it starts with gzip's magic bytes.
-func maybeGzip(r io.Reader) (io.Reader, error) {
-	br := bufio.NewReader(r)
-	if magic, err := br.Peek(2); err == nil && magic[0] == 0x1f && magic[1] == 0x8b {
-		return gzip.NewReader(br)
-	}
-	return br, nil
-}
 
 // query expands the objects a command line names.
 type query struct {
@@ -764,7 +692,7 @@ type query struct {
 	special bool // keep special-purpose AS numbers
 	maxLen  int  // -m: 0, or the longest prefix a list holds
 	levels  int  // -L, as bgpq4 counts: the top set and levels-1 below it
-	be      *backend
+	be      *backendT
 	trace   *tracer                   // -d, or nil
 	own     map[string]resolve.Source // registry -> the backend restricted to it
 	conc    int
