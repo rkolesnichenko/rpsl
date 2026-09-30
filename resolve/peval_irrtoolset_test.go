@@ -3,6 +3,7 @@ package resolve_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math/rand/v2"
 	"net"
 	"os"
@@ -101,8 +102,10 @@ func TestPevalMatchesIRRToolSet(t *testing.T) {
 				}
 				t.Fatalf("seed %d: peval %s: %v\n%s", seed, text, err, raw)
 			}
-			theirs := pevalPrefixes(out.String())
-			if !slices.Equal(ours, theirs) {
+			theirs, err := pevalPrefixes(out.String(), text)
+			if err != nil {
+				t.Errorf("seed %d: %s: %v", seed, text, err)
+			} else if !slices.Equal(ours, theirs) {
 				t.Errorf("seed %d: %s:\n  ours  %v\n  peval %v\n  raw   %s", seed, text, ours, theirs, strings.TrimSpace(out.String()))
 			}
 		}
@@ -127,7 +130,10 @@ func pevalSafe(f *mFilter, underNot bool) bool {
 	case "any":
 		return !underNot
 	case "as":
-		return !underNot // D1: peval's NOT over AS-derived terms is wrong
+		// D1: peval's NOT over AS-derived terms is wrong. D17: so is, in
+		// the Linux build, an operator window beyond /32 over IPv4 routes
+		// (modelOps' ^126 and ^127-128), which should denote nothing.
+		return !underNot && !beyondV4(f.op)
 	case "set":
 		// D2: peval substitutes 0.0.0.0/0 for a route-set/as-set member it
 		// cannot resolve (missing, wrong-class, or junk — not only one
@@ -143,6 +149,16 @@ func pevalSafe(f *mFilter, underNot bool) bool {
 		return pevalSafe(f.subs[0], underNot) && pevalSafe(f.subs[1], underNot)
 	}
 	return false // regexps, communities, PeerAS, filter-sets: not compared here
+}
+
+// beyondV4 reports whether op, a range operator from modelOps, names only
+// lengths longer than an IPv4 prefix has (D17).
+func beyondV4(op string) bool {
+	var n int
+	if _, err := fmt.Sscanf(op, "^%d", &n); err != nil {
+		return false // "", "^+", "^-"
+	}
+	return n > 32
 }
 
 var pevalRange = regexp.MustCompile(`[0-9a-fA-F:.]+/\d+(\^[-+]|\^\d+(-\d+)?)?`)
@@ -163,11 +179,12 @@ func everyPrefix() []types.PrefixRange {
 // unbounded complement, so it prints the excluded ranges instead; RFC 2622
 // gives NOT no finite denotation on its own, and this is the correct value,
 // not a divergence) — as the sorted prefixes of the model's universes it
-// denotes.
-func pevalPrefixes(out string) []string {
-	out = strings.TrimSpace(out)
+// denotes. out is all peval wrote for filter; only its answer is read. A
+// range that is not one (D17's "10.0.0.4/33") is an error, never skipped.
+func pevalPrefixes(out, filter string) ([]string, error) {
+	out = pevalAnswer(out, filter)
 	if strings.Contains(out, "NOT ANY") || out == "" {
-		return nil
+		return nil, nil
 	}
 	negated := strings.Contains(out, "NOT{")
 	var ranges []types.PrefixRange
@@ -175,14 +192,28 @@ func pevalPrefixes(out string) []string {
 		ranges = append(ranges, everyPrefix()...)
 	}
 	for _, s := range pevalRange.FindAllString(out, -1) {
-		if pr, err := types.ParsePrefixRange(s); err == nil {
-			ranges = append(ranges, pr)
+		pr, err := types.ParsePrefixRange(s)
+		if err != nil {
+			return nil, fmt.Errorf("peval answered %q: %v", out, err)
 		}
+		ranges = append(ranges, pr)
 	}
 	if negated {
-		return materialize(everyPrefix(), ranges)
+		return materialize(everyPrefix(), ranges), nil
 	}
-	return materialize(ranges, nil)
+	return materialize(ranges, nil), nil
+}
+
+// pevalAnswer is what peval answered to filter: its output without the echo
+// of the line it read, which a build with GNU readline (the Linux one that
+// scripts/build-irrtoolset.sh makes) writes first and the Homebrew bottle
+// does not.
+func pevalAnswer(out, filter string) string {
+	out = strings.TrimSpace(out)
+	if rest, ok := strings.CutPrefix(out, filter+"\n"); ok {
+		return strings.TrimSpace(rest)
+	}
+	return out
 }
 
 // materialize lists the IPv4 prefixes of the model's universe that lie in

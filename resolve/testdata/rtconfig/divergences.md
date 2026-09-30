@@ -6,7 +6,8 @@ filters, served by the in-process IRRd in `internal/irrtest`. A throwaway
 spike (design doc §3) found ten IRRToolSet bugs running `rtconfig` and
 `peval` together against it (D1–D10); writing v0.22's plan found three more
 (D11–D13), and the rtconfig differential (`resolve/rtconfig_irrtoolset_test.go`)
-three after that (D14–D16). They are pinned here, and each by a test, so a fix
+three after that (D14–D16), and running the peval differential against the
+Linux build one more (D17). They are pinned here, and each by a test, so a fix
 on either side is caught instead of passing unnoticed.
 
 | # | Input | rtconfig/peval does | Correct |
@@ -27,6 +28,7 @@ on either side is caught instead of passing unnoticed.
 | D14 | IOS-XR, a clause that is ANY (`announce ANY`) or NOT ANY | `drop` (then `done`), which ends the policy: ANY refuses every route, NOT ANY also the routes a later clause accepts | ANY: `done`; NOT ANY: nothing |
 | D15 | IOS, a session whose policy denotes no route (`accept NOT ANY`, an AS with no routes) | `neighbor … route-map MyMap_2_1 in`, with no `route-map MyMap_2_1` written or cleared: what the router already holds under that name decides | a route-map that denies |
 | D16 | IOS-XR, a clause whose only AS-path regexp is negated (`NOT <AS65004>`) | an `as-path-set` holding `permit .*`, which is not RPL (its elements are `ios-regex`, `length`, …): the configuration does not load | `not as-path in …` alone |
+| D17 | peval, IPv4 routes under a range-operator window beyond /32 (`AS65001^127-128`, `^126`, `^40`) | the Linux build (`scripts/build-irrtoolset.sh`, -O0; seen on aarch64, in Docker) enumerates prefixes: `({10.0.0.0/31, 10.0.0.2/31})` for a /30, or invalid ones (`10.0.0.4/33`, `138.0.0.4/33`), with no pattern (`^33` and `^65` come out right); the Homebrew bottle answers `NOT ANY` | `NOT ANY`: no IPv4 prefix is longer than /32 |
 
 ## Where each is pinned
 
@@ -50,6 +52,7 @@ Each test fails when its divergence goes away, on either side.
 | D14 | `TestRtconfigGoldens` (export-v4, ciscoxr, 10.0.0.3: ANY); `TestRtconfigDivergences/D14` (NOT ANY before a clause that accepts) |
 | D15 | `TestRtconfigDivergences/D15` |
 | D16 | `TestRtconfigDivergences/D16` |
+| D17 | `TestPevalDivergences/D17` (skips where peval answers correctly, as the bottle does); `pevalSafe` keeps it out of `TestPevalMatchesIRRToolSet` |
 
 ## rtconfig (`TestRtconfigMatches`, `TestRtconfigGoldens`)
 
@@ -133,7 +136,15 @@ excludes the `"set"` `mFilter` kind entirely, reusing D2 rather than adding a
 new number: it is the same `0.0.0.0/0`-substitution bug, just reached through
 a wider range of inputs than the one case the design doc's table shows.
 
-A bare AS number (`mFilter` kind `"as"`) is unaffected and stays in
+**The Linux build echoes its input, and gets D17 wrong.** A peval built with
+GNU readline (`scripts/build-irrtoolset.sh`, which CI uses) writes the line it
+read before its answer; `pevalAnswer` drops that echo, and `pevalPrefixes`
+refuses a range it cannot parse instead of skipping it, so an answer like
+D17's `10.0.0.4/33` fails the test rather than vanishing. `pevalSafe` leaves out
+a bare AS number under a window beyond /32 (`modelOps`' `^126`, `^127-128`):
+the bottle answers `NOT ANY`, correctly, and the Linux build does not (D17).
+
+A bare AS number (`mFilter` kind `"as"`) is otherwise unaffected and stays in
 `pevalSafe`: it resolves straight to `-K -r -i origin ASn`, a route lookup
 with no `!i` membership walk to corrupt — confirmed with mixed-family and
 open-ended operators (`AS1^+`, `AS1^127-128`) producing no hang and a correct,

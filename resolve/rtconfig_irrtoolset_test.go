@@ -633,7 +633,8 @@ func TestPevalDivergences(t *testing.T) {
 	if err != nil {
 		t.Skip("IRRToolSet's peval is not installed (scripts/build-irrtoolset.sh)")
 	}
-	addr := irrtest.New(goldenObjects(t)...).IRRd(t)
+	// AS65001's one small route keeps D17's answer short.
+	addr := irrtest.New(append(goldenObjects(t), "route: 10.0.0.0/30\norigin: AS65001\nmnt-by: MNT-X\nsource: RADB\n")...).IRRd(t)
 	host, port, _ := net.SplitHostPort(addr)
 	theirs := func(filter string, timeout time.Duration) (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -647,9 +648,7 @@ func TestPevalDivergences(t *testing.T) {
 		if ctx.Err() != nil {
 			err = ctx.Err()
 		}
-		// A build with GNU readline (Linux; not the Homebrew bottle) echoes
-		// the line it reads before its answer.
-		return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(out.String()), filter)), err
+		return pevalAnswer(out.String(), filter), err
 	}
 	ours := func(t *testing.T, filter string) string {
 		t.Helper()
@@ -682,6 +681,19 @@ func TestPevalDivergences(t *testing.T) {
 		if out := ours(t, "afi ipv6.unicast {2001:db8::/32^+}"); out != "{2001:db8::/32^+}" {
 			t.Errorf("rpslconf says %q", out)
 		}
+	})
+	t.Run("D17", func(t *testing.T) { // IPv4 routes under a window beyond /32 denote nothing
+		if ours := ours(t, "afi ipv4.unicast AS65001^127-128"); ours != "NOT ANY" {
+			t.Errorf("rpslconf says %q", ours)
+		}
+		out, err := theirs("AS65001^127-128", 10*time.Second)
+		if err != nil {
+			t.Fatalf("peval: %v\n%s", err, out)
+		}
+		if out == "NOT ANY" {
+			t.Skip("this peval answers AS65001^127-128 correctly, as the Homebrew bottle does; the Linux build does not")
+		}
+		t.Logf("D17: peval answers AS65001^127-128 with %s", out)
 	})
 	t.Run("D10", func(t *testing.T) { // peval prints ranges as AS10-AS12; ours parses back
 		if out, err := theirs("<^AS1 AS-FOO*$>", 10*time.Second); err != nil || !strings.Contains(out, "AS10-AS12") {
