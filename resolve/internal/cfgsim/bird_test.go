@@ -112,3 +112,139 @@ func TestBIRDSyntax(t *testing.T) {
 		t.Errorf("bird -p accepted nonsense")
 	}
 }
+
+// TestBIRDIfElse checks both arms of if/then/else, in block form and as the
+// single-statement form ("if E then accept; else reject;").
+func TestBIRDIfElse(t *testing.T) {
+	c, err := ParseBIRD(`
+filter I {
+  if (net ~ [ 10.0.0.0/8+ ]) then {
+    bgp_local_pref = 100;
+    accept;
+  } else {
+    bgp_local_pref = 200;
+    accept;
+  }
+  reject;
+}
+filter J {
+  if (net ~ [ 10.0.0.0/8+ ]) then accept; else reject;
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, a, err := c.Policy("I", route("10.1.0.0/16", nil)); err != nil || !ok || !reflect.DeepEqual(a, Attrs{LocalPref: 100, MED: -1}) {
+		t.Errorf("I(10.1.0.0/16) = %v %+v, %v; want the then-branch, LocalPref 100", ok, a, err)
+	}
+	if ok, a, err := c.Policy("I", route("192.0.2.0/24", nil)); err != nil || !ok || !reflect.DeepEqual(a, Attrs{LocalPref: 200, MED: -1}) {
+		t.Errorf("I(192.0.2.0/24) = %v %+v, %v; want the else-branch, LocalPref 200", ok, a, err)
+	}
+	if ok, _, err := c.Policy("J", route("10.1.0.0/16", nil)); err != nil || !ok {
+		t.Errorf("J(10.1.0.0/16) = %v, %v; want the then-branch, accept", ok, err)
+	}
+	if ok, _, err := c.Policy("J", route("192.0.2.0/24", nil)); err != nil || ok {
+		t.Errorf("J(192.0.2.0/24) = %v, %v; want the else-branch, reject", ok, err)
+	}
+}
+
+// TestBIRDFallOffEnd checks a top-level filter with no trailing reject;: a
+// non-matching route falls off the end and is rejected; a matching one is
+// still accepted by its own if.
+func TestBIRDFallOffEnd(t *testing.T) {
+	c, err := ParseBIRD("filter H {\n  if (net ~ [ 10.0.0.0/8+ ]) then accept;\n}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, _, err := c.Policy("H", route("10.1.0.0/16", nil)); err != nil || !ok {
+		t.Errorf("H(10.1.0.0/16) = %v, %v; want accept", ok, err)
+	}
+	if ok, a, err := c.Policy("H", route("192.0.2.0/24", nil)); err != nil || ok || !reflect.DeepEqual(a, Attrs{}) {
+		t.Errorf("H(192.0.2.0/24) = %v %+v, %v; want reject (falling off the end)", ok, a, err)
+	}
+}
+
+// TestBIRDRouterID checks the top-level "router id X;" is accepted (and
+// skipped), and that a malformed one missing its ";" is an error.
+func TestBIRDRouterID(t *testing.T) {
+	c, err := ParseBIRD("router id 10.0.0.1;\nfilter K {\n  accept;\n}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, _, err := c.Policy("K", route("10.0.0.0/8", nil)); err != nil || !ok {
+		t.Errorf("K(...) = %v, %v; want accept", ok, err)
+	}
+	if _, err := ParseBIRD("router id 10.0.0.1\nfilter K {\n  accept;\n}\n"); err == nil {
+		t.Errorf("\"router id\" without a semicolon parsed")
+	}
+}
+
+// TestBIRDDuplicateProtocol checks a protocol defined twice under one name
+// is refused, as BIRD itself refuses it.
+func TestBIRDDuplicateProtocol(t *testing.T) {
+	_, err := ParseBIRD("protocol bgp P {\n  neighbor 10.0.0.2 as 2;\n}\nprotocol bgp P {\n  neighbor 10.0.0.3 as 3;\n}\n")
+	if err == nil {
+		t.Errorf("a protocol defined twice under one name parsed")
+	}
+}
+
+// TestBIRDLiteralsAndAll checks true/false literals in a condition, and
+// "import all;"/"export all;" in a channel, which attach nothing.
+func TestBIRDLiteralsAndAll(t *testing.T) {
+	c, err := ParseBIRD(`
+filter T {
+  if false then {
+    bgp_local_pref = 111;
+    accept;
+  }
+  if true then {
+    bgp_local_pref = 222;
+    accept;
+  }
+  reject;
+}
+protocol bgp Q {
+  neighbor 10.0.0.4 as 4;
+  ipv4 {
+    import all;
+    export all;
+  };
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Attrs{LocalPref: 222, MED: -1}
+	if ok, a, err := c.Policy("T", route("10.0.0.0/8", nil)); err != nil || !ok || !reflect.DeepEqual(a, want) {
+		t.Errorf("T(...) = %v %+v, %v; want %+v (the \"if true\" branch, \"if false\" skipped)", ok, a, err, want)
+	}
+	if name, ok := c.Attached(netip.MustParseAddr("10.0.0.4"), false); ok {
+		t.Errorf("import all attached filter %q", name)
+	}
+	if name, ok := c.Attached(netip.MustParseAddr("10.0.0.4"), true); ok {
+		t.Errorf("export all attached filter %q", name)
+	}
+}
+
+// TestBIRDTruncatedInputs checks that truncated input is diagnosed, never
+// panics.
+func TestBIRDTruncatedInputs(t *testing.T) {
+	for _, in := range []string{
+		"filter F { if (net ~",
+		"filter F { bgp_med =",
+		"protocol bgp p { neighbor",
+		"filter F { if (",
+	} {
+		in := in
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("ParseBIRD(%q) panicked: %v", in, r)
+				}
+			}()
+			if _, err := ParseBIRD(in); err == nil {
+				t.Errorf("ParseBIRD(%q) parsed", in)
+			}
+		}()
+	}
+}
