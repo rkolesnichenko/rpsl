@@ -420,17 +420,17 @@ func prefixAFI(p netip.Prefix) types.AFI {
 	return types.AFIv6
 }
 
-// decide is the oracle's per-route answer, once af — the session's
-// AF.AFI, which peval binds whole to Evaluator's Expander.AFI (see
-// Evaluator.newCall) — has ruled out a route of the wrong family. Every
-// literal prefix a filter can denote, including the implicit "ANY" a purely
-// symbolic filter (a community test, an unconstrained NOT) normalizes to,
-// passes through Expander's afiAllows/put (resolve/expander.go,
-// resolve/normalize.go's finish): with AFI fixed for the whole call, no
-// clause can ever accept a route of the other family, regardless of what its
-// filter text says. samplePrefixes mixes both families (it is shared with
-// Task 5's filterGen, whose model has no per-call AFI), so the check belongs
-// here rather than in filterGen.accepts.
+// decide is the oracle's per-route answer for the session's address family af
+// (peval.Evaluator binds it whole to Expander.AFI for the call — see
+// Evaluator.newCall). A route of the other family is refused before any term
+// is tried: every literal prefix a filter can denote, including the implicit
+// "ANY" a purely symbolic filter (a community test, an unconstrained NOT)
+// normalizes to, passes through Expander.afiAllows/put (expander.go,
+// normalize.go's finish), so with AFI fixed for the whole call no clause can
+// ever accept a route of the other family, whatever its filter text says.
+// samplePrefixes mixes both families (it is shared with Task 5's filterGen,
+// whose model has no per-call AFI), so this check belongs here rather than in
+// filterGen.accepts.
 func (pg *policyGen) decide(terms []oTerm, rt routemodel.Route, peer types.ASN, af types.AFI) (bool, string) {
 	if prefixAFI(rt.Prefix) != af {
 		return false, ""
