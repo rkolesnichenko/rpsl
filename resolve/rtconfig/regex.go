@@ -1,6 +1,7 @@
 package rtconfig
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 
@@ -92,18 +93,10 @@ func (t translator) members(e policy.ASPathExpr) (asns []types.ASN, all bool, er
 				}
 			}
 		}
-		sortASNs(asns)
+		slices.Sort(asns)
 		return asns, false, nil
 	}
 	return nil, false, t.refuse(CausePathShape)
-}
-
-func sortASNs(as []types.ASN) {
-	for i := 1; i < len(as); i++ {
-		for j := i; j > 0 && as[j] < as[j-1]; j-- {
-			as[j], as[j-1] = as[j-1], as[j]
-		}
-	}
 }
 
 func num(a types.ASN) string { return strconv.FormatUint(uint64(a), 10) }
