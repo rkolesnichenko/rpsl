@@ -159,9 +159,9 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   - `EvalFilter` success ⇒ at most one pure conjunct.
   - Only test code matches a regexp against a path: `resolve/internal/routemodel` and the filter
     model's own Go translation (`goRE` in resolve/filter_model_test.go).
-  - The filter model runs over MemSource only, with no set templates and no set reaching AS-ANY;
-    the policy model covers import:/mp-import: only (MemSource, KeepPolicy Corpus, irrd, whois).
-    Export, via and default have table tests.
+  - The filter model runs over MemSource only, with no set reaching AS-ANY; the policy model
+    covers import:, export:, import-via: and default:, each with its mp- form (MemSource,
+    KeepPolicy Corpus, irrd, whois). export-via: has table tests only.
 
 ## Scope guardrails
 
