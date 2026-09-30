@@ -98,7 +98,27 @@ type DefaultClause struct {
 type Undecided struct {
 	Index int         // the attribute's position, as Clause.Index
 	Term  policy.Term // zero for an attribute skipped whole (a protocol)
-	Why   string      // "peer router not given", "local router not given", "peering regexp", "protocol OSPF", …
+	Why   string      // one of the Why constants below
+}
+
+// The reasons a term is Undecided, Undecided.Why. They are stable, for a
+// consumer to compare, and docs/rpslconf.md explains each. WhyProtocol and
+// WhyInto begin a reason: a space and the protocol's name follow ("protocol
+// OSPF", "into RIP").
+const (
+	WhyPeerRouter     = "peer router not given"                          // the peering names the peer's router; Session.PeerRtr is unset
+	WhyLocalRouter    = "local router not given"                         // the peering names a local router ("at …"); Session.LocalRtr is unset
+	WhyPeeringRegexp  = "peering regexp"                                 // a peering written as an AS-path regexp names no set of sessions
+	WhyUnknownPeering = "unknown peering"                                // a peering of a kind this version does not know
+	WhyViaPeerAS      = "PeerAS beyond a via peering names no single AS" // import-via:/export-via: whose remote peering is not one AS
+	WhyProtocol       = "protocol"                                       // a policy for another protocol (RFC 2622 §6.4)
+	WhyInto           = "into"                                           // a policy into another protocol
+)
+
+// Whys returns the Undecided reasons, WhyProtocol and WhyInto as the words
+// that begin theirs.
+func Whys() []string {
+	return []string{WhyPeerRouter, WhyLocalRouter, WhyPeeringRegexp, WhyUnknownPeering, WhyViaPeerAS, WhyProtocol, WhyInto}
 }
 
 // errNoSource is returned by every evaluation method when Evaluator.Src is nil.
@@ -262,9 +282,9 @@ func (c *call) policy(attrs []attr, via bool) (Policy, error) {
 			continue
 		}
 		if !isBGP(a.proto) || !isBGP(a.into) {
-			why := "protocol " + a.proto
+			why := WhyProtocol + " " + a.proto
 			if isBGP(a.proto) {
-				why = "into " + a.into
+				why = WhyInto + " " + a.into
 			}
 			p.Undecided = append(p.Undecided, Undecided{Index: i, Why: why})
 			continue
@@ -296,7 +316,7 @@ func (c *call) policy(attrs []attr, via bool) (Policy, error) {
 			}
 			nf, err := c.filter(t.Filter, peer)
 			if via && errors.Is(err, resolve.ErrUnboundPeer) {
-				p.Undecided = append(p.Undecided, Undecided{Index: i, Term: t, Why: "PeerAS beyond a via peering names no single AS"})
+				p.Undecided = append(p.Undecided, Undecided{Index: i, Term: t, Why: WhyViaPeerAS})
 				continue
 			}
 			if err != nil {

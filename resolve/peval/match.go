@@ -75,8 +75,8 @@ func (c *call) peering(p policy.Peering) (verdict, string, error) {
 			addr netip.Addr
 			why  string
 		}{
-			{x.Router, c.s.PeerRtr, "peer router not given"},
-			{x.AtRouter, c.s.LocalRtr, "local router not given"},
+			{x.Router, c.s.PeerRtr, WhyPeerRouter},
+			{x.AtRouter, c.s.LocalRtr, WhyLocalRouter},
 		} {
 			if side.expr == nil {
 				continue
@@ -121,9 +121,9 @@ func (c *call) peering(p policy.Peering) (verdict, string, error) {
 		}
 		return v, why, nil
 	case policy.PeeringRegexp:
-		return undecided, "peering regexp", nil
+		return undecided, WhyPeeringRegexp, nil
 	}
-	return undecided, "unknown peering", nil
+	return undecided, WhyUnknownPeering, nil
 }
 
 // asExpr reports whether the session's peer is in the AS expression.

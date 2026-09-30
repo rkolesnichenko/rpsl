@@ -122,6 +122,62 @@ operator-qualified one) it cannot resolve, which would fail the comparison
 for reasons that have nothing to do with `rpslconf`. See that file for the
 narrower `pevalSafe` allow-list and why.
 
+## What a vendor cannot say
+
+A printer never approximates: a construct a vendor's configuration cannot express is refused. The error wraps `rtconfig.ErrUnsupported` and names the vendor, the term, and one of these causes (`rtconfig.Cause*`). When a vendor refuses a policy, it writes nothing for it.
+
+| Cause | Meaning |
+|---|---|
+| `a via clause (import-via:, export-via:)` | route-server policies (draft-ietf-grow-rpsl-via) are evaluated by peval but rendered by no printer yet |
+| `a SAFI other than unicast` | a multicast session |
+| `two AS-path regexps that must both match` | IOS and Junos OR the as-path lists of one entry or term |
+| `a negated AS-path class [^…]` | no dialect has a negated AS class |
+| `same-AS repetition (~*, ~+, ~{m,n}) over more than one AS` | `~*` over a set or class is not a regular language over paths |
+| `an AS-path regexp shape the vendor's path syntax lacks` | an inner anchor for Junos or BIRD, alternation or repetition for BIRD, a count over 32 for IOS, a class of more than 1024 ASes |
+| `a community that is neither a:b nor a well-known one` | large and extended communities are not typed yet |
+| `an exact community match (community == {…})` | where the vendor has no exact match, or cannot combine one with other tests |
+| `an action other than pref, med, community, aspath.prepend and next-hop` | another RP-attribute |
+| `an action value the vendor cannot set` | `med = igp_cost` or `next-hop = self` where the vendor has none, a pref or med that is not a number, `community = {}` on Junos |
+| `a pref above MaxPreference` | pref N becomes local-preference MaxPreference−N, which would be negative |
+| `a default: the vendor has no configuration for` | every vendor but IOS; on IOS, a default with actions, or with networks other than exact IPv4 prefixes (D6) |
+| `networks the vendor has no configuration for` | Junos and BIRD |
+| `a filter that is not a single list of that kind` | access_list of a filter with a regexp or community test, or of several conjuncts |
+
+## Terms peval cannot decide
+
+A term that might cover the session, but can't be decided, is reported as a warning. It is never guessed. The reason is one of these (`peval.Why*`); the last two are followed by the protocol's name.
+
+| Reason | Meaning |
+|---|---|
+| `peer router not given` | the peering names the peer's router, and the session does not |
+| `local router not given` | the peering names a local router (`at …`), and the session does not |
+| `peering regexp` | a peering written as an AS-path regexp names no set of sessions |
+| `unknown peering` | a peering of a kind this version does not know |
+| `PeerAS beyond a via peering names no single AS` | an import-via:/export-via: whose remote peering is not one AS binds PeerAS to nothing |
+| `protocol` | a policy for routes of another protocol (RFC 2622 §6.4) |
+| `into` | a policy for routes into another protocol |
+
+## Capabilities by vendor
+
+Generated from `rtconfig.Capabilities()`; `TestRpslconfDocs` holds this table to the code.
+
+<!-- capabilities -->
+| Feature | cisco | junos | ciscoxr | bird | Refused with |
+|---|---|---|---|---|---|
+| two AS-path regexps in one clause, both to match | no | no | yes | yes | `two AS-path regexps that must both match` |
+| alternation, or repetition of an AS, in an AS-path regexp | yes | yes | yes | no | `an AS-path regexp shape the vendor's path syntax lacks` |
+| ^ or $ inside an AS-path regexp | yes | no | yes | no | `an AS-path regexp shape the vendor's path syntax lacks` |
+| a negated AS-path class [^…] | no | no | no | no | `a negated AS-path class [^…]` |
+| community == {…} as a clause's only community test | yes | no | no | yes | `an exact community match (community == {…})` |
+| community == {…} negated, or beside other community tests | no | no | no | yes | `an exact community match (community == {…})` |
+| med = igp_cost | yes | yes | yes | no | `an action value the vendor cannot set` |
+| next-hop = self | no | yes | yes | no | `an action value the vendor cannot set` |
+| default: (rtconfig's default command) | yes | no | no | no | `a default: the vendor has no configuration for` |
+| networks, v6networks | yes | no | yes | no | `networks the vendor has no configuration for` |
+| import-via:, export-via: | no | no | no | no | `a via clause (import-via:, export-via:)` |
+| a multicast SAFI | no | no | no | no | `a SAFI other than unicast` |
+<!-- /capabilities -->
+
 ## Flags
 
 Flags use IRRToolSet's single-dash style, read with Go's `flag` package
