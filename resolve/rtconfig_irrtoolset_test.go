@@ -42,6 +42,20 @@ import (
 // CI builds them); the goldens keep TestRtconfigGoldens comparing without.
 
 // squeezeBlank collapses runs of blank lines to one, as the goldens are kept.
+// firstDiff shows where want and got first differ: a few lines of each
+// from there, so a failure in CI says what changed.
+func firstDiff(want, got string) string {
+	w, g := strings.Split(want, "\n"), strings.Split(got, "\n")
+	i := 0
+	for i < len(w) && i < len(g) && w[i] == g[i] {
+		i++
+	}
+	show := func(lines []string) string {
+		return strings.Join(lines[i:min(len(lines), i+6)], "\n")
+	}
+	return fmt.Sprintf("from line %d, want:\n%s\ngot:\n%s", i+1, show(w), show(g))
+}
+
 func squeezeBlank(s string) string {
 	var b strings.Builder
 	blank := false
@@ -239,7 +253,7 @@ func TestRtconfigGoldens(t *testing.T) {
 					}
 					theirs = fresh
 				case fresh != theirs:
-					t.Errorf("%s: rtconfig no longer writes %s; if that is expected, rerun with RPSL_RTCONFIG_UPDATE=1 and review the diff", label, path)
+					t.Errorf("%s: rtconfig no longer writes %s; if that is expected, rerun with RPSL_RTCONFIG_UPDATE=1 and review the diff\n%s", label, path, firstDiff(theirs, fresh))
 				}
 			}
 			ours, code, errOut := runRpslconf(addr, "RADB", tmpl, "-config", vendor)
