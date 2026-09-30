@@ -200,3 +200,16 @@ Warning: filter "P" matches ANY/NOT ANY
 		t.Errorf("P(192.0.2.0/24) = %v, %v; want accepted", ok, err)
 	}
 }
+
+// A community has at least one member: Junos rejects "members [ ]", so cfgsim
+// does too.
+func TestJunosCommunityNeedsMembers(t *testing.T) {
+	for _, text := range []string{
+		"policy-options {\n    community C members [  ];\n}\n",
+		"policy-options {\n    community C members [ ];\n}\n",
+	} {
+		if _, err := ParseJunos(text); err == nil {
+			t.Errorf("%q parsed", text)
+		}
+	}
+}

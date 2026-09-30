@@ -224,9 +224,12 @@ func (c *iosConfig) communityList(f []string) error {
 	}
 	e := commEntry{permit: f[1] == "permit"}
 	vals := f[2:]
-	if len(vals) == 1 && vals[0] == "internet" {
+	switch {
+	case len(vals) == 0:
+		return fmt.Errorf("community-list entry names no community") // IOS rejects it
+	case len(vals) == 1 && vals[0] == "internet":
 		e.internet = true
-	} else {
+	default:
 		cs, err := canonList(vals)
 		if err != nil {
 			return err

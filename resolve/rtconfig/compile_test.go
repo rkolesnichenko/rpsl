@@ -1,11 +1,13 @@
 package rtconfig
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/rkolesnichenko/rpsl/resolve/internal/cfgsim"
 	"github.com/rkolesnichenko/rpsl/resolve/peval"
 	"github.com/rkolesnichenko/rpsl/types"
 )
@@ -177,6 +179,65 @@ func TestCompileNextHopFamily(t *testing.T) {
 		s, p := fixturePolicyFor(t, v6Session, "mp-import: afi any.unicast from AS2 action next-hop = self; accept ANY")
 		if _, err := (&Generator{Vendor: v}).compile(s, p); err != nil {
 			t.Errorf("%v next-hop = self on ipv6: %v", v, err)
+		}
+	}
+}
+
+// A contains-test of no communities holds for every route, so its negation
+// holds for none (ruling R21): a conjunct with NOT community() matches
+// nothing and gets no entry, and a positive community() adds no condition.
+// community == {} (the route carries no community at all) is a real test:
+// BIRD writes it, the others refuse it as an exact match.
+func TestCompileEmptyCommunityTests(t *testing.T) {
+	r2 := rt("10.2.0.0/16", []types.ASN{2})
+	r2c := rt("10.2.0.0/16", []types.ASN{2}, "1:1")
+	r3 := rt("10.3.0.0/16", []types.ASN{2, 3})
+	for _, c := range []struct {
+		filter  string
+		entries int
+		accept  map[*cfgsim.Route]bool
+	}{
+		{"NOT community()", 0, map[*cfgsim.Route]bool{&r2: false, &r2c: false, &r3: false}},
+		{"NOT community.contains()", 0, map[*cfgsim.Route]bool{&r2: false, &r2c: false, &r3: false}},
+		{"AS2 AND NOT community()", 0, map[*cfgsim.Route]bool{&r2: false, &r2c: false, &r3: false}},
+		{"AS3 OR NOT community()", 1, map[*cfgsim.Route]bool{&r2: false, &r2c: false, &r3: true}},
+		{"community()", 1, map[*cfgsim.Route]bool{&r2: true, &r2c: true, &r3: true}},
+	} {
+		for _, v := range Vendors() {
+			g := &Generator{Vendor: v}
+			s, p := fixturePolicy(t, "from AS2 accept "+c.filter)
+			pl, err := g.compile(s, p)
+			if err != nil || len(pl.entries) != c.entries {
+				t.Errorf("%v %s: %d entries, %v; want %d", v, c.filter, len(pl.entries), err, c.entries)
+				continue
+			}
+			var b bytes.Buffer
+			if err := writeImport(g, &b, s, p); err != nil {
+				t.Fatalf("%v %s: %v", v, c.filter, err)
+			}
+			for r, want := range c.accept {
+				if ok, _ := simulate(t, v, b.String(), s, false, *r); ok != want {
+					t.Errorf("%v %s over %v: %v, want %v\n%s", v, c.filter, *r, ok, want, b.String())
+				}
+			}
+		}
+	}
+	for _, v := range Vendors() {
+		s, p := fixturePolicy(t, "from AS2 accept community == {}")
+		var b bytes.Buffer
+		err := writeImport(&Generator{Vendor: v}, &b, s, p)
+		var ue *UnsupportedError
+		switch {
+		case v == BIRD2 && err != nil:
+			t.Errorf("bird community == {}: %v", err)
+		case v == BIRD2:
+			for r, want := range map[*cfgsim.Route]bool{&r2: true, &r2c: false} {
+				if ok, _ := simulate(t, v, b.String(), s, false, *r); ok != want {
+					t.Errorf("bird community == {} over %v: %v, want %v\n%s", *r, ok, want, b.String())
+				}
+			}
+		case !errors.As(err, &ue) || ue.Cause != CauseCommunityEquals:
+			t.Errorf("%v community == {}: %v, want cause %q", v, err, CauseCommunityEquals)
 		}
 	}
 }

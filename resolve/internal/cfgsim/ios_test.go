@@ -106,3 +106,18 @@ router bgp 1
 		t.Errorf("an unknown line parsed")
 	}
 }
+
+// A community-list entry names at least one community (or internet): IOS
+// rejects one with none, so cfgsim does too, rather than read it as
+// matching every route.
+func TestIOSCommunityListNeedsValue(t *testing.T) {
+	for _, line := range []string{
+		"ip community-list standard cl100 deny",
+		"ip community-list standard cl100 permit",
+		"ip community-list standard cl100 deny \n",
+	} {
+		if _, err := ParseIOS(line + "\n"); err == nil {
+			t.Errorf("%q parsed", line)
+		}
+	}
+}

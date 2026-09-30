@@ -80,6 +80,9 @@ func (g *Generator) compile(s peval.Session, p peval.Policy) (plan, error) {
 			return pl, err
 		}
 		for _, conj := range c.Filter.Conjuncts {
+			if matchesNothing(conj) {
+				continue
+			}
 			e, err := g.compileConjunct(conj, term)
 			if err != nil {
 				return pl, err
@@ -89,6 +92,21 @@ func (g *Generator) compile(s peval.Session, p peval.Policy) (plan, error) {
 		}
 	}
 	return pl, nil
+}
+
+// matchesNothing reports whether a conjunct holds for no route: one with a
+// negated contains-test of no communities. community() holds for every
+// route, since a route carries each of none, so NOT community() holds for
+// none (ruling R21). Such a conjunct gets no entry, as a conjunct of no
+// prefixes gets none from NormalizeFilter; written out, it would be a
+// community list of no values, which no vendor accepts.
+func matchesNothing(c resolve.Conjunct) bool {
+	for _, m := range c.Communities {
+		if m.Negated && m.Test.Op == policy.CommunityContains && len(m.Test.Values) == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // compileConjunct turns one conjunct into an entry's conditions.

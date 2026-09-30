@@ -366,6 +366,9 @@ func (c *junosConfig) policyOptions(nodes []*jnode) error {
 			if err != nil {
 				return err
 			}
+			if len(cs) == 0 { // Junos rejects "members [ ]"
+				return fmt.Errorf("cfgsim: junos: community %s has no members", w[1])
+			}
 			c.comms[w[1]] = cs
 		default:
 			return fmt.Errorf("cfgsim: junos: policy-options %q", strings.Join(w, " "))

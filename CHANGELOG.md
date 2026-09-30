@@ -48,6 +48,11 @@ same version (see [RELEASING.md](RELEASING.md)).
   `CauseActionValue`, instead of writing it into the policy: IOS rejected the
   `set ipv6 next-hop` line on load but kept the entry, which then accepted routes with their
   next-hop unchanged. `next-hop = self` is unaffected.
+- `resolve/rtconfig` writes no entry for a conjunct holding `NOT community()` (or
+  `NOT community.contains()`): a route carries each of no communities, so the negated test
+  holds for none. It used to write a community list of no values, which no vendor accepts (BIRD
+  `if !() then`, Junos `members [ ]`). `community == {}` keeps its meaning: BIRD writes it, the
+  others refuse it as an exact match.
 - `NormalizeFilter`'s depth limit no longer depends on the order a memo was filled: reusing a
   filter-set's inlined normal form now re-checks `MaxDepth` against how deep that inlining
   actually reached, not just the depth of the call that first computed it.
