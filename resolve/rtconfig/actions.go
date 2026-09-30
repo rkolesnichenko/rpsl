@@ -41,7 +41,7 @@ func (g *Generator) compileActions(acts []policy.Action, term string) (setOps, e
 			ops.localPref = g.maxPref() - n
 		case a.Attr == "med" && a.Op == policy.ActionAssign:
 			if strings.EqualFold(strings.TrimSpace(a.Value), "igp_cost") {
-				if g.Vendor == BIRD2 {
+				if !g.supports(FeatureMEDIGP) {
 					return ops, unsupported(g.Vendor, CauseActionValue, a.String())
 				}
 				ops.med, ops.medIGP = -1, true
@@ -65,7 +65,7 @@ func (g *Generator) compileActions(acts []policy.Action, term string) (setOps, e
 		case a.Attr == "next-hop" && a.Op == policy.ActionAssign:
 			v := strings.TrimSpace(a.Value)
 			if strings.EqualFold(v, "self") {
-				if g.Vendor == IOS || g.Vendor == BIRD2 {
+				if !g.supports(FeatureNextHopSelf) {
 					return ops, unsupported(g.Vendor, CauseActionValue, a.String())
 				}
 				ops.nextHop, ops.nextHopSelf = netip.Addr{}, true
