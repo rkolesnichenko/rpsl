@@ -350,14 +350,12 @@ func TestNormalizeMaxDepthIsOrderIndependent(t *testing.T) {
 		fltrSet("FLTR-N0", "FLTR-N1"),
 	)
 	e := &Expander{Src: src, AFI: types.AFIv4, MaxDepth: 5}
-	var errs []string
 	for _, filter := range []string{"FLTR-N0 OR FLTR-A", "FLTR-A OR FLTR-N0"} {
 		_, err := e.NormalizeFilter(context.Background(), mustFilter(t, filter))
 		var tl *SetTooLargeError
 		if !errors.As(err, &tl) || tl.Limit != LimitDepth {
 			t.Errorf("NormalizeFilter(%s) at MaxDepth 5: err %v, want LimitDepth", filter, err)
 		}
-		errs = append(errs, fmt.Sprint(err))
 	}
 	deep := &Expander{Src: src, AFI: types.AFIv4, MaxDepth: 32}
 	for _, filter := range []string{"FLTR-N0 OR FLTR-A", "FLTR-A OR FLTR-N0"} {
