@@ -13,7 +13,7 @@
 # script after step 2 and runs it again, which must resume. release.sh's own
 # last steps then check every module from an empty module cache — its
 # @latest, that a consumer gets only what it requires, its tests from the
-# zip — and every rpslq archive it builds, as a real release does.
+# zip — and every rpslq and rpslconf archive it builds, as a real release does.
 # Nothing touches the real repository, its remote, the public proxy, the
 # checksum database, GitHub, or your module cache.
 set -eu

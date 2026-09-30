@@ -20,6 +20,7 @@ import (
 	"github.com/rkolesnichenko/rpsl/policy"
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/backend"
+	"github.com/rkolesnichenko/rpsl/resolve/internal/buildinfo"
 	"github.com/rkolesnichenko/rpsl/resolve/rtconfig"
 	"github.com/rkolesnichenko/rpsl/types"
 )
@@ -45,8 +46,13 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	peerFlag := fs.String("peer", "", "peval mode: the `AS` PeerAS denotes")
 	config := fs.String("config", "cisco", "template mode: the configuration `format`: cisco, junos, ciscoxr or bird")
 	timeout := fs.Duration("timeout", 60*time.Second, "give up after this long")
+	showVersion := fs.Bool("v", false, "print rpslconf's version and exit")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if *showVersion {
+		fmt.Fprintf(stdout, "rpslconf %s\n", buildinfo.Version())
+		return 0
 	}
 	if fs.NArg() > 0 {
 		fmt.Fprintf(stderr, "rpslconf: unexpected argument %q (the template is read from stdin)\n", fs.Arg(0))
