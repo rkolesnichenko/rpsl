@@ -11,7 +11,7 @@ import (
 
 // rtconfig's own Junos output means what its IOS output means (Task 7).
 func TestJunosReadsRtconfig(t *testing.T) {
-	text, err := os.ReadFile("testdata/rtconfig-junos-import.txt")
+	text, err := os.ReadFile("../../testdata/rtconfig/golden/import-v4-junos.txt")
 	if err != nil {
 		t.Fatal(err)
 	}

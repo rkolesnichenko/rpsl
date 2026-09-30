@@ -12,7 +12,7 @@ import (
 // rtconfig's own IOS-XR output reads as Task 7's IOS output does, but for
 // D11.
 func TestXRReadsRtconfig(t *testing.T) {
-	text, err := os.ReadFile("testdata/rtconfig-xr-import.txt")
+	text, err := os.ReadFile("../../testdata/rtconfig/golden/import-v4-ciscoxr.txt")
 	if err != nil {
 		t.Fatal(err)
 	}

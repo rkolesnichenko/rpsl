@@ -15,7 +15,7 @@ func route(p string, path []types.ASN, comms ...string) Route {
 
 // rtconfig's own IOS output reads as IRRToolSet meant it.
 func TestIOSReadsRtconfig(t *testing.T) {
-	text, err := os.ReadFile("testdata/rtconfig-ios-import.txt")
+	text, err := os.ReadFile("../../testdata/rtconfig/golden/import-v4-cisco.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
