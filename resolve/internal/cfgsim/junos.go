@@ -313,7 +313,35 @@ func ParseJunos(text string) (Config, error) {
 			return nil, fmt.Errorf("cfgsim: junos: unknown top-level %q", n.words[0])
 		}
 	}
+	if err := c.check(); err != nil {
+		return nil, err
+	}
 	return c, nil
+}
+
+// check runs every term's conditions and actions once, over a scratch route,
+// once the whole configuration is read (so a name defined after its use
+// resolves): a route-filter, an action or a name Junos would reject fails
+// the parse, even in a term no route reaches.
+func (c *junosConfig) check() error {
+	for _, name := range c.order {
+		for _, t := range c.policies[name] {
+			s := newState(Route{Prefix: netip.MustParsePrefix("0.0.0.0/0")})
+			var rfs []jroute
+			var chain []string
+			for _, n := range t.from {
+				if _, err := fromHandlers[n.words[0]](c, n.words, s, &rfs, &chain); err != nil {
+					return fmt.Errorf("cfgsim: junos: policy %s term %s: %w", name, t.name, err)
+				}
+			}
+			for _, n := range t.then {
+				if _, err := c.then(n.words, s); err != nil {
+					return fmt.Errorf("cfgsim: junos: policy %s term %s: %w", name, t.name, err)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (c *junosConfig) policyOptions(nodes []*jnode) error {

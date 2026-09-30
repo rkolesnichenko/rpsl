@@ -41,8 +41,11 @@ type rmEntry struct {
 	paths    []string
 	comms    []string
 	exact    bool
-	sets     []string // the set lines, applied in order
+	sets     []iosSet // the set lines, read when parsed and applied in order
 }
+
+// iosSet is one route-map "set" line, read: what it does to a route.
+type iosSet func(c *iosConfig, s *state)
 
 type attachKey struct {
 	addr   netip.Addr
@@ -242,7 +245,11 @@ func (c *iosConfig) communityList(f []string) error {
 
 func (c *iosConfig) entryLine(e *rmEntry, f []string) error {
 	if f[0] == "set" {
-		e.sets = append(e.sets, strings.Join(f[1:], " "))
+		op, err := parseIOSSet(f[1:])
+		if err != nil {
+			return err
+		}
+		e.sets = append(e.sets, op)
 		return nil
 	}
 	switch {
@@ -299,9 +306,7 @@ func (c *iosConfig) Policy(name string, r Route) (bool, Attrs, error) {
 			return false, Attrs{}, nil
 		}
 		for _, set := range e.sets {
-			if err := c.apply(set, s); err != nil {
-				return false, Attrs{}, err
-			}
+			set(c, s)
 		}
 		return true, s.finish(), nil
 	}
@@ -419,60 +424,78 @@ func (c *iosConfig) commPermits(name string, s *state, exact bool) bool {
 	return false
 }
 
-func (c *iosConfig) apply(set string, s *state) error {
-	f := strings.Fields(set)
+// parseIOSSet reads a route-map "set" line's words after "set", refusing
+// what IOS would reject — so an entry no route reaches still cannot hide a
+// bad line — and returns what it does to a route.
+func parseIOSSet(f []string) (iosSet, error) {
+	bad := func() (iosSet, error) { return nil, fmt.Errorf("cfgsim: ios set %q", strings.Join(f, " ")) }
 	switch {
 	case len(f) == 2 && f[0] == "local-preference":
 		v, err := strconv.Atoi(f[1])
-		s.attrs.LocalPref = v
-		return err
+		if err != nil {
+			return bad()
+		}
+		return func(c *iosConfig, s *state) { s.attrs.LocalPref = v }, nil
 	case len(f) == 2 && f[0] == "metric":
 		v, err := strconv.Atoi(f[1])
-		s.attrs.MED, s.attrs.MEDIGP = v, false
-		return err
+		if err != nil {
+			return bad()
+		}
+		return func(c *iosConfig, s *state) { s.attrs.MED, s.attrs.MEDIGP = v, false }, nil
 	case len(f) == 2 && f[0] == "metric-type" && f[1] == "internal":
-		s.attrs.MED, s.attrs.MEDIGP = -1, true
+		return func(c *iosConfig, s *state) { s.attrs.MED, s.attrs.MEDIGP = -1, true }, nil
 	case len(f) >= 2 && f[0] == "community":
 		vals, additive := f[1:], false
 		if vals[len(vals)-1] == "additive" {
 			vals, additive = vals[:len(vals)-1], true
 		}
-		if len(vals) == 1 && vals[0] == "none" {
-			s.comms = map[string]bool{}
-			return nil
+		if len(vals) == 1 && vals[0] == "none" && !additive {
+			return func(c *iosConfig, s *state) { s.comms = map[string]bool{} }, nil
+		}
+		if len(vals) == 0 {
+			return bad()
 		}
 		cs, err := canonList(vals)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if !additive {
-			s.comms = map[string]bool{}
-		}
-		for _, c := range cs {
-			s.comms[c] = true
-		}
+		return func(c *iosConfig, s *state) {
+			if !additive {
+				s.comms = map[string]bool{}
+			}
+			for _, x := range cs {
+				s.comms[x] = true
+			}
+		}, nil
 	case len(f) == 3 && f[0] == "comm-list" && f[2] == "delete":
-		for _, e := range c.comms[f[1]] {
-			if e.permit {
-				for _, x := range e.comms {
-					delete(s.comms, x)
+		name := f[1]
+		return func(c *iosConfig, s *state) {
+			for _, e := range c.comms[name] {
+				if e.permit {
+					for _, x := range e.comms {
+						delete(s.comms, x)
+					}
 				}
 			}
-		}
+		}, nil
 	case len(f) >= 3 && f[0] == "as-path" && f[1] == "prepend":
 		var as []types.ASN
 		for _, x := range f[2:] {
 			a, err := parsePlainASN(x)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			as = append(as, a)
 		}
-		s.prepend(as)
+		return func(c *iosConfig, s *state) { s.prepend(as) }, nil
 	case len(f) == 3 && (f[0] == "ip" || f[0] == "ipv6") && f[1] == "next-hop":
-		s.attrs.NextHop = f[2]
-	default:
-		return fmt.Errorf("cfgsim: ios set %q", set)
+		// The keyword names the family: IOS rejects "set ipv6 next-hop
+		// 192.0.2.1".
+		a, err := netip.ParseAddr(f[2])
+		if err != nil || a.Is4() != (f[0] == "ip") {
+			return bad()
+		}
+		return func(c *iosConfig, s *state) { s.attrs.NextHop = f[2] }, nil
 	}
-	return nil
+	return bad()
 }

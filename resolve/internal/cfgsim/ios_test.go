@@ -121,3 +121,31 @@ func TestIOSCommunityListNeedsValue(t *testing.T) {
 		}
 	}
 }
+
+// A route-map entry's set lines are checked as the configuration is read,
+// not when a route first reaches the entry: an entry no sampled route reaches
+// must not hide a line IOS would reject. A next-hop of the other family than
+// its keyword is one (IOS rejects "set ipv6 next-hop 192.0.2.1").
+func TestIOSSetLinesCheckedAtParse(t *testing.T) {
+	for _, set := range []string{
+		"set local-preference abc",
+		"set metric",
+		"set frobnicate 1",
+		"set community 1:2:3",
+		"set as-path prepend AS1",
+		"set ipv6 next-hop 192.0.2.1",
+		"set ip next-hop 2001:db8::1",
+		"set ip next-hop banana",
+		"set comm-list cl1 remove",
+	} {
+		text := "route-map M permit 10\nroute-map M permit 20\n " + set + "\n"
+		if _, err := ParseIOS(text); err == nil {
+			t.Errorf("%q parsed", set)
+		}
+	}
+	for _, set := range []string{"set ip next-hop 192.0.2.1", "set ipv6 next-hop 2001:db8::1", "set community none", "set comm-list cl1 delete"} {
+		if _, err := ParseIOS("route-map M permit 10\n " + set + "\n"); err != nil {
+			t.Errorf("%q: %v", set, err)
+		}
+	}
+}

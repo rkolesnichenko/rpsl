@@ -159,7 +159,7 @@ policy-options {
 // Junos reader knows each keyword, so nothing is silently accepted in one
 // place and silently ignored in the other).
 func TestJunosInvalidActionsRefused(t *testing.T) {
-	c, err := ParseJunos(`
+	if _, err := ParseJunos(`
 policy-options {
     policy-statement P {
         term t {
@@ -168,15 +168,63 @@ policy-options {
         }
     }
 }
-`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := c.Policy("P", route("10.0.0.0/8", nil)); err == nil {
+`); err == nil {
 		t.Errorf("a route-filter with an invalid action parsed")
 	}
 	if _, err := ParseJunos("policy-options { policy-statement P { term t { then frobnicate; } } }"); err == nil {
 		t.Errorf("an unknown then keyword parsed")
+	}
+}
+
+// A term's route-filters and actions are checked as the configuration is
+// read, not when a route first reaches the term: a term no sampled route
+// reaches must not hide a line Junos would reject.
+func TestJunosTermsCheckedAtParse(t *testing.T) {
+	for _, bad := range []string{
+		"from { route-filter 10.0.0.0/8 exact frobnicate; }",
+		"from { route-filter 10.0.0.0/8 bogus; }",
+		"from { route-filter 10.0.0.0/33 exact; }",
+		"from { route-filter 10.0.0.0/8 upto; }",
+		"from { route-filter 10.0.0.0/8 prefix-length-range /16; }",
+		"from as-path NOPE;",
+		"from community NOPE;",
+		"then local-preference abc;",
+		"then metric;",
+		"then community add NOPE;",
+		"then as-path-prepend \"AS1\";",
+	} {
+		text := "policy-options {\n    policy-statement P {\n        term first {\n            then accept;\n        }\n" +
+			"        term t {\n            " + bad + "\n        }\n    }\n}\n"
+		if _, err := ParseJunos(text); err == nil {
+			t.Errorf("%q parsed", bad)
+		}
+	}
+	good := `policy-options {
+    as-path A "2 .*";
+    community C members [ 1:1 ];
+    policy-statement P {
+        term first {
+            then accept;
+        }
+        term t {
+            from {
+                route-filter 10.0.0.0/8 upto /24;
+                as-path A;
+                community C;
+            }
+            then {
+                local-preference 10;
+                community add C;
+                as-path-prepend "1 1";
+                next-hop 192.0.2.1;
+                accept;
+            }
+        }
+    }
+}
+`
+	if _, err := ParseJunos(good); err != nil {
+		t.Errorf("a valid unreached term: %v", err)
 	}
 }
 
