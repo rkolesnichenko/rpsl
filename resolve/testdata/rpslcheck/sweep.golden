@@ -19,4 +19,5 @@ totals
   lint/no-aut-num                          1
   lint/shadowed                            1
   pairs over a limit or not decidable      0
+  checks over their time budget            0
   most warnings: AS65002 (6), AS65004 (4), AS65001 (3), AS65005 (1)

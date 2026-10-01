@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rkolesnichenko/rpsl/resolve/internal/buildinfo"
 )
@@ -163,5 +165,51 @@ func TestSweepCountsUndecidable(t *testing.T) {
 	}
 	if _, _, code := run(t, "-dump", dump, "AS65001", "AS65002"); code != exitFailed {
 		t.Errorf("single check: exit %d, want %d", code, exitFailed)
+	}
+}
+
+// A sweep gives each Lint and Check its own budget: one that runs out is
+// counted and the sweep goes on; the run's own deadline still stops it.
+func TestSweepCheckTimeout(t *testing.T) {
+	out1, errw, code := run(t, "-dump", fixture, "-sweep", "-check-timeout", "1ns", "-c", "1")
+	if code == exitFailed {
+		t.Fatalf("exit %d; stderr %s", code, errw)
+	}
+	var n int
+	for _, line := range strings.Split(out1, "\n") {
+		if strings.HasPrefix(line, "  checks over their time budget") {
+			fmt.Sscanf(strings.TrimPrefix(line, "  checks over their time budget"), "%d", &n)
+		}
+	}
+	if n == 0 {
+		t.Errorf("no check over its budget counted:\n%s", out1)
+	}
+	out8, _, _ := run(t, "-dump", fixture, "-sweep", "-check-timeout", "1ns", "-c", "8")
+	if out1 != out8 {
+		t.Errorf("-c 1 and -c 8 differ:\n%s\n---\n%s", out1, out8)
+	}
+	js, _, _ := run(t, "-dump", fixture, "-sweep", "-check-timeout", "1ns", "-json")
+	if !strings.Contains(js, `{"type":"timeout",`) {
+		t.Errorf("no timeout record:\n%s", js)
+	}
+	if _, errw, code := run(t, "-dump", fixture, "-sweep", "-timeout", "1ns"); code != exitFailed {
+		t.Errorf("-timeout 1ns: exit %d, want %d; stderr %s", code, exitFailed, errw)
+	}
+}
+
+func TestRunTimeout(t *testing.T) {
+	for _, c := range []struct {
+		sweep, explicit bool
+		flag, want      time.Duration
+	}{
+		{false, false, 10 * time.Minute, 10 * time.Minute}, // one AS or a pair: the default
+		{true, false, 10 * time.Minute, 0},                 // a sweep: no deadline by default
+		{true, true, 5 * time.Minute, 5 * time.Minute},     // unless one is given
+		{true, true, 0, 0},
+		{false, true, time.Second, time.Second},
+	} {
+		if got := runTimeout(c.sweep, c.flag, c.explicit); got != c.want {
+			t.Errorf("runTimeout(%v, %v, %v) = %v, want %v", c.sweep, c.flag, c.explicit, got, c.want)
+		}
 	}
 }

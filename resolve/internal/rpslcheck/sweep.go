@@ -3,12 +3,14 @@ package rpslcheck
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rkolesnichenko/rpsl/ast"
 	"github.com/rkolesnichenko/rpsl/resolve"
@@ -35,18 +37,61 @@ func parallel(n, conc int, fn func(i int)) {
 }
 
 type lintResult struct {
-	issues []consist.Issue
-	peers  []types.ASN
-	err    error
+	issues  []consist.Issue
+	linted  bool // issues are the aut-num's lint
+	peers   []types.ASN
+	err     error  // the sweep cannot go on
+	timeout string // the lint or the peer list ran over its own budget: why
 }
 
 type checkResult struct {
-	rep consist.Report
-	err error
+	rep  consist.Report
+	err  error
+	over string // the check ran over its own budget: why
 }
 
+// budget is one Lint's or Check's own time budget within a sweep.
+type budget struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	d      time.Duration
+	end    time.Time // zero: no budget
+}
+
+// newBudget derives a call's context from the run's: with a deadline d
+// from now, or none when d is 0.
+func newBudget(run context.Context, d time.Duration) budget {
+	if d <= 0 {
+		ctx, cancel := context.WithCancel(run)
+		return budget{ctx: ctx, cancel: cancel}
+	}
+	ctx, cancel := context.WithTimeout(run, d)
+	return budget{ctx: ctx, cancel: cancel, d: d, end: time.Now().Add(d)}
+}
+
+// over reports whether the call ended over its own budget while the run
+// goes on: it failed on its deadline, or it ended after it without
+// noticing — so whether a call is counted never depends on when its
+// timer fired, and a sweep's output is the same for any -c.
+func (b budget) over(run context.Context, err error) bool {
+	if run.Err() != nil || b.end.IsZero() {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	return err == nil && !time.Now().Before(b.end)
+}
+
+// overError is what a sweep reports for a call over its budget: the same
+// text however the call ended.
+func (b budget) overError() string { return fmt.Sprintf("over its time budget of %v", b.d) }
+
 // runSweep audits the aut-nums of src, a dump's MemSource.
-func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFamily, sample int, seed uint64, conc int, w *writer, stderr io.Writer) int {
+// Each aut-num's lint (with its peer list) and each pair's check runs under
+// its own budget, checkTimeout (0: none): one that runs out is counted and
+// the sweep goes on, while the run's own deadline or cancellation stops it.
+func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFamily, sample int, seed uint64, conc int, checkTimeout time.Duration, w *writer, stderr io.Writer) int {
 	pi, ok := src.(resolve.PolicyIndex)
 	if !ok {
 		fmt.Fprintln(stderr, "rpslcheck: -sweep: the source cannot list its aut-nums")
@@ -72,16 +117,33 @@ func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFam
 	lints := make([]lintResult, len(ases))
 	parallel(len(ases), conc, func(i int) {
 		lr := &lints[i]
-		if lr.issues, lr.err = c.Lint(ctx, ases[i]); lr.err != nil {
+		bg := newBudget(ctx, checkTimeout)
+		defer bg.cancel()
+		issues, err := c.Lint(bg.ctx, ases[i])
+		switch {
+		case bg.over(ctx, err):
+			lr.timeout = bg.overError()
+			return
+		case err != nil:
+			lr.err = err
 			return
 		}
-		pl, err := c.Peers(ctx, ases[i])
-		if err != nil && !isLimit(err) {
+		lr.issues, lr.linted = issues, true
+		pl, err := c.Peers(bg.ctx, ases[i])
+		switch {
+		case bg.over(ctx, err):
+			lr.timeout = bg.overError()
+			return
+		case err != nil && !isLimit(err):
 			lr.err = err
 			return
 		}
 		lr.peers = pl.Forward
 	})
+	if err := ctx.Err(); err != nil { // the run's own deadline, or cancelled
+		fmt.Fprintf(stderr, "rpslcheck: %v\n", err)
+		return exitFailed
+	}
 	t := newTotals()
 	t.autnums = len(ases)
 	// Phase 2: each unordered pair once, in each family, in order.
@@ -93,11 +155,23 @@ func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFam
 			fmt.Fprintf(stderr, "rpslcheck: %s: %v\n", as, err)
 			return exitFailed
 		}
-		an, _ := src.AutNum(ctx, as, "")
-		if w.lint(as, an, lints[i].issues) {
-			t.warned = true
+		if lints[i].linted {
+			an, _ := src.AutNum(ctx, as, "")
+			if w.lint(as, an, lints[i].issues) {
+				t.warned = true
+			}
+			t.addIssues(as, lints[i].issues)
 		}
-		t.addIssues(as, lints[i].issues)
+		if why := lints[i].timeout; why != "" {
+			t.timeouts++
+			if w.json {
+				w.emit(struct {
+					Type  string `json:"type"`
+					AS    string `json:"as"`
+					Error string `json:"error"`
+				}{"timeout", as.String(), why})
+			}
+		}
 		for _, peer := range lints[i].peers {
 			k := pairKey{min(as, peer), max(as, peer)}
 			if seen[k] {
@@ -118,10 +192,31 @@ func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFam
 	// Phase 3: check them.
 	checks := make([]checkResult, len(pairs))
 	parallel(len(pairs), conc, func(i int) {
-		checks[i].rep, checks[i].err = c.Check(ctx, pairs[i])
+		bg := newBudget(ctx, checkTimeout)
+		defer bg.cancel()
+		checks[i].rep, checks[i].err = c.Check(bg.ctx, pairs[i])
+		if bg.over(ctx, checks[i].err) {
+			checks[i].over = bg.overError()
+		}
 	})
+	if err := ctx.Err(); err != nil {
+		fmt.Fprintf(stderr, "rpslcheck: %v\n", err)
+		return exitFailed
+	}
 	for i, cr := range checks {
 		switch {
+		case cr.over != "":
+			t.timeouts++
+			if w.json {
+				w.emit(struct {
+					Type  string `json:"type"`
+					A     string `json:"a"`
+					B     string `json:"b"`
+					AF    string `json:"af"`
+					Error string `json:"error"`
+				}{"timeout", pairs[i].A.String(), pairs[i].B.String(), pairs[i].AF.String(), cr.over})
+			}
+			continue
 		case isLimit(cr.err) || notDecidable(cr.err):
 			t.limits++ // a limit, or a filter that cannot be evaluated for the pair
 			if w.json {
@@ -154,6 +249,7 @@ func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFam
 // totals is what a sweep counts.
 type totals struct {
 	autnums, pairs, directions, consistent, limits int            // limits: pairs over a limit or not decidable
+	timeouts                                       int            // lints and checks over their own time budget
 	kinds                                          map[string]int // directions with at least one finding of the kind ("undecided: <why>" by reason)
 	rules                                          map[string]int // lint issues by rule
 	warnings                                       map[types.ASN]int
@@ -245,8 +341,9 @@ func (t *totals) write(w *writer) {
 			Kinds      map[string]int `json:"kinds"`
 			Rules      map[string]int `json:"rules"`
 			Limits     int            `json:"limits"`
+			Timeouts   int            `json:"timeouts"`
 			Top        []entry        `json:"top"`
-		}{"totals", t.autnums, t.pairs, t.directions, t.consistent, t.kinds, t.rules, t.limits, tops})
+		}{"totals", t.autnums, t.pairs, t.directions, t.consistent, t.kinds, t.rules, t.limits, t.timeouts, tops})
 		return
 	}
 	fmt.Fprintln(w.out, "totals")
@@ -262,6 +359,7 @@ func (t *totals) write(w *writer) {
 		row(k, t.rules[k])
 	}
 	row("pairs over a limit or not decidable", t.limits)
+	row("checks over their time budget", t.timeouts)
 	if len(top) > 0 {
 		var parts []string
 		for _, as := range top {

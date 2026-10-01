@@ -53,7 +53,8 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	sample := fs.Int("sample", 0, "sweep: a random sample of `N` aut-nums instead of all")
 	seed := fs.Uint64("seed", 1, "sweep: the sample's random `seed`")
 	conc := fs.Int("c", runtime.GOMAXPROCS(0), "`N` checks at once; the output is the same for any N")
-	timeout := fs.Duration("timeout", 10*time.Minute, "give up after this long (0: never)")
+	timeout := fs.Duration("timeout", 10*time.Minute, "give up on the whole run after this long (0: never); a -sweep has no deadline unless this is given")
+	checkTimeout := fs.Duration("check-timeout", time.Minute, "sweep: give each aut-num's lint and each pair's check this long, counting the ones that run out (0: no limit)")
 	showVersion := fs.Bool("v", false, "print rpslcheck's version and exit")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -93,9 +94,11 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	case len(ases) == 2 && ases[0] == ases[1]:
 		return usage("the two ASes are the same")
 	}
-	if *timeout > 0 {
+	explicit := false
+	fs.Visit(func(f *flag.Flag) { explicit = explicit || f.Name == "timeout" })
+	if d := runTimeout(*sweep, *timeout, explicit); d > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, *timeout)
+		ctx, cancel = context.WithTimeout(ctx, d)
 		defer cancel()
 	}
 	b, err := backend.Open(backend.Options{Host: hostPort(*host, *port), Sources: *sources, Whois: *useWhois,
@@ -108,7 +111,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	w := newWriter(stdout, *asJSON)
 	src := resolve.NewCache(b.Src, 0)
 	if *sweep {
-		return runSweep(ctx, src, afs, *sample, *seed, *conc, w, stderr)
+		return runSweep(ctx, src, afs, *sample, *seed, *conc, *checkTimeout, w, stderr)
 	}
 	c := &consist.Checker{Eval: peval.Evaluator{Src: src}}
 	r := &runner{ctx: ctx, c: c, src: src, w: w, stderr: stderr}
@@ -116,6 +119,16 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return r.one(ases[0], afs)
 	}
 	return r.pair(ases[0], ases[1], afs)
+}
+
+// runTimeout is the deadline of the whole run: the -timeout flag, except
+// that a sweep — a full registry takes most of an hour — has none unless
+// -timeout was given explicitly; its checks have their own (-check-timeout).
+func runTimeout(sweep bool, timeout time.Duration, explicit bool) time.Duration {
+	if sweep && !explicit {
+		return 0
+	}
+	return timeout
 }
 
 func hostPort(host, port string) string {
