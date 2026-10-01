@@ -1,0 +1,244 @@
+package consist
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/rkolesnichenko/rpsl/ast"
+	"github.com/rkolesnichenko/rpsl/resolve"
+	"github.com/rkolesnichenko/rpsl/resolve/peval"
+	"github.com/rkolesnichenko/rpsl/types"
+)
+
+func TestPeers(t *testing.T) {
+	c := checker(t,
+		autNum(1,
+			"import: from AS2 accept ANY",
+			"export: to AS-PEERS announce AS-ONE",
+			"import: from AS-ANY accept ANY",
+			"default: to AS6",
+			"import: from AS1:AS-CUST:PeerAS accept ANY",
+			"mp-import: from PRNG-X accept ANY",
+			"import: from AS-NOPE accept ANY",
+			"import-via: AS11 from AS12 accept ANY"),
+		autNum(9, "export: to AS1 announce ANY"),
+		"peering-set: PRNG-X\npeering: AS7\nmnt-by: MNT-A\nsource: RIPE\n")
+	pl, err := c.Peers(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []types.ASN{2, 3, 6, 7}; !slices.Equal(pl.Forward, want) {
+		t.Errorf("Forward %v, want %v", pl.Forward, want)
+	}
+	if want := []string{"AS-ANY", "AS1:AS-CUST:PeerAS"}; !slices.Equal(pl.Skipped, want) {
+		t.Errorf("Skipped %v, want %v", pl.Skipped, want)
+	}
+	if want := []types.ASN{9}; !slices.Equal(pl.Reverse, want) || pl.NoIndex {
+		t.Errorf("Reverse %v NoIndex %v, want %v false", pl.Reverse, pl.NoIndex, want)
+	}
+	// A source that keeps no index.
+	c.Eval.Src = plainSource{c.Eval.Src}
+	if pl, err = c.Peers(context.Background(), 1); err != nil || !pl.NoIndex || len(pl.Reverse) != 0 {
+		t.Errorf("plain source: %+v %v", pl, err)
+	}
+	if _, err := c.Peers(context.Background(), 99); !errors.Is(err, resolve.ErrNotFound) {
+		t.Errorf("missing aut-num: %v, want ErrNotFound", err)
+	}
+}
+
+// A regexp peering is skipped, as written.
+func TestPeersRegexp(t *testing.T) {
+	c := checker(t, autNum(1, "import: from <^AS8$> accept ANY"))
+	pl, err := c.Peers(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pl.Forward) != 0 || !slices.Equal(pl.Skipped, []string{"<^AS8$>"}) {
+		t.Errorf("Forward %v Skipped %v", pl.Forward, pl.Skipped)
+	}
+}
+
+// plainSource hides every method but PolicySource's.
+type plainSource struct{ resolve.PolicySource }
+
+// issueText renders an issue compactly: "rule attr#index line: message
+// [peers] [afs]".
+func issueText(is Issue) string {
+	var afs []string
+	for _, af := range is.AFs {
+		afs = append(afs, af.String())
+	}
+	return fmt.Sprintf("%s %s#%d L%d: %s %v %v", is.Rule, is.Attr, is.Index, is.Span.StartLine, is.Message, is.Peers, afs)
+}
+
+func lint(t *testing.T, c *Checker, as types.ASN) []Issue {
+	t.Helper()
+	is, err := c.Lint(context.Background(), as)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return is
+}
+
+func rulesOf(is []Issue) []string {
+	var out []string
+	for _, i := range is {
+		out = append(out, i.Rule)
+	}
+	return out
+}
+
+func TestLintShadowed(t *testing.T) {
+	is := lint(t, checker(t, autNum(1, "import: from AS2 accept ANY", "import: from AS2 accept AS-ONE"), autNum(2)), 1)
+	if len(is) != 1 {
+		t.Fatalf("issues %v", is)
+	}
+	i := is[0]
+	if i.Rule != RuleShadowed || i.Severity != ast.Warning || i.Attr != "import" || i.Index != 1 || i.Span.StartLine != 4 ||
+		!slices.Equal(i.Peers, []types.ASN{2}) || len(i.AFs) != 1 || i.AFs[0] != v4 {
+		t.Errorf("issue %s", issueText(i))
+	}
+}
+
+func TestLintNotPartiallyShadowed(t *testing.T) {
+	is := lint(t, checker(t,
+		autNum(1, "import: from AS2 accept {10.1.0.0/16}", "import: from AS2 accept {10.1.0.0/16, 10.9.0.0/16}"), autNum(2)), 1)
+	if len(is) != 0 {
+		t.Errorf("issues %v", is)
+	}
+}
+
+func TestLintShadowedSymbolic(t *testing.T) {
+	// A broader term with fewer tests first: the narrower one is shadowed.
+	is := lint(t, checker(t,
+		autNum(1, "import: from AS2 accept <^AS2$>", "import: from AS2 accept <^AS2$> AND {10.0.0.0/8^+}"), autNum(2)), 1)
+	if got := rulesOf(is); !slices.Equal(got, []string{RuleShadowed}) {
+		t.Errorf("rules %v", got)
+	}
+	// The other way round, nothing is.
+	is = lint(t, checker(t,
+		autNum(1, "import: from AS2 accept <^AS2$> AND {10.0.0.0/8^+}", "import: from AS2 accept <^AS2$>"), autNum(2)), 1)
+	if len(is) != 0 {
+		t.Errorf("issues %v", is)
+	}
+	// A test the earlier term lacks does not shadow: <^AS2$> does not cover
+	// routes failing it.
+	is = lint(t, checker(t,
+		autNum(1, "import: from AS2 accept <^AS2$>", "import: from AS2 accept ANY"), autNum(2)), 1)
+	if len(is) != 0 {
+		t.Errorf("issues %v", is)
+	}
+}
+
+func TestLintRules(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		objects []string
+		want    []string // issueText prefixes, in order
+	}{
+		{
+			name:    "empty",
+			objects: []string{autNum(1, "import: from AS2 accept NOT ANY"), autNum(2)},
+			want:    []string{"lint/empty import#0 L3:"},
+		},
+		{
+			name:    "missing set in a filter",
+			objects: []string{autNum(1, "import: from AS2 accept AS-NOPE"), autNum(2)},
+			want:    []string{"lint/empty import#0 L3:", "lint/missing-set import#0 L3:"},
+		},
+		{
+			name:    "missing set in a peering",
+			objects: []string{autNum(1, "import: from AS2 accept ANY", "import: from AS-NOPE accept ANY"), autNum(2)},
+			want:    []string{"lint/missing-set #-1 L0:"},
+		},
+		{
+			name:    "missing router",
+			objects: []string{autNum(1, "import: from AS2 r9.example.net accept ANY"), autNum(2)},
+			want:    []string{"lint/missing-router import#0 L3:", "lint/undecided import#0 L3:"},
+		},
+		{
+			name:    "missing rtr-set",
+			objects: []string{autNum(1, "import: from AS2 at RTRS-NOPE accept ANY"), autNum(2)},
+			want:    []string{"lint/missing-set import#0 L3:", "lint/undecided import#0 L3:"},
+		},
+		{
+			name:    "a peer without an aut-num",
+			objects: []string{autNum(1, "import: from AS3 accept ANY")},
+			want:    []string{"lint/no-aut-num #-1 L0:"},
+		},
+		{
+			name:    "undecided",
+			objects: []string{autNum(1, "import: from AS2 192.0.2.1 accept ANY"), autNum(2)},
+			want:    []string{"lint/undecided import#0 L3:"},
+		},
+		{
+			name:    "a default's empty networks",
+			objects: []string{autNum(1, "default: to AS2 networks NOT ANY"), autNum(2)},
+			want:    []string{"lint/empty default#0 L3:"},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			is := lint(t, checker(t, c.objects...), 1)
+			var got []string
+			for _, i := range is {
+				got = append(got, issueText(i))
+			}
+			if len(got) != len(c.want) {
+				t.Fatalf("issues\n%s\nwant prefixes %v", strings.Join(got, "\n"), c.want)
+			}
+			for k := range got {
+				if !strings.HasPrefix(got[k], c.want[k]) {
+					t.Errorf("issue %d: %s, want prefix %s", k, got[k], c.want[k])
+				}
+			}
+		})
+	}
+}
+
+func TestLintMergesSessions(t *testing.T) {
+	is := lint(t, checker(t,
+		autNum(1, "mp-import: afi any from AS2 OR AS3 accept ANY", "mp-import: afi any from AS2 OR AS3 accept AS-ONE"),
+		autNum(2), autNum(3)), 1)
+	if len(is) != 1 {
+		t.Fatalf("issues %v", is)
+	}
+	i := is[0]
+	if i.Rule != RuleShadowed || i.Attr != "mp-import" || !slices.Equal(i.Peers, []types.ASN{2, 3}) || !slices.Equal(i.AFs, []types.AddrFamily{v4, v6}) {
+		t.Errorf("issue %s", issueText(i))
+	}
+}
+
+func TestLintLimit(t *testing.T) {
+	c := checker(t, autNum(1, "import: from AS2 accept AS-A"), autNum(2),
+		"as-set: AS-A\nmembers: AS-B\nmnt-by: MNT-A\nsource: RIPE\n",
+		"as-set: AS-B\nmembers: AS-C\nmnt-by: MNT-A\nsource: RIPE\n",
+		"as-set: AS-C\nmembers: AS1\nmnt-by: MNT-A\nsource: RIPE\n")
+	c.Eval.Expander = resolve.Expander{MaxDepth: 1}
+	is := lint(t, c, 1)
+	if got := rulesOf(is); !slices.Contains(got, RuleLimit) {
+		t.Errorf("rules %v, want a lint/limit", got)
+	}
+}
+
+func TestLintMissingAutNum(t *testing.T) {
+	if _, err := checker(t).Lint(context.Background(), 99); !errors.Is(err, resolve.ErrNotFound) {
+		t.Errorf("err %v, want ErrNotFound", err)
+	}
+}
+
+func TestRules(t *testing.T) {
+	want := []string{RuleShadowed, RuleEmpty, RuleMissingSet, RuleMissingRouter, RuleNoAutNum, RuleUndecided, RuleLimit}
+	if !slices.Equal(Rules(), want) {
+		t.Errorf("Rules %v", Rules())
+	}
+	for _, r := range want {
+		if _, ok := ruleSeverity[r]; !ok {
+			t.Errorf("%s has no severity", r)
+		}
+	}
+	_ = peval.WhyPeerRouter // the undecided message carries peval's Why
+}
