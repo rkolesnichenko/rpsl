@@ -28,8 +28,10 @@ import (
 // forward peers in both families. It measures the load (time, heap with
 // and without IndexPeers) and the sweep, and holds every unconditional
 // not-imported finding to the two sides' clause spaces: its example lies in
-// a pure export conjunct and in no import conjunct. A limit, a timeout or
-// a pair whose filter cannot be evaluated is counted; any other error fails.
+// a pure export conjunct and in no import conjunct (with a budget of its
+// own, 30s; running out of it is counted as a verify timeout). A limit, a
+// timeout or a pair whose filter cannot be evaluated is counted; any other
+// error fails.
 func TestRealDataConsist(t *testing.T) {
 	dir := os.Getenv("RPSL_REALDATA")
 	if dir == "" {
@@ -153,7 +155,17 @@ func TestRealDataConsist(t *testing.T) {
 								count("directions with "+k, 1)
 							}
 							if f.Kind == NotImported && len(f.Given) == 0 {
-								if msg := c.verify(ctx, d, f, af); msg != "" {
+								// verify has its own budget: the per-AS one may be
+								// nearly spent by the Check that found f.
+								vctx, vcancel := context.WithTimeout(context.Background(), 30*time.Second)
+								msg, err := c.verify(vctx, d, f, af)
+								vcancel()
+								switch {
+								case errors.Is(err, context.DeadlineExceeded):
+									count("verify timeout", 1)
+								case err != nil:
+									t.Errorf("verify %v %v→%v: %v", af, d.From, d.To, err)
+								case msg != "":
 									t.Errorf("%v %v→%v: %s", af, d.From, d.To, msg)
 								}
 							}
@@ -202,15 +214,16 @@ func counted(err error, count func(string, int)) bool {
 
 // verify holds an unconditional not-imported finding to the clause spaces:
 // its example is in some pure export conjunct of From and in no import
-// conjunct of To.
-func (c *Checker) verify(ctx context.Context, d Direction, f Finding, af types.AddrFamily) string {
+// conjunct of To. It returns what contradicts that, or the error that kept
+// it from deciding.
+func (c *Checker) verify(ctx context.Context, d Direction, f Finding, af types.AddrFamily) (string, error) {
 	exp, _, err := c.policies(ctx, c.session(d.From, d.To, netip.Addr{}, netip.Addr{}, af))
 	if err != nil {
-		return err.Error()
+		return "", err
 	}
 	_, imp, err := c.policies(ctx, c.session(d.To, d.From, netip.Addr{}, netip.Addr{}, af))
 	if err != nil {
-		return err.Error()
+		return "", err
 	}
 	in := false
 	for _, cj := range sideOf(exp).conjs {
@@ -219,12 +232,12 @@ func (c *Checker) verify(ctx context.Context, d Direction, f Finding, af types.A
 		}
 	}
 	if !in {
-		return fmt.Sprintf("example %v is in no pure export conjunct", f.Example)
+		return fmt.Sprintf("example %v is in no pure export conjunct", f.Example), nil
 	}
 	for _, cj := range sideOf(imp).conjs {
 		if cj.space.Contains(f.Example) {
-			return fmt.Sprintf("example %v is in an import conjunct (%v)", f.Example, cj.sig)
+			return fmt.Sprintf("example %v is in an import conjunct (%v)", f.Example, cj.sig), nil
 		}
 	}
-	return ""
+	return "", nil
 }
