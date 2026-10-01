@@ -42,6 +42,9 @@ Every layer ships. Until v1.0.0, a minor version may change the API; the
 | `resolve/peval` | An aut-num's import, export, via and default policies evaluated for one BGP session into ordered clauses of normalized filter and actions, with undecidable terms reported rather than guessed | shipped |
 | `resolve/rtconfig` | Router configuration from an evaluated policy — Cisco IOS/IOS-XE, Junos, Cisco IOS-XR and BIRD 2 — never approximating a construct a vendor cannot express (`*UnsupportedError`) | shipped |
 | `rpslconf` | IRRToolSet's `RtConfig` and `peval` on this engine: router configuration for Cisco IOS, Junos, IOS-XR and BIRD 2 from `@RtConfig` templates, and filters' normal forms (`resolve/cmd/rpslconf`) | shipped |
+| `types.PrefixSpace` | An exact set of prefixes of both families — union, intersection, difference, without ever enumerating — that `resolve/consist` decides prefix consistency with | shipped |
+| `resolve/consist` | Whether two neighbours' `peval`-evaluated policies agree, in one address family — exact for prefixes, conditional (`Given`) or `Undecided` for AS-path and community tests, never guessed — plus a lint of one aut-num's own policies (dead clauses, missing sets/routers/aut-nums) | shipped |
+| `rpslcheck` | Lint an aut-num and check it against its neighbours, or sweep a dump and report totals, on `resolve/consist` (`resolve/cmd/rpslcheck`) | shipped |
 
 RFC 4012 (RPSLng) is supported: `mp-import`/`mp-export`/`mp-default`, the `afi`
 dictionary and `afi`-scoped policies (`Import`/`Export`/`Default`/`Except`/

@@ -9,6 +9,33 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+## [0.23.0] - Unreleased
+
+### Added
+
+- `types.PrefixSpace`: an exact set of prefixes of both families, closed under `Union`,
+  `Intersect` and `Minus`, built from `PrefixRange`s with `SpaceOf` or `FullSpace`, and never
+  enumerating prefixes (`::/0^0-128` is one node). `Subset`, `Equal`, `Contains`, `Example` and
+  `Ranges` read it.
+- `resolve.Conjunct.Space`: a normal-form conjunct's prefix region as a `types.PrefixSpace`.
+- `resolve.PolicyIndex` (`AutNums`, `NamedBy`) and `resolve.ErrNoIndex`: a reverse "who names me"
+  index over a `Source`'s aut-nums, for the operator and a registry sweep.
+- `Corpus.IndexPeers` and `DumpLoader.IndexPeers`: build that index while loading, keeping AS
+  numbers only, never decoded policies.
+- `AutNums` and `NamedBy` on `MemSource`, `Cache` and `rpki.Filter`.
+- `resolve/consist`: `Checker.Check` compares what one neighbour's `export:` permits announcing
+  with what the other's `import:` accepts, both directions, in one address family — exact for
+  prefixes, conditional (`Finding.Given`) or `Undecided` for AS-path and community tests, never
+  guessed. `Checker.Lint` reports what is dead or wrong in one aut-num's own policies
+  (`lint/shadowed`, `lint/empty`, `lint/missing-set`, `lint/missing-router`, `lint/no-aut-num`,
+  `lint/undecided`, `lint/limit` — new rows in `docs/diagnostics.md`), and `Checker.Peers` lists
+  an aut-num's forward and (over a `PolicyIndex`) reverse peers. `Pair`, `Report`, `Direction`,
+  `Finding`, `Kind`, `Issue` and `Whys()` round out the API.
+- `rpslcheck` (`resolve/cmd/rpslcheck`; logic in `resolve/internal/rpslcheck`): lint an AS and
+  check it against its neighbours, check a named pair, or `-sweep` a dump and report totals.
+  Release binaries alongside `rpslq`'s and `rpslconf`'s. See `docs/rpslcheck.md`.
+- `FuzzPrefixSpace` (`types`): the fuzz targets are now 41.
+
 ## [0.22.0] - 2026-09-30
 
 ### Added
