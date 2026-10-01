@@ -66,7 +66,9 @@ type Pair struct {
 	ARtr, BRtr netip.Addr
 }
 
-// Report is what Check found for a Pair.
+// Report is what Check found for a Pair. When an aut-num is missing, each
+// Direction holds one NoAutNum finding naming it — A's when both are
+// missing — and Missing and MissingRouters are empty: nothing was compared.
 type Report struct {
 	Pair       Pair
 	AtoB, BtoA Direction
@@ -162,7 +164,9 @@ func (c *Checker) session(local, peer types.ASN, lrtr, prtr netip.Addr, af types
 
 // Check compares A's export toward B with B's import from A (AtoB), and
 // B's export toward A with A's import from B (BtoA). A missing aut-num is a
-// NoAutNum finding in each direction, not an error. The error is an invalid
+// NoAutNum finding in each direction, not an error; when both are missing,
+// only A is named, and the Report's Missing and MissingRouters are empty,
+// since nothing was compared. The error is an invalid
 // Pair (an AS unset, A equal to B, or AF not ipv4.unicast or ipv6.unicast),
 // a limit, a filter that cannot be evaluated for the session (wrapping a
 // *resolve.AnySetError or *resolve.NotEnumerableError: Lint reports it as

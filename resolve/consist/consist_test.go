@@ -604,3 +604,21 @@ func TestNoPolicy(t *testing.T) {
 		t.Error("a missing aut-num is reported as no policy")
 	}
 }
+
+// Both aut-nums missing: one NoAutNum naming A in each direction, and no
+// Missing sets or routers, since nothing was compared.
+func TestBothAutNumsMissing(t *testing.T) {
+	r := check(t, checker(t), Pair{A: 1, B: 2, AF: v4})
+	for _, d := range []Direction{r.AtoB, r.BtoA} {
+		if len(d.Findings) != 1 || d.Findings[0].Kind != NoAutNum || d.Findings[0].AS != 1 {
+			t.Errorf("%v→%v: %+v, want one no-aut-num naming AS1", d.From, d.To, d.Findings)
+		}
+	}
+	if len(r.Missing()) != 0 || len(r.MissingRouters()) != 0 {
+		t.Errorf("Missing %v, MissingRouters %v", r.Missing(), r.MissingRouters())
+	}
+	r = check(t, checker(t, autNum(2, "import: from AS1 accept AS-NOPE")), Pair{A: 1, B: 2, AF: v4})
+	if len(r.Missing()) != 0 {
+		t.Errorf("A missing: Missing %v, want none", r.Missing())
+	}
+}
