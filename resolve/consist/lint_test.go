@@ -319,3 +319,36 @@ func TestRules(t *testing.T) {
 	}
 	_ = peval.WhyPeerRouter // the undecided message carries peval's Why
 }
+
+// AS0 is reserved (RFC 7607) and never a session's peer: a peering naming
+// it, directly or through an as-set, is skipped as "AS0", and Lint runs no
+// session toward it.
+func TestPeersAS0(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		objects []string
+		forward []types.ASN
+	}{
+		{"direct", []string{autNum(1, "import: from AS0 accept ANY", "export: to AS0 announce AS1")}, nil},
+		{"through an as-set", []string{autNum(1, "import: from AS-IX accept ANY"), autNum(2),
+			"as-set: AS-IX\nmembers: AS0, AS2\nmnt-by: MNT-A\nsource: RIPE\n"}, []types.ASN{2}},
+		{"mp-import", []string{autNum(1, "mp-import: afi ipv6.unicast from AS0 accept ANY", "import: from AS-ANY accept ANY")}, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ch := checker(t, c.objects...)
+			pl, err := ch.Peers(context.Background(), 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(pl.Forward, c.forward) || !slices.Contains(pl.Skipped, "AS0") || slices.Contains(pl.Reverse, 0) {
+				t.Errorf("Forward %v Skipped %v Reverse %v, want Forward %v and AS0 skipped", pl.Forward, pl.Skipped, pl.Reverse, c.forward)
+			}
+			if !slices.IsSorted(pl.Skipped) || len(slices.Compact(slices.Clone(pl.Skipped))) != len(pl.Skipped) {
+				t.Errorf("Skipped %v: not sorted or repeated", pl.Skipped)
+			}
+			if _, err := ch.Lint(context.Background(), 1); err != nil {
+				t.Errorf("Lint: %v", err)
+			}
+		})
+	}
+}
