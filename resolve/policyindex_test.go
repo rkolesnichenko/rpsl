@@ -137,6 +137,37 @@ func TestKeptTextSpanStartsAtOne(t *testing.T) {
 	}
 }
 
+// Fix round 2: a leading comment that quotes the object's first line verbatim
+// must not fool a content search into under-trimming. textFrom's original
+// strings.Index(text, attrs[0].Raw) matched inside "# aut-num: AS1" itself
+// (the same bytes as the real "aut-num: AS1" line that follows), leaving the
+// comment's own class line in the stored text and shifting every span by one.
+// The fix scans by the stream's own line rule (lexer.StartsAttribute)
+// instead of searching for matching content.
+func TestKeptTextSkipsQuotingComment(t *testing.T) {
+	l := &resolve.DumpLoader{KeepPolicy: true}
+	load(t, l, "# aut-num: AS1\naut-num: AS1\nas-name: ONE\nimport: from AS2 accept ANY\nmnt-by: MNT-A\nsource: RIPE\n")
+	an, err := l.Source().AutNum(context.Background(), 1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := an.Raw()
+	attrs := raw.Attributes()
+	if n := len(raw.GetAll("aut-num")); n != 1 {
+		t.Fatalf("GetAll(aut-num) has %d entries (want 1): stored text %q", n, raw.String())
+	}
+	if got := attrs[0].Span.StartLine; got != 1 {
+		t.Errorf("aut-num's StartLine = %d, want 1: stored text %q", got, raw.String())
+	}
+	imp, ok := raw.GetFirst("import")
+	if !ok {
+		t.Fatal("no import attribute")
+	}
+	if got := imp.Span.StartLine; got != 3 {
+		t.Errorf("import's StartLine = %d, want 3: stored text %q", got, raw.String())
+	}
+}
+
 func TestNamedByNeedsIndex(t *testing.T) {
 	kept := &resolve.DumpLoader{KeepPolicy: true}
 	load(t, kept, indexObjects)

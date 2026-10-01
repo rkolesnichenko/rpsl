@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/rkolesnichenko/rpsl/ast"
+	"github.com/rkolesnichenko/rpsl/lexer"
 	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/types"
 )
@@ -181,24 +182,34 @@ func (c *Corpus) putWhole(k wholeKey, o object.Object) {
 	c.whole[k] = held{obj: o, key: k, seq: c.seq}
 }
 
-// textFrom returns raw's serialized text starting at its first attribute,
-// dropping the blank/comment/malformed lines the stream attached before the
-// object (ast.Object owns them so the *stream's* round-trip stays
-// byte-exact). A Corpus entry kept as text is later re-decoded on its own
-// (rpsl.ParseObject, in MemSource.AutNum/InetRtr), so keeping that leading
-// trivia would shift every attribute's re-decoded line by the trivia's own
-// line count. Attribute.Raw is the attribute's exact source bytes, so the
-// first attribute's Raw occurs in text at the point its own lead trivia
-// ends; falling back to the untrimmed text is safe (and harmless beyond the
-// line-number shift) if that is ever not found.
+// textFrom returns raw's serialized text starting at its first attribute
+// line, dropping the blank, comment and malformed lines the stream attached
+// before the object (ast.Object owns them so the *stream's* own round-trip
+// stays byte-exact; see rpsl.ParseWith). A Corpus entry kept as text is later
+// re-decoded on its own (rpsl.ParseObject, in MemSource.AutNum/InetRtr), so
+// keeping that leading trivia would shift every attribute's re-decoded line
+// by the trivia's own line count.
+//
+// The scan uses the same line rule the streamer itself splits objects by
+// (lexer.StartsAttribute — a blank line, a comment, and a malformed line all
+// fail it and are trivia the stream can attach ahead of an object), not a
+// content search: a leading comment can quote the object's first line
+// verbatim ("# aut-num: AS1" followed by the real "aut-num: AS1"), which a
+// strings.Index on the attribute's raw bytes would match inside the comment
+// itself, understating how much trivia to drop.
 func textFrom(raw *ast.Object) string {
 	text := raw.String()
-	attrs := raw.Attributes()
-	if len(attrs) == 0 {
-		return text
-	}
-	if i := strings.Index(text, attrs[0].Raw); i > 0 {
-		return text[i:]
+	rest, off := text, 0
+	for len(rest) > 0 {
+		line, eol := rest, len(rest)
+		if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
+			line, eol = rest[:nl], nl+1
+		}
+		if lexer.StartsAttribute(strings.TrimSuffix(line, "\r")) {
+			return text[off:]
+		}
+		off += eol
+		rest = rest[eol:]
 	}
 	return text
 }
