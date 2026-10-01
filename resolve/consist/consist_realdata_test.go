@@ -28,8 +28,9 @@ import (
 // forward peers in both families. It measures the load (time, heap with
 // and without IndexPeers) and the sweep, and holds every unconditional
 // not-imported finding to the two sides' clause spaces: its example lies in
-// a pure export conjunct and in no import conjunct (with a budget of its
-// own, 30s; running out of it is counted as a verify timeout). A limit, a
+// a pure export conjunct and in no import conjunct. Each call has its own
+// budget: an aut-num's Lint and Peers 60s together, each Check 60s, each
+// verify 30s (running out of it is counted as a verify timeout). A limit, a
 // timeout or a pair whose filter cannot be evaluated is counted; any other
 // error fails.
 func TestRealDataConsist(t *testing.T) {
@@ -109,6 +110,8 @@ func TestRealDataConsist(t *testing.T) {
 		sem <- struct{}{}
 		go func(as types.ASN) {
 			defer func() { <-sem; wg.Done() }()
+			// Each call has a budget of its own — Lint with Peers, each
+			// Check, each verify — so one slow call never starves the rest.
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 			issues, err := c.Lint(ctx, as)
@@ -130,7 +133,9 @@ func TestRealDataConsist(t *testing.T) {
 				}
 				for _, af := range fams {
 					p := Pair{A: as, B: peer, AF: af}
-					rep, err := c.Check(ctx, p)
+					cctx, ccancel := context.WithTimeout(context.Background(), 60*time.Second)
+					rep, err := c.Check(cctx, p)
+					ccancel()
 					if !counted(err, count) {
 						t.Errorf("check %v: %v", p, err)
 						continue
