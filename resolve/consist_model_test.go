@@ -3,6 +3,7 @@ package resolve_test
 import (
 	"context"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"net/netip"
 	"slices"
@@ -37,46 +38,68 @@ type consistModel struct {
 	texts            []string
 	pg               *policyGen
 	imports, exports map[types.ASN][]*mAttr // each aut-num's attributes, in document order
+	autnums          map[types.ASN]string   // each aut-num's text, for a failure's message
+	noAutNum         bool                   // peerAS's aut-num is left out of texts
 	given            resolve.Source         // what a finding's Given is normalized over
 }
 
 func randomConsist(t *testing.T, r *rand.Rand, seed uint64) *consistModel {
 	t.Helper()
 	texts, pg := newPolicyIRR(r, modelActions)
-	cm := &consistModel{pg: pg, imports: map[types.ASN][]*mAttr{}, exports: map[types.ASN][]*mAttr{}}
+	cm := &consistModel{pg: pg, imports: map[types.ASN][]*mAttr{}, exports: map[types.ASN][]*mAttr{}, autnums: map[types.ASN]string{}}
 	for _, as := range []types.ASN{localAS, peerAS} {
-		pg.favour = peerAS
-		if as == peerAS {
-			pg.favour = localAS
-		}
-		var b strings.Builder
-		fmt.Fprintf(&b, "aut-num: %s\nas-name: X\n", as)
-		for n := 1 + r.IntN(4); n > 0; n-- {
-			if r.IntN(2) == 0 {
-				a := pg.attr("import")
-				cm.imports[as] = append(cm.imports[as], a)
-				b.WriteString(a.line() + "\n")
-			} else {
-				a := pg.attr("export")
-				cm.exports[as] = append(cm.exports[as], a)
-				b.WriteString(a.line() + "\n")
-			}
-		}
-		b.WriteString("mnt-by: MNT-A\nsource: RIPE\n")
-		raw, _ := rpsl.ParseObject(b.String())
-		if _, ds := rpsl.Decode(raw); len(ds) > 0 {
-			for _, d := range ds {
-				if d.Severity >= ast.Error {
-					t.Fatalf("seed %d: the generated aut-num does not decode: %v\n%s", seed, d, b.String())
-				}
-			}
-		}
-		texts = append(texts, b.String())
+		cm.autNum(t, r, seed, as)
 	}
-	pg.favour = 0
+	texts = append(texts, cm.autnums[localAS])
+	// About one seed in eight leaves peerAS's aut-num out: Check must then
+	// give one NoAutNum finding in each direction, and nothing else.
+	if r.IntN(8) == 0 {
+		cm.noAutNum = true
+		delete(cm.imports, peerAS)
+		delete(cm.exports, peerAS)
+	} else {
+		texts = append(texts, cm.autnums[peerAS])
+	}
 	cm.texts = texts
 	cm.given = resolve.NewMemSource(decodeAll(t, texts), "RIPE", "RADB")
 	return cm
+}
+
+// autNum draws a new aut-num for as, its peerings naming the other AS half
+// the time, replacing as's attributes in the model; it returns its text.
+func (cm *consistModel) autNum(t *testing.T, r *rand.Rand, seed uint64, as types.ASN) string {
+	t.Helper()
+	pg := cm.pg
+	pg.favour = peerAS
+	if as == peerAS {
+		pg.favour = localAS
+	}
+	defer func() { pg.favour = 0 }()
+	cm.imports[as], cm.exports[as] = nil, nil
+	var b strings.Builder
+	fmt.Fprintf(&b, "aut-num: %s\nas-name: X\n", as)
+	for n := 1 + r.IntN(4); n > 0; n-- {
+		if r.IntN(2) == 0 {
+			a := pg.attr("import")
+			cm.imports[as] = append(cm.imports[as], a)
+			b.WriteString(a.line() + "\n")
+		} else {
+			a := pg.attr("export")
+			cm.exports[as] = append(cm.exports[as], a)
+			b.WriteString(a.line() + "\n")
+		}
+	}
+	b.WriteString("mnt-by: MNT-A\nsource: RIPE\n")
+	raw, _ := rpsl.ParseObject(b.String())
+	if _, ds := rpsl.Decode(raw); len(ds) > 0 {
+		for _, d := range ds {
+			if d.Severity >= ast.Error {
+				t.Fatalf("seed %d: the generated aut-num does not decode: %v\n%s", seed, d, b.String())
+			}
+		}
+	}
+	cm.autnums[as] = b.String()
+	return b.String()
 }
 
 func (cm *consistModel) pair(r *rand.Rand) consist.Pair {
@@ -106,6 +129,100 @@ func (cm *consistModel) side(local, peer types.ASN, lrtr, prtr netip.Addr, af ty
 	return oSide{terms, len(und) > 0}
 }
 
+// Three-valued answers of maybe.
+const (
+	tFalse = iota
+	tTrue
+	tUnknown
+)
+
+// maybe is the filter model's three-valued (Kleene) reading of f for a
+// route with prefix p: AS-path regexps and community tests are unknown,
+// every other test is decided by p alone. tFalse means no route with prefix
+// p passes f, whatever its path and communities.
+func (cm *consistModel) maybe(f *mFilter, p netip.Prefix, peer types.ASN) int {
+	g := cm.pg.fg
+	switch f.kind {
+	case "re", "comm":
+		return tUnknown
+	case "fltr":
+		for _, x := range g.fltrs {
+			if x.name == f.set {
+				return cm.maybe(x.f, p, peer)
+			}
+		}
+		return tFalse
+	case "not":
+		switch v := cm.maybe(f.subs[0], p, peer); v {
+		case tFalse:
+			return tTrue
+		case tTrue:
+			return tFalse
+		default:
+			return v
+		}
+	case "and", "or":
+		a, b := cm.maybe(f.subs[0], p, peer), cm.maybe(f.subs[1], p, peer)
+		short, long := tFalse, tTrue // and: false wins
+		if f.kind == "or" {
+			short, long = tTrue, tFalse
+		}
+		switch {
+		case a == short || b == short:
+			return short
+		case a == long && b == long:
+			return long
+		}
+		return tUnknown
+	}
+	if g.accepts(f, routemodel.Route{Prefix: p}, peer) {
+		return tTrue
+	}
+	return tFalse
+}
+
+// mayAccept reports whether some route with prefix p, of family af, may
+// pass one of terms (sessionPeer bound to PeerAS), whatever its path and
+// communities: the prefix space a NoImport or NoExport finding may name.
+func (cm *consistModel) mayAccept(terms []oTerm, p netip.Prefix, sessionPeer types.ASN, af types.AFI) bool {
+	if prefixAFI(p) != af {
+		return false
+	}
+	for _, t := range terms {
+		peer := sessionPeer
+		if t.peer != 0 {
+			peer = t.peer
+		}
+		v := tTrue
+		for _, f := range t.filters {
+			v = min3(v, cm.maybe(f, p, peer))
+		}
+		for _, f := range t.notAny {
+			switch cm.maybe(f, p, peer) {
+			case tTrue:
+				v = tFalse
+			case tUnknown:
+				v = min3(v, tUnknown)
+			}
+		}
+		if v != tFalse {
+			return true
+		}
+	}
+	return false
+}
+
+// min3 is Kleene AND.
+func min3(a, b int) int {
+	switch {
+	case a == tFalse || b == tFalse:
+		return tFalse
+	case a == tUnknown || b == tUnknown:
+		return tUnknown
+	}
+	return tTrue
+}
+
 // givenHolds reports whether rt passes a finding's Given tests, read back
 // and matched by the route model (test code: the library never matches a
 // regexp against a path).
@@ -126,8 +243,17 @@ func (cm *consistModel) givenHolds(t *testing.T, rt routemodel.Route, given []st
 	return ok
 }
 
+// wantSeverity is the severity each kind of finding carries.
+func wantSeverity(k consist.Kind) ast.Severity {
+	switch k {
+	case consist.NotImported, consist.NoImport, consist.NoAutNum:
+		return ast.Warning
+	}
+	return ast.Info
+}
+
 // consistCounts tallies what the model exercised: findings by kind (and
-// Undecided by reason), across directions.
+// Undecided by what it may be and why), across directions.
 type consistCounts map[string]int
 
 // wantFinding is a finding the model expects when a side has no decided
@@ -143,11 +269,10 @@ func (cm *consistModel) checkDirection(t *testing.T, label string, d consist.Dir
 	if d.From == p.B {
 		fromRtr, toRtr = p.BRtr, p.ARtr
 	}
-	exp := cm.side(d.From, d.To, fromRtr, toRtr, p.AF, true)
-	imp := cm.side(d.To, d.From, toRtr, fromRtr, p.AF, false)
+	af := p.AF.AFI
 	fail := func(format string, args ...any) {
 		t.Helper()
-		t.Fatalf("%s: %v→%v %v: %s\nfindings %+v\nobjects:\n%s", label, d.From, d.To, p, fmt.Sprintf(format, args...), d.Findings, strings.Join(cm.texts[len(cm.texts)-2:], "\n"))
+		t.Fatalf("%s: %v→%v %v: %s\nfindings %+v\nobjects:\n%s\n%s", label, d.From, d.To, p, fmt.Sprintf(format, args...), d.Findings, cm.autnums[localAS], cm.autnums[peerAS])
 	}
 	for _, f := range d.Findings {
 		key := f.Kind.String()
@@ -155,7 +280,21 @@ func (cm *consistModel) checkDirection(t *testing.T, label string, d consist.Dir
 			key += "/" + f.Of.String() + "/" + f.Why
 		}
 		kc[key]++
+		if f.Severity != wantSeverity(f.Kind) {
+			fail("%v has severity %v, want %v", key, f.Severity, wantSeverity(f.Kind))
+		}
+		if f.Truncated {
+			fail("a finding was truncated; raise MaxRanges")
+		}
 	}
+	if cm.noAutNum {
+		if len(d.Findings) != 1 || d.Findings[0].Kind != consist.NoAutNum || d.Findings[0].AS != peerAS {
+			fail("peerAS's aut-num is missing: want one no-aut-num finding naming it")
+		}
+		return
+	}
+	exp := cm.side(d.From, d.To, fromRtr, toRtr, p.AF, true)
+	imp := cm.side(d.To, d.From, toRtr, fromRtr, p.AF, false)
 	// A side with no decided term: the findings are fixed by which side has
 	// decided terms and which has undecided ones.
 	expD, impD := len(exp.terms) > 0, len(imp.terms) > 0
@@ -193,6 +332,18 @@ func (cm *consistModel) checkDirection(t *testing.T, label string, d consist.Dir
 		if !slices.Equal(got, want) {
 			fail("exporter decided %v undecided %v, importer decided %v undecided %v: want %+v", expD, exp.und, impD, imp.und, want)
 		}
+		switch {
+		case expD:
+			cm.checkWholeSide(t, r, d.Findings[0], exp.terms, d.From, d.To, af, "announced", fail)
+		case impD:
+			cm.checkWholeSide(t, r, d.Findings[0], imp.terms, d.From, d.From, af, "accepted", fail)
+		default:
+			for _, f := range d.Findings {
+				if len(f.Ranges) != 0 || f.Example.IsValid() {
+					fail("neither side has a decided term, yet a finding names prefixes")
+				}
+			}
+		}
 		return
 	}
 	for _, f := range d.Findings {
@@ -205,33 +356,47 @@ func (cm *consistModel) checkDirection(t *testing.T, label string, d consist.Dir
 			fail("the importer has undecided terms, yet not-imported is not demoted")
 		case f.Kind == consist.NotExported && exp.und:
 			fail("the exporter has undecided terms, yet not-exported is not demoted")
-		case f.Truncated:
-			fail("a finding was truncated; raise MaxRanges")
 		}
 	}
 	decide := func(rt routemodel.Route) (announced, accepted bool) {
-		announced, _ = cm.pg.decide(exp.terms, rt, d.To, p.AF.AFI)
-		accepted, _ = cm.pg.decide(imp.terms, rt, d.From, p.AF.AFI)
+		announced, _ = cm.pg.decide(exp.terms, rt, d.To, af)
+		accepted, _ = cm.pg.decide(imp.terms, rt, d.From, af)
 		return
 	}
-	// Soundness: a definite finding's example is announced and refused (or
-	// accepted and not announced) on every sampled route passing its Given.
+	// Soundness: a definite finding holds for every route passing its Given
+	// whose prefix is its example or any sampled prefix in its ranges: the
+	// route is announced and refused (accepted and not announced).
 	for _, f := range d.Findings {
 		if f.Kind != consist.NotImported && f.Kind != consist.NotExported {
 			continue
 		}
-		for k := 0; k < 40; k++ {
-			rt := randomRoute(r, d.From)
-			rt.Prefix = f.Example
-			if !cm.givenHolds(t, rt, f.Given, p.AF.AFI) {
-				continue
+		sp := types.SpaceOf(f.Ranges...)
+		if !sp.Contains(f.Example) {
+			fail("%v: the example %v is not in the ranges", f.Kind, f.Example)
+		}
+		prefixes := []netip.Prefix{f.Example}
+		for _, q := range samplePrefixes {
+			if len(prefixes) > 20 {
+				break
 			}
-			an, ac := decide(rt)
-			if f.Kind == consist.NotImported && !(an && !ac) {
-				fail("not-imported example, route %v: the model says announced %v, accepted %v", rt, an, ac)
+			if prefixAFI(q) == af && q != f.Example && sp.Contains(q) {
+				prefixes = append(prefixes, q)
 			}
-			if f.Kind == consist.NotExported && !(ac && !an) {
-				fail("not-exported example, route %v: the model says announced %v, accepted %v", rt, an, ac)
+		}
+		for _, q := range prefixes {
+			for k := 0; k < 8; k++ {
+				rt := randomRoute(r, d.From)
+				rt.Prefix = q
+				if !cm.givenHolds(t, rt, f.Given, af) {
+					continue
+				}
+				an, ac := decide(rt)
+				if f.Kind == consist.NotImported && !(an && !ac) {
+					fail("not-imported, route %v: the model says announced %v, accepted %v", rt, an, ac)
+				}
+				if f.Kind == consist.NotExported && !(ac && !an) {
+					fail("not-exported, route %v: the model says announced %v, accepted %v", rt, an, ac)
+				}
 			}
 		}
 	}
@@ -240,7 +405,7 @@ func (cm *consistModel) checkDirection(t *testing.T, label string, d consist.Dir
 	covered := func(rt routemodel.Route, kind consist.Kind) bool {
 		for _, f := range d.Findings {
 			if (f.Kind == kind || f.Kind == consist.Undecided && f.Of == kind) &&
-				types.SpaceOf(f.Ranges...).Contains(rt.Prefix) && cm.givenHolds(t, rt, f.Given, p.AF.AFI) {
+				types.SpaceOf(f.Ranges...).Contains(rt.Prefix) && cm.givenHolds(t, rt, f.Given, af) {
 				return true
 			}
 		}
@@ -248,7 +413,7 @@ func (cm *consistModel) checkDirection(t *testing.T, label string, d consist.Dir
 	}
 	for k := 0; k < 200; k++ {
 		rt := randomRoute(r, d.From)
-		if prefixAFI(rt.Prefix) != p.AF.AFI {
+		if prefixAFI(rt.Prefix) != af {
 			continue
 		}
 		an, ac := decide(rt)
@@ -257,6 +422,29 @@ func (cm *consistModel) checkDirection(t *testing.T, label string, d consist.Dir
 		}
 		if ac && !an && !covered(rt, consist.NotExported) {
 			fail("route %v is accepted and not announced, and no finding covers it", rt)
+		}
+	}
+}
+
+// checkWholeSide holds a NoImport (NoExport) finding, or its Undecided form,
+// to the one side that has decided terms: its ranges hold every sampled
+// route that side passes, and only prefixes some route may pass with.
+// peer is what the side binds PeerAS to; what names the side for a message.
+func (cm *consistModel) checkWholeSide(t *testing.T, r *rand.Rand, f consist.Finding, terms []oTerm, from, peer types.ASN, af types.AFI, what string, fail func(string, ...any)) {
+	t.Helper()
+	sp := types.SpaceOf(f.Ranges...)
+	if len(f.Ranges) > 0 && !sp.Contains(f.Example) {
+		fail("%v: the example %v is not in the ranges", f.Kind, f.Example)
+	}
+	for _, q := range samplePrefixes {
+		if sp.Contains(q) && !cm.mayAccept(terms, q, peer, af) {
+			fail("%v names %v, which no route with that prefix is %s with", f.Kind, q, what)
+		}
+	}
+	for k := 0; k < 100; k++ {
+		rt := randomRoute(r, from)
+		if ok, _ := cm.pg.decide(terms, rt, peer, af); ok && !sp.Contains(rt.Prefix) {
+			fail("route %v is %s, and the %v finding's ranges leave it out", rt, what, f.Kind)
 		}
 	}
 }
@@ -274,17 +462,25 @@ func (cm *consistModel) check(t *testing.T, label string, c *consist.Checker, r 
 	}
 }
 
-// requireCounts fails when the model did not exercise each kind of finding.
-func requireCounts(t *testing.T, label string, kc consistCounts, floor int) {
+// requireCounts fails when the model did not exercise a kind of finding as
+// often as floors asks.
+func requireCounts(t *testing.T, label string, kc consistCounts, floors map[string]int) {
 	t.Helper()
 	t.Logf("%s: %v", label, kc)
-	for _, k := range []string{"not-imported", "not-exported", "no-import", "no-export",
-		"undecided/not-imported/" + consist.WhySymbolic, "undecided/not-imported/" + consist.WhyImporterUndecided} {
-		if kc[k] < floor {
-			t.Errorf("%s: only %d %s findings", label, kc[k], k)
+	keys := slices.Sorted(maps.Keys(floors))
+	for _, k := range keys {
+		if kc[k] < floors[k] {
+			t.Errorf("%s: only %d %s findings, want %d", label, kc[k], k, floors[k])
 		}
 	}
 }
+
+const (
+	undNotImp = "undecided/not-imported/"
+	undNotExp = "undecided/not-exported/"
+	undNoImp  = "undecided/no-import/"
+	undNoExp  = "undecided/no-export/"
+)
 
 func TestModelConsist(t *testing.T) {
 	kc := consistCounts{}
@@ -294,33 +490,60 @@ func TestModelConsist(t *testing.T) {
 		c := &consist.Checker{Eval: peval.Evaluator{Src: resolve.NewMemSource(decodeAll(t, cm.texts), "RIPE", "RADB")}, MaxRanges: 1 << 16}
 		cm.check(t, fmt.Sprintf("seed %d", seed), c, r, kc)
 	}
-	requireCounts(t, "memsource", kc, 10)
+	requireCounts(t, "memsource", kc, map[string]int{
+		"not-imported": 10, "not-exported": 10, "no-import": 10, "no-export": 10, "no-aut-num": 150,
+		undNotImp + consist.WhySymbolic: 10, undNotImp + consist.WhyImporterUndecided: 3,
+		undNotExp + consist.WhySymbolic: 25, undNotExp + consist.WhyExporterUndecided: 5,
+		undNoImp + consist.WhyImporterUndecided: 15, undNoImp + consist.WhyExporterUndecided: 45,
+		undNoExp + consist.WhyImporterUndecided: 55, undNoExp + consist.WhyExporterUndecided: 25,
+	})
 }
 
 // The same over a Corpus with IndexPeers, whose NamedBy is held to the
-// model too, and over the network backends against an IRRd-like server.
+// model too — as loaded, after the aut-num of localAS is replaced and after
+// it is deleted — and over the network backends against an IRRd-like
+// server.
 func TestModelConsistBackends(t *testing.T) {
-	kcs := map[string]consistCounts{"corpus": {}, "irrd": {}, "whois": {}}
+	kc := consistCounts{}
 	for seed := uint64(0); seed < 60; seed++ {
 		r := rand.New(rand.NewPCG(seed, 41))
+		label := fmt.Sprintf("seed %d", seed)
 		cm := randomConsist(t, r, seed)
+		cm.checkNamedBy(t, label+" memsource", resolve.NewMemSource(decodeAll(t, cm.texts), "RIPE", "RADB"))
 		l := &resolve.DumpLoader{Sources: []string{"RIPE", "RADB"}, IndexPeers: true}
 		if err := l.Read(strings.NewReader(strings.Join(cm.texts, "\n"))); err != nil {
 			t.Fatal(err)
 		}
 		src := l.Source()
-		cm.checkNamedBy(t, fmt.Sprintf("seed %d", seed), src)
-		cm.check(t, fmt.Sprintf("corpus seed %d", seed), &consist.Checker{Eval: peval.Evaluator{Src: src}, MaxRanges: 1 << 16}, r, kcs["corpus"])
+		cm.checkNamedBy(t, label+" corpus", src)
+		cm.check(t, "corpus "+label, &consist.Checker{Eval: peval.Evaluator{Src: src}, MaxRanges: 1 << 16}, r, kc)
 		db := irrtest.New(cm.texts...).WithSources("RIPE", "RADB")
 		ir := &irrd.Source{Addr: db.IRRd(t), Sources: []string{"RIPE", "RADB"}, Pipeline: 8, Timeout: 5 * time.Second}
-		cm.check(t, fmt.Sprintf("irrd seed %d", seed), &consist.Checker{Eval: peval.Evaluator{Src: ir}, MaxRanges: 1 << 16}, r, kcs["irrd"])
+		cm.check(t, "irrd "+label, &consist.Checker{Eval: peval.Evaluator{Src: ir}, MaxRanges: 1 << 16}, r, kc)
 		ir.Close()
 		wh := &whois.Source{Addr: db.Whois(t), Sources: []string{"RIPE", "RADB"}, Timeout: 5 * time.Second}
-		cm.check(t, fmt.Sprintf("whois seed %d", seed), &consist.Checker{Eval: peval.Evaluator{Src: wh}, MaxRanges: 1 << 16}, r, kcs["whois"])
+		cm.check(t, "whois "+label, &consist.Checker{Eval: peval.Evaluator{Src: wh}, MaxRanges: 1 << 16}, r, kc)
+
+		// The index follows a replacement and a delete.
+		if err := l.Read(strings.NewReader(cm.autNum(t, r, seed, localAS))); err != nil {
+			t.Fatal(err)
+		}
+		cm.checkNamedBy(t, label+" replaced", l.Source())
+		if !l.Corpus().Delete("aut-num", localAS.String(), "RIPE") {
+			t.Fatalf("%s: the aut-num of %v is not in the corpus", label, localAS)
+		}
+		delete(cm.imports, localAS)
+		delete(cm.exports, localAS)
+		cm.checkNamedBy(t, label+" deleted", l.Source())
 	}
-	for _, b := range []string{"corpus", "irrd", "whois"} {
-		requireCounts(t, b, kcs[b], 2)
-	}
+	// corpus, irrd and whois pooled.
+	requireCounts(t, "backends", kc, map[string]int{
+		"not-imported": 6, "not-exported": 6, "no-import": 6, "no-export": 6, "no-aut-num": 6,
+		undNotImp + consist.WhySymbolic: 6, undNotImp + consist.WhyImporterUndecided: 6,
+		undNotExp + consist.WhySymbolic: 6, undNotExp + consist.WhyExporterUndecided: 6,
+		undNoImp + consist.WhyImporterUndecided: 6, undNoImp + consist.WhyExporterUndecided: 6,
+		undNoExp + consist.WhyImporterUndecided: 6, undNoExp + consist.WhyExporterUndecided: 6,
+	})
 }
 
 // checkNamedBy holds NamedBy to the AS numbers the model's peerings name.
@@ -422,6 +645,25 @@ func TestModelConsistExact(t *testing.T) {
 			}
 			return false
 		}
+		// meeting is the indexes, among as's export (import) attributes, of
+		// those accepting a prefix of sp.
+		meeting := func(as types.ASN, export bool, sp types.PrefixSpace) []int {
+			var out []int
+			i := 0
+			for _, a := range sides[as] {
+				if a.export != export {
+					continue
+				}
+				for _, p := range universe {
+					if a.f.contains(p) && sp.Contains(p) {
+						out = append(out, i)
+						break
+					}
+				}
+				i++
+			}
+			return out
+		}
 		rep, err := c.Check(context.Background(), consist.Pair{A: localAS, B: peerAS, AF: families[0]})
 		if err != nil {
 			t.Fatal(err)
@@ -442,7 +684,22 @@ func TestModelConsistExact(t *testing.T) {
 				if f.Kind != consist.NotImported && f.Kind != consist.NotExported {
 					t.Fatalf("%s: %v→%v: a pure policy gave %v %+v", label, d.From, d.To, f.Kind, f)
 				}
-				got[f.Kind] = got[f.Kind].Union(types.SpaceOf(f.Ranges...))
+				if f.Severity != wantSeverity(f.Kind) {
+					t.Fatalf("%s: %v→%v: %v has severity %v", label, d.From, d.To, f.Kind, f.Severity)
+				}
+				sp := types.SpaceOf(f.Ranges...)
+				got[f.Kind] = got[f.Kind].Union(sp)
+				// Roles: the side the finding is about lists its attributes
+				// that meet the finding's prefixes; the other side none.
+				gotExp, gotImp := f.Export, f.Import
+				wantExp, wantImp := meeting(d.From, true, sp), []int(nil)
+				if f.Kind == consist.NotExported {
+					wantExp, wantImp = nil, meeting(d.To, false, sp)
+				}
+				if !slices.Equal(gotExp, wantExp) || !slices.Equal(gotImp, wantImp) {
+					t.Fatalf("%s: %v→%v: %v names export %v, import %v; the oracle %v, %v\n%s", label, d.From, d.To, f.Kind,
+						gotExp, gotImp, wantExp, wantImp, strings.Join(texts, "\n"))
+				}
 			}
 			for _, k := range []consist.Kind{consist.NotImported, consist.NotExported} {
 				want := notImp
