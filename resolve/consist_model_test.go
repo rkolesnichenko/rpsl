@@ -390,6 +390,40 @@ func (cm *consistModel) checkDirection(t *testing.T, label string, d consist.Dir
 	// A side with no decided term: the findings are fixed by which side has
 	// decided terms and which has undecided ones.
 	expD, impD := len(exp.terms) > 0, len(imp.terms) > 0
+	if expD != impD {
+		// Ruling R15: when the one side with decided terms permits nothing
+		// in the family, Check reads it as having none. Whether it permits
+		// anything is read from Check's answer — a NoImport (NoExport)
+		// finding, or its Undecided form for the other side's undecided
+		// terms — and held to the model: an answer without one must come
+		// with a side that passes no sampled route, and one with it names
+		// prefixes (checkWholeSide).
+		whole := func(f consist.Finding) bool {
+			if expD {
+				return f.Kind == consist.NoImport || f.Kind == consist.Undecided && f.Of == consist.NoImport && f.Why == consist.WhyImporterUndecided
+			}
+			return f.Kind == consist.NoExport || f.Kind == consist.Undecided && f.Of == consist.NoExport && f.Why == consist.WhyExporterUndecided
+		}
+		if len(d.Findings) != 1 || !whole(d.Findings[0]) {
+			terms, peer, what := exp.terms, d.To, "announced"
+			if impD {
+				terms, peer, what = imp.terms, d.From, "accepted"
+			}
+			for _, q := range samplePrefixes {
+				if cm.mayAccept(terms, q, peer, af) {
+					fail("no whole-side finding, yet a route with prefix %v may be %s", q, what)
+				}
+			}
+			for k := 0; k < 100; k++ {
+				if ok, _ := cm.pg.decide(terms, randomRoute(r, d.From), peer, af); ok {
+					fail("no whole-side finding, yet a sampled route is %s", what)
+				}
+			}
+			expD, impD = false, false
+		} else if len(d.Findings[0].Ranges) == 0 {
+			fail("a whole-side %v finding names no prefix", d.Findings[0].Kind)
+		}
+	}
 	if !expD || !impD {
 		var want []wantFinding
 		switch {
@@ -625,7 +659,7 @@ const (
 
 func TestModelConsist(t *testing.T) {
 	kc := consistCounts{}
-	for seed := uint64(0); seed < 300; seed++ {
+	for seed := uint64(0); seed < 400; seed++ {
 		r := rand.New(rand.NewPCG(seed, 41))
 		cm := randomConsist(t, r, seed)
 		c := &consist.Checker{Eval: peval.Evaluator{Src: resolve.NewMemSource(decodeAll(t, cm.texts), "RIPE", "RADB")}, MaxRanges: 1 << 16}

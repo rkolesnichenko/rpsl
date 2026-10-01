@@ -290,8 +290,19 @@ func subset(a, b []string) bool {
 // session's family afi.
 func (c *Checker) direction(exp, imp side, afi types.AFI) []Finding {
 	var out []Finding
+	// A one-sided direction whose decided side permits nothing in the
+	// family is read as if that side had no decided clause (Ruling R15): a
+	// NoImport (NoExport) finding would name no prefix, and the two-sided
+	// path has none either. Its undecided terms still count.
+	expD, impD := exp.clauses, imp.clauses
 	switch {
-	case !exp.clauses && !imp.clauses:
+	case expD && !impD && union(exp.conjs).IsEmpty():
+		expD = false
+	case impD && !expD && union(imp.conjs).IsEmpty():
+		impD = false
+	}
+	switch {
+	case !expD && !impD:
 		// Neither side has a decided clause. The exporter's undecided terms
 		// may export to To, so the direction may be NoImport; the importer's
 		// may import from From, so it may be NoExport. Those terms name no
@@ -303,13 +314,13 @@ func (c *Checker) direction(exp, imp side, afi types.AFI) []Finding {
 			out = append(out, c.finish(Finding{Kind: Undecided, Of: NoExport, Why: WhyImporterUndecided}, types.PrefixSpace{}))
 		}
 		return out
-	case exp.clauses && !imp.clauses:
+	case expD && !impD:
 		f := Finding{Kind: NoImport, Export: indexes(exp.conjs, types.FullSpace(types.AFIAny))}
 		if imp.undecided {
 			f = Finding{Kind: Undecided, Of: NoImport, Why: WhyImporterUndecided, Export: f.Export}
 		}
 		return []Finding{c.finish(f, union(exp.conjs))}
-	case !exp.clauses && imp.clauses:
+	case !expD && impD:
 		f := Finding{Kind: NoExport, Import: indexes(imp.conjs, types.FullSpace(types.AFIAny))}
 		if exp.undecided {
 			f = Finding{Kind: Undecided, Of: NoExport, Why: WhyExporterUndecided, Import: f.Import}

@@ -523,3 +523,40 @@ func TestUndecidedBesideDecided(t *testing.T) {
 		})
 	}
 }
+
+// Ruling R15: a one-sided direction whose decided side permits nothing in
+// the family has no NoImport (NoExport) finding, as the two-sided path has
+// none; that side's undecided terms still count.
+func TestOneSidedEmpty(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		a, b string
+		atob []string
+	}{
+		{name: "the exporter announces nothing in the family",
+			a: autNum(1, "mp-export: to AS2 announce AS3"),
+			b: autNum(2, "import: from AS1 accept ANY")},
+		{name: "the importer accepts nothing in the family",
+			a: autNum(1, "export: to AS2 announce ANY"),
+			b: autNum(2, "mp-import: from AS1 accept AS3")},
+		{name: "the exporter announces nothing decided, and has an undecided term",
+			a:    autNum(1, "mp-export: to AS2 announce AS3", "mp-export: to AS2 192.0.2.9 announce ANY"),
+			b:    autNum(2, "import: from AS1 accept ANY"),
+			atob: []string{"undecided[no-import:" + WhyExporterUndecided + "]"}},
+		{name: "the importer accepts nothing decided, and has an undecided term",
+			a:    autNum(1, "export: to AS2 announce ANY"),
+			b:    autNum(2, "mp-import: from AS1 accept AS3", "mp-import: from AS1 192.0.2.1 accept ANY"),
+			atob: []string{"undecided[no-export:" + WhyImporterUndecided + "]"}},
+		{name: "the exporter announces something: no-import as before",
+			a:    autNum(1, "mp-export: to AS2 announce AS1"),
+			b:    autNum(2, "import: from AS1 accept ANY"),
+			atob: []string{"no-import"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := check(t, checker(t, c.a, c.b), Pair{A: 1, B: 2, AF: v6})
+			if got := kinds(r.AtoB); !slices.Equal(got, c.atob) {
+				t.Errorf("AtoB %v, want %v", got, c.atob)
+			}
+		})
+	}
+}
