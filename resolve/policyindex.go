@@ -123,6 +123,8 @@ func (s *MemSource) buildIndex() {
 	s.autnumList = s.autnumList[:0]
 	if s.index {
 		s.namedBy = map[types.ASN][]types.ASN{}
+	} else {
+		s.namedBy = nil // leave no stale index behind a second, unindexed finish
 	}
 	for as, es := range s.autnums {
 		e, err := s.pick(es, "")
