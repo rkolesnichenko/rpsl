@@ -25,14 +25,15 @@ import (
 
 // TestRealDataConsist (opt-in: RPSL_REALDATA) sweeps RIPE: every aut-num,
 // or RPSL_CONSIST_SAMPLE of them (seeded), linted and checked against its
-// forward peers in both families. It measures the load (time, heap with
+// forward peers in both families, each unordered pair once. It measures the load (time, heap with
 // and without IndexPeers) and the sweep, and holds every unconditional
 // not-imported finding to the two sides' clause spaces: its example lies in
 // a pure export conjunct and in no import conjunct. Each call has its own
 // budget: an aut-num's Lint and Peers 60s together, each Check 60s, each
 // verify 30s (running out of it is counted as a verify timeout). A limit, a
-// timeout or a pair whose filter cannot be evaluated is counted; any other
-// error fails.
+// timeout or a pair whose filter cannot be evaluated is counted, and goes
+// no further (a pair counted so is not among "pairs"); any other error
+// fails.
 func TestRealDataConsist(t *testing.T) {
 	dir := os.Getenv("RPSL_REALDATA")
 	if dir == "" {
@@ -93,9 +94,21 @@ func TestRealDataConsist(t *testing.T) {
 		slices.Sort(ases)
 	}
 	c := &Checker{Eval: peval.Evaluator{Src: resolve.NewCache(src, 0)}, MaxRanges: 64}
-	inSweep := map[types.ASN]bool{}
-	for _, as := range ases {
-		inSweep[as] = true
+	// Each unordered pair a peering names, from either side, is checked
+	// once, by whichever side claims it first: the set of pairs does not
+	// depend on the order, and a pair only one side names is checked too.
+	type pairKey struct{ a, b types.ASN }
+	var claimMu sync.Mutex
+	claimed := map[pairKey]bool{}
+	claim := func(a, b types.ASN) bool {
+		k := pairKey{min(a, b), max(a, b)}
+		claimMu.Lock()
+		defer claimMu.Unlock()
+		if claimed[k] {
+			return false
+		}
+		claimed[k] = true
+		return true
 	}
 	fams := []types.AddrFamily{{AFI: types.AFIv4, SAFI: types.SAFIUnicast}, {AFI: types.AFIv6, SAFI: types.SAFIUnicast}}
 
@@ -115,20 +128,24 @@ func TestRealDataConsist(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 			issues, err := c.Lint(ctx, as)
-			if !counted(err, count) {
-				t.Errorf("lint %s: %v", as, err)
+			if err != nil { // counted or failed, the aut-num goes no further
+				if !counted(err, count) {
+					t.Errorf("lint %s: %v", as, err)
+				}
 				return
 			}
 			for _, is := range issues {
 				count("lint: "+is.Rule, 1)
 			}
 			pl, err := c.Peers(ctx, as)
-			if !counted(err, count) {
-				t.Errorf("peers %s: %v", as, err)
+			if err != nil {
+				if !counted(err, count) {
+					t.Errorf("peers %s: %v", as, err)
+				}
 				return
 			}
 			for _, peer := range pl.Forward {
-				if peer < as && inSweep[peer] {
+				if !claim(as, peer) {
 					continue // the pair is checked from peer's side
 				}
 				for _, af := range fams {
@@ -136,8 +153,10 @@ func TestRealDataConsist(t *testing.T) {
 					cctx, ccancel := context.WithTimeout(context.Background(), 60*time.Second)
 					rep, err := c.Check(cctx, p)
 					ccancel()
-					if !counted(err, count) {
-						t.Errorf("check %v: %v", p, err)
+					if err != nil { // not a pair checked: no directions to count
+						if !counted(err, count) {
+							t.Errorf("check %v: %v", p, err)
+						}
 						continue
 					}
 					count("pairs", 1)
