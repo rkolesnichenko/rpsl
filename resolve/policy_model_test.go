@@ -264,10 +264,16 @@ type policyGen struct {
 	fg      *filterGen
 	prngs   map[string][]*mPeering
 	asSets  []string
-	actions []string // the actions a clause draws from: modelActions, unless a model asks for others
+	actions []string  // the actions a clause draws from: modelActions, unless a model asks for others
+	favour  types.ASN // when set, asn draws it half the time: a peering then names this AS
 }
 
-func (pg *policyGen) asn() types.ASN { return types.ASN(firstAS + pg.fg.r.IntN(4)) }
+func (pg *policyGen) asn() types.ASN {
+	if pg.favour != 0 && pg.fg.r.IntN(2) == 0 {
+		return pg.favour
+	}
+	return types.ASN(firstAS + pg.fg.r.IntN(4))
+}
 
 func (pg *policyGen) peering(allowPrng bool) *mPeering {
 	r := pg.fg.r
@@ -664,10 +670,10 @@ func randomPolicy(t *testing.T, r *rand.Rand, seed uint64) ([]string, *policyGen
 	return randomPolicyWith(t, r, seed, modelActions)
 }
 
-// randomPolicyWith is randomPolicy with its clauses' actions drawn from
-// actions.
-func randomPolicyWith(t *testing.T, r *rand.Rand, seed uint64, actions []string) ([]string, *policyGen, *mPolicy) {
-	t.Helper()
+// newPolicyIRR draws the IRR a policy model test runs over: a random model
+// with its set templates' as-sets, two filter-sets, the routers and two
+// peering-sets. It returns the objects' RPSL and the generator.
+func newPolicyIRR(r *rand.Rand, actions []string) ([]string, *policyGen) {
 	m := withTemplateSets(r, randomModel(r, false))
 	fg := newFilterGen(r, newOracle(m))
 	pg := &policyGen{fg: fg, prngs: map[string][]*mPeering{}, asSets: fg.asSets, actions: actions}
@@ -685,6 +691,14 @@ func randomPolicyWith(t *testing.T, r *rand.Rand, seed uint64, actions []string)
 		b.WriteString("mnt-by: MNT-A\nsource: RIPE\n")
 		texts = append(texts, b.String())
 	}
+	return texts, pg
+}
+
+// randomPolicyWith is randomPolicy with its clauses' actions drawn from
+// actions.
+func randomPolicyWith(t *testing.T, r *rand.Rand, seed uint64, actions []string) ([]string, *policyGen, *mPolicy) {
+	t.Helper()
+	texts, pg := newPolicyIRR(r, actions)
 	pol := &mPolicy{kind: policyKinds[r.IntN(len(policyKinds))]}
 	if pol.kind == "default" {
 		for n := 1 + r.IntN(3); n > 0; n-- {
