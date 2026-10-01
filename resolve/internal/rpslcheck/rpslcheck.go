@@ -114,7 +114,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return runSweep(ctx, src, afs, *sample, *seed, *conc, *checkTimeout, w, stderr)
 	}
 	c := &consist.Checker{Eval: peval.Evaluator{Src: src}}
-	r := &runner{ctx: ctx, c: c, src: src, w: w, stderr: stderr}
+	r := &runner{ctx: ctx, c: c, src: src, w: w, stderr: stderr, afs: afs}
 	if len(ases) == 1 {
 		return r.one(ases[0], afs)
 	}
@@ -171,7 +171,20 @@ type runner struct {
 	src    resolve.PolicySource
 	w      *writer
 	stderr io.Writer
-	worst  int // exitClean or exitWarning, from what was written
+	afs    []types.AddrFamily // -af: the lint issues written are of these
+	worst  int                // exitClean or exitWarning, from what was written
+}
+
+// ofFamilies keeps the lint issues of one of afs, and those of no family
+// (Lint always lints both families; -af chooses what is written).
+func ofFamilies(issues []consist.Issue, afs []types.AddrFamily) []consist.Issue {
+	var out []consist.Issue
+	for _, is := range issues {
+		if len(is.AFs) == 0 || slices.ContainsFunc(is.AFs, func(af types.AddrFamily) bool { return slices.Contains(afs, af) }) {
+			out = append(out, is)
+		}
+	}
+	return out
 }
 
 func (r *runner) fail(err error) int {
@@ -227,6 +240,7 @@ func (r *runner) pair(a, b types.ASN, afs []types.AddrFamily) int {
 // lint writes as's lint; exitFailed when it could not, else exitClean.
 func (r *runner) lint(as types.ASN) int {
 	issues, err := r.c.Lint(r.ctx, as)
+	issues = ofFamilies(issues, r.afs)
 	if errors.Is(err, resolve.ErrNotFound) {
 		return r.fail(fmt.Errorf("%s: aut-num not found", as))
 	}

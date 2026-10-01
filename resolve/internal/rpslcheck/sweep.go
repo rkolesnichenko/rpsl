@@ -141,7 +141,7 @@ func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFam
 		case err != nil:
 			lr.err = err
 		default:
-			lr.issues, lr.linted = issues, true
+			lr.issues, lr.linted = ofFamilies(issues, afs), true
 		}
 	})
 	if err := ctx.Err(); err != nil { // the run's own deadline, or cancelled

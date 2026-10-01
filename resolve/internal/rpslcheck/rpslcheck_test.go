@@ -55,7 +55,7 @@ func TestGoldens(t *testing.T) {
 		{"as65001-json", []string{"-dump", fixture, "-json", "AS65001"}, 1},
 		{"as65003", []string{"-dump", fixture, "AS65003"}, 0},
 		{"pair", []string{"-dump", fixture, "AS65001", "AS65002"}, 1},
-		{"pair-ipv6", []string{"-dump", fixture, "-af", "ipv6", "AS65001", "AS65002"}, 1}, // lint is of both families: AS65001's shadowed term
+		{"pair-ipv6", []string{"-dump", fixture, "-af", "ipv6", "AS65001", "AS65002"}, 1}, // AS65002's lint/no-aut-num has no family: always written
 		{"sweep", []string{"-dump", fixture, "-sweep"}, 1},
 		{"sweep-json", []string{"-dump", fixture, "-sweep", "-json"}, 1},
 	} {
@@ -327,5 +327,25 @@ source: RIPE
 		if !strings.Contains(out, want) {
 			t.Errorf("want %q in:\n%s%s", want, out, errw)
 		}
+	}
+}
+
+// -af restricts the lint too: an issue of other families only is not
+// written (nor counted toward the exit status); one of no family always is.
+func TestLintFollowsFamilies(t *testing.T) {
+	v4, _, _ := run(t, "-dump", fixture, "-af", "ipv4", "AS65001", "AS65002")
+	v6, _, code := run(t, "-dump", fixture, "-af", "ipv6", "AS65001", "AS65002")
+	if !strings.Contains(v4, "lint/shadowed") {
+		t.Errorf("ipv4: no lint/shadowed:\n%s", v4)
+	}
+	if strings.Contains(v6, "lint/shadowed") {
+		t.Errorf("ipv6: an ipv4-only issue is written:\n%s", v6)
+	}
+	if !strings.Contains(v6, "lint/no-aut-num") || code != exitWarning {
+		t.Errorf("ipv6: exit %d, an issue of no family is not written:\n%s", code, v6)
+	}
+	sw, _, _ := run(t, "-dump", fixture, "-af", "ipv6", "-sweep")
+	if strings.Contains(sw, "lint/shadowed") {
+		t.Errorf("sweep -af ipv6: an ipv4-only issue is written or counted:\n%s", sw)
 	}
 }
