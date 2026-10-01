@@ -54,7 +54,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	seed := fs.Uint64("seed", 1, "sweep: the sample's random `seed`")
 	conc := fs.Int("c", runtime.GOMAXPROCS(0), "`N` checks at once; the output is the same for any N")
 	timeout := fs.Duration("timeout", 10*time.Minute, "give up on the whole run after this long (0: never); a -sweep has no deadline unless this is given")
-	checkTimeout := fs.Duration("check-timeout", time.Minute, "sweep: give each aut-num's lint and each pair's check this long, counting the ones that run out (0: no limit)")
+	checkTimeout := fs.Duration("check-timeout", time.Minute, "sweep: give each aut-num's peer list, its lint, and each pair's check this long, each its own budget, counting the ones that run out (0: no limit)")
 	showVersion := fs.Bool("v", false, "print rpslcheck's version and exit")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage

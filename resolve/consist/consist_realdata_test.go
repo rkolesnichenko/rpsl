@@ -29,11 +29,12 @@ import (
 // and without IndexPeers) and the sweep, and holds every unconditional
 // not-imported finding to the two sides' clause spaces: its example lies in
 // a pure export conjunct and in no import conjunct. Each call has its own
-// budget: an aut-num's Lint and Peers 60s together, each Check 60s, each
-// verify 30s (running out of it is counted as a verify timeout). A limit, a
-// timeout or a pair whose filter cannot be evaluated is counted, and goes
-// no further (a pair counted so is not among "pairs"); any other error
-// fails.
+// budget: an aut-num's Peers 60s, then its Lint 60s (so a lint that runs
+// out never drops its pairs), each Check 60s, each verify 30s (running out
+// of it is counted as a verify timeout). A limit, a timeout or a pair whose
+// filter cannot be evaluated is counted, and goes no further (a pair
+// counted so is not among "pairs"); any other error fails. A direction with
+// no policy either way is counted apart from the consistent ones.
 func TestRealDataConsist(t *testing.T) {
 	dir := os.Getenv("RPSL_REALDATA")
 	if dir == "" {
@@ -123,26 +124,28 @@ func TestRealDataConsist(t *testing.T) {
 		sem <- struct{}{}
 		go func(as types.ASN) {
 			defer func() { <-sem; wg.Done() }()
-			// Each call has a budget of its own — Lint with Peers, each
-			// Check, each verify — so one slow call never starves the rest.
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			defer cancel()
-			issues, err := c.Lint(ctx, as)
+			// Each call has a budget of its own — Peers, Lint, each Check,
+			// each verify — so one slow call never starves the rest, and the
+			// pairs never depend on whether the lint finished.
+			pctx, pcancel := context.WithTimeout(context.Background(), 60*time.Second)
+			pl, err := c.Peers(pctx, as)
+			pcancel()
 			if err != nil { // counted or failed, the aut-num goes no further
-				if !counted(err, count) {
-					t.Errorf("lint %s: %v", as, err)
-				}
-				return
-			}
-			for _, is := range issues {
-				count("lint: "+is.Rule, 1)
-			}
-			pl, err := c.Peers(ctx, as)
-			if err != nil {
 				if !counted(err, count) {
 					t.Errorf("peers %s: %v", as, err)
 				}
 				return
+			}
+			lctx, lcancel := context.WithTimeout(context.Background(), 60*time.Second)
+			issues, err := c.Lint(lctx, as)
+			lcancel()
+			if err != nil { // counted or failed; its pairs are still checked
+				if !counted(err, count) {
+					t.Errorf("lint %s: %v", as, err)
+				}
+			}
+			for _, is := range issues {
+				count("lint: "+is.Rule, 1)
 			}
 			for _, peer := range pl.Forward {
 				if !claim(as, peer) {
@@ -162,7 +165,10 @@ func TestRealDataConsist(t *testing.T) {
 					count("pairs", 1)
 					for _, d := range []Direction{rep.AtoB, rep.BtoA} {
 						count("directions", 1)
-						if len(d.Findings) == 0 {
+						switch {
+						case d.NoPolicy:
+							count("directions with no policy either way", 1)
+						case len(d.Findings) == 0:
 							count("directions consistent", 1)
 						}
 						seen := map[string]bool{}

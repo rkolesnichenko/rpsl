@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rkolesnichenko/rpsl/object"
+	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/buildinfo"
 )
 
@@ -235,5 +237,51 @@ func TestNoPolicyEitherWay(t *testing.T) {
 	sj, _, _ := run(t, "-dump", fixture, "-sweep", "-json")
 	if !strings.Contains(sj, `"no_policy":`) {
 		t.Errorf("sweep JSON totals:\n%s", sj)
+	}
+}
+
+// slowRouters is a MemSource whose inet-rtr lookups wait until the call's
+// context ends: Lint looks them up, Peers never does.
+type slowRouters struct{ *resolve.MemSource }
+
+func (s slowRouters) InetRtr(ctx context.Context, name, source string) (object.InetRtr, error) {
+	<-ctx.Done()
+	return object.InetRtr{}, ctx.Err()
+}
+
+// Ruling R15: a sweep lists an aut-num's peers before its lint, each under
+// its own budget, so a lint that runs out never drops the pairs only that
+// aut-num names.
+func TestSweepPeersBeforeLint(t *testing.T) {
+	const objs = `aut-num: AS65001
+as-name: ONE
+export: to AS65002 announce AS65001
+import: from AS65002 at r1.example.net accept ANY
+mnt-by: MNT-A
+source: RIPE
+
+aut-num: AS65002
+as-name: TWO
+mnt-by: MNT-A
+source: RIPE
+`
+	l := &resolve.DumpLoader{Sources: []string{"RIPE"}, IndexPeers: true}
+	if err := l.Read(strings.NewReader(objs)); err != nil {
+		t.Fatal(err)
+	}
+	src := slowRouters{l.Source()}
+	afs, _ := families("both")
+	var out, errw bytes.Buffer
+	code := runSweep(context.Background(), src, afs, 0, 1, 1, 200*time.Millisecond, newWriter(&out, false), &errw)
+	if code == exitFailed {
+		t.Fatalf("exit %d; stderr %s", code, errw.String())
+	}
+	for _, want := range []string{
+		"  pairs checked (per family)               2\n", // AS65001 and AS65002, both families
+		"  checks over their time budget            1\n", // AS65001's lint
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("want %q in:\n%s", want, out.String())
+		}
 	}
 }

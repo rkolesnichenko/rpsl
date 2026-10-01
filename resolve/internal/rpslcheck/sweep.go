@@ -37,11 +37,11 @@ func parallel(n, conc int, fn func(i int)) {
 }
 
 type lintResult struct {
-	issues  []consist.Issue
-	linted  bool // issues are the aut-num's lint
-	peers   []types.ASN
-	err     error  // the sweep cannot go on
-	timeout string // the lint or the peer list ran over its own budget: why
+	issues   []consist.Issue
+	linted   bool // issues are the aut-num's lint
+	peers    []types.ASN
+	err      error    // the sweep cannot go on
+	timeouts []string // the peer list or the lint ran over its own budget: why, for each
 }
 
 type checkResult struct {
@@ -88,9 +88,10 @@ func (b budget) over(run context.Context, err error) bool {
 func (b budget) overError() string { return fmt.Sprintf("over its time budget of %v", b.d) }
 
 // runSweep audits the aut-nums of src, a dump's MemSource.
-// Each aut-num's lint (with its peer list) and each pair's check runs under
-// its own budget, checkTimeout (0: none): one that runs out is counted and
-// the sweep goes on, while the run's own deadline or cancellation stops it.
+// Each aut-num's peer list, its lint, and each pair's check runs under its
+// own budget, checkTimeout (0: none): one that runs out is counted and the
+// sweep goes on, while the run's own deadline or cancellation stops it. The
+// peer list comes first, so a lint that runs out never drops a pair.
 func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFamily, sample int, seed uint64, conc int, checkTimeout time.Duration, w *writer, stderr io.Writer) int {
 	pi, ok := src.(resolve.PolicyIndex)
 	if !ok {
@@ -113,32 +114,35 @@ func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFam
 	if !w.json {
 		w.only = ast.Warning
 	}
-	// Phase 1: lint each aut-num and list its forward peers.
+	// Phase 1: list each aut-num's forward peers, then lint it, each under
+	// its own budget: the pairs never depend on whether the lint finished.
 	lints := make([]lintResult, len(ases))
 	parallel(len(ases), conc, func(i int) {
 		lr := &lints[i]
-		bg := newBudget(ctx, checkTimeout)
-		defer bg.cancel()
-		issues, err := c.Lint(bg.ctx, ases[i])
+		pb := newBudget(ctx, checkTimeout)
+		pl, err := c.Peers(pb.ctx, ases[i])
+		over := pb.over(ctx, err)
+		pb.cancel()
 		switch {
-		case bg.over(ctx, err):
-			lr.timeout = bg.overError()
-			return
-		case err != nil:
-			lr.err = err
-			return
-		}
-		lr.issues, lr.linted = issues, true
-		pl, err := c.Peers(bg.ctx, ases[i])
-		switch {
-		case bg.over(ctx, err):
-			lr.timeout = bg.overError()
-			return
+		case over:
+			lr.timeouts = append(lr.timeouts, "peers: "+pb.overError())
 		case err != nil && !isLimit(err):
 			lr.err = err
 			return
+		default:
+			lr.peers = pl.Forward
 		}
-		lr.peers = pl.Forward
+		lb := newBudget(ctx, checkTimeout)
+		defer lb.cancel()
+		issues, err := c.Lint(lb.ctx, ases[i])
+		switch {
+		case lb.over(ctx, err):
+			lr.timeouts = append(lr.timeouts, "lint: "+lb.overError())
+		case err != nil:
+			lr.err = err
+		default:
+			lr.issues, lr.linted = issues, true
+		}
 	})
 	if err := ctx.Err(); err != nil { // the run's own deadline, or cancelled
 		fmt.Fprintf(stderr, "rpslcheck: %v\n", err)
@@ -162,7 +166,7 @@ func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFam
 			}
 			t.addIssues(as, lints[i].issues)
 		}
-		if why := lints[i].timeout; why != "" {
+		for _, why := range lints[i].timeouts {
 			t.timeouts++
 			if w.json {
 				w.emit(struct {
@@ -250,7 +254,7 @@ func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFam
 type totals struct {
 	autnums, pairs, directions, consistent, limits int            // limits: pairs over a limit or not decidable
 	noPolicy                                       int            // directions where neither side has a term toward the other
-	timeouts                                       int            // lints and checks over their own time budget
+	timeouts                                       int            // peer lists, lints and checks over their own time budget
 	kinds                                          map[string]int // directions with at least one finding of the kind ("undecided: <why>" by reason)
 	rules                                          map[string]int // lint issues by rule
 	warnings                                       map[types.ASN]int
