@@ -329,12 +329,22 @@ func FuzzPrefixSpace(f *testing.F) {
 	})
 }
 
+// benchBase returns a scattered, non-adjacent /24 address: a multiplicative
+// hash of i (Knuth's constant), masked to the /24 boundary. Consecutive /24s
+// (plain uint32(i)<<8) compress to a handful of canonical nodes under
+// Union/lift, so "100k" measured almost nothing; this spreads them across
+// the whole IPv4 space so they never merge.
+func benchBase(i int) [4]byte {
+	a := (uint32(i) * 2654435761) &^ 0xff
+	var b [4]byte
+	binary.BigEndian.PutUint32(b[:], a)
+	return b
+}
+
 func benchRanges(n int, lo, hi int) []PrefixRange {
 	rs := make([]PrefixRange, n)
 	for i := range rs {
-		var b [4]byte
-		binary.BigEndian.PutUint32(b[:], uint32(i)<<8)
-		rs[i] = mustRange(netip.PrefixFrom(netip.AddrFrom4(b), 24), lo, hi)
+		rs[i] = mustRange(netip.PrefixFrom(netip.AddrFrom4(benchBase(i)), 24), lo, hi)
 	}
 	return rs
 }
@@ -349,11 +359,14 @@ func BenchmarkSpaceOf100k(b *testing.B) {
 
 func BenchmarkSpaceMinus100k(b *testing.B) {
 	x := SpaceOf(benchRanges(100_000, 24, 32)...)
-	var half []PrefixRange
-	for _, r := range benchRanges(100_000, 25, 25) {
-		half = append(half, r)
+	// y holds, for each of x's scattered /24s, only its lower /25 — so the
+	// subtraction has real per-/24 work to do instead of two sides that
+	// collapse to the same few nodes.
+	ys := make([]PrefixRange, 100_000)
+	for i := range ys {
+		ys[i] = mustRange(netip.PrefixFrom(netip.AddrFrom4(benchBase(i)), 25), 25, 25)
 	}
-	y := SpaceOf(half...)
+	y := SpaceOf(ys...)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		x.Minus(y)
