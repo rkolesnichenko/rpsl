@@ -40,7 +40,8 @@ func Rules() []string {
 // attribute inside the aut-num's text — plus where it applies. Identical
 // issues across sessions are merged: Peers and AFs list every session that
 // has it, ascending. An issue no one attribute carries (a peering's missing
-// set, a limit, a peer's missing aut-num) has Attr "" and Index -1.
+// set, a limit, a session's filter that cannot be evaluated, a peer's
+// missing aut-num) has Attr "" and Index -1.
 type Issue struct {
 	ast.Diagnostic
 	Attr  string // the attribute as written: "import", "mp-import", "export", …
@@ -62,7 +63,10 @@ var lintFamilies = []types.AddrFamily{{AFI: types.AFIv4, SAFI: types.SAFIUnicast
 // reported even when no session reaches it; the sessions add the sets
 // missing deeper, inside one that exists. It returns an error wrapping
 // resolve.ErrNotFound when as's own aut-num is not in the Source. A limit hit
-// in one session is a lint/limit issue; the other sessions are still linted.
+// in one session is a lint/limit issue, and a filter that cannot be
+// evaluated for a session (a set reaching AS-ANY inside it, or no normal
+// form: *resolve.AnySetError, *resolve.NotEnumerableError) a lint/undecided
+// issue with the error as its message; the other sessions are still linted.
 func (c *Checker) Lint(ctx context.Context, as types.ASN) ([]Issue, error) {
 	ev := c.eval()
 	an, err := ev.Src.AutNum(ctx, as, ev.Source)
@@ -123,38 +127,66 @@ func namesAny(skipped []string) bool {
 	return false
 }
 
-// session lints as's policies toward peer, in each family.
+// session lints as's policies toward peer, in each family. A limit is a
+// lint/limit issue and a filter that cannot be evaluated for the session a
+// lint/undecided one, neither attributed to an attribute; the session's
+// other policies are still linted.
 func (l *linter) session(ctx context.Context, ev *peval.Evaluator, as, peer types.ASN) error {
-	var err error
 	for _, af := range lintFamilies {
 		s := peval.Session{Local: as, Peer: peer, AF: af}
 		for _, kind := range []string{"import", "export"} {
 			var p peval.Policy
+			var err error
 			if kind == "import" {
 				p, err = ev.Import(ctx, s)
 			} else {
 				p, err = ev.Export(ctx, s)
 			}
-			if isLimit(err) {
-				l.add(RuleLimit, "", -1, err.Error(), peer, &af)
-				continue
+			if ok, err := l.failed(err, peer, af); !ok {
+				if err != nil {
+					return err
+				}
+				l.policy(kind, p, peer, af)
 			}
+		}
+		d, err := ev.Default(ctx, s)
+		if ok, err := l.failed(err, peer, af); !ok {
 			if err != nil {
 				return err
 			}
-			l.policy(kind, p, peer, af)
+			l.defaults(d, peer, af)
 		}
-		d, err := ev.Default(ctx, s)
-		if isLimit(err) {
-			l.add(RuleLimit, "", -1, err.Error(), peer, &af)
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		l.defaults(d, peer, af)
 	}
 	return nil
+}
+
+// failed reports whether a session's evaluation failed in a way that is an
+// issue — a limit (lint/limit) or a filter that cannot be evaluated for the
+// session (lint/undecided) — and records it; any other error is returned.
+func (l *linter) failed(err error, peer types.ASN, af types.AddrFamily) (bool, error) {
+	switch {
+	case err == nil:
+		return false, nil
+	case isLimit(err):
+		l.add(RuleLimit, "", -1, err.Error(), peer, &af)
+		return true, nil
+	case notDecidable(err):
+		l.add(RuleUndecided, "", -1, err.Error(), peer, &af)
+		return true, nil
+	}
+	return false, err
+}
+
+// notDecidable reports whether err is a session's filter that cannot be
+// evaluated for it: one naming a set that reaches AS-ANY
+// (*resolve.AnySetError), or one with no normal form
+// (*resolve.NotEnumerableError), such as a cycle of filter-sets through an
+// AS-path regexp. Lint reports such a session as lint/undecided; Check
+// returns the error.
+func notDecidable(err error) bool {
+	var anyErr *resolve.AnySetError
+	var ne *resolve.NotEnumerableError
+	return errors.As(err, &anyErr) || errors.As(err, &ne)
 }
 
 func isLimit(err error) bool {

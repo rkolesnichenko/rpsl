@@ -122,8 +122,8 @@ func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFam
 	})
 	for i, cr := range checks {
 		switch {
-		case isLimit(cr.err):
-			t.limits++
+		case isLimit(cr.err) || notDecidable(cr.err):
+			t.limits++ // a limit, or a filter that cannot be evaluated for the pair
 			if w.json {
 				w.emit(struct {
 					Type  string `json:"type"`
@@ -153,7 +153,7 @@ func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFam
 
 // totals is what a sweep counts.
 type totals struct {
-	autnums, pairs, directions, consistent, limits int
+	autnums, pairs, directions, consistent, limits int            // limits: pairs over a limit or not decidable
 	kinds                                          map[string]int // directions with at least one finding of the kind ("undecided: <why>" by reason)
 	rules                                          map[string]int // lint issues by rule
 	warnings                                       map[types.ASN]int
@@ -261,7 +261,7 @@ func (t *totals) write(w *writer) {
 	for _, k := range sortedKeys(t.rules) {
 		row(k, t.rules[k])
 	}
-	row("pairs over a limit", t.limits)
+	row("pairs over a limit or not decidable", t.limits)
 	if len(top) > 0 {
 		var parts []string
 		for _, as := range top {

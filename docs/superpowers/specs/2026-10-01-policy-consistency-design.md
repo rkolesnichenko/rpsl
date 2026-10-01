@@ -306,7 +306,7 @@ type Issue struct {
 | `lint/missing-set` | Warning | a filter or peering names a set the Source does not have |
 | `lint/missing-router` | Warning | a peering names an inet-rtr the Source does not have |
 | `lint/no-aut-num` | Warning | a peering names an AS whose aut-num the Source does not have |
-| `lint/undecided` | Info | a term peval cannot decide; the message carries the Why |
+| `lint/undecided` | Info | a term peval cannot decide (the message carries the Why), or a session whose filter cannot be evaluated (AnySetError, NotEnumerableError; the message is the error, no attribute) |
 | `lint/limit` | Warning | a session's evaluation hit a limit; the other sessions are still linted |
 
 - **Shadowing is exact.** Clause k is shadowed when, for every signature T

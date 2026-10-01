@@ -28,8 +28,8 @@ import (
 // forward peers in both families. It measures the load (time, heap with
 // and without IndexPeers) and the sweep, and holds every unconditional
 // not-imported finding to the two sides' clause spaces: its example lies in
-// a pure export conjunct and in no import conjunct. A limit or a timeout is
-// counted; any other error fails.
+// a pure export conjunct and in no import conjunct. A limit, a timeout or
+// a pair whose filter cannot be evaluated is counted; any other error fails.
 func TestRealDataConsist(t *testing.T) {
 	dir := os.Getenv("RPSL_REALDATA")
 	if dir == "" {
@@ -176,8 +176,9 @@ func TestRealDataConsist(t *testing.T) {
 	t.Logf("%d aut-nums swept in %s:\n%s", len(ases), time.Since(start).Round(time.Second), b.String())
 }
 
-// counted counts a limit or a timeout and reports true; nil is true too;
-// any other error is false.
+// counted counts a limit, a timeout or a filter that cannot be evaluated
+// for a session (Check's error; Lint reports it as lint/undecided) and
+// reports true; nil is true too; any other error is false.
 func counted(err error, count func(string, int)) bool {
 	var tl *resolve.SetTooLargeError
 	switch {
@@ -191,6 +192,9 @@ func counted(err error, count func(string, int)) bool {
 		return true
 	case isLimit(err):
 		count("limit: flatten", 1)
+		return true
+	case notDecidable(err):
+		count("not decidable", 1)
 		return true
 	}
 	return false

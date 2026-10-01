@@ -158,7 +158,9 @@ func (c *Checker) session(local, peer types.ASN, lrtr, prtr netip.Addr, af types
 // B's export toward A with A's import from B (BtoA). A missing aut-num is a
 // NoAutNum finding in each direction, not an error. The error is an invalid
 // Pair (an AS unset, A equal to B, or AF not ipv4.unicast or ipv6.unicast),
-// a limit, a cancelled context, or a Source failure.
+// a limit, a filter that cannot be evaluated for the session (wrapping a
+// *resolve.AnySetError or *resolve.NotEnumerableError: Lint reports it as
+// lint/undecided), a cancelled context, or a Source failure.
 func (c *Checker) Check(ctx context.Context, p Pair) (Report, error) {
 	switch {
 	case p.A == 0 || p.B == 0:

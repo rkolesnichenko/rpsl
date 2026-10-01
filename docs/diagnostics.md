@@ -141,7 +141,11 @@ code):
   source does not have.
 - **`lint/undecided`** (Info) — a term `peval` cannot decide for a session (a
   router not given, a peering regexp, another protocol); the message gives
-  the reason.
+  the reason. A session whose filter cannot be evaluated at all — it names a
+  set that reaches `AS-ANY` (inside an AS-path regexp, say), or has no normal
+  form, such as a cycle of filter-sets through a regexp — is reported the
+  same way, against no attribute, with the error as its message; the other
+  sessions are still linted. `Check` returns that error.
 - Sessions run toward every AS the aut-num's peerings name and every aut-num
   naming it (when the source keeps a peer index). A policy toward `AS-ANY` is
   linted through a session with the reserved AS4294967295 (RFC 7300), never

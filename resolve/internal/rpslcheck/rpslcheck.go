@@ -227,8 +227,9 @@ func (r *runner) lint(as types.ASN) int {
 	return exitClean
 }
 
-// check writes one pair's report; exitFailed when it could not (a limit
-// included, outside a sweep), else exitClean.
+// check writes one pair's report; exitFailed when it could not (a limit or
+// a filter that cannot be evaluated included, outside a sweep), else
+// exitClean.
 func (r *runner) check(p consist.Pair) int {
 	rep, err := r.c.Check(r.ctx, p)
 	if err != nil {
@@ -244,4 +245,13 @@ func (r *runner) check(p consist.Pair) int {
 func isLimit(err error) bool {
 	var tl *resolve.SetTooLargeError
 	return errors.As(err, &tl) || errors.Is(err, policy.ErrFlattenTooLarge)
+}
+
+// notDecidable reports whether err is a filter that cannot be evaluated for
+// a session: it names a set reaching AS-ANY, or has no normal form. A sweep
+// counts such a pair with the limits; a single check fails on it.
+func notDecidable(err error) bool {
+	var anyErr *resolve.AnySetError
+	var ne *resolve.NotEnumerableError
+	return errors.As(err, &anyErr) || errors.As(err, &ne)
 }

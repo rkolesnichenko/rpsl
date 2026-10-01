@@ -137,3 +137,31 @@ func TestNote(t *testing.T) {
 		t.Errorf("note %q with an index", got)
 	}
 }
+
+// A pair whose filter cannot be evaluated (a regexp's set reaching AS-ANY,
+// AS1887's shape) is counted beside the limits, and the sweep goes on; a
+// single check of it still fails.
+func TestSweepCountsUndecidable(t *testing.T) {
+	const dump = "../../testdata/rpslcheck/undecidable.rpsl"
+	out, errw, code := run(t, "-dump", dump, "-sweep")
+	if code == exitFailed {
+		t.Fatalf("exit %d; stderr %s", code, errw)
+	}
+	if !strings.Contains(out, "  pairs over a limit or not decidable      1\n") {
+		t.Errorf("totals:\n%s", out)
+	}
+	out, errw, _ = run(t, "-dump", dump, "-sweep", "-json")
+	var rec struct{ Type, A, B, AF, Error string }
+	found := false
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if err := json.Unmarshal([]byte(line), &rec); err == nil && rec.Type == "limit" {
+			found = rec.A == "AS65001" && rec.B == "AS65002" && rec.AF == "ipv4.unicast" && strings.Contains(rec.Error, "AS-ANY")
+		}
+	}
+	if !found {
+		t.Errorf("no limit record for AS65001 and AS65002 with the error:\n%s%s", out, errw)
+	}
+	if _, _, code := run(t, "-dump", dump, "AS65001", "AS65002"); code != exitFailed {
+		t.Errorf("single check: exit %d, want %d", code, exitFailed)
+	}
+}

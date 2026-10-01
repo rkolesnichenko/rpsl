@@ -352,3 +352,64 @@ func TestPeersAS0(t *testing.T) {
 		})
 	}
 }
+
+// A session whose filter cannot be normalized — AS1887's shape: an AS-path
+// regexp names a set that reaches AS-ANY — is a lint/undecided issue with
+// no attribute, and the other sessions are still linted; Check still
+// returns the error.
+func TestLintFilterNotEvaluable(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		objects []string
+		wantErr func(error) bool
+	}{
+		{
+			name: "AS-ANY inside a regexp's set",
+			objects: []string{
+				autNum(1, "export: to AS2 announce <AS1:AS-CUST:AS-RCVD> OR <AS1:AS-PEERS:AS-RCVD$>", "import: from AS3 accept AS-NOPE"),
+				autNum(2, "import: from AS1 accept <AS1:AS-PEERS:AS-RCVD$>"), autNum(3),
+				"as-set: AS1:AS-CUST:AS-RCVD\nmembers: AS1\nmnt-by: MNT-A\nsource: RIPE\n",
+				"as-set: AS1:AS-PEERS:AS-RCVD\nmembers: AS1:AS-PEERS:AS2\nmnt-by: MNT-A\nsource: RIPE\n",
+				"as-set: AS1:AS-PEERS:AS2\nmembers: AS-ANY\nmnt-by: MNT-A\nsource: RIPE\n",
+			},
+			wantErr: func(err error) bool { var e *resolve.AnySetError; return errors.As(err, &e) },
+		},
+		{
+			name: "a cycle of filter-sets through a regexp",
+			objects: []string{
+				autNum(1, "export: to AS2 announce FLTR-X", "import: from AS3 accept AS-NOPE"),
+				autNum(2, "import: from AS1 accept ANY"), autNum(3),
+				"filter-set: FLTR-X\nfilter: <^AS1$> OR FLTR-Y\nmnt-by: MNT-A\nsource: RIPE\n",
+				"filter-set: FLTR-Y\nfilter: FLTR-X\nmnt-by: MNT-A\nsource: RIPE\n",
+			},
+			wantErr: func(err error) bool { var e *resolve.NotEnumerableError; return errors.As(err, &e) },
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ch := checker(t, c.objects...)
+			_, cerr := ch.Check(context.Background(), Pair{A: 1, B: 2, AF: v4})
+			if !c.wantErr(cerr) {
+				t.Fatalf("Check: %v, want the error peval wraps", cerr)
+			}
+			is := lint(t, ch, 1)
+			var undecided []Issue
+			for _, i := range is {
+				if i.Rule == RuleUndecided {
+					undecided = append(undecided, i)
+				}
+			}
+			if len(undecided) != 1 {
+				t.Fatalf("issues\n%v\nwant one lint/undecided", is)
+			}
+			u := undecided[0]
+			if u.Attr != "" || u.Index != -1 || u.Message != cerr.Error() || u.Severity != ast.Info ||
+				!slices.Equal(u.Peers, []types.ASN{2}) || !slices.Equal(u.AFs, []types.AddrFamily{v4}) {
+				t.Errorf("issue %s, want the error %q for AS2 in ipv4.unicast", issueText(u), cerr)
+			}
+			// The session toward AS3 is still linted: its missing filter set.
+			if !slices.ContainsFunc(is, func(i Issue) bool { return i.Rule == RuleEmpty && slices.Equal(i.Peers, []types.ASN{3}) }) {
+				t.Errorf("issues\n%v\nwant AS3's session linted", is)
+			}
+		})
+	}
+}
