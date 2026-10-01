@@ -239,6 +239,21 @@ func TestSpaceOperations(t *testing.T) {
 			minus:  nil,
 			subset: true,
 		},
+		{
+			// a's four /26 descendants of 10.0.0.0/24 never coincide with b's
+			// two /27 descendants of 10.0.0.0/26 (different lengths), so a
+			// and b are disjoint sets of prefixes; but 10.0.0.0/26 itself
+			// (one of a's four members) is also the root b hangs its /27s
+			// under, so the union's node there must lift the length-26 fact
+			// up past that root while keeping the extra length-27 fact below.
+			name:   "minus disjoint by length, union must still lift",
+			a:      []string{"10.0.0.0/24^26"},
+			b:      []string{"10.0.0.0/26^27"},
+			union:  []string{"10.0.0.0/24^26", "10.0.0.0/26^27"},
+			inter:  nil,
+			minus:  []string{"10.0.0.0/24^26"},
+			subset: false,
+		},
 	} {
 		a, b := spaceOf(t, c.a...), spaceOf(t, c.b...)
 		for _, op := range []struct {

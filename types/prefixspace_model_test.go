@@ -77,6 +77,50 @@ func under(root netip.Prefix, l int, i uint64) netip.Prefix {
 	return netip.PrefixFrom(a, l)
 }
 
+// canonErr reports the first canonical-form violation (see spaceNode) found
+// under n, a node at depth d of a family width bits wide; anc is the lengths
+// an ancestor already holds.
+func canonErr(n *spaceNode, d, width int, anc lenMask) error {
+	if n == nil {
+		return nil
+	}
+	if n.mask.isZero() && n.child[0] == nil && n.child[1] == nil {
+		return fmt.Errorf("empty node at depth %d", d)
+	}
+	if !n.mask.andNot(geMask[d]).isZero() {
+		return fmt.Errorf("bit below depth %d", d)
+	}
+	if !n.mask.and(anc).isZero() {
+		return fmt.Errorf("bit an ancestor holds at depth %d", d)
+	}
+	if n.child[0] != nil && n.child[1] != nil && !n.child[0].mask.and(n.child[1].mask).isZero() {
+		return fmt.Errorf("unlifted bit at depth %d", d)
+	}
+	if d == width && (n.child[0] != nil || n.child[1] != nil) {
+		return fmt.Errorf("children past width")
+	}
+	for _, c := range n.child {
+		if err := canonErr(c, d+1, width, anc.or(n.mask)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkCanonical fails the test if s violates the canonical-form invariants:
+// an empty node, a mask bit below the node's depth, a bit an ancestor
+// already holds, a bit both children hold (unlifted), or a child beyond the
+// family width.
+func checkCanonical(t *testing.T, label string, s PrefixSpace) {
+	t.Helper()
+	if err := canonErr(s.v4, 0, 32, lenMask{}); err != nil {
+		t.Fatalf("%s: v4 not canonical: %v", label, err)
+	}
+	if err := canonErr(s.v6, 0, 128, lenMask{}); err != nil {
+		t.Fatalf("%s: v6 not canonical: %v", label, err)
+	}
+}
+
 type expr struct {
 	op   string // "ranges", "union", "intersect", "minus"
 	rs   []PrefixRange
@@ -100,16 +144,25 @@ func (e *expr) contains(p netip.Prefix) bool {
 	return e.l.contains(p) && !e.r.contains(p)
 }
 
-func (e *expr) space() PrefixSpace {
+// space builds e's PrefixSpace, checking every intermediate Union/Intersect/
+// Minus result for canonical form as it goes, so a non-canonical result
+// anywhere in the tree fails the test rather than being re-canonicalized by
+// an operation further up (as intersecting with uniSpace would).
+func (e *expr) space(t *testing.T) PrefixSpace {
+	t.Helper()
+	var s PrefixSpace
 	switch e.op {
 	case "ranges":
-		return SpaceOf(e.rs...)
+		s = SpaceOf(e.rs...)
 	case "union":
-		return e.l.space().Union(e.r.space())
+		s = e.l.space(t).Union(e.r.space(t))
 	case "intersect":
-		return e.l.space().Intersect(e.r.space())
+		s = e.l.space(t).Intersect(e.r.space(t))
+	default:
+		s = e.l.space(t).Minus(e.r.space(t))
 	}
-	return e.l.space().Minus(e.r.space())
+	checkCanonical(t, e.String(), s)
+	return s
 }
 
 func (e *expr) String() string {
@@ -179,7 +232,8 @@ func lessPrefix(a, b netip.Prefix) bool {
 // the pairwise properties (Equal, Subset).
 func checkExpr(t *testing.T, label string, e, other *expr) {
 	t.Helper()
-	s := e.space()
+	s := e.space(t)
+	checkCanonical(t, label, s) // the result itself, not only in (below), which Intersect with uniSpace would re-canonicalize regardless
 	for _, p := range append(slices.Clone(universe), probes...) {
 		if got, want := s.Contains(p), e.contains(p); got != want {
 			t.Fatalf("%s: %v: Contains(%v) = %v, the oracle %v\nspace %v", label, e, p, got, want, s)
@@ -229,7 +283,7 @@ func checkExpr(t *testing.T, label string, e, other *expr) {
 	if !in.Union(in).Equal(in) || !in.Minus(PrefixSpace{}).Equal(in) || !in.Intersect(in).Equal(in) {
 		t.Fatalf("%s: %v: an identity operation changed the space", label, e)
 	}
-	o := other.space().Intersect(uniSpace)
+	o := other.space(t).Intersect(uniSpace)
 	owant := other.members()
 	if got, want := in.Equal(o), slices.Equal(want, owant); got != want {
 		t.Fatalf("%s: Equal(%v, %v) = %v, the oracle %v", label, e, other, got, want)
