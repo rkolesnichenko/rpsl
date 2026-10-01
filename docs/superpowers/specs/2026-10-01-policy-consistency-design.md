@@ -320,7 +320,9 @@ that does, with a prefix in Ranges, is refused.
 // no routers given, and reports what is wrong or dead in them. A policy
 // toward AS-ANY is linted through one extra session with the reserved
 // AS4294967295 (RFC 7300, never a real peer); that session's issues list no
-// peer. Every set a policy names directly (in a peering or a filter) is
+// peer, and a term whose filter names PeerAS or a set template is left out
+// of that session's lint/empty and lint/shadowed, since it means nothing
+// without a peer. Every set a policy names directly (in a peering or a filter) is
 // looked up once by a static walk and reported against that attribute even
 // when no session reaches it; a set missing only inside one that exists (a
 // member of a nested as-set, say) is instead reported by whichever sessions
@@ -365,8 +367,10 @@ type Issue struct {
 - **`lint/empty` and `lint/missing-set` together.** A clause that is empty
   because its sets are missing gets both.
 - **Sessions run toward Forward ∪ Reverse**, and, for a policy naming
-  AS-ANY, also toward the reserved AS4294967295 sentinel; AS0 is never a
-  session either (`Peers`, §4.1).
+  AS-ANY, also toward the reserved AS4294967295 sentinel, whose session
+  leaves out any term whose filter names PeerAS or a set template from its
+  `lint/empty`/`lint/shadowed` checks (it means nothing without a real
+  peer); AS0 is never a session either (`Peers`, §4.1).
 - **A session that cannot be evaluated is undecidable, not fatal.** `Lint`
   reports `lint/undecided` and keeps linting the aut-num's other sessions;
   `Check`, by contrast, returns that same error to its caller (§4.1) —

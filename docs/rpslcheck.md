@@ -260,9 +260,10 @@ finding or issue — a `no-aut-num` finding has no `ranges`, a consistent
 
 `resolve/consist`'s own real-data test, `TestRealDataConsist`
 (`resolve/consist/consist_realdata_test.go`), swept RIPE's split dumps
-(2026-10-01) whole, each aut-num's Lint/Peers and each pair's Check under its
-own 60-second budget. One measured run, verbatim (the totals depend on that
-budget and on the machine, so treat them as one run's, not a guarantee):
+(fetched 2026-09-27) whole, run on 2026-10-01, each aut-num's Lint/Peers and
+each pair's Check under its own 60-second budget. One measured run, verbatim
+(the totals depend on that budget and on the machine, so treat them as one
+run's, not a guarantee):
 
 | Measure | Value |
 | --- | --- |

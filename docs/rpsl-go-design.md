@@ -916,8 +916,11 @@ documentation specifies, ported once, applied to both.
 
 `resolve/consist` (v0.23.0) is the consumer §8.10 named next: whether two
 neighbours' policies agree, and what is wrong or dead in one aut-num's own.
-It is pure like `peval`, built entirely on top of it — no new I/O, no new
-limits beyond `peval`'s and the `Expander`'s.
+It is pure like `peval`, built entirely on top of it — no new I/O. The one
+new limit is `Checker.MaxRanges`, a cap (default 64) on how many ranges a
+single `Finding.Ranges` lists; past it the finding is marked `Truncated`
+rather than growing without bound, the same discipline `peval`'s and the
+`Expander`'s own limits follow.
 
 **What `Check` compares.** For a `Pair` (two ASNs, one address family —
 `ipv4.unicast` or `ipv6.unicast`, never multicast), `Check` evaluates A's
@@ -957,20 +960,34 @@ demoted to `Undecided` when the importer has an undecided term, and every
 principle as `peval.Undecided`: never report a disagreement that an
 unevaluated term could in fact resolve.
 
-**One-sided policies.** `NoImport` fires when the exporter has decided
-export terms toward the peer and the importer has no decided import term
-covering it at all (Warning: likely a stale or missing `import:`); `NoExport`
-the same the other way (Info: the importer accepting more than the exporter
-promises is the common, harmless shape). When neither side has any term for
-the other, there is no finding — the registry simply does not show a
-peering. `NoAutNum` is one finding each way when an aut-num named in the
-`Pair` is missing from the `Source` entirely; nothing else about the pair is
-compared.
+**One-sided policies.** These apply only where one side has no decided
+clause at all toward the peer (a side with any decided clause always goes
+through the signature comparison above instead). `NoImport` fires when the
+exporter has decided export terms and the importer has none (Warning:
+likely a stale or missing `import:`); `NoExport` the same the other way
+(Info: the importer accepting more than the exporter promises is the common,
+harmless shape). The same demotion as above applies here too: an importer
+with no decided term but an undecided one might still cover the exporter, so
+the finding is `Undecided{Of: NoImport, Why: WhyImporterUndecided}` instead
+of a bare `NoImport` — and symmetrically for `NoExport`. When *neither* side
+has a decided clause, an exporter's undecided term can still mean it exports
+(`Undecided{Of: NoImport, Why: WhyExporterUndecided}`) and an importer's
+undecided term can still mean it imports (`Undecided{Of: NoExport, Why:
+WhyImporterUndecided}`); both can fire together, with no prefix to name.
+Only when neither side has any term for the other — decided or not — is
+there no finding: the registry simply does not show a peering. `NoAutNum` is
+one finding each way when an aut-num named in the `Pair` is missing from the
+`Source` entirely; nothing else about the pair is compared.
 
 **Lint.** `Lint` evaluates one aut-num's import, export and default policies
 toward every peer `Peers` finds (forward: its own peerings, as-sets
-expanded; reverse: who names it back, when the `Source` keeps an index) and
-reports what is dead or wrong: `lint/shadowed` (an earlier decided clause
+expanded; reverse: who names it back, when the `Source` keeps an index). A
+policy toward `AS-ANY` is linted through one extra session toward the
+reserved `AS4294967295` (RFC 7300), never a real peer — its issues list no
+peer — and, since a term naming `PeerAS` or a set template means nothing
+without a real one, such a term is left out of that one session's
+`lint/empty` and `lint/shadowed` checks (its other terms are still linted
+normally). `Lint` reports what is dead or wrong: `lint/shadowed` (an earlier decided clause
 already covers everything a later one would ever match — computed by the
 same per-signature subset test `Check` uses, so it is exact: an undecided
 term can only ever add routes an earlier clause does not already cover, so
