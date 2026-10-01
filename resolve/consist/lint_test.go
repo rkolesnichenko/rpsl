@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/rkolesnichenko/rpsl/ast"
+	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/peval"
 	"github.com/rkolesnichenko/rpsl/types"
@@ -263,6 +264,26 @@ func TestLintWithoutConcretePeers(t *testing.T) {
 			name:    "AS-ANY with NOT PeerAS first",
 			objects: []string{autNum(1, "import: from AS-ANY accept NOT PeerAS", "import: from AS-ANY accept AS-ONE")},
 		},
+		{
+			// Ruling R15: PeerAS inside a filter-set is as peer-dependent as
+			// one written in the term: no lint/shadowed toward the sentinel.
+			name: "AS-ANY with PeerAS inside a filter-set",
+			objects: []string{autNum(1, "import: from AS-ANY accept {10.1.0.0/16}", "import: from AS-ANY accept FLTR-PEER"),
+				"filter-set: FLTR-PEER\nfilter: PeerAS OR {10.1.0.0/16}\nmnt-by: MNT-A\nsource: RIPE\n"},
+		},
+		{
+			// …and inside a filter-set's AS-path regexp.
+			name: "AS-ANY with a regexp naming PeerAS inside a filter-set",
+			objects: []string{autNum(1, "import: from AS-ANY accept <^AS1>", "import: from AS-ANY accept FLTR-PEER-RE"),
+				"filter-set: FLTR-PEER-RE\nfilter: <^PeerAS> OR <^AS1>\nmnt-by: MNT-A\nsource: RIPE\n"},
+		},
+		{
+			// A filter-set without PeerAS is linted toward the sentinel.
+			name: "AS-ANY with a filter-set of no peer",
+			objects: []string{autNum(1, "import: from AS-ANY accept {10.1.0.0/16}", "import: from AS-ANY accept FLTR-PLAIN"),
+				"filter-set: FLTR-PLAIN\nfilter: {10.1.0.0/16}\nmnt-by: MNT-A\nsource: RIPE\n"},
+			want: []string{"lint/shadowed import#1 L4: import term AS-ANY | FLTR-PLAIN never decides: earlier terms accept every route it accepts [] [ipv4.unicast]"},
+		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			var got []string
@@ -455,5 +476,50 @@ source: RIPE
 	// "member-of: AS-CLAIM\n" (20), "import: from AS65011 accept ANY\n" (32).
 	if want := []string{"L5-5 C1 B82"}; !slices.Equal(got, want) {
 		t.Errorf("shadowed spans %v, want %v; issues %v", got, want, is)
+	}
+}
+
+// evilSource answers AS-EVIL with a route-set of that name.
+type evilSource struct{ resolve.PolicySource }
+
+func (s evilSource) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error) {
+	if ref.Name().String() == "AS-EVIL" {
+		return object.RouteSet{Name: ref.Name()}, nil
+	}
+	return s.PolicySource.GetSet(ctx, ref)
+}
+
+// The static walk treats a set whose class is not its name's as missing, as
+// the engine does.
+func TestLintSetOfAnotherClass(t *testing.T) {
+	c := checker(t, autNum(1, "import: from AS2 accept AS-EVIL"), autNum(2))
+	c.Eval.Src = evilSource{c.Eval.Src}
+	var got []string
+	for _, i := range lint(t, c, 1) {
+		if i.Rule == RuleMissingSet && i.Peers == nil {
+			got = append(got, issueText(i))
+		}
+	}
+	if want := []string{"lint/missing-set import#0 L3: the policy names AS-EVIL, which is not in the source [] []"}; !slices.Equal(got, want) {
+		t.Errorf("static missing-set issues %v, want %v", got, want)
+	}
+}
+
+// A peer's aut-num is looked up in the Evaluator's registry, as Check looks
+// it up: one only another registry holds is lint/no-aut-num.
+func TestLintPeerAutNumSource(t *testing.T) {
+	c := checker(t, autNum(1, "import: from AS2 accept ANY"),
+		strings.Replace(autNum(2), "source: RIPE", "source: RADB", 1))
+	c.Eval.Source = "RIPE"
+	var got []string
+	for _, i := range lint(t, c, 1) {
+		got = append(got, i.Rule)
+	}
+	if !slices.Contains(got, RuleNoAutNum) {
+		t.Errorf("rules %v, want %s", got, RuleNoAutNum)
+	}
+	r := check(t, c, Pair{A: 1, B: 2, AF: v4})
+	if kinds(r.AtoB)[0] != "no-aut-num" {
+		t.Errorf("Check: AtoB %v", kinds(r.AtoB))
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/rkolesnichenko/rpsl/ast"
 	"github.com/rkolesnichenko/rpsl/lexer"
@@ -59,9 +60,13 @@ var lintFamilies = []types.AddrFamily{{AFI: types.AFIv4, SAFI: types.SAFIUnicast
 // in Peers' Forward and Reverse lists, in ipv4.unicast and ipv6.unicast,
 // with no routers given, and reports what is wrong or dead in them. A policy
 // toward AS-ANY is linted through a session with the reserved AS4294967295
-// (RFC 7300), never a real peer: its issues list no peer, and a term whose
-// filter names PeerAS or a set template is left out of that session's
-// lint/empty and lint/shadowed, since it means nothing without a peer. Every
+// (RFC 7300), never a real peer: its issues list no peer, and a term that
+// depends on the peer is left out of that session's lint/empty and
+// lint/shadowed, since it means nothing without one — a term whose filter
+// names PeerAS or a set template (directly, in an AS-path regexp, or inside
+// a filter-set it names, at any depth), or whose normal form differs when
+// the session is evaluated again toward AS65535, RFC 7300's other reserved
+// AS. Every
 // set a policy names directly is looked up statically, so a missing one is
 // reported even when no session reaches it; the sessions add the sets
 // missing deeper, inside one that exists. It returns an error wrapping
@@ -78,14 +83,14 @@ func (c *Checker) Lint(ctx context.Context, as types.ASN) ([]Issue, error) {
 	}
 	peers, err := c.Peers(ctx, as)
 	if isLimit(err) {
-		l := newLinter(an)
+		l := newLinter(ctx, ev, an)
 		l.add(RuleLimit, "", -1, err.Error(), 0, nil)
 		return l.issues(), nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	l := newLinter(an)
+	l := newLinter(ctx, ev, an)
 	if err := l.sets(ctx, c); err != nil {
 		return nil, err
 	}
@@ -96,7 +101,7 @@ func (c *Checker) Lint(ctx context.Context, as types.ASN) ([]Issue, error) {
 	slices.Sort(all)
 	all = slices.DeleteFunc(slices.Compact(all), func(a types.ASN) bool { return a == as || a == anyPeer })
 	for _, peer := range all {
-		if _, err := ev.Src.AutNum(ctx, peer, ""); errors.Is(err, resolve.ErrNotFound) {
+		if _, err := ev.Src.AutNum(ctx, peer, ev.Source); errors.Is(err, resolve.ErrNotFound) {
 			l.add(RuleNoAutNum, "", -1, fmt.Sprintf("%s's aut-num is not in the source", peer), peer, nil)
 		} else if err != nil {
 			return nil, err
@@ -109,6 +114,9 @@ func (c *Checker) Lint(ctx context.Context, as types.ASN) ([]Issue, error) {
 		if err := l.session(ctx, ev, as, anyPeer); err != nil {
 			return nil, err
 		}
+	}
+	if l.err != nil {
+		return nil, l.err
 	}
 	return l.issues(), nil
 }
@@ -133,34 +141,103 @@ func namesAny(skipped []string) bool {
 // session lints as's policies toward peer, in each family. A limit is a
 // lint/limit issue and a filter that cannot be evaluated for the session a
 // lint/undecided one, neither attributed to an attribute; the session's
-// other policies are still linted.
+// other policies are still linted. Toward the sentinel (anyPeer), each
+// policy is evaluated a second time toward anyPeer2, and a clause that
+// differs between the two depends on the peer (PeerAS at any depth, inside
+// a filter-set too): it is left out of lint/empty and lint/shadowed.
 func (l *linter) session(ctx context.Context, ev *peval.Evaluator, as, peer types.ASN) error {
 	for _, af := range lintFamilies {
 		s := peval.Session{Local: as, Peer: peer, AF: af}
 		for _, kind := range []string{"import", "export"} {
-			var p peval.Policy
-			var err error
-			if kind == "import" {
-				p, err = ev.Import(ctx, s)
-			} else {
-				p, err = ev.Export(ctx, s)
+			eval := func(s peval.Session) (peval.Policy, error) {
+				if kind == "import" {
+					return ev.Import(ctx, s)
+				}
+				return ev.Export(ctx, s)
 			}
-			if ok, err := l.failed(err, peer, af); !ok {
+			p, err := eval(s)
+			if ok, err := l.failed(err, peer, af); ok || err != nil {
 				if err != nil {
 					return err
 				}
-				l.policy(kind, p, peer, af)
+				continue
 			}
+			var dep map[string]bool
+			if peer == anyPeer {
+				s2 := s
+				s2.Peer = anyPeer2
+				p2, err := eval(s2)
+				if err != nil && !isLimit(err) && !notDecidable(err) {
+					return err
+				}
+				dep = dependent(p.Clauses, p2.Clauses, err != nil)
+			}
+			l.policy(kind, p, peer, af, dep)
 		}
 		d, err := ev.Default(ctx, s)
-		if ok, err := l.failed(err, peer, af); !ok {
+		if ok, err := l.failed(err, peer, af); ok || err != nil {
 			if err != nil {
 				return err
 			}
-			l.defaults(d, peer, af)
+			continue
 		}
+		var dep map[string]bool
+		if peer == anyPeer {
+			s2 := s
+			s2.Peer = anyPeer2
+			d2, err := ev.Default(ctx, s2)
+			if err != nil && !isLimit(err) && !notDecidable(err) {
+				return err
+			}
+			dep = dependent(networks(d.Clauses), networks(d2.Clauses), err != nil)
+		}
+		l.defaults(d, peer, af, dep)
 	}
 	return nil
+}
+
+// anyPeer2 is the second peer the sentinel session is evaluated toward:
+// AS65535, reserved by RFC 7300 as AS4294967295 is.
+const anyPeer2 types.ASN = 65535
+
+// clauseKey identifies a clause across two evaluations of one policy.
+func clauseKey(c peval.Clause) string { return fmt.Sprintf("%d %s", c.Index, c.Term) }
+
+// dependent returns the keys of the clauses of a (toward anyPeer) whose
+// normal form differs in b (toward anyPeer2), or that b lacks: they depend
+// on the peer. failed (b's evaluation failed) makes every clause dependent.
+func dependent(a, b []peval.Clause, failed bool) map[string]bool {
+	other := map[string][]conj{}
+	for _, cl := range b {
+		other[clauseKey(cl)] = append(other[clauseKey(cl)], sideOf(peval.Policy{Clauses: []peval.Clause{cl}}).conjs...)
+	}
+	dep := map[string]bool{}
+	for _, cl := range a {
+		k := clauseKey(cl)
+		cs, ok := other[k]
+		if failed || !ok || !sameConjs(sideOf(peval.Policy{Clauses: []peval.Clause{cl}}).conjs, cs) {
+			dep[k] = true
+		}
+	}
+	return dep
+}
+
+// sameConjs reports whether two conjunct lists are the same, in order:
+// signatures and spaces.
+func sameConjs(a, b []conj) bool {
+	return slices.EqualFunc(a, b, func(x, y conj) bool { return slices.Equal(x.sig, y.sig) && x.space.Equal(y.space) })
+}
+
+// networks returns default clauses as peval clauses of their networks
+// filters (a default without one is left out), for dependent.
+func networks(ds []peval.DefaultClause) []peval.Clause {
+	var out []peval.Clause
+	for _, dc := range ds {
+		if dc.Networks != nil {
+			out = append(out, peval.Clause{Index: dc.Index, Filter: *dc.Networks})
+		}
+	}
+	return out
 }
 
 // failed reports whether a session's evaluation failed in a way that is an
@@ -203,6 +280,12 @@ type linter struct {
 	attrs map[string][]ast.Attribute // "import", "export", "default" -> those attributes (and their mp- forms), in order
 	first lexer.Span                 // the object's first attribute: spans are made relative to it
 	m     map[issueKey]*Issue
+	// For filterSetDependent: the lookups' context and Evaluator, what each
+	// filter-set was found to be, and the first Source failure met.
+	ctx     context.Context
+	ev      *peval.Evaluator
+	fltrDep map[string]bool
+	err     error
 	// reported holds the sets the static walk (sets) found missing, per
 	// attribute; a session reports a missing set for an attribute only when
 	// the walk did not report it for that attribute — so a set missing inside
@@ -225,8 +308,9 @@ type issueKey struct {
 	msg        string
 }
 
-func newLinter(an object.AutNum) *linter {
-	l := &linter{an: an, attrs: map[string][]ast.Attribute{}, m: map[issueKey]*Issue{}, reported: map[setKey]bool{}}
+func newLinter(ctx context.Context, ev *peval.Evaluator, an object.AutNum) *linter {
+	l := &linter{an: an, attrs: map[string][]ast.Attribute{}, m: map[issueKey]*Issue{}, reported: map[setKey]bool{},
+		ctx: ctx, ev: ev, fltrDep: map[string]bool{}}
 	if raw := an.Raw(); raw != nil {
 		for i, a := range raw.Attributes() {
 			if i == 0 {
@@ -286,8 +370,9 @@ func objectSpan(sp, first lexer.Span) lexer.Span {
 	return sp
 }
 
-// policy lints one evaluated import or export policy.
-func (l *linter) policy(kind string, p peval.Policy, peer types.ASN, af types.AddrFamily) {
+// policy lints one evaluated import or export policy; dep holds the keys of
+// clauses that depend on the peer (toward the sentinel only).
+func (l *linter) policy(kind string, p peval.Policy, peer types.ASN, af types.AddrFamily, dep map[string]bool) {
 	for _, u := range p.Undecided {
 		l.add(RuleUndecided, kind, u.Index, fmt.Sprintf("%s term cannot be decided: %s", kind, u.Why), peer, &af)
 	}
@@ -307,7 +392,7 @@ func (l *linter) policy(kind string, p peval.Policy, peer types.ASN, af types.Ad
 	}
 	var earlier []conj
 	for _, cl := range p.Clauses {
-		if peer == anyPeer && peerDependent(cl.Term.Filter) {
+		if peer == anyPeer && (l.peerDependent(cl.Term.Filter) || dep[clauseKey(cl)]) {
 			continue // PeerAS toward the sentinel is no AS: the term's routes are unknown
 		}
 		cs := sideOf(peval.Policy{Clauses: []peval.Clause{cl}}).conjs
@@ -328,7 +413,7 @@ func (l *linter) policy(kind string, p peval.Policy, peer types.ASN, af types.Ad
 func shadowed(cs, earlier []conj) bool {
 	bySig := map[string][]conj{}
 	for _, cj := range cs {
-		k := fmt.Sprint(cj.sig)
+		k := strings.Join(cj.sig, "\x00")
 		bySig[k] = append(bySig[k], cj)
 	}
 	for _, g := range bySig {
@@ -345,8 +430,8 @@ func shadowed(cs, earlier []conj) bool {
 	return true
 }
 
-// defaults lints one evaluated default policy.
-func (l *linter) defaults(d peval.Defaults, peer types.ASN, af types.AddrFamily) {
+// defaults lints one evaluated default policy; dep as for policy.
+func (l *linter) defaults(d peval.Defaults, peer types.ASN, af types.AddrFamily, dep map[string]bool) {
 	for _, u := range d.Undecided {
 		l.add(RuleUndecided, "default", u.Index, fmt.Sprintf("default term cannot be decided: %s", u.Why), peer, &af)
 	}
@@ -361,7 +446,8 @@ func (l *linter) defaults(d peval.Defaults, peer types.ASN, af types.AddrFamily)
 				l.add(RuleMissingSet, "default", dc.Index, fmt.Sprintf("the networks filter names %s, which is not in the source", m), peer, &af)
 			}
 		}
-		if peer == anyPeer && dc.Index >= 0 && dc.Index < len(l.an.Defaults) && peerDependent(l.an.Defaults[dc.Index].Networks) {
+		if peer == anyPeer && (dc.Index >= 0 && dc.Index < len(l.an.Defaults) && l.peerDependent(l.an.Defaults[dc.Index].Networks) ||
+			dep[clauseKey(peval.Clause{Index: dc.Index, Filter: *dc.Networks})]) {
 			continue
 		}
 		if union(sideOf(peval.Policy{Clauses: []peval.Clause{{Filter: *dc.Networks}}}).conjs).IsEmpty() {
@@ -391,9 +477,11 @@ func (l *linter) deeper(m types.SetRef, peer types.ASN, kind string, index int) 
 }
 
 // peerDependent reports whether a filter names PeerAS or a set template,
-// directly or in an AS-path regexp: what it accepts depends on who the peer
-// is. A filter-set's own filter is not looked into.
-func peerDependent(f policy.Filter) bool {
+// directly, in an AS-path regexp, or inside a filter-set it names (at any
+// depth): what it accepts depends on who the peer is. The two evaluations
+// toward the sentinel cannot see PeerAS as a prefix filter, since neither
+// reserved AS originates a route.
+func (l *linter) peerDependent(f policy.Filter) bool {
 	switch x := f.(type) {
 	case policy.FilterPeerAS, policy.FilterSetTemplate:
 		return true
@@ -401,14 +489,53 @@ func peerDependent(f policy.Filter) bool {
 		return asExprTemplate(x.AS)
 	case policy.FilterPathRE:
 		return x.Regexp != nil && pathPeerDependent(x.Regexp.Body)
+	case policy.FilterSetRef:
+		return l.filterSetDependent(x.Name)
 	case policy.FilterAnd:
-		return slices.ContainsFunc(x.Terms, peerDependent)
+		return slices.ContainsFunc(x.Terms, l.peerDependent)
 	case policy.FilterOr:
-		return slices.ContainsFunc(x.Terms, peerDependent)
+		return slices.ContainsFunc(x.Terms, l.peerDependent)
 	case policy.FilterNot:
-		return peerDependent(x.Inner)
+		return l.peerDependent(x.Inner)
 	}
 	return false
+}
+
+// filterSetDependent reports whether the filter-set n's filters depend on
+// the peer, looking each set up once. A set being looked into (a cycle)
+// counts as not, the cycle's other sets deciding; a missing set, or one
+// whose class is not filter-set, does not depend on the peer; a Source
+// failure is kept for Lint to return, and counts as dependent.
+func (l *linter) filterSetDependent(n types.SetName) bool {
+	if n.Class() != types.ClassFilterSet {
+		return false
+	}
+	k := n.String()
+	if v, ok := l.fltrDep[k]; ok {
+		return v
+	}
+	l.fltrDep[k] = false // visiting
+	set, err := l.ev.Src.GetSet(l.ctx, types.Ref(n))
+	switch {
+	case errors.Is(err, resolve.ErrNotFound):
+		return false
+	case err != nil:
+		if l.err == nil {
+			l.err = err
+		}
+		l.fltrDep[k] = true
+		return true
+	}
+	var fs object.FilterSet
+	switch x := set.(type) {
+	case object.FilterSet:
+		fs = x
+	case *object.FilterSet:
+		fs = *x
+	}
+	dep := fs.Filter != nil && l.peerDependent(fs.Filter) || fs.MpFilter != nil && l.peerDependent(fs.MpFilter)
+	l.fltrDep[k] = dep
+	return dep
 }
 
 func asExprTemplate(e policy.ASExpr) bool {
@@ -453,12 +580,16 @@ func (l *linter) sets(ctx context.Context, c *Checker) error {
 		for _, n := range names {
 			miss, seen := missing[n]
 			if !seen {
-				_, err := ev.Src.GetSet(ctx, types.Ref(n))
+				set, err := ev.Src.GetSet(ctx, types.Ref(n))
 				switch {
 				case errors.Is(err, resolve.ErrNotFound):
 					miss = true
 				case err != nil:
 					return err
+				default:
+					// A set whose class is not its name's is missing, as the
+					// engine treats it (route-set: AS-EVIL answering AS-EVIL).
+					miss = set == nil || set.Class() != n.Class().String()
 				}
 				missing[n] = miss
 			}
