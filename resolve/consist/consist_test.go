@@ -223,13 +223,16 @@ func TestSymbolicIsConditional(t *testing.T) {
 	if got := kinds(r.AtoB); !slices.Equal(got, []string{"not-imported|<^ AS1+ $>", "undecided[not-exported:" + WhySymbolic + "]"}) {
 		t.Errorf("AtoB %v", got)
 	}
-	// The same regexp on both sides compares exactly: AS2 accepts every route
-	// the regexp passes, so nothing is left.
+	// The same regexp on both sides is not the same test (Ruling R13): AS2
+	// reads the path after AS1 prepends itself, so whether AS2 accepts what
+	// AS1's regexp passes is undecided, both ways.
 	c = checker(t,
 		autNum(1, "export: to AS2 announce <^AS1+$>"),
 		autNum(2, "import: from AS1 accept <^AS1+$>"))
-	if r := check(t, c, Pair{A: 1, B: 2, AF: v4}); len(r.AtoB.Findings) != 0 {
-		t.Errorf("identical regexps: AtoB %v", kinds(r.AtoB))
+	r = check(t, c, Pair{A: 1, B: 2, AF: v4})
+	if got := kinds(r.AtoB); !slices.Equal(got, []string{"undecided[not-imported:" + WhySymbolic + "]|<^ AS1+ $>",
+		"undecided[not-exported:" + WhySymbolic + "]|<^ AS1+ $>"}) {
+		t.Errorf("identical regexps: AtoB %v", got)
 	}
 	// A test on the import side only: AS2 may refuse what AS1 announces.
 	c = checker(t,
@@ -416,6 +419,105 @@ func TestUndecidedSides(t *testing.T) {
 				}
 				if c.name == "both only undecided" && (f.Ranges != nil || f.Example.IsValid()) {
 					t.Errorf("finding with no space: Ranges %v Example %v", f.Ranges, f.Example)
+				}
+			}
+		})
+	}
+}
+
+// Ruling R13: a test is never assumed equal across the session boundary.
+// The importer sees the route after the exporter prepends its AS and applies
+// its export actions, so an identical AS-path test, or an identical community
+// test where the exporter's clause changes communities, is undecided.
+func TestSessionBoundary(t *testing.T) {
+	und := func(of Kind, given string) string {
+		return "undecided[" + of.String() + ":" + WhySymbolic + "]|" + given
+	}
+	for _, c := range []struct {
+		name string
+		a, b string
+		atob []string
+	}{
+		{name: "identical AS-path regexps",
+			a:    autNum(1, "export: to AS2 announce <^AS3>"),
+			b:    autNum(2, "import: from AS1 accept <^AS3>"),
+			atob: []string{und(NotImported, "<^ AS3>"), und(NotExported, "<^ AS3>")}},
+		{name: "identical negated AS-path regexps",
+			a:    autNum(1, "export: to AS2 announce NOT <^AS3>"),
+			b:    autNum(2, "import: from AS1 accept NOT <^AS3>"),
+			atob: []string{und(NotImported, "NOT <^ AS3>"), und(NotExported, "NOT <^ AS3>")}},
+		{name: "identical community tests, the exporter appends the community",
+			a:    autNum(1, "export: to AS2 action community.append(65000:666); announce NOT community(65000:666)"),
+			b:    autNum(2, "import: from AS1 accept NOT community(65000:666)"),
+			atob: []string{und(NotImported, "NOT community(65000:666)"), und(NotExported, "NOT community(65000:666)")}},
+		{name: "identical community tests, the exporter sets communities",
+			a:    autNum(1, "export: to AS2 action community = {1:2}; announce community(1:2)"),
+			b:    autNum(2, "import: from AS1 accept community(1:2)"),
+			atob: []string{und(NotImported, "community(1:2)"), und(NotExported, "community(1:2)")}},
+		{name: "identical community tests, no community action: exact",
+			a: autNum(1, "export: to AS2 action med = 5; announce community(1:2)"),
+			b: autNum(2, "import: from AS1 accept community(1:2)")},
+		{name: "an exporter's regexp against a pure prefix import: exact",
+			a:    autNum(1, "export: to AS2 announce <^AS1+$>"),
+			b:    autNum(2, "import: from AS1 accept ANY"),
+			atob: []string{"undecided[not-exported:" + WhySymbolic + "]"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := check(t, checker(t, c.a, c.b), Pair{A: 1, B: 2, AF: v4})
+			if got := kinds(r.AtoB); !slices.Equal(got, c.atob) {
+				t.Errorf("AtoB %v, want %v", got, c.atob)
+			}
+		})
+	}
+}
+
+// Ruling R14: when both sides have decided clauses, the other side's
+// undecided terms may still make a finding: what they may announce (accept)
+// the importer (exporter) is not sure to accept (announce), so the
+// direction is Undecided over the family's space less the other side's
+// conjuncts with no symbolic test — never "consistent".
+func TestUndecidedBesideDecided(t *testing.T) {
+	notOne := types.FullSpace(types.AFIv4).Minus(types.SpaceOf(mustRange(t, "10.1.0.0/16")))
+	for _, c := range []struct {
+		name  string
+		a, b  string
+		atob  []string
+		space types.PrefixSpace
+	}{
+		{name: "exporter has an undecided term",
+			a:     autNum(1, "export: to AS2 announce AS-ONE", "export: to AS2 192.0.2.9 announce ANY"),
+			b:     autNum(2, "import: from AS1 accept AS-ONE"),
+			atob:  []string{"undecided[not-imported:" + WhyExporterUndecided + "]"},
+			space: notOne},
+		{name: "importer has an undecided term",
+			a:     autNum(1, "export: to AS2 announce AS-ONE"),
+			b:     autNum(2, "import: from AS1 accept AS-ONE", "import: from AS1 192.0.2.1 accept ANY"),
+			atob:  []string{"undecided[not-exported:" + WhyImporterUndecided + "]"},
+			space: notOne},
+		{name: "exporter undecided, the importer accepts every route: no may-be not-imported",
+			a:     autNum(1, "export: to AS2 announce AS-ONE", "export: to AS2 192.0.2.9 announce ANY"),
+			b:     autNum(2, "import: from AS1 accept ANY"),
+			atob:  []string{"undecided[not-exported:" + WhyExporterUndecided + "]"},
+			space: notOne},
+		{name: "the importer's only test is symbolic: the whole family",
+			a: autNum(1, "export: to AS2 announce AS-ONE", "export: to AS2 192.0.2.9 announce ANY"),
+			b: autNum(2, "import: from AS1 accept community(1:2)"),
+			atob: []string{"undecided[not-imported:" + WhyExporterUndecided + "]", "undecided[not-imported:" + WhySymbolic + "]",
+				"undecided[not-exported:" + WhyExporterUndecided + "]|community(1:2)"},
+			space: types.FullSpace(types.AFIv4)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := check(t, checker(t, c.a, c.b), Pair{A: 1, B: 2, AF: v4})
+			if got := kinds(r.AtoB); !slices.Equal(got, c.atob) {
+				t.Fatalf("AtoB %v, want %v", got, c.atob)
+			}
+			if len(c.atob) > 0 {
+				f := r.AtoB.Findings[0]
+				if got := types.SpaceOf(f.Ranges...); !got.Equal(c.space) {
+					t.Errorf("space %v, want %v", got, c.space)
+				}
+				if f.Severity != ast.Info || f.Truncated {
+					t.Errorf("severity %v, truncated %v", f.Severity, f.Truncated)
 				}
 			}
 		})

@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/rkolesnichenko/rpsl/ast"
+	"github.com/rkolesnichenko/rpsl/policy"
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/peval"
 	"github.com/rkolesnichenko/rpsl/types"
@@ -189,8 +190,8 @@ func (c *Checker) Check(ctx context.Context, p Pair) (Report, error) {
 		r.BtoA.Findings = []Finding{f}
 		return r, nil
 	}
-	r.AtoB.Findings = c.direction(sideOf(aExp), sideOf(bImp))
-	r.BtoA.Findings = c.direction(sideOf(bExp), sideOf(aImp))
+	r.AtoB.Findings = c.direction(sideOf(aExp), sideOf(bImp), p.AF.AFI)
+	r.BtoA.Findings = c.direction(sideOf(bExp), sideOf(aImp), p.AF.AFI)
 	r.missing = mergeSorted(func(a, b types.SetRef) int { return cmp.Compare(a.String(), b.String()) },
 		aExp.Missing(), aImp.Missing(), bExp.Missing(), bImp.Missing())
 	r.routers = mergeSorted(strings.Compare, aExp.MissingRouters(), aImp.MissingRouters(), bExp.MissingRouters(), bImp.MissingRouters())
@@ -219,23 +220,34 @@ func mergeSorted[T comparable](cmpf func(a, b T) int, lists ...[]T) []T {
 
 // conj is a decided conjunct as consistency reads it.
 type conj struct {
-	sig   []string // sorted symbolic tests, as text
-	space types.PrefixSpace
-	index int // the clause's attribute Index
+	sig      []string // sorted symbolic tests, as text
+	space    types.PrefixSpace
+	index    int  // the clause's attribute Index
+	path     bool // sig holds an AS-path test
+	comm     bool // sig holds a community test
+	commActs bool // the clause's actions change communities
 }
 
 // side is one peval.Policy, as consistency reads it.
 type side struct {
 	conjs     []conj
-	clauses   bool // the policy has a decided clause for the session
-	undecided bool // the policy has a term peval cannot decide
+	clauses   bool  // the policy has a decided clause for the session
+	undecided bool  // the policy has a term peval cannot decide
+	undIdx    []int // the undecided terms' attribute Index values, ascending
 }
 
 func sideOf(p peval.Policy) side {
 	s := side{clauses: len(p.Clauses) > 0, undecided: len(p.Undecided) > 0}
+	for _, u := range p.Undecided {
+		s.undIdx = append(s.undIdx, u.Index)
+	}
+	slices.Sort(s.undIdx)
+	s.undIdx = slices.Compact(s.undIdx)
 	for _, cl := range p.Clauses {
+		acts := slices.ContainsFunc(cl.Actions, func(a policy.Action) bool { return a.Attr == "community" })
 		for _, cj := range cl.Filter.Conjuncts {
-			s.conjs = append(s.conjs, conj{sig: signature(cj), space: cj.Space(), index: cl.Index})
+			s.conjs = append(s.conjs, conj{sig: signature(cj), space: cj.Space(), index: cl.Index,
+				path: len(cj.Paths) > 0, comm: len(cj.Communities) > 0, commActs: acts})
 		}
 	}
 	return s
@@ -274,8 +286,9 @@ func subset(a, b []string) bool {
 	return true
 }
 
-// direction compares From's export side with To's import side.
-func (c *Checker) direction(exp, imp side) []Finding {
+// direction compares From's export side with To's import side, in the
+// session's family afi.
+func (c *Checker) direction(exp, imp side, afi types.AFI) []Finding {
 	var out []Finding
 	switch {
 	case !exp.clauses && !imp.clauses:
@@ -315,12 +328,47 @@ func (c *Checker) direction(exp, imp side) []Finding {
 		}
 		out = append(out, f)
 	}
+	// Ruling R14: the exporter's undecided terms may announce any route of
+	// the family, and the importer surely accepts only what its conjuncts
+	// with no symbolic test do (any other test may read the route
+	// differently across the session); the importer's undecided terms, the
+	// mirror. Each finding names the undecided terms' attributes.
+	if exp.undecided {
+		if sp := types.FullSpace(afi).Minus(union(plain(imp.conjs))); !sp.IsEmpty() {
+			out = append(out, c.finish(Finding{Kind: Undecided, Of: NotImported, Why: WhyExporterUndecided, Export: exp.undIdx}, sp))
+		}
+	}
+	if imp.undecided {
+		if sp := types.FullSpace(afi).Minus(union(plain(exp.conjs))); !sp.IsEmpty() {
+			out = append(out, c.finish(Finding{Kind: Undecided, Of: NotExported, Why: WhyImporterUndecided, Import: imp.undIdx}, sp))
+		}
+	}
 	slices.SortFunc(out, compareFindings)
+	return out
+}
+
+// plain returns the conjuncts with no symbolic test.
+func plain(cs []conj) []conj {
+	var out []conj
+	for _, cj := range cs {
+		if len(cj.sig) == 0 {
+			out = append(out, cj)
+		}
+	}
 	return out
 }
 
 // compare finds what src's conjuncts accept and dst's do not (§4.3): kind
 // is NotImported (src the export side) or NotExported (src the import side).
+//
+// A dst conjunct decides a src group's routes ("sure") only when its tests
+// are among the group's and still mean the same across the session (Ruling
+// R13): the importer reads a route after the exporter prepends its AS and
+// applies its export actions. So a dst conjunct with an AS-path test is
+// never sure, and one with a community test only when the exporter's clause
+// involved changes no community: for NotImported the src group's clauses,
+// for NotExported the dst conjunct's own. Every other dst conjunct is
+// "maybe", and what only it may decide is Undecided (WhySymbolic).
 func (c *Checker) compare(src, dst side, kind Kind) []Finding {
 	groups := map[string][]conj{}
 	var keys []string
@@ -336,9 +384,14 @@ func (c *Checker) compare(src, dst side, kind Kind) []Finding {
 	for _, k := range keys {
 		g := groups[k]
 		sig := g[0].sig
+		groupActs := slices.ContainsFunc(g, func(cj conj) bool { return cj.commActs })
 		var sure, maybe []conj
 		for _, d := range dst.conjs {
-			if subset(d.sig, sig) {
+			acts := d.commActs // NotExported: the exporter's clause is d's
+			if kind == NotImported {
+				acts = groupActs
+			}
+			if subset(d.sig, sig) && !d.path && !(d.comm && acts) {
 				sure = append(sure, d)
 			} else {
 				maybe = append(maybe, d)
@@ -408,7 +461,7 @@ func (c *Checker) finish(f Finding, sp types.PrefixSpace) Finding {
 	return f
 }
 
-// compareFindings orders findings by Kind, Of, Given, then Example.
+// compareFindings orders findings by Kind, Of, Given, Example, then Why.
 func compareFindings(a, b Finding) int {
 	if c := cmp.Compare(a.Kind, b.Kind); c != 0 {
 		return c
@@ -428,5 +481,8 @@ func compareFindings(a, b Finding) int {
 	if c := a.Example.Addr().Compare(b.Example.Addr()); c != 0 {
 		return c
 	}
-	return cmp.Compare(a.Example.Bits(), b.Example.Bits())
+	if c := cmp.Compare(a.Example.Bits(), b.Example.Bits()); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.Why, b.Why)
 }

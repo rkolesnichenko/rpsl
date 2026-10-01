@@ -45,7 +45,7 @@ type consistModel struct {
 
 func randomConsist(t *testing.T, r *rand.Rand, seed uint64) *consistModel {
 	t.Helper()
-	texts, pg := newPolicyIRR(r, modelActions)
+	texts, pg := newPolicyIRR(r, consistActions)
 	cm := &consistModel{pg: pg, imports: map[types.ASN][]*mAttr{}, exports: map[types.ASN][]*mAttr{}, autnums: map[types.ASN]string{}}
 	for _, as := range []types.ASN{localAS, peerAS} {
 		cm.autNum(t, r, seed, as)
@@ -75,19 +75,32 @@ func (cm *consistModel) autNum(t *testing.T, r *rand.Rand, seed uint64, as types
 		pg.favour = localAS
 	}
 	defer func() { pg.favour = 0 }()
+	other := pg.favour
 	cm.imports[as], cm.exports[as] = nil, nil
 	var b strings.Builder
 	fmt.Fprintf(&b, "aut-num: %s\nas-name: X\n", as)
 	for n := 1 + r.IntN(4); n > 0; n-- {
-		if r.IntN(2) == 0 {
-			a := pg.attr("import")
-			cm.imports[as] = append(cm.imports[as], a)
-			b.WriteString(a.line() + "\n")
-		} else {
-			a := pg.attr("export")
-			cm.exports[as] = append(cm.exports[as], a)
-			b.WriteString(a.line() + "\n")
+		// A third of the time an attribute mirrors one of the other aut-num's
+		// toward this one, so both sides often hold the same tests.
+		export := r.IntN(2) != 0
+		mirrored := cm.exports[other]
+		if export {
+			mirrored = cm.imports[other]
 		}
+		var a *mAttr
+		if len(mirrored) > 0 && r.IntN(3) == 0 {
+			a = cm.mirror(r, mirrored[r.IntN(len(mirrored))], other)
+		} else if export {
+			a = pg.attr("export")
+		} else {
+			a = pg.attr("import")
+		}
+		if export {
+			cm.exports[as] = append(cm.exports[as], a)
+		} else {
+			cm.imports[as] = append(cm.imports[as], a)
+		}
+		b.WriteString(a.line() + "\n")
 	}
 	b.WriteString("mnt-by: MNT-A\nsource: RIPE\n")
 	raw, _ := rpsl.ParseObject(b.String())
@@ -100,6 +113,54 @@ func (cm *consistModel) autNum(t *testing.T, r *rand.Rand, seed uint64, as types
 	}
 	cm.autnums[as] = b.String()
 	return b.String()
+}
+
+// consistActions are the actions the consistency model's clauses draw
+// from: the policy model's, and an append of a community its filters test,
+// so an export action changes what the importer's community tests see.
+var consistActions = append(slices.Clone(modelActions), "community.append(1:2)")
+
+// crossed is rt as the importer receives it from from (Ruling R13): from
+// prepended to the path, and the communities the announcing export term's
+// actions (acts, as pg.decide gives them) append.
+func crossed(rt routemodel.Route, from types.ASN, acts string) routemodel.Route {
+	out := routemodel.Route{Prefix: rt.Prefix, Path: append([]types.ASN{from}, rt.Path...), Communities: slices.Clone(rt.Communities)}
+	for _, a := range strings.Split(acts, "; ") {
+		if c, ok := strings.CutPrefix(a, "community.append("); ok {
+			for _, x := range strings.Split(strings.TrimSuffix(c, ")"), ",") {
+				if x = strings.TrimSpace(x); !slices.Contains(out.Communities, x) {
+					out.Communities = append(out.Communities, x)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// mirror returns a's counterpart on the other side of the session: an
+// import for an export and the reverse, with the same structure, afi
+// clause, protocol and filters, its every peering naming other, and an
+// export's actions drawn afresh.
+func (cm *consistModel) mirror(r *rand.Rand, a *mAttr, other types.ASN) *mAttr {
+	m := *a
+	m.export = !a.export
+	fix := func(fs []mFactor) []mFactor {
+		var out []mFactor
+		for _, f := range fs {
+			nf := mFactor{filter: f.filter}
+			for range f.peers {
+				pa := mPeerAct{p: &mPeering{kind: "as", as: other}}
+				for k := r.IntN(3); m.export && k > 0; k-- {
+					pa.actions = append(pa.actions, cm.pg.actions[r.IntN(len(cm.pg.actions))])
+				}
+				nf.peers = append(nf.peers, pa)
+			}
+			out = append(out, nf)
+		}
+		return out
+	}
+	m.left, m.right = fix(a.left), fix(a.right)
+	return &m
 }
 
 func (cm *consistModel) pair(r *rand.Rand) consist.Pair {
@@ -206,6 +267,37 @@ func (cm *consistModel) mayAccept(terms []oTerm, p netip.Prefix, sessionPeer typ
 			}
 		}
 		if v != tFalse {
+			return true
+		}
+	}
+	return false
+}
+
+// mustAccept reports whether every route with prefix p, of family af,
+// passes one of terms (sessionPeer bound to PeerAS), whatever its path and
+// communities.
+func (cm *consistModel) mustAccept(terms []oTerm, p netip.Prefix, sessionPeer types.ASN, af types.AFI) bool {
+	if prefixAFI(p) != af {
+		return false
+	}
+	for _, t := range terms {
+		peer := sessionPeer
+		if t.peer != 0 {
+			peer = t.peer
+		}
+		v := tTrue
+		for _, f := range t.filters {
+			v = min3(v, cm.maybe(f, p, peer))
+		}
+		for _, f := range t.notAny {
+			switch cm.maybe(f, p, peer) {
+			case tTrue:
+				v = tFalse
+			case tUnknown:
+				v = min3(v, tUnknown)
+			}
+		}
+		if v == tTrue {
 			return true
 		}
 	}
@@ -358,10 +450,23 @@ func (cm *consistModel) checkDirection(t *testing.T, label string, d consist.Dir
 			fail("the exporter has undecided terms, yet not-exported is not demoted")
 		}
 	}
-	decide := func(rt routemodel.Route) (announced, accepted bool) {
-		announced, _ = cm.pg.decide(exp.terms, rt, d.To, af)
-		accepted, _ = cm.pg.decide(imp.terms, rt, d.From, af)
+	// decide reads rt, a route as the exporter has it, on both sides: the
+	// importer reads it as it crosses the session (crossed), with the
+	// announcing term's actions applied — none when no term announces it.
+	decide := func(rt routemodel.Route) (announced, accepted bool, seen routemodel.Route) {
+		announced, acts := cm.pg.decide(exp.terms, rt, d.To, af)
+		seen = crossed(rt, d.From, acts)
+		accepted, _ = cm.pg.decide(imp.terms, seen, d.From, af)
 		return
+	}
+	// A finding's Given is read where the side it is about reads the route:
+	// a not-imported finding's (the exporter's tests) on rt, a not-exported
+	// one's (the importer's) on the route as received.
+	givenOn := func(f consist.Finding, rt, seen routemodel.Route) bool {
+		if f.Kind == consist.NotExported || f.Kind == consist.Undecided && f.Of == consist.NotExported {
+			return cm.givenHolds(t, seen, f.Given, af)
+		}
+		return cm.givenHolds(t, rt, f.Given, af)
 	}
 	// Soundness: a definite finding holds for every route passing its Given
 	// whose prefix is its example or any sampled prefix in its ranges: the
@@ -387,10 +492,10 @@ func (cm *consistModel) checkDirection(t *testing.T, label string, d consist.Dir
 			for k := 0; k < 8; k++ {
 				rt := randomRoute(r, d.From)
 				rt.Prefix = q
-				if !cm.givenHolds(t, rt, f.Given, af) {
+				an, ac, seen := decide(rt)
+				if !givenOn(f, rt, seen) {
 					continue
 				}
-				an, ac := decide(rt)
 				if f.Kind == consist.NotImported && !(an && !ac) {
 					fail("not-imported, route %v: the model says announced %v, accepted %v", rt, an, ac)
 				}
@@ -402,10 +507,10 @@ func (cm *consistModel) checkDirection(t *testing.T, label string, d consist.Dir
 	}
 	// Completeness: every sampled route announced and refused (accepted and
 	// not announced) is in a finding of that kind, or an undecided one.
-	covered := func(rt routemodel.Route, kind consist.Kind) bool {
+	covered := func(rt, seen routemodel.Route, kind consist.Kind) bool {
 		for _, f := range d.Findings {
 			if (f.Kind == kind || f.Kind == consist.Undecided && f.Of == kind) &&
-				types.SpaceOf(f.Ranges...).Contains(rt.Prefix) && cm.givenHolds(t, rt, f.Given, af) {
+				types.SpaceOf(f.Ranges...).Contains(rt.Prefix) && givenOn(f, rt, seen) {
 				return true
 			}
 		}
@@ -416,12 +521,48 @@ func (cm *consistModel) checkDirection(t *testing.T, label string, d consist.Dir
 		if prefixAFI(rt.Prefix) != af {
 			continue
 		}
-		an, ac := decide(rt)
-		if an && !ac && !covered(rt, consist.NotImported) {
-			fail("route %v is announced and refused, and no finding covers it", rt)
+		an, ac, seen := decide(rt)
+		if an && !ac && !covered(rt, seen, consist.NotImported) {
+			fail("route %v (received as %v) is announced and refused, and no finding covers it", rt, seen)
 		}
-		if ac && !an && !covered(rt, consist.NotExported) {
-			fail("route %v is accepted and not announced, and no finding covers it", rt)
+		if ac && !an && !covered(rt, seen, consist.NotExported) {
+			fail("route %v (received as %v) is accepted and not announced, and no finding covers it", rt, seen)
+		}
+		// Ruling R14: an undecided export term may announce any route, with
+		// any of the actions; one the importer may refuse is covered.
+		if exp.und {
+			for _, acts := range []string{"", "community.append(1:3)", "community.append(1:2)", "community.append(1:2); community.append(1:3)"} {
+				in := crossed(rt, d.From, acts)
+				if ok, _ := cm.pg.decide(imp.terms, in, d.From, af); !ok && !covered(rt, in, consist.NotImported) {
+					fail("route %v (received as %v) may be announced by an undecided export term and is refused, and no finding covers it", rt, in)
+				}
+			}
+		}
+		// The mirror: an undecided import term may accept any route the
+		// exporter does not announce.
+		if imp.und && !an && !covered(rt, seen, consist.NotExported) {
+			fail("route %v is not announced and may be accepted by an undecided import term, and no finding covers it", rt)
+		}
+	}
+	// The space of those two findings holds only prefixes the other side
+	// may refuse (does not surely accept) some route with.
+	for _, f := range d.Findings {
+		terms, peer, what := imp.terms, d.From, "accepted"
+		switch {
+		case f.Kind == consist.Undecided && f.Of == consist.NotImported && f.Why == consist.WhyExporterUndecided:
+		case f.Kind == consist.Undecided && f.Of == consist.NotExported && f.Why == consist.WhyImporterUndecided:
+			terms, peer, what = exp.terms, d.To, "announced"
+		default:
+			continue
+		}
+		sp := types.SpaceOf(f.Ranges...)
+		if !sp.Contains(f.Example) {
+			fail("%v/%v: the example %v is not in the ranges", f.Kind, f.Of, f.Example)
+		}
+		for _, q := range samplePrefixes {
+			if sp.Contains(q) && cm.mustAccept(terms, q, peer, af) {
+				fail("undecided %v (%s) names %v, which every route with that prefix is %s with", f.Of, f.Why, q, what)
+			}
 		}
 	}
 }
@@ -492,8 +633,8 @@ func TestModelConsist(t *testing.T) {
 	}
 	requireCounts(t, "memsource", kc, map[string]int{
 		"not-imported": 10, "not-exported": 10, "no-import": 10, "no-export": 10, "no-aut-num": 150,
-		undNotImp + consist.WhySymbolic: 10, undNotImp + consist.WhyImporterUndecided: 3,
-		undNotExp + consist.WhySymbolic: 25, undNotExp + consist.WhyExporterUndecided: 5,
+		undNotImp + consist.WhySymbolic: 10, undNotImp + consist.WhyImporterUndecided: 3, undNotImp + consist.WhyExporterUndecided: 10,
+		undNotExp + consist.WhySymbolic: 25, undNotExp + consist.WhyExporterUndecided: 5, undNotExp + consist.WhyImporterUndecided: 10,
 		undNoImp + consist.WhyImporterUndecided: 15, undNoImp + consist.WhyExporterUndecided: 45,
 		undNoExp + consist.WhyImporterUndecided: 55, undNoExp + consist.WhyExporterUndecided: 25,
 	})
@@ -505,7 +646,7 @@ func TestModelConsist(t *testing.T) {
 // server.
 func TestModelConsistBackends(t *testing.T) {
 	kc := consistCounts{}
-	for seed := uint64(0); seed < 60; seed++ {
+	for seed := uint64(0); seed < 150; seed++ {
 		r := rand.New(rand.NewPCG(seed, 41))
 		label := fmt.Sprintf("seed %d", seed)
 		cm := randomConsist(t, r, seed)
@@ -539,8 +680,8 @@ func TestModelConsistBackends(t *testing.T) {
 	// corpus, irrd and whois pooled.
 	requireCounts(t, "backends", kc, map[string]int{
 		"not-imported": 6, "not-exported": 6, "no-import": 6, "no-export": 6, "no-aut-num": 6,
-		undNotImp + consist.WhySymbolic: 6, undNotImp + consist.WhyImporterUndecided: 6,
-		undNotExp + consist.WhySymbolic: 6, undNotExp + consist.WhyExporterUndecided: 6,
+		undNotImp + consist.WhySymbolic: 6, undNotImp + consist.WhyImporterUndecided: 6, undNotImp + consist.WhyExporterUndecided: 6,
+		undNotExp + consist.WhySymbolic: 6, undNotExp + consist.WhyExporterUndecided: 6, undNotExp + consist.WhyImporterUndecided: 6,
 		undNoImp + consist.WhyImporterUndecided: 6, undNoImp + consist.WhyExporterUndecided: 6,
 		undNoExp + consist.WhyImporterUndecided: 6, undNoExp + consist.WhyExporterUndecided: 6,
 	})
