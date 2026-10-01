@@ -42,6 +42,11 @@ type DumpLoader struct {
 	// Read.
 	KeepPolicy bool
 
+	// IndexPeers sets Corpus.IndexPeers: Source and SourceOf are PolicyIndexes
+	// whose NamedBy answers. It implies KeepPolicy. Set it before the first
+	// Read.
+	IndexPeers bool
+
 	// OnDiagnostics, when set, is called for every object that raised
 	// diagnostics, with the object and its diagnostics. It is the hook for a
 	// caller that wants to report on a dump's quality; leaving it nil keeps
@@ -59,6 +64,7 @@ type DumpLoader struct {
 // and dropped. A read error stops the load and is returned.
 func (l *DumpLoader) Read(r io.Reader) error {
 	l.corpus.KeepPolicy = l.KeepPolicy
+	l.corpus.IndexPeers = l.IndexPeers
 	for o, ds := range rpsl.Parse(r) {
 		l.Stats.Objects++
 		if len(ds) > 0 {

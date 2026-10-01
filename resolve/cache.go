@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"context"
 	"errors"
+	"iter"
 	"net/netip"
 	"strings"
 	"sync"
@@ -185,6 +186,26 @@ func (c *Cache) InetRtr(ctx context.Context, name, source string) (object.InetRt
 }
 
 var _ PolicySource = (*Cache)(nil)
+
+var _ PolicyIndex = (*Cache)(nil)
+
+// AutNums passes through to Src when it is a PolicyIndex, and is ErrNoIndex
+// otherwise. A listing is not cached.
+func (c *Cache) AutNums() (iter.Seq[types.ASN], error) {
+	if pi, ok := c.Src.(PolicyIndex); ok {
+		return pi.AutNums()
+	}
+	return nil, ErrNoIndex
+}
+
+// NamedBy passes through to Src when it is a PolicyIndex, and is ErrNoIndex
+// otherwise. The index is in memory already; it is not cached again.
+func (c *Cache) NamedBy(as types.ASN) ([]types.ASN, error) {
+	if pi, ok := c.Src.(PolicyIndex); ok {
+		return pi.NamedBy(as)
+	}
+	return nil, ErrNoIndex
+}
 
 // policySourceKey is the cache key of a policy lookup's source: its canonical
 // form, as the lookups compare it (types.ParseSourceName), so every spelling

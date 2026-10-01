@@ -35,6 +35,7 @@ type policyEntry struct {
 	source string // upper-case
 	obj    object.Object
 	text   string
+	named  []types.ASN // an aut-num kept as text: the ASes its peerings name, when indexed (nil: not computed)
 }
 
 // decode returns the entry's object, decoding its text on each call: a
@@ -111,8 +112,8 @@ func rtrKey(name string) string { return strings.ToUpper(strings.TrimSpace(name)
 
 // addPolicy indexes an aut-num or inet-rtr: decoded (o set) or as text (o nil,
 // class and key read from Corpus's key).
-func (s *MemSource) addPolicy(class, key, source string, o object.Object, text string) {
-	e := policyEntry{source: strings.ToUpper(strings.TrimSpace(source)), obj: o, text: text}
+func (s *MemSource) addPolicy(class, key, source string, o object.Object, text string, named []types.ASN) {
+	e := policyEntry{source: strings.ToUpper(strings.TrimSpace(source)), obj: o, text: text, named: named}
 	switch class {
 	case "aut-num":
 		if as, err := types.ParseASN(key); err == nil {

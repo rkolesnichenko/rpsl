@@ -2,6 +2,7 @@ package rpki
 
 import (
 	"context"
+	"iter"
 	"net/netip"
 
 	"github.com/rkolesnichenko/rpsl/object"
@@ -82,6 +83,27 @@ func (f *Filter) InetRtr(ctx context.Context, name, source string) (object.InetR
 }
 
 var _ resolve.PolicySource = (*Filter)(nil)
+
+var _ resolve.PolicyIndex = (*Filter)(nil)
+
+// AutNums passes through to Src when it is a resolve.PolicyIndex, and is
+// resolve.ErrNoIndex otherwise.
+func (f *Filter) AutNums() (iter.Seq[types.ASN], error) {
+	if pi, ok := f.Src.(resolve.PolicyIndex); ok {
+		return pi.AutNums()
+	}
+	return nil, resolve.ErrNoIndex
+}
+
+// NamedBy passes through to Src when it is a resolve.PolicyIndex, and is
+// resolve.ErrNoIndex otherwise. RPKI suppresses route objects, not aut-nums,
+// so the index is exact.
+func (f *Filter) NamedBy(as types.ASN) ([]types.ASN, error) {
+	if pi, ok := f.Src.(resolve.PolicyIndex); ok {
+		return pi.NamedBy(as)
+	}
+	return nil, resolve.ErrNoIndex
+}
 
 // keep returns the elements of xs that ok accepts: xs itself when it accepts
 // them all, as it usually does, and a copy only once one is left out.

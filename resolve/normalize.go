@@ -37,6 +37,14 @@ type Conjunct struct {
 // family, so a printer can leave the prefix match out.
 func (c Conjunct) AnyPrefix() bool { return c.any }
 
+// Space returns the prefixes the conjunct's prefix tests accept: Prefixes
+// less NotPrefixes. ANY is in Prefixes as 0.0.0.0/0^0-32 and ::/0^0-128,
+// trimmed to the Expander's AFI, so a conjunct with AnyPrefix gives every
+// prefix of that family.
+func (c Conjunct) Space() types.PrefixSpace {
+	return types.SpaceOf(c.Prefixes.List()...).Minus(types.SpaceOf(c.NotPrefixes.List()...))
+}
+
 // PathMatch is an AS-path regexp a route's path must match (or, Negated, must
 // not). RE has PeerAS and set templates bound. Sets holds every as-set RE
 // names, expanded, so a printer can write the regexp without a registry;
