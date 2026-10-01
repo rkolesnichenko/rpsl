@@ -5,9 +5,13 @@
 // what A's export toward B permits announcing with what B's import from A
 // accepts, and the reverse. It reads both sides through peval and decides
 // the prefix parts exactly (types.PrefixSpace). AS-path and community tests
-// are compared by identity only: a finding over them is stated with Given
-// (any route passing those tests, with a prefix in Ranges, is refused), and
-// a part that cannot be decided is an Undecided finding, never a guess. An
+// are compared by identity only, and never across the session boundary: the
+// importer reads a route after the exporter prepends its AS and applies its
+// export actions, so an importer's AS-path test never decides what the
+// exporter's permits, nor a community test where the exporter's clause
+// changes communities. A finding over such tests is stated with Given (any
+// route passing those tests, with a prefix in Ranges, is refused), and a
+// part that cannot be decided is an Undecided finding, never a guess. An
 // AS-path regexp is never evaluated here.
 //
 // The package is pure: no network, all I/O through the Evaluator's
@@ -109,12 +113,20 @@ type Finding struct {
 
 	// Given lists the AS-path and community tests a route must also pass for
 	// the finding to hold, as normal-form text ("<^ AS1+ $>", "NOT
-	// community(1:2)"); empty, it holds for every route with a prefix in
-	// Ranges.
+	// community(1:2)"), read where the side the finding is about reads the
+	// route: a NotImported finding's (the exporter's tests) before the
+	// exporter's prepend and actions, a NotExported one's (the importer's)
+	// as the importer receives it. Empty, it holds for every route with a
+	// prefix in Ranges.
 	Given []string
 
-	Export []int  // the exporting side's clause Index values whose terms are concerned
-	Import []int  // the importing side's
+	// Export and Import list the clause Index values of each side whose
+	// terms are concerned — except that an Undecided finding of NotImported
+	// for WhyExporterUndecided lists in Export the exporter's undecided
+	// terms' attribute Index values instead, and one of NotExported for
+	// WhyImporterUndecided the importer's in Import.
+	Export []int
+	Import []int
 	Why    string // Undecided only: one of the Why constants
 }
 
@@ -149,7 +161,7 @@ func (k Kind) severity() ast.Severity {
 
 // The reasons an Undecided finding gives.
 const (
-	WhySymbolic          = "symbolic test on one side only" // an AS-path or community test the other side does not hold
+	WhySymbolic          = "symbolic test on one side only" // an AS-path or community test the other side does not hold, or holds only as the route crosses the session
 	WhyImporterUndecided = "importer has undecided terms"   // To's import has a term peval cannot decide
 	WhyExporterUndecided = "exporter has undecided terms"   // From's export has a term peval cannot decide
 )
