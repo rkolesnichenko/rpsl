@@ -106,10 +106,10 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 	defer b.Close()
 	w := newWriter(stdout, *asJSON)
-	if *sweep {
-		return runSweep(ctx, b.Src, afs, *sample, *seed, *conc, w, stderr)
-	}
 	src := resolve.NewCache(b.Src, 0)
+	if *sweep {
+		return runSweep(ctx, src, afs, *sample, *seed, *conc, w, stderr)
+	}
 	c := &consist.Checker{Eval: peval.Evaluator{Src: src}}
 	r := &runner{ctx: ctx, c: c, src: src, w: w, stderr: stderr}
 	if len(ases) == 1 {

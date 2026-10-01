@@ -249,6 +249,9 @@ func (w *writer) direction(ctx context.Context, src resolve.PolicySource, d cons
 		}
 		text := findingText(d, f, el, il)
 		if w.only > ast.Info {
+			if len(f.Given) > 0 {
+				text += " [given: " + strings.Join(f.Given, " AND ") + "]"
+			}
 			fmt.Fprintf(w.out, "%s %s\n", head, text)
 			continue
 		}
