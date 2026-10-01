@@ -112,6 +112,31 @@ func TestNamedByCorpus(t *testing.T) {
 	}
 }
 
+// Ruling R8 (fix round 1): a Corpus kept aut-num's text must start at its
+// own first attribute, not at the blank/comment trivia the stream attached
+// before it (ast.Object owns that trivia for the *stream's* round-trip, but
+// a Corpus entry is later re-decoded on its own, rpsl.ParseObject, whose line
+// numbering must not be shifted by trivia that belongs to the object before
+// it in the dump).
+func TestKeptTextSpanStartsAtOne(t *testing.T) {
+	l := &resolve.DumpLoader{KeepPolicy: true}
+	load(t, l, "\n# a comment before the object\naut-num: AS1\nas-name: ONE\nmnt-by: MNT-A\nsource: RIPE\n")
+	an, err := l.Source().AutNum(context.Background(), 1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attrs := an.Raw().Attributes()
+	if len(attrs) == 0 {
+		t.Fatal("no attributes")
+	}
+	if got := attrs[0].Span.StartLine; got != 1 {
+		t.Errorf("first attribute's StartLine = %d, want 1 (leading trivia leaked into the kept text)", got)
+	}
+	if attrs[0].Name != "aut-num" {
+		t.Errorf("first attribute = %q, want aut-num", attrs[0].Name)
+	}
+}
+
 func TestNamedByNeedsIndex(t *testing.T) {
 	kept := &resolve.DumpLoader{KeepPolicy: true}
 	load(t, kept, indexObjects)

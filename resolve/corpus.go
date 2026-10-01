@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/rkolesnichenko/rpsl/ast"
 	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/types"
 )
@@ -131,7 +132,7 @@ func (c *Corpus) Put(o object.Object) bool {
 			if an, ok := o.(object.AutNum); ok && c.IndexPeers {
 				named = peeringASNs(an)
 			}
-			c.putText(k, raw.String(), named)
+			c.putText(k, textFrom(raw), named)
 		} else {
 			c.putWhole(k, o) // built by hand: no text to keep
 		}
@@ -178,6 +179,28 @@ func (c *Corpus) putWhole(k wholeKey, o object.Object) {
 	}
 	c.seq++
 	c.whole[k] = held{obj: o, key: k, seq: c.seq}
+}
+
+// textFrom returns raw's serialized text starting at its first attribute,
+// dropping the blank/comment/malformed lines the stream attached before the
+// object (ast.Object owns them so the *stream's* round-trip stays
+// byte-exact). A Corpus entry kept as text is later re-decoded on its own
+// (rpsl.ParseObject, in MemSource.AutNum/InetRtr), so keeping that leading
+// trivia would shift every attribute's re-decoded line by the trivia's own
+// line count. Attribute.Raw is the attribute's exact source bytes, so the
+// first attribute's Raw occurs in text at the point its own lead trivia
+// ends; falling back to the untrimmed text is safe (and harmless beyond the
+// line-number shift) if that is ever not found.
+func textFrom(raw *ast.Object) string {
+	text := raw.String()
+	attrs := raw.Attributes()
+	if len(attrs) == 0 {
+		return text
+	}
+	if i := strings.Index(text, attrs[0].Raw); i > 0 {
+		return text[i:]
+	}
+	return text
 }
 
 // putText is putWhole for an object kept as its text.
