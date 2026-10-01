@@ -1,0 +1,54 @@
+route: 10.1.0.0/16
+origin: AS65001
+mnt-by: MNT-A
+source: RIPE
+
+route: 10.2.0.0/16
+origin: AS65002
+mnt-by: MNT-A
+source: RIPE
+
+route: 10.3.0.0/16
+origin: AS65003
+mnt-by: MNT-A
+source: RIPE
+
+route6: 2001:db8:1::/48
+origin: AS65001
+mnt-by: MNT-A
+source: RIPE
+
+as-set: AS-CUST1
+members: AS65001
+mnt-by: MNT-A
+source: RIPE
+
+aut-num: AS65001
+as-name: ONE
+export: to AS65002 announce ANY
+import: from AS65002 accept ANY
+import: from AS65002 accept AS65002
+export: to AS65003 announce AS65001
+mp-import: afi ipv6.unicast from AS65002 accept ANY
+mnt-by: MNT-A
+source: RIPE
+
+aut-num: AS65002
+as-name: TWO
+import: from AS65001 accept AS-CUST1
+export: to AS65001 announce ANY
+import: from AS65004 accept ANY
+mnt-by: MNT-A
+source: RIPE
+
+aut-num: AS65003
+as-name: THREE
+import: from AS65001 accept AS65001
+mnt-by: MNT-A
+source: RIPE
+
+aut-num: AS65005
+as-name: FIVE
+export: to AS65001 announce AS65005
+mnt-by: MNT-A
+source: RIPE

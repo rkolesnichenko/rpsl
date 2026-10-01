@@ -1,0 +1,16 @@
+{"type":"issue","as":"AS65001","rule":"lint/shadowed","severity":"warning","message":"import term AS65002 | AS65002 never decides: earlier terms accept every route it accepts","attr":"import","index":1,"line":6,"peers":["AS65002"],"afs":["ipv4.unicast"]}
+{"type":"direction","from":"AS65001","to":"AS65002","af":"ipv4.unicast","findings":1}
+{"type":"finding","from":"AS65001","to":"AS65002","af":"ipv4.unicast","kind":"not-imported","severity":"warning","example":"0.0.0.0/0","ranges":["0.0.0.0/0^0-15","0.0.0.0/0^17-32","0.0.0.0/5^16","8.0.0.0/7^16","10.0.0.0/16","10.2.0.0/15^16","10.4.0.0/14^16","10.8.0.0/13^16","10.16.0.0/12^16","10.32.0.0/11^16","10.64.0.0/10^16","10.128.0.0/9^16","11.0.0.0/8^16","12.0.0.0/6^16","16.0.0.0/4^16","32.0.0.0/3^16","64.0.0.0/2^16","128.0.0.0/1^16"],"export_lines":[4]}
+{"type":"direction","from":"AS65002","to":"AS65001","af":"ipv4.unicast","findings":0}
+{"type":"direction","from":"AS65001","to":"AS65002","af":"ipv6.unicast","findings":0}
+{"type":"direction","from":"AS65002","to":"AS65001","af":"ipv6.unicast","findings":1}
+{"type":"finding","from":"AS65002","to":"AS65001","af":"ipv6.unicast","kind":"no-export","severity":"info","example":"::/0","ranges":["::/0^+"],"import_lines":[8]}
+{"type":"direction","from":"AS65001","to":"AS65003","af":"ipv4.unicast","findings":0}
+{"type":"direction","from":"AS65003","to":"AS65001","af":"ipv4.unicast","findings":0}
+{"type":"direction","from":"AS65001","to":"AS65003","af":"ipv6.unicast","findings":0}
+{"type":"direction","from":"AS65003","to":"AS65001","af":"ipv6.unicast","findings":0}
+{"type":"direction","from":"AS65001","to":"AS65005","af":"ipv4.unicast","findings":0}
+{"type":"direction","from":"AS65005","to":"AS65001","af":"ipv4.unicast","findings":1}
+{"type":"finding","from":"AS65005","to":"AS65001","af":"ipv4.unicast","kind":"no-import","severity":"warning"}
+{"type":"direction","from":"AS65001","to":"AS65005","af":"ipv6.unicast","findings":0}
+{"type":"direction","from":"AS65005","to":"AS65001","af":"ipv6.unicast","findings":0}
