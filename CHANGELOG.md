@@ -26,7 +26,10 @@ same version (see [RELEASING.md](RELEASING.md)).
 - `resolve/consist`: `Checker.Check` compares what one neighbour's `export:` permits announcing
   with what the other's `import:` accepts, both directions, in one address family — exact for
   prefixes, conditional (`Finding.Given`) or `Undecided` for AS-path and community tests, never
-  guessed. `Checker.Lint` reports what is dead or wrong in one aut-num's own policies
+  guessed, and never assumed equal across the session (the importer reads a route after the
+  exporter's prepend and export actions). An undecided term on either side is reported, never
+  read as agreement, and a direction where neither side has any term is `Direction.NoPolicy`.
+  `Checker.Lint` reports what is dead or wrong in one aut-num's own policies
   (`lint/shadowed`, `lint/empty`, `lint/missing-set`, `lint/missing-router`, `lint/no-aut-num`,
   `lint/undecided`, `lint/limit` — new rows in `docs/diagnostics.md`), and `Checker.Peers` lists
   an aut-num's forward and (over a `PolicyIndex`) reverse peers. `Pair`, `Report`, `Direction`,
@@ -35,6 +38,13 @@ same version (see [RELEASING.md](RELEASING.md)).
   check it against its neighbours, check a named pair, or `-sweep` a dump and report totals.
   Release binaries alongside `rpslq`'s and `rpslconf`'s. See `docs/rpslcheck.md`.
 - `FuzzPrefixSpace` (`types`): the fuzz targets are now 41.
+
+### Known limits
+
+- `Checker.Lint` evaluates each attribute once per session, so its time grows with the
+  aut-num's size times its number of peers: an aut-num with N peers, one import and one export
+  each, took 29 ms at N=250, 108 ms at N=500 and 396 ms at N=1000. A sweep's `-check-timeout`
+  bounds it; memoizing per-attribute evaluation within one lint is a follow-up.
 
 ## [0.22.0] - 2026-09-30
 

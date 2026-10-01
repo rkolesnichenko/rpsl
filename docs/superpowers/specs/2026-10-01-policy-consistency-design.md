@@ -29,7 +29,8 @@ The release adds a prefix-set algebra to `types`, a pure package
 2. **Users:** both the operator and the audit, over one per-pair check.
 3. **Approach A, exact or undecided.** Prefix parts are compared exactly by a
    new set algebra. AS-path and community tests are compared by identity
-   only. Whatever cannot be decided is reported as undecided, never guessed.
+   only, and never across the session boundary (§4.3). Whatever cannot be
+   decided is reported as undecided, never guessed.
    Regexps are never evaluated against paths (CLAUDE.md scope guardrail).
 4. **Accept sets, not actions.** Consistency compares which routes pass, not
    what is done to them. Actions matter to lint only.
@@ -155,7 +156,9 @@ type Pair struct {
 
 // Check compares A's export toward B with B's import from A (AtoB), and
 // B's export toward A with A's import from B (BtoA). A missing aut-num is a
-// NoAutNum finding in each direction, not an error. The error is an invalid
+// NoAutNum finding in each direction, not an error; when both are missing,
+// only A is named, and Missing and MissingRouters are empty (nothing was
+// compared). The error is an invalid
 // Pair (an AS unset, A equal to B, or AF not exactly ipv4.unicast or
 // ipv6.unicast), a limit, a filter that cannot be evaluated for the session
 // (wrapping a *resolve.AnySetError or *resolve.NotEnumerableError — Lint
@@ -176,10 +179,12 @@ func (r Report) Missing() []types.SetRef
 func (r Report) MissingRouters() []string
 
 // Direction is one way routes flow: From's export toward To against To's
-// import from From. No findings: the two agree.
+// import from From. No findings: the two agree — or, with NoPolicy, have
+// nothing to agree on.
 type Direction struct {
 	From, To types.ASN
 	Findings []Finding
+	NoPolicy bool // neither side has any term, decided or undecided, toward the other in this family; false when an aut-num is missing
 }
 
 type Finding struct {
@@ -191,9 +196,9 @@ type Finding struct {
 	Example   netip.Prefix        // NotImported/NotExported/Undecided: one prefix in Ranges
 	Ranges    []types.PrefixRange // the difference, canonical (PrefixSpace.Ranges)
 	Truncated bool                // Ranges stopped at MaxRanges
-	Given     []string            // symbolic tests a route must also pass; empty: unconditional
-	Export    []int               // exporting side's clause Index values involved
-	Import    []int               // importing side's clause Index values involved
+	Given     []string            // symbolic tests a route must also pass, as the side the finding is about reads it; empty: unconditional
+	Export    []int               // exporting side's clause Index values involved (§4.3 step 7: its undecided terms' attribute Index values)
+	Import    []int               // importing side's clause Index values involved (§4.3 step 7: its undecided terms')
 	Why       string              // Undecided only: one of the Why constants
 }
 
@@ -211,7 +216,7 @@ const (
 func (k Kind) String() string // "not-imported", "not-exported", "no-import", "no-export", "no-aut-num", "undecided"
 
 const (
-	WhySymbolic          = "symbolic test on one side only" // an AS-path or community test the other side does not hold
+	WhySymbolic          = "symbolic test on one side only" // an AS-path or community test the other side does not hold, or holds only as the route crosses the session
 	WhyImporterUndecided = "importer has undecided terms"   // To's import has a term peval cannot decide
 	WhyExporterUndecided = "exporter has undecided terms"   // From's export has a term peval cannot decide
 )
@@ -249,7 +254,11 @@ type PeerList struct {
   leak the provider would refuse.
 - **NoImport / NoExport.** These apply only when one side has decided
   clauses and the other has none at all (decided or not — a side with any
-  decided clause always goes through §4.3 instead):
+  decided clause always goes through §4.3 instead). A decided side whose
+  clauses permit nothing in the family (the union of their spaces is empty)
+  is read as having no decided clause (Ruling R15): a NoImport or NoExport
+  finding would name no prefix, and the two-sided path reports nothing
+  either; its undecided terms still count as below.
   - From has decided export clauses, To has no clauses at all: NoImport
     (Warning), `Export` naming the export clauses.
   - …and To does have undecided terms (just no decided clause): the finding
@@ -266,8 +275,9 @@ type PeerList struct {
     import, so `Undecided{Of: NoExport, Why: WhyImporterUndecided}` — both
     can fire together, with no `Ranges`/`Example` (the undecided terms name
     no prefix Check can state). When neither side has any term for the
-    other at all, decided or not, the direction has no findings: the two
-    simply do not peer in the registry.
+    other at all, decided or not, the direction has no findings and is
+    marked `NoPolicy` (Ruling R15): the two simply do not peer in the
+    registry, which is not the same as agreeing.
 - **NoAutNum.** A missing aut-num on either side is one NoAutNum finding in
   each direction; nothing else is compared.
 
@@ -281,13 +291,21 @@ To and To's import from From:
    expanded sets and polarity, and each `CommunityMatch` as its normalized
    text and polarity. A pure-prefix conjunct has the empty signature.
 2. **Export side.** For each signature T, `E_T` is the union of `Space()` over
-   From's decided export conjuncts with signature exactly T.
-3. **What To surely accepts.** `Sure_T` is the union of `Space()` over To's
-   decided import conjuncts whose signature is a subset of T. A route
-   passing T passes those tests too, so it is accepted when its prefix lies
-   in `Sure_T`.
+   From's decided export conjuncts with signature exactly T: the routes as
+   From holds them, before its export.
+3. **What To surely accepts.** To reads a route after From prepends its AS
+   and applies the export clause's actions (as `rtconfig` renders it: the
+   export filter matches the path before the prepend), so a test is never
+   assumed to mean the same on both sides of the session (Ruling R13).
+   `Sure_T` is the union of `Space()` over To's decided import conjuncts
+   whose signature is a subset of T **and** that hold no AS-path test (`<…>`
+   or `NOT <…>`), and that hold a community test only when none of the
+   export clauses of `E_T` has a community-modifying action (an action whose
+   attribute is `community`, any method or assignment). Such a conjunct's
+   tests read the route the same on both sides, and a route passing T passes
+   them, so it is accepted when its prefix lies in `Sure_T`.
 4. **What To may accept.** `Maybe_T` is the union of `Space()` over To's
-   decided import conjuncts whose signature is not a subset of T.
+   other decided import conjuncts — identical tests included.
 5. **The remainder.** `R_T = E_T − Sure_T`.
    - `R_T ∩ Maybe_T` may or may not be accepted: `Undecided{Of: NotImported,
      Why: WhySymbolic}`, with `Given` = T.
@@ -297,20 +315,36 @@ To and To's import from From:
    WhyImporterUndecided}` (its `Given`, `Export` and `Import` kept as they
    were).
 7. **NotExported** is the same computation with the roles swapped: `I_T`
-   from To's import, `Sure_T` and `Maybe_T` from From's export. The
-   symbolic-remainder finding is `Undecided{Of: NotExported, Why:
-   WhySymbolic}`, and demotion uses `Undecided{Of: NotExported, Why:
-   WhyExporterUndecided}`.
+   from To's import (routes as To receives them), `Sure_T` and `Maybe_T`
+   from From's export, where an export conjunct with an AS-path test is
+   never sure, and one with a community test only when its own clause has
+   no community-modifying action. The symbolic-remainder finding is
+   `Undecided{Of: NotExported, Why: WhySymbolic}`, and demotion uses
+   `Undecided{Of: NotExported, Why: WhyExporterUndecided}`.
+8. **The other side's undecided terms (Ruling R14).** When both sides have
+   decided clauses and From's export also has an undecided term, that term
+   may announce any route of the family: `Undecided{Of: NotImported, Why:
+   WhyExporterUndecided}` over the family's full space less the union of To's
+   import conjuncts with the empty signature (only those accept a route
+   whatever crosses the session), with `Export` naming the undecided terms'
+   attributes; omitted when that space is empty. The mirror: To's undecided
+   import term may accept any route, so `Undecided{Of: NotExported, Why:
+   WhyImporterUndecided}` over the full space less From's empty-signature
+   export conjuncts, `Import` naming the undecided terms' attributes.
 
 Each finding's `Example` is `Example()` of its space, and its `Ranges` are
 the space's canonical ranges, at most `MaxRanges` (then `Truncated`).
 `Export` and `Import` list the clause `Index` values whose conjuncts
-contributed to the space. Findings are ordered by Kind, then `Given`, then
-Example, so a Report is deterministic.
+contributed to the space (step 8's findings name the undecided terms'
+attributes instead). Findings are ordered by Kind, then `Of`, `Given`,
+Example and `Why`, so a Report is deterministic.
 
 A non-empty `Given` makes a finding conditional and exact: it does not claim
 any route passes T (that would need a regexp evaluated), only that any route
-that does, with a prefix in Ranges, is refused.
+that does, with a prefix in Ranges, is refused. T is read where the side
+the finding is about reads the route: a NotImported finding's (From's
+tests) before From's prepend and actions, a NotExported one's (To's) as To
+receives the route.
 
 ## 5. Lint
 
@@ -320,9 +354,12 @@ that does, with a prefix in Ranges, is refused.
 // no routers given, and reports what is wrong or dead in them. A policy
 // toward AS-ANY is linted through one extra session with the reserved
 // AS4294967295 (RFC 7300, never a real peer); that session's issues list no
-// peer, and a term whose filter names PeerAS or a set template is left out
-// of that session's lint/empty and lint/shadowed, since it means nothing
-// without a peer. Every set a policy names directly (in a peering or a filter) is
+// peer, and a term that depends on the peer is left out of that session's
+// lint/empty and lint/shadowed, since it means nothing without one: its
+// filter names PeerAS or a set template (directly, in a regexp, or inside a
+// filter-set it names, at any depth), or its normal form differs when the
+// session is evaluated again toward AS65535, RFC 7300's other reserved AS.
+// Every set a policy names directly (in a peering or a filter) is
 // looked up once by a static walk and reported against that attribute even
 // when no session reaches it; a set missing only inside one that exists (a
 // member of a nested as-set, say) is instead reported by whichever sessions
@@ -334,7 +371,8 @@ that does, with a prefix in Ranges, is refused.
 func (c *Checker) Lint(ctx context.Context, as types.ASN) ([]Issue, error)
 
 // Issue is a Diagnostic (Rule, Severity, Message, and the Span of the
-// attribute inside the aut-num's text) plus where it applies. Identical
+// attribute inside the aut-num's text, relative to the object: its first
+// attribute is line 1, byte 0) plus where it applies. Identical
 // issues across sessions are merged: Peers and AFs list every session that
 // has it, ascending. An issue no one attribute carries (a peering's missing
 // set, a limit, a session's filter that cannot be evaluated, a peer's
@@ -368,9 +406,21 @@ type Issue struct {
   because its sets are missing gets both.
 - **Sessions run toward Forward ∪ Reverse**, and, for a policy naming
   AS-ANY, also toward the reserved AS4294967295 sentinel, whose session
-  leaves out any term whose filter names PeerAS or a set template from its
-  `lint/empty`/`lint/shadowed` checks (it means nothing without a real
-  peer); AS0 is never a session either (`Peers`, §4.1).
+  leaves out of its `lint/empty`/`lint/shadowed` checks any term that
+  depends on the peer (it means nothing without a real one): one whose
+  filter names PeerAS or a set template, directly, in a regexp or inside a
+  filter-set at any depth, or whose normal form differs when evaluated
+  again toward AS65535 (Ruling R15; neither reserved AS originates a route,
+  so PeerAS as a prefix filter is the same toward both, and the filter-set
+  walk is what finds it); AS0 is never a session either (`Peers`, §4.1).
+- **A set whose class is not its name's** (`route-set: AS-EVIL` answering
+  `AS-EVIL`) is missing to the static walk, as the engine treats it.
+- **Known limit (Ruling R16).** Lint evaluates each attribute once per
+  session, so its cost grows with the aut-num's size times its peers:
+  measured, an aut-num with N peers, one import and one export each, took
+  29 ms at N=250, 108 ms at N=500 and 396 ms at N=1000. The per-check
+  budget bounds it; memoizing per-attribute evaluation within one Lint is
+  a follow-up.
 - **A session that cannot be evaluated is undecidable, not fatal.** `Lint`
   reports `lint/undecided` and keeps linting the aut-num's other sessions;
   `Check`, by contrast, returns that same error to its caller (§4.1) —
@@ -426,10 +476,13 @@ to the `Corpus` they build.
 - `Corpus.Put` (and `Merge`'s copied text) keeps a policy object's text from
   its first attribute line on — the leading blank/comment trivia a dump or
   mirror carries before the object is dropped, since it carries no meaning
-  and only costs memory. A `Lint` `Issue`'s `Span`, decoded from that text,
-  is therefore relative to the object, the same as from `irrd`/`whois`
-  (never the whole stream's lossless positions `rpsl.Parse` would give the
-  object inside a dump file).
+  and only costs memory. A `member-of:` claimant aut-num is kept whole,
+  decoded with the stream's positions, so `Lint` makes every `Issue`'s
+  `Span` relative to the object's first attribute (lines from 1, bytes from
+  0, columns kept) and `rpslcheck` counts line numbers the same way: an
+  issue points at the object's line, as from `irrd`/`whois`, never at the
+  whole stream's lossless positions `rpsl.Parse` would give the object
+  inside a dump file (Ruling R15, completing R8).
 
 ## 7. The CLI (`rpslcheck`)
 
@@ -446,7 +499,7 @@ rpslcheck -sweep -dump …     audit every aut-num in the dumps
   -sample N -seed S          sweep a seeded random sample of N aut-nums
   -c N                       concurrent checks (default GOMAXPROCS)
   -timeout D                 give up on the whole run after D (0: never); a sweep has none unless this is given (default 10m for one AS or a pair)
-  -check-timeout D           sweep only: each aut-num's lint and each pair's check gets its own D (default 1m; 0: no limit)
+  -check-timeout D           sweep only: each aut-num's peer list, its lint, and each pair's check gets its own D (default 1m; 0: no limit)
   -v                         version
 ```
 
@@ -454,20 +507,28 @@ rpslcheck -sweep -dump …     audit every aut-num in the dumps
 
 - **Text output** groups findings by peer and direction: the Kind and
   severity, the attributes on each side with their line numbers in the
-  aut-num text, the example, the ranges, and `Given` when non-empty.
+  aut-num text, the example, the ranges, and `Given` when non-empty. A
+  direction with no findings reads `consistent`, or `no policy either way`
+  when it is `NoPolicy`.
+- **`-af` chooses the lint issues written too.** `Lint` always lints both
+  families; `rpslcheck` writes (and counts toward the exit status and the
+  totals) only the issues of a chosen family, and those of none (the static
+  ones).
 - **The sweep** builds the pairs from `AutNums()` and each aut-num's forward
   peers, each unordered pair once (whichever side names it first), in each
-  family asked for. Each aut-num's `Lint` (with its `Peers`) and each pair's
+  family asked for. Each aut-num's `Peers`, then its `Lint`, and each pair's
   `Check` runs under its own `-check-timeout` budget, independent of the
-  others, so a sweep's counts do not depend on which aut-nums happen to be
-  slow or on `-c`. It ends with totals:
+  others, so a lint that runs out never drops a pair; the output is the
+  same for any `-c` as long as no call runs past its budget. It ends with
+  totals:
   - aut-nums swept, pairs and directions checked;
-  - directions by outcome (consistent, each Kind, Undecided by Why);
+  - directions by outcome (consistent, no policy either way — counted apart,
+    never as consistent — each Kind, Undecided by Why);
   - lint issues by rule;
   - "pairs over a limit or not decidable" — a limit, or a filter that could
     not be evaluated for the session (*resolve.AnySetError*,
     *resolve.NotEnumerableError*: never guessed at, only counted);
-  - "checks over their time budget" — a lint or a check that ran past
+  - "checks over their time budget" — a peer list, a lint or a check that ran past
     `-check-timeout`;
   - the ten aut-nums with the most Warnings.
 - **Text output lists only Warnings**, one self-contained line per finding or
@@ -477,7 +538,8 @@ rpslcheck -sweep -dump …     audit every aut-num in the dumps
   every direction (consistent ones included, with `findings: 0`), every
   finding, every pair over a limit or a time budget, and the totals — one
   JSON object per line, as `direction`, `finding`, `issue`, `limit`,
-  `timeout` and `totals` records.
+  `timeout` and `totals` records; a `direction` record of a `NoPolicy`
+  direction carries `"no_policy": true`, and `totals` a `no_policy` count.
 - **Deterministic.** Output is in input order and identical for `-c 1` and
   `-c 8`, whatever ran over its own time budget.
 - **`-sweep` requires `-dump`.** Walking a registry over a live server would
@@ -514,8 +576,8 @@ brute-force answer from the generator's model, never from parsed text.
   length, then address), and `Equal` (true exactly when the sets are equal:
   canonicity). `SpaceOf(Ranges()...)` is `Equal` to the space, and its ranges
   are disjoint.
-- **`FuzzPrefixSpace`:** an operation sequence decoded from bytes, checked the
-  same way. Fuzz targets: 41.
+- **`FuzzPrefixSpace`:** the fuzz input's bytes seed a random expression of
+  the same operations, checked the same way. Fuzz targets: 41.
 - **Benchmarks:** `SpaceOf` over 100k ranges; `Minus` of two such spaces.
 
 ### 8.2 The consistency model (`resolve`, `TestModelConsist`)
@@ -524,9 +586,16 @@ brute-force answer from the generator's model, never from parsed text.
   policies toward each other: EXCEPT/REFINE, lists, afi clauses, as-set and
   AS-number peerings, regexps with sets, community tests, routers given and
   not.
+- A third of each aut-num's attributes mirror one of the other's toward it
+  (an import for an export, with the same filters), so both sides often
+  hold the same tests; export actions include appending a community the
+  filters test.
 - Routes are sampled (prefix, path, communities), and the oracle evaluates
   each side per route from the model, regexps included, in test code only (as
-  the filter model's `goRE` does).
+  the filter model's `goRE` does). The importer reads the route as it
+  crosses the session (Ruling R13): the exporter's AS prepended to the path,
+  and the communities the announcing export term (the first that matches)
+  appends.
 - **Soundness.** An unconditional NotImported example is announced and
   refused on every sampled path and community set with that prefix. A
   conditional one holds for every sampled route passing its `Given`.
@@ -534,6 +603,18 @@ brute-force answer from the generator's model, never from parsed text.
   lies in a NotImported finding's ranges with its `Given` satisfied, unless
   an Undecided finding's ranges hold its prefix. `MaxRanges` is set so nothing
   is truncated. The same for NotExported, NoImport, NoExport and NoAutNum.
+  A NotImported finding's `Given` is read on the route before the boundary,
+  a NotExported one's after it.
+- **The other side's undecided terms (§4.3 step 8).** With an undecided
+  export term, every sampled route the importer refuses — received with
+  any of the actions — is covered; with an undecided import term, every
+  sampled route the exporter does not announce is. Those findings' ranges
+  hold no sampled prefix the other side accepts whatever the route's path
+  and communities.
+- **One-sided directions.** A NoImport or NoExport finding names prefixes;
+  an answer without one, where only one side has decided terms, comes with
+  a side that passes no sampled route. `NoPolicy` is exactly "neither side
+  has a term".
 - **Exactness on pure-prefix policies.** For policies drawn with pure-prefix
   filters in the small universe, both directions are checked against the
   whole universe: findings, their ranges, and `lint/shadowed` must equal the
@@ -550,7 +631,9 @@ brute-force answer from the generator's model, never from parsed text.
 - `accept ANY` against a narrow export: NotExported, Info;
 - one-sided policies: NoImport, NoExport; neither side: no findings;
 - a missing aut-num: NoAutNum both ways;
-- a regexp on the export side only: `Given`; on both sides identically: compared exactly;
+- a regexp on the export side only: `Given`; on both sides identically: Undecided (the importer reads the path after the exporter's prepend), and so is an identical community test when the exporter's clause changes communities;
+- an undecided term on one side beside decided clauses on both: Undecided over what the other side does not surely take;
+- a one-sided direction whose decided side permits nothing: no finding; neither side with a term: `NoPolicy`;
 - an undecided import term: demotion to Undecided;
 - legacy `import:` against `mp-import:`, per family;
 - an as-set peering on one side, an AS number on the other;

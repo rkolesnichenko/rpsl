@@ -939,9 +939,17 @@ Each decided conjunct's prefix part becomes a `types.PrefixSpace` via
 grouped by *signature* — their sorted AS-path and community tests, as
 normal-form text — and compared group by group: for each signature T on the
 exporting side, `Sure_T` is the union of importing-side spaces whose
-signature is a subset of T (a route passing T passes those too, so it is
-surely accepted), and `Maybe_T` the rest (conjuncts with tests the export
-side's T does not already guarantee). What the exporter permits (`E_T`) less
+signature is a subset of T and whose tests read a route the same on both
+sides of the session (a route passing T passes those too, so it is surely
+accepted), and `Maybe_T` the rest. The importer reads a route after the
+exporter prepends its AS and applies its export actions — the export filter
+matches the path before the prepend, as `rtconfig` renders it — so a test is
+never assumed equal across the boundary: an importing conjunct with an
+AS-path test is never sure, and one with a community test only when the
+exporter's clauses of `E_T` change no community (for the reverse
+comparison, when the exporting conjunct's own clause does not). Identical
+regexps on both sides are therefore `Undecided`, not "compared exactly".
+What the exporter permits (`E_T`) less
 `Sure_T` is the disagreement; the part of it inside `Maybe_T` is `Undecided`
 (the other side's extra test might still accept or refuse it), and the part
 outside it is a concrete finding — `NotImported` (Warning) one way,
@@ -958,7 +966,16 @@ more than its decided clauses show — so every `NotImported` finding is
 demoted to `Undecided` when the importer has an undecided term, and every
 `NotExported` to `Undecided` when the exporter does. This is the same
 principle as `peval.Undecided`: never report a disagreement that an
-unevaluated term could in fact resolve.
+unevaluated term could in fact resolve. The converse holds too: an
+exporter's undecided term may announce any route of the family, so when
+both sides have decided clauses it adds `Undecided{Of: NotImported, Why:
+WhyExporterUndecided}` over the family's space less the importer's
+conjuncts with no symbolic test (the only ones sure to take any route
+that crosses the session), naming the undecided terms' attributes — and an
+importer's undecided term adds `Undecided{Of: NotExported, Why:
+WhyImporterUndecided}` over the family less the exporter's. A direction
+with an undecided term on either side is never reported consistent on the
+strength of the decided clauses alone.
 
 **One-sided policies.** These apply only where one side has no decided
 clause at all toward the peer (a side with any decided clause always goes
@@ -966,7 +983,10 @@ through the signature comparison above instead). `NoImport` fires when the
 exporter has decided export terms and the importer has none (Warning:
 likely a stale or missing `import:`); `NoExport` the same the other way
 (Info: the importer accepting more than the exporter promises is the common,
-harmless shape). The same demotion as above applies here too: an importer
+harmless shape). A decided side that permits nothing in the family is read
+as having no decided clause: a finding over it would name no prefix, and
+the two-sided path reports nothing for it either. The same demotion as
+above applies here too: an importer
 with no decided term but an undecided one might still cover the exporter, so
 the finding is `Undecided{Of: NoImport, Why: WhyImporterUndecided}` instead
 of a bare `NoImport` — and symmetrically for `NoExport`. When *neither* side
@@ -975,7 +995,9 @@ has a decided clause, an exporter's undecided term can still mean it exports
 undecided term can still mean it imports (`Undecided{Of: NoExport, Why:
 WhyImporterUndecided}`); both can fire together, with no prefix to name.
 Only when neither side has any term for the other — decided or not — is
-there no finding: the registry simply does not show a peering. `NoAutNum` is
+there no finding, and the direction is marked `NoPolicy`: the registry
+simply does not show a peering, which `rpslcheck` prints as "no policy
+either way" rather than "consistent". `NoAutNum` is
 one finding each way when an aut-num named in the `Pair` is missing from the
 `Source` entirely; nothing else about the pair is compared.
 
@@ -984,10 +1006,17 @@ toward every peer `Peers` finds (forward: its own peerings, as-sets
 expanded; reverse: who names it back, when the `Source` keeps an index). A
 policy toward `AS-ANY` is linted through one extra session toward the
 reserved `AS4294967295` (RFC 7300), never a real peer — its issues list no
-peer — and, since a term naming `PeerAS` or a set template means nothing
-without a real one, such a term is left out of that one session's
-`lint/empty` and `lint/shadowed` checks (its other terms are still linted
-normally). `Lint` reports what is dead or wrong: `lint/shadowed` (an earlier decided clause
+peer — and, since a term that depends on the peer means nothing without a
+real one, such a term is left out of that one session's `lint/empty` and
+`lint/shadowed` checks (its other terms are still linted normally). A term
+depends on the peer when its filter names `PeerAS` or a set template —
+directly, in an AS-path regexp, or inside a filter-set it names, at any
+depth — or when its normal form differs as the session is evaluated again
+toward `AS65535`, RFC 7300's other reserved AS (neither originates a route,
+so `PeerAS` as a prefix filter is the same toward both; the filter-set walk
+is what finds it). An `Issue`'s span is relative to the object's first
+attribute, however the `Source` decoded it: a `Corpus` keeps a `member-of:`
+claimant whole, with the dump's positions. `Lint` reports what is dead or wrong: `lint/shadowed` (an earlier decided clause
 already covers everything a later one would ever match — computed by the
 same per-signature subset test `Check` uses, so it is exact: an undecided
 term can only ever add routes an earlier clause does not already cover, so
@@ -999,7 +1028,11 @@ of the policy text for what it names directly, and by the per-session
 `peval.Policy.Missing()` for what a set nests), and `lint/undecided` (a term
 `peval` could not decide, or a session whose filter has no normal form at
 all — `*resolve.AnySetError`, `*resolve.NotEnumerableError` — which makes
-that one session undecidable without aborting the rest of the lint).
+that one session undecidable without aborting the rest of the lint). Its
+cost grows with the aut-num's size times its peers, since each attribute is
+evaluated once per session — a known limit, bounded in a sweep by the
+per-check budget (measured: an aut-num with N peers, one import and one
+export each, 29 ms at N=250, 108 ms at N=500, 396 ms at N=1000).
 
 **The reverse index (`resolve.PolicyIndex`).** No IRR query answers "who
 names me" — `Lint`'s reverse peers, and a sweep's own pair list, need it

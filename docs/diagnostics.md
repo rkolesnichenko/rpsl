@@ -131,7 +131,8 @@ code):
 - **`lint/empty`** (Info) — a term's filter, or a default's `networks` filter,
   accepts no route.
 - **`lint/missing-set`** (Warning) — a filter, a peering or a router
-  expression names a set the source does not have. A set the policy names
+  expression names a set the source does not have (or one whose class is
+  not its name's, as the engine treats it). A set the policy names
   directly is reported against its attribute, whether or not any session
   reaches it; a set missing inside one that exists (a member of an as-set,
   say) is reported for the sessions that expand it.
@@ -149,6 +150,10 @@ code):
 - Sessions run toward every AS the aut-num's peerings name and every aut-num
   naming it (when the source keeps a peer index). A policy toward `AS-ANY` is
   linted through a session with the reserved AS4294967295 (RFC 7300), never
-  a real peer; its issues list no peer.
+  a real peer; its issues list no peer, and a term that depends on the peer
+  (`PeerAS` or a set template, directly, in a regexp or inside a filter-set
+  at any depth, or a normal form that changes toward AS65535) is left out of
+  its `lint/empty` and `lint/shadowed`. An issue's span is relative to the
+  aut-num's first attribute, however the source decoded it.
 - **`lint/limit`** (Warning) — a session's evaluation hit a limit; the other
   sessions are still linted.

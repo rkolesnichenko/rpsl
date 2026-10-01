@@ -9,9 +9,10 @@ not anyone peers with it yet.
 
 The comparison is exact or undecided. Prefix parts are decided exactly,
 through `types.PrefixSpace`; AS-path and community tests are compared by
-identity only, so a finding over one is stated conditionally (`given: ...`)
-rather than guessed, and whatever is neither decided nor conditional is
-`Undecided`. An AS-path regexp is never evaluated against a route: matching
+identity only, and never across the session (the importer reads a route
+after the exporter prepends its AS and applies its export actions), so a
+finding over one is stated conditionally (`given: ...`) rather than
+guessed, and whatever is neither decided nor conditional is `Undecided`. An AS-path regexp is never evaluated against a route: matching
 one against live BGP paths is a separate consumer's job, not a registry
 tool's (the library's long-standing scope guardrail — see CLAUDE.md).
 
@@ -69,23 +70,27 @@ Generated from `rpslcheck -help`:
 | `-sweep` | off | audit every aut-num in the dumps (needs `-dump`) |
 | `-sample` | `0` | sweep: a random sample of `N` aut-nums instead of all |
 | `-seed` | `1` | sweep: the sample's random seed |
-| `-c` | `GOMAXPROCS` | `N` checks at once; the output is the same for any `N` |
+| `-c` | `GOMAXPROCS` | `N` checks at once; the output is the same for any `N` while no call runs past `-check-timeout` |
 | `-timeout` | `10m0s` | give up on the whole run after this long (0: never); a `-sweep` has no deadline unless this is given |
-| `-check-timeout` | `1m0s` | sweep: give each aut-num's lint and each pair's check this long, counting the ones that run out (0: no limit) |
+| `-check-timeout` | `1m0s` | sweep: give each aut-num's peer list, its lint, and each pair's check this long, each its own budget, counting the ones that run out (0: no limit) |
 | `-v` | — | print rpslcheck's version and exit |
 
 ## Reading the output
 
 ### Findings
 
-A pair's check produces one `Direction` each way, each a list of `Finding`s
-(no findings: the two agree). Each kind:
+A pair's check produces one `Direction` each way, each a list of `Finding`s.
+No findings: the two agree (`consistent`) — or neither side has any term,
+decided or undecided, toward the other in that family, which is printed
+`no policy either way` (`Direction.NoPolicy`, JSON `"no_policy": true`),
+since two networks the registry does not show peering have nothing to agree
+on. Each kind:
 
 | Kind | Severity | Means | What to do |
 | --- | --- | --- | --- |
 | `not-imported` | Warning | The exporter's policy permits announcing routes the importer's policy refuses. | The export is broader than the neighbour accepts — usually the exporter leaking more than it means to (`announce ANY` toward a provider), occasionally the importer's accept list falling behind. |
 | `not-exported` | Info | The importer's policy accepts routes the exporter's policy does not permit announcing. | Usually harmless — the importer accepts more than this neighbour will ever send — but worth a look if the importer meant to be strict. |
-| `no-import` | Warning | The exporter has policy toward the neighbour; the neighbour has no decided import term covering it. | The session is one-sided in the registry: add the missing `import:`, or confirm the export is stale. |
+| `no-import` | Warning | The exporter has policy toward the neighbour, permitting some route of the family; the neighbour has no decided import term covering it. (An export that permits nothing in the family makes no finding.) | The session is one-sided in the registry: add the missing `import:`, or confirm the export is stale. |
 | `no-export` | Info | The importer has policy from the neighbour; the neighbour has no decided export term covering it. | As `no-import`, the other way round; lower severity because an importer's `accept` with nothing arriving is the common, harmless case. |
 | `no-aut-num` | Warning | One side's aut-num is not in the source. | The registry is missing an object `Finding.AS` names; nothing else about the pair was compared. |
 | `undecided` | Info | Part of the comparison could not be decided. | See below. |
@@ -97,11 +102,22 @@ Warning: the text claims a leak the provider's policy would in fact refuse,
 whatever routes the customer happens to be sending today.
 
 `given:` appears under a finding when it is conditional: the listed AS-path
-and community tests are ones only one side's policy carries, so the finding
-holds only for a route that also passes them. It never claims that such a
-route exists — regexps are never evaluated — only that if one does, with a
-prefix in the finding's ranges, it is refused (or accepted, for
-`not-exported`).
+and community tests are ones the side the finding is about carries and the
+other side's policy does not settle, so the finding holds only for a route
+that also passes them. It never claims that such a route exists — regexps
+are never evaluated — only that if one does, with a prefix in the finding's
+ranges, it is refused (or accepted, for `not-exported`). The tests are read
+where that side reads the route: for `not-imported`, the exporter's tests
+on the route before its prepend and actions; for `not-exported`, the
+importer's tests on the route as it receives it.
+
+The same test on both sides is not the same test. The importer sees the
+path with the exporter's AS prepended, and the communities after the
+exporter's actions — `export: to AS2 announce <^AS3>` against `import: from
+AS1 accept <^AS3>` can never agree, since AS2 receives every such path
+starting with AS1. So an import test on the AS path never settles what the
+exporter permits, and an import community test settles it only when the
+exporter's clause changes no community; anything else is `Undecided`.
 
 ### Undecided
 
@@ -110,7 +126,9 @@ An `Undecided` finding's `Of` says what it may be (`NotImported`,
 (`consist.Whys()`, verbatim):
 
 - `symbolic test on one side only` — an AS-path or community test the other
-  side does not hold.
+  side does not hold, or holds only as the route crosses the session (the
+  same regexp on both sides; the same community test where the exporter's
+  clause changes communities).
 - `importer has undecided terms` — the importing side's policy has a term
   `peval` cannot decide for this session (a router the pair does not give, a
   peering regexp, another protocol).
@@ -118,7 +136,16 @@ An `Undecided` finding's `Of` says what it may be (`NotImported`,
 
 A side with any undecided term demotes every `not-imported`/`not-exported`
 finding that side would otherwise produce to `Undecided`, rather than
-reporting a comparison that an undecided term could still overturn.
+reporting a comparison that an undecided term could still overturn. The
+converse holds too: when both sides have decided terms, an exporter's
+undecided term may announce any route of the family, so the direction gets
+`undecided` (may be `not-imported`, `exporter has undecided terms`) over
+every prefix the importer does not accept unconditionally — every prefix
+outside its terms with no AS-path or community test — with the undecided
+terms' lines; and an importer's undecided term, the mirror (may be
+`not-exported`, `importer has undecided terms`). A direction with an
+undecided term is never `consistent` on the strength of the decided terms
+alone.
 
 ### Lint
 
@@ -137,11 +164,30 @@ it back. Same severities as [`docs/diagnostics.md`](diagnostics.md):
 | `lint/undecided` | Info | A term `peval` cannot decide for a session, or a session whose filter cannot be evaluated at all (it names a set reaching `AS-ANY`, or has no normal form); the other sessions are still linted. |
 | `lint/limit` | Warning | A session's evaluation hit a limit; the other sessions are still linted. |
 
+`Lint` always evaluates both families; `-af` chooses which issues are
+written (and count toward the exit status and a sweep's totals): those of a
+chosen family, and those of none — the static ones, such as a missing set
+the policy names. A policy toward `AS-ANY` is linted through a session
+toward the reserved AS4294967295; a term there that depends on the peer —
+`PeerAS` or a set template in its filter, directly, in a regexp, or inside a
+filter-set at any depth, or a normal form that changes when the session is
+evaluated again toward AS65535 — is left out of that session's
+`lint/empty` and `lint/shadowed`. Line numbers count from the aut-num's own
+first line, whatever the source: a dump's `member-of:` claimant aut-num
+too.
+
+**Known limit.** `Lint` evaluates each attribute once per session, so its
+time grows with the aut-num's size times its number of peers: measured, an
+aut-num with N peers, one import and one export each, took 29 ms at
+N=250, 108 ms at N=500 and 396 ms at N=1000. A sweep's `-check-timeout`
+bounds it; memoizing per-attribute evaluation within one lint is a
+follow-up.
+
 ### A real example
 
 Running the test fixture `resolve/testdata/rpslcheck/objects.rpsl` (four
-small aut-nums with a shadowed import term, a one-sided export, and a peer
-whose aut-num is missing):
+small aut-nums with a shadowed import term, a one-sided import, an export
+of an AS with no routes, and a peer whose aut-num is missing):
 
 ```sh
 $ rpslcheck -dump resolve/testdata/rpslcheck/objects.rpsl AS65001
@@ -150,18 +196,17 @@ AS65001 lint
 AS65001 -> AS65002 ipv4.unicast
   warning not-imported: AS65001's export (line 3) permits announcing routes AS65002's import refuses: 0.0.0.0/0^0-15, 0.0.0.0/0^17-32, 0.0.0.0/5^16, … (18 ranges; e.g. 0.0.0.0/0)
 AS65002 -> AS65001 ipv4.unicast: consistent
-AS65001 -> AS65002 ipv6.unicast: consistent
+AS65001 -> AS65002 ipv6.unicast: no policy either way
 AS65002 -> AS65001 ipv6.unicast
   info no-export: AS65001 imports from AS65002, and AS65002's export has nothing toward AS65001
 AS65001 -> AS65003 ipv4.unicast: consistent
-AS65003 -> AS65001 ipv4.unicast: consistent
-AS65001 -> AS65003 ipv6.unicast: consistent
-AS65003 -> AS65001 ipv6.unicast: consistent
-AS65001 -> AS65005 ipv4.unicast: consistent
-AS65005 -> AS65001 ipv4.unicast
-  warning no-import: AS65005 exports to AS65001, and AS65001's import has nothing from AS65005
-AS65001 -> AS65005 ipv6.unicast: consistent
-AS65005 -> AS65001 ipv6.unicast: consistent
+AS65003 -> AS65001 ipv4.unicast: no policy either way
+AS65001 -> AS65003 ipv6.unicast: no policy either way
+AS65003 -> AS65001 ipv6.unicast: no policy either way
+AS65001 -> AS65005 ipv4.unicast: no policy either way
+AS65005 -> AS65001 ipv4.unicast: consistent
+AS65001 -> AS65005 ipv6.unicast: no policy either way
+AS65005 -> AS65001 ipv6.unicast: no policy either way
 $ echo $?
 1
 ```
@@ -169,7 +214,10 @@ $ echo $?
 (AS65001's `import: from AS65002 accept AS65002` is shadowed by the earlier
 `import: from AS65002 accept ANY` — hence the lint warning — and its
 `export: to AS65002 announce ANY` is what the `not-imported` finding is
-about, since AS65002 only imports `AS-CUST1` from it.)
+about, since AS65002 only imports `AS-CUST1` from it. AS65005's `export: to
+AS65001 announce AS65005` names an AS with no routes, so it permits nothing
+and makes no `no-import` finding; the directions where neither side has a
+term read `no policy either way`.)
 
 ## The reverse index
 
@@ -193,15 +241,20 @@ would be hundreds of thousands of queries against someone else's service,
 and no registry offers that as a query in the first place. It lints every
 aut-num the dumps hold, checks every unordered pair an aut-num's forward
 peerings reach (each pair once, whichever side names it first), in each
-family `-af` asks for, and prints totals. Output is deterministic: the same
-for `-c 1` and `-c 8`.
+family `-af` asks for, and prints totals. Each aut-num's peer list, then its
+lint, and each pair's check runs under its own `-check-timeout` budget; the
+peer list comes first, so a lint that runs out never drops a pair. Output
+is deterministic — the same for `-c 1` and `-c 8` — as long as no call runs
+past `-check-timeout`; one that does is counted, and whether a call near
+the budget finishes in time depends on the machine and its load.
 
 **Text output** writes one self-contained line per Warning — a lint issue or
 a finding at Warning severity — then the totals; with a full registry this
 is the only readable form. Info-severity findings (`not-exported`,
 `no-export`, `lint/empty`, `lint/undecided`) are not printed as lines, but
 are still counted in the totals. `-json` writes everything: every issue,
-every direction (including consistent ones, as a record with `findings: 0`),
+every direction (including consistent ones, as a record with `findings: 0`,
+and those with no policy either way, with `"no_policy": true` too),
 every finding, every pair that timed out or hit a limit, and the totals,
 one JSON object per line.
 
@@ -213,6 +266,8 @@ the JSON `totals` record both carry:
 - `aut-nums` swept;
 - `pairs checked (per family)` and `directions` (two per pair);
 - `directions consistent`;
+- `directions with no policy either way` — neither side has a term toward
+  the other in that family; counted here, never as consistent;
 - one row per finding kind seen in at least one direction (`not-imported`,
   `not-exported`, `no-import`, `no-export`, `no-aut-num`, and `undecided`
   broken out by `Why`);
@@ -220,7 +275,7 @@ the JSON `totals` record both carry:
 - `pairs over a limit or not decidable` — a pair whose check hit an
   `Expander` limit, or whose filter could not be evaluated for the session
   at all (`*resolve.AnySetError`, `*resolve.NotEnumerableError`);
-- `checks over their time budget` — a lint or a check that ran past
+- `checks over their time budget` — a peer list, a lint or a check that ran past
   `-check-timeout` (never guessed at, never counted as consistent: see
   "On real data" below);
 - the ten aut-nums with the most Warnings.
@@ -233,11 +288,11 @@ Each line's `type` field picks its shape (fields from
 | Type | Fields |
 | --- | --- |
 | `issue` | `as`, `rule`, `severity`, `message`, `attr`, `index`, `line`, `peers`, `afs` |
-| `direction` | `from`, `to`, `af`, `findings` (count) |
+| `direction` | `from`, `to`, `af`, `findings` (count), `no_policy` (true when neither side has a term) |
 | `finding` | `from`, `to`, `af`, `kind`, `of`, `severity`, `as`, `example`, `ranges`, `truncated`, `given`, `export_lines`, `import_lines`, `why` |
 | `limit` | `a`, `b`, `af`, `error` — a sweep pair over a limit or not decidable |
-| `timeout` | a lint: `as`, `error`; a check: `a`, `b`, `af`, `error` — over `-check-timeout` |
-| `totals` | `autnums`, `pairs`, `directions`, `consistent`, `kinds`, `rules`, `limits`, `timeouts`, `top` (`[{as, warnings}]`) |
+| `timeout` | a peer list or a lint: `as`, `error` (beginning `peers: ` or `lint: `); a check: `a`, `b`, `af`, `error` — over `-check-timeout` |
+| `totals` | `autnums`, `pairs`, `directions`, `consistent`, `no_policy`, `kinds`, `rules`, `limits`, `timeouts`, `top` (`[{as, warnings}]`) |
 
 A field omitted from a record (Go's `omitempty`) does not apply to that
 finding or issue — a `no-aut-num` finding has no `ranges`, a consistent
@@ -313,7 +368,8 @@ RPSL_CONSIST_SAMPLE=5000 RPSL_REALDATA=$PWD/.data go test -run TestRealDataConsi
 
 - **Actions.** `rpslcheck` compares which routes pass, not what is done to
   them: a community one side sets and the other expects, or a preference, is
-  not checked.
+  not checked. An export action that changes communities only makes the
+  comparison of a community test the importer shares undecided.
 - **Route servers.** `import-via:`/`export-via:` make consistency a
   three-party question (the route server's policy too); `rpslcheck` lints
   their sets and routers but does not check them against a peer.
