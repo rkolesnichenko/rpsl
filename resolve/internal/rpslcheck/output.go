@@ -199,7 +199,10 @@ func (w *writer) direction(ctx context.Context, src resolve.PolicySource, d cons
 			To       string `json:"to"`
 			AF       string `json:"af"`
 			Findings int    `json:"findings"`
-		}{"direction", d.From.String(), d.To.String(), af.String(), len(d.Findings)})
+			NoPolicy bool   `json:"no_policy,omitempty"`
+		}{"direction", d.From.String(), d.To.String(), af.String(), len(d.Findings), d.NoPolicy})
+	} else if d.NoPolicy && w.only == ast.Info {
+		fmt.Fprintf(w.out, "%s: no policy either way\n", head)
 	} else if len(d.Findings) == 0 && w.only == ast.Info {
 		fmt.Fprintf(w.out, "%s: consistent\n", head)
 	} else if w.only == ast.Info {

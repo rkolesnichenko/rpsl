@@ -380,13 +380,19 @@ func (cm *consistModel) checkDirection(t *testing.T, label string, d consist.Dir
 		}
 	}
 	if cm.noAutNum {
-		if len(d.Findings) != 1 || d.Findings[0].Kind != consist.NoAutNum || d.Findings[0].AS != peerAS {
-			fail("peerAS's aut-num is missing: want one no-aut-num finding naming it")
+		if len(d.Findings) != 1 || d.Findings[0].Kind != consist.NoAutNum || d.Findings[0].AS != peerAS || d.NoPolicy {
+			fail("peerAS's aut-num is missing: want one no-aut-num finding naming it, and policy")
 		}
 		return
 	}
 	exp := cm.side(d.From, d.To, fromRtr, toRtr, p.AF, true)
 	imp := cm.side(d.To, d.From, toRtr, fromRtr, p.AF, false)
+	if none := len(exp.terms) == 0 && !exp.und && len(imp.terms) == 0 && !imp.und; d.NoPolicy != none {
+		fail("NoPolicy %v; the model: neither side has a term %v", d.NoPolicy, none)
+	}
+	if d.NoPolicy {
+		kc["no policy"]++
+	}
 	// A side with no decided term: the findings are fixed by which side has
 	// decided terms and which has undecided ones.
 	expD, impD := len(exp.terms) > 0, len(imp.terms) > 0
@@ -666,7 +672,7 @@ func TestModelConsist(t *testing.T) {
 		cm.check(t, fmt.Sprintf("seed %d", seed), c, r, kc)
 	}
 	requireCounts(t, "memsource", kc, map[string]int{
-		"not-imported": 10, "not-exported": 10, "no-import": 10, "no-export": 10, "no-aut-num": 150,
+		"not-imported": 10, "not-exported": 10, "no-import": 10, "no-export": 10, "no-aut-num": 150, "no policy": 50,
 		undNotImp + consist.WhySymbolic: 10, undNotImp + consist.WhyImporterUndecided: 3, undNotImp + consist.WhyExporterUndecided: 10,
 		undNotExp + consist.WhySymbolic: 25, undNotExp + consist.WhyExporterUndecided: 5, undNotExp + consist.WhyImporterUndecided: 10,
 		undNoImp + consist.WhyImporterUndecided: 15, undNoImp + consist.WhyExporterUndecided: 45,
@@ -713,7 +719,7 @@ func TestModelConsistBackends(t *testing.T) {
 	}
 	// corpus, irrd and whois pooled.
 	requireCounts(t, "backends", kc, map[string]int{
-		"not-imported": 6, "not-exported": 6, "no-import": 6, "no-export": 6, "no-aut-num": 6,
+		"not-imported": 6, "not-exported": 6, "no-import": 6, "no-export": 6, "no-aut-num": 6, "no policy": 6,
 		undNotImp + consist.WhySymbolic: 6, undNotImp + consist.WhyImporterUndecided: 6, undNotImp + consist.WhyExporterUndecided: 6,
 		undNotExp + consist.WhySymbolic: 6, undNotExp + consist.WhyExporterUndecided: 6, undNotExp + consist.WhyImporterUndecided: 6,
 		undNoImp + consist.WhyImporterUndecided: 6, undNoImp + consist.WhyExporterUndecided: 6,

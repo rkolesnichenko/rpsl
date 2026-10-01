@@ -83,10 +83,15 @@ func (r Report) Missing() []types.SetRef { return r.missing }
 func (r Report) MissingRouters() []string { return r.routers }
 
 // Direction is one way routes flow: From's export toward To against To's
-// import from From. No findings: the two agree.
+// import from From. No findings: the two agree — or, with NoPolicy, have
+// nothing to agree on.
 type Direction struct {
 	From, To types.ASN
 	Findings []Finding
+	// NoPolicy: neither side has any term, decided or undecided, toward the
+	// other in this family (Findings is then empty). It is false when an
+	// aut-num is missing.
+	NoPolicy bool
 }
 
 // Finding is one way a Direction's two policies disagree, or could.
@@ -190,8 +195,9 @@ func (c *Checker) Check(ctx context.Context, p Pair) (Report, error) {
 		r.BtoA.Findings = []Finding{f}
 		return r, nil
 	}
-	r.AtoB.Findings = c.direction(sideOf(aExp), sideOf(bImp), p.AF.AFI)
-	r.BtoA.Findings = c.direction(sideOf(bExp), sideOf(aImp), p.AF.AFI)
+	ae, ai, be, bi := sideOf(aExp), sideOf(aImp), sideOf(bExp), sideOf(bImp)
+	r.AtoB.Findings, r.AtoB.NoPolicy = c.direction(ae, bi, p.AF.AFI), ae.none() && bi.none()
+	r.BtoA.Findings, r.BtoA.NoPolicy = c.direction(be, ai, p.AF.AFI), be.none() && ai.none()
 	r.missing = mergeSorted(func(a, b types.SetRef) int { return cmp.Compare(a.String(), b.String()) },
 		aExp.Missing(), aImp.Missing(), bExp.Missing(), bImp.Missing())
 	r.routers = mergeSorted(strings.Compare, aExp.MissingRouters(), aImp.MissingRouters(), bExp.MissingRouters(), bImp.MissingRouters())
@@ -252,6 +258,9 @@ func sideOf(p peval.Policy) side {
 	}
 	return s
 }
+
+// none reports whether the side has no term at all, decided or undecided.
+func (s side) none() bool { return !s.clauses && !s.undecided }
 
 // signature returns a conjunct's AS-path and community tests as normal-form
 // text, sorted and without repeats: what two conjuncts must share to be

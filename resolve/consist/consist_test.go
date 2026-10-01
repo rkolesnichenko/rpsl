@@ -560,3 +560,47 @@ func TestOneSidedEmpty(t *testing.T) {
 		})
 	}
 }
+
+// Ruling R15: a direction where neither side has any term toward the other
+// in the family is NoPolicy, not merely without findings.
+func TestNoPolicy(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		a, b       string
+		af         types.AddrFamily
+		atob, btoa bool
+	}{
+		{name: "neither side names the other",
+			a: autNum(1, "import: from AS3 accept ANY"), b: autNum(2, "import: from AS3 accept ANY"), af: v4,
+			atob: true, btoa: true},
+		{name: "matching sets: consistent, with policy",
+			a: autNum(1, "export: to AS2 announce AS-ONE"), b: autNum(2, "import: from AS1 accept AS-ONE"), af: v4,
+			btoa: true},
+		{name: "legacy policy only: no policy in IPv6",
+			a: autNum(1, "export: to AS2 announce AS-ONE"), b: autNum(2, "import: from AS1 accept AS-ONE"), af: v6,
+			atob: true, btoa: true},
+		{name: "an undecided term is a term",
+			a: autNum(1, "export: to AS2 192.0.2.9 announce ANY"), b: autNum(2), af: v4,
+			btoa: true},
+		{name: "a decided term that permits nothing is a term",
+			a: autNum(1, "mp-export: to AS2 announce AS3"), b: autNum(2), af: v6,
+			btoa: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := check(t, checker(t, c.a, c.b), Pair{A: 1, B: 2, AF: c.af})
+			if r.AtoB.NoPolicy != c.atob || r.BtoA.NoPolicy != c.btoa {
+				t.Errorf("NoPolicy AtoB %v BtoA %v, want %v %v", r.AtoB.NoPolicy, r.BtoA.NoPolicy, c.atob, c.btoa)
+			}
+			for _, d := range []Direction{r.AtoB, r.BtoA} {
+				if d.NoPolicy && len(d.Findings) > 0 {
+					t.Errorf("%v→%v: no policy, yet findings %v", d.From, d.To, kinds(d))
+				}
+			}
+		})
+	}
+	// A missing aut-num is not "no policy".
+	r := check(t, checker(t, autNum(1)), Pair{A: 1, B: 2, AF: v4})
+	if r.AtoB.NoPolicy || r.BtoA.NoPolicy {
+		t.Error("a missing aut-num is reported as no policy")
+	}
+}

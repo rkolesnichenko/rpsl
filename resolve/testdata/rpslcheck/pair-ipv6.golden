@@ -2,6 +2,6 @@ AS65001 lint
   warning lint/shadowed import (line 5): import term AS65002 | AS65002 never decides: earlier terms accept every route it accepts [AS65002; ipv4.unicast]
 AS65002 lint
   warning lint/no-aut-num: AS65004's aut-num is not in the source [AS65004]
-AS65001 -> AS65002 ipv6.unicast: consistent
+AS65001 -> AS65002 ipv6.unicast: no policy either way
 AS65002 -> AS65001 ipv6.unicast
   info no-export: AS65001 imports from AS65002, and AS65002's export has nothing toward AS65001

@@ -213,3 +213,27 @@ func TestRunTimeout(t *testing.T) {
 		}
 	}
 }
+
+// Ruling R15: a direction where neither side has a term toward the other
+// says so, in text and JSON, and the sweep counts it apart from the
+// consistent ones.
+func TestNoPolicyEitherWay(t *testing.T) {
+	out, _, _ := run(t, "-dump", fixture, "AS65003")
+	if !strings.Contains(out, "AS65003 -> AS65001 ipv6.unicast: no policy either way\n") ||
+		!strings.Contains(out, "AS65001 -> AS65003 ipv4.unicast: consistent\n") {
+		t.Errorf("text:\n%s", out)
+	}
+	js, _, _ := run(t, "-dump", fixture, "-json", "AS65003")
+	if !strings.Contains(js, `{"type":"direction","from":"AS65003","to":"AS65001","af":"ipv6.unicast","findings":0,"no_policy":true}`) ||
+		!strings.Contains(js, `{"type":"direction","from":"AS65001","to":"AS65003","af":"ipv4.unicast","findings":0}`) {
+		t.Errorf("JSON:\n%s", js)
+	}
+	sw, _, _ := run(t, "-dump", fixture, "-sweep")
+	if !strings.Contains(sw, "  directions with no policy either way") {
+		t.Errorf("sweep totals:\n%s", sw)
+	}
+	sj, _, _ := run(t, "-dump", fixture, "-sweep", "-json")
+	if !strings.Contains(sj, `"no_policy":`) {
+		t.Errorf("sweep JSON totals:\n%s", sj)
+	}
+}

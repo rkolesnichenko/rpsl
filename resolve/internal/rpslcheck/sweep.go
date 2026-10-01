@@ -249,6 +249,7 @@ func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFam
 // totals is what a sweep counts.
 type totals struct {
 	autnums, pairs, directions, consistent, limits int            // limits: pairs over a limit or not decidable
+	noPolicy                                       int            // directions where neither side has a term toward the other
 	timeouts                                       int            // lints and checks over their own time budget
 	kinds                                          map[string]int // directions with at least one finding of the kind ("undecided: <why>" by reason)
 	rules                                          map[string]int // lint issues by rule
@@ -272,6 +273,10 @@ func (t *totals) addIssues(as types.ASN, issues []consist.Issue) {
 func (t *totals) addReport(rep consist.Report) {
 	for _, d := range []consist.Direction{rep.AtoB, rep.BtoA} {
 		t.directions++
+		if d.NoPolicy {
+			t.noPolicy++
+			continue
+		}
 		if len(d.Findings) == 0 {
 			t.consistent++
 			continue
@@ -338,12 +343,13 @@ func (t *totals) write(w *writer) {
 			Pairs      int            `json:"pairs"`
 			Directions int            `json:"directions"`
 			Consistent int            `json:"consistent"`
+			NoPolicy   int            `json:"no_policy"`
 			Kinds      map[string]int `json:"kinds"`
 			Rules      map[string]int `json:"rules"`
 			Limits     int            `json:"limits"`
 			Timeouts   int            `json:"timeouts"`
 			Top        []entry        `json:"top"`
-		}{"totals", t.autnums, t.pairs, t.directions, t.consistent, t.kinds, t.rules, t.limits, t.timeouts, tops})
+		}{"totals", t.autnums, t.pairs, t.directions, t.consistent, t.noPolicy, t.kinds, t.rules, t.limits, t.timeouts, tops})
 		return
 	}
 	fmt.Fprintln(w.out, "totals")
@@ -352,6 +358,7 @@ func (t *totals) write(w *writer) {
 	row("pairs checked (per family)", t.pairs)
 	row("directions", t.directions)
 	row("directions consistent", t.consistent)
+	row("directions with no policy either way", t.noPolicy)
 	for _, k := range sortedKeys(t.kinds) {
 		row("directions with "+k, t.kinds[k])
 	}
