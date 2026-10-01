@@ -167,9 +167,20 @@ type linter struct {
 	an    object.AutNum
 	attrs map[string][]ast.Attribute // "import", "export", "default" -> those attributes (and their mp- forms), in order
 	m     map[issueKey]*Issue
-	// reported holds the sets the static walk (sets) found missing; the
-	// sessions report only the others, the sets missing inside one that exists.
-	reported map[string]bool
+	// reported holds the sets the static walk (sets) found missing, per
+	// attribute; a session reports a missing set for an attribute only when
+	// the walk did not report it for that attribute — so a set missing inside
+	// one that exists is still reported for every other attribute reaching it.
+	reported map[setKey]bool
+}
+
+// setKey is a set the static walk reported missing for the attribute kind's
+// index; index -1 stands for any attribute of the kind, which is how a
+// session's peering-level report (no attribute) is matched.
+type setKey struct {
+	kind  string
+	index int
+	name  string
 }
 
 type issueKey struct {
@@ -179,7 +190,7 @@ type issueKey struct {
 }
 
 func newLinter(an object.AutNum) *linter {
-	l := &linter{an: an, attrs: map[string][]ast.Attribute{}, m: map[issueKey]*Issue{}, reported: map[string]bool{}}
+	l := &linter{an: an, attrs: map[string][]ast.Attribute{}, m: map[issueKey]*Issue{}, reported: map[setKey]bool{}}
 	if raw := an.Raw(); raw != nil {
 		for _, a := range raw.Attributes() {
 			switch a.Name {
@@ -228,13 +239,13 @@ func (l *linter) policy(kind string, p peval.Policy, peer types.ASN, af types.Ad
 	for _, cl := range p.Clauses {
 		for _, m := range cl.Filter.Missing() {
 			inClause[m.String()] = true
-			if l.deeper(m, peer) {
+			if l.deeper(m, peer, kind, cl.Index) {
 				l.add(RuleMissingSet, kind, cl.Index, fmt.Sprintf("the filter names %s, which is not in the source", m), peer, &af)
 			}
 		}
 	}
 	for _, m := range p.Missing() {
-		if !inClause[m.String()] && l.deeper(m, peer) {
+		if !inClause[m.String()] && l.deeper(m, peer, kind, -1) {
 			l.add(RuleMissingSet, "", -1, fmt.Sprintf("an %s peering names %s, which is not in the source", kind, m), peer, &af)
 		}
 	}
@@ -290,7 +301,7 @@ func (l *linter) defaults(d peval.Defaults, peer types.ASN, af types.AddrFamily)
 		}
 		for _, m := range dc.Networks.Missing() {
 			inClause[m.String()] = true
-			if l.deeper(m, peer) {
+			if l.deeper(m, peer, "default", dc.Index) {
 				l.add(RuleMissingSet, "default", dc.Index, fmt.Sprintf("the networks filter names %s, which is not in the source", m), peer, &af)
 			}
 		}
@@ -302,17 +313,19 @@ func (l *linter) defaults(d peval.Defaults, peer types.ASN, af types.AddrFamily)
 		}
 	}
 	for _, m := range d.Missing() {
-		if !inClause[m.String()] && l.deeper(m, peer) {
+		if !inClause[m.String()] && l.deeper(m, peer, "default", -1) {
 			l.add(RuleMissingSet, "", -1, fmt.Sprintf("a default peering names %s, which is not in the source", m), peer, &af)
 		}
 	}
 }
 
-// deeper reports whether a session's missing set m is one to report: not
-// one the static walk already reported, and, toward the sentinel, not a set
-// template filled in with it (AS1:AS-CUST:AS4294967295 names no real set).
-func (l *linter) deeper(m types.SetRef, peer types.ASN) bool {
-	if l.reported[m.String()] {
+// deeper reports whether a session's missing set m, found for kind's
+// attribute index (-1: a peering, no attribute), is one to report: not one
+// the static walk already reported for that attribute (for -1, for any
+// attribute of the kind), and, toward the sentinel, not a set template
+// filled in with it (AS1:AS-CUST:AS4294967295 names no real set).
+func (l *linter) deeper(m types.SetRef, peer types.ASN, kind string, index int) bool {
+	if l.reported[setKey{kind, index, m.String()}] {
 		return false
 	}
 	if peer == anyPeer && slices.Contains(m.Name().Components(), anyPeer.String()) {
@@ -394,7 +407,8 @@ func (l *linter) sets(ctx context.Context, c *Checker) error {
 				missing[n] = miss
 			}
 			if miss {
-				l.reported[n.String()] = true
+				l.reported[setKey{kind, i, n.String()}] = true
+				l.reported[setKey{kind, -1, n.String()}] = true
 				l.add(RuleMissingSet, kind, i, fmt.Sprintf("the policy names %s, which is not in the source", n), 0, nil)
 			}
 		}

@@ -240,6 +240,18 @@ func TestLintWithoutConcretePeers(t *testing.T) {
 			},
 		},
 		{
+			// A set reported missing for one attribute is still reported for
+			// another that reaches it inside an existing set.
+			name: "one missing set, two attributes",
+			objects: []string{autNum(1, "import: from AS-NOPE accept ANY", "export: to AS2 announce AS-BIG"), autNum(2),
+				"as-set: AS-BIG\nmembers: AS-NOPE\nmnt-by: MNT-A\nsource: RIPE\n"},
+			want: []string{
+				"lint/missing-set import#0 L3: the policy names AS-NOPE, which is not in the source [] []",
+				"lint/empty export#0 L4: export term AS2 | AS-BIG accepts no route [AS2] [ipv4.unicast]",
+				"lint/missing-set export#0 L4: the filter names AS-NOPE, which is not in the source [AS2] [ipv4.unicast]",
+			},
+		},
+		{
 			// PeerAS and set templates mean nothing toward the sentinel: no
 			// lint/empty, no missing AS1:AS-CUST:AS4294967295.
 			name:    "AS-ANY with PeerAS",
