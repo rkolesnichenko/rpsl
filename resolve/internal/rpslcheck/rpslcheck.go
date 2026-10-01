@@ -52,7 +52,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	sweep := fs.Bool("sweep", false, "audit every aut-num in the dumps (needs -dump)")
 	sample := fs.Int("sample", 0, "sweep: a random sample of `N` aut-nums instead of all")
 	seed := fs.Uint64("seed", 1, "sweep: the sample's random `seed`")
-	conc := fs.Int("c", runtime.GOMAXPROCS(0), "`N` checks at once; the output is the same for any N")
+	conc := fs.Int("c", runtime.GOMAXPROCS(0), "`N` checks at once; the output is the same for any N while no call runs past -check-timeout")
 	timeout := fs.Duration("timeout", 10*time.Minute, "give up on the whole run after this long (0: never); a -sweep has no deadline unless this is given")
 	checkTimeout := fs.Duration("check-timeout", time.Minute, "sweep: give each aut-num's peer list, its lint, and each pair's check this long, each its own budget, counting the ones that run out (0: no limit)")
 	showVersion := fs.Bool("v", false, "print rpslcheck's version and exit")
