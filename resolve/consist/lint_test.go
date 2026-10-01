@@ -153,7 +153,7 @@ func TestLintRules(t *testing.T) {
 		{
 			name:    "missing set in a peering",
 			objects: []string{autNum(1, "import: from AS2 accept ANY", "import: from AS-NOPE accept ANY"), autNum(2)},
-			want:    []string{"lint/missing-set #-1 L0:"},
+			want:    []string{"lint/missing-set import#1 L4:"},
 		},
 		{
 			name:    "missing router",
@@ -194,6 +194,71 @@ func TestLintRules(t *testing.T) {
 				if !strings.HasPrefix(got[k], c.want[k]) {
 					t.Errorf("issue %d: %s, want prefix %s", k, got[k], c.want[k])
 				}
+			}
+		})
+	}
+}
+
+// A policy naming no concrete peer is still linted: missing sets statically,
+// AS-ANY through a session with the reserved AS4294967295 (no peer listed).
+func TestLintWithoutConcretePeers(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		objects []string
+		want    []string // full issueText, in order
+	}{
+		{
+			name:    "a missing set as the only peering",
+			objects: []string{autNum(1, "import: from AS-NOPE accept ANY")},
+			want:    []string{"lint/missing-set import#0 L3: the policy names AS-NOPE, which is not in the source [] []"},
+		},
+		{
+			name:    "AS-ANY with a missing filter set",
+			objects: []string{autNum(1, "import: from AS-ANY accept AS-NOPE"), autNum(2)},
+			want: []string{
+				"lint/empty import#0 L3: import term AS-ANY | AS-NOPE accepts no route [] [ipv4.unicast]",
+				"lint/missing-set import#0 L3: the policy names AS-NOPE, which is not in the source [] []",
+			},
+		},
+		{
+			name:    "AS-ANY shadowed",
+			objects: []string{autNum(1, "import: from AS-ANY accept ANY", "import: from AS-ANY accept AS-ONE")},
+			want:    []string{"lint/shadowed import#1 L4: import term AS-ANY | AS-ONE never decides: earlier terms accept every route it accepts [] [ipv4.unicast]"},
+		},
+		{
+			name:    "AS-ANY shadowed, a reverse peer",
+			objects: []string{autNum(1, "import: from AS-ANY accept ANY", "import: from AS-ANY accept AS-ONE"), autNum(9, "export: to AS1 announce ANY")},
+			want:    []string{"lint/shadowed import#1 L4: import term AS-ANY | AS-ONE never decides: earlier terms accept every route it accepts [AS9] [ipv4.unicast]"},
+		},
+		{
+			name: "a set missing inside an existing one",
+			objects: []string{autNum(1, "import: from AS2 accept AS-OUTER"), autNum(2),
+				"as-set: AS-OUTER\nmembers: AS-GONE\nmnt-by: MNT-A\nsource: RIPE\n"},
+			want: []string{
+				"lint/empty import#0 L3: import term AS2 | AS-OUTER accepts no route [AS2] [ipv4.unicast]",
+				"lint/missing-set import#0 L3: the filter names AS-GONE, which is not in the source [AS2] [ipv4.unicast]",
+			},
+		},
+		{
+			// PeerAS and set templates mean nothing toward the sentinel: no
+			// lint/empty, no missing AS1:AS-CUST:AS4294967295.
+			name:    "AS-ANY with PeerAS",
+			objects: []string{autNum(1, "import: from AS-ANY accept PeerAS", "import: from AS-ANY accept AS1:AS-CUST:PeerAS")},
+		},
+		{
+			// NOT PeerAS toward the sentinel would be every route: it must not
+			// shadow a later term.
+			name:    "AS-ANY with NOT PeerAS first",
+			objects: []string{autNum(1, "import: from AS-ANY accept NOT PeerAS", "import: from AS-ANY accept AS-ONE")},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var got []string
+			for _, i := range lint(t, checker(t, c.objects...), 1) {
+				got = append(got, issueText(i))
+			}
+			if !slices.Equal(got, c.want) {
+				t.Errorf("issues\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(c.want, "\n"))
 			}
 		})
 	}
