@@ -310,12 +310,18 @@ func TestMaxRanges(t *testing.T) {
 		autNum(2, "import: from AS1 accept AS-ONE"))
 	c.MaxRanges = 3
 	r := check(t, c, Pair{A: 1, B: 2, AF: v4})
+	if len(r.AtoB.Findings) == 0 {
+		t.Fatal("no findings")
+	}
 	f := r.AtoB.Findings[0]
 	if len(f.Ranges) != 3 || !f.Truncated {
 		t.Errorf("%d ranges, truncated %v; want 3, true", len(f.Ranges), f.Truncated)
 	}
 	c.MaxRanges = 0 // the default, 64
 	r = check(t, c, Pair{A: 1, B: 2, AF: v4})
+	if len(r.AtoB.Findings) == 0 {
+		t.Fatal("default cap: no findings")
+	}
 	if f := r.AtoB.Findings[0]; f.Truncated || len(f.Ranges) > 64 {
 		t.Errorf("default cap: %d ranges, truncated %v", len(f.Ranges), f.Truncated)
 	}
@@ -333,7 +339,11 @@ func TestMissingSets(t *testing.T) {
 
 func TestCheckRejectsBadPairs(t *testing.T) {
 	c := checker(t)
-	for _, p := range []Pair{{A: 0, B: 2, AF: v4}, {A: 1, B: 0, AF: v4}, {A: 1, B: 1, AF: v4}, {A: 1, B: 2}} {
+	for _, p := range []Pair{{A: 0, B: 2, AF: v4}, {A: 1, B: 0, AF: v4}, {A: 1, B: 1, AF: v4}, {A: 1, B: 2},
+		{A: 1, B: 2, AF: types.AddrFamily{AFI: types.AFIAny, SAFI: types.SAFIUnicast}},
+		{A: 1, B: 2, AF: types.AddrFamily{AFI: types.AFIv4, SAFI: types.SAFIMulticast}},
+		{A: 1, B: 2, AF: types.AddrFamily{AFI: types.AFIv4}},
+	} {
 		if _, err := c.Check(context.Background(), p); err == nil {
 			t.Errorf("%+v: no error", p)
 		}
@@ -349,5 +359,65 @@ func TestWhysAndKinds(t *testing.T) {
 		if k.String() != want {
 			t.Errorf("%d.String() = %q, want %q", k, k.String(), want)
 		}
+	}
+}
+
+// Ruling R4: Expander.Exclude never applies; consistency compares the
+// policies' text, and an exclusion would make accepted routes look refused.
+func TestExcludeIgnored(t *testing.T) {
+	c := checker(t,
+		autNum(1, "export: to AS2 announce {10.1.0.0/16}"),
+		autNum(2, "import: from AS1 accept AS-ONE"))
+	c.Eval.Expander.Exclude = resolve.Exclusion{ASNs: []types.ASN{1}}
+	r := check(t, c, Pair{A: 1, B: 2, AF: v4})
+	if len(r.AtoB.Findings) != 0 || len(r.BtoA.Findings) != 0 {
+		t.Errorf("with Exclude: AtoB %v, BtoA %v; want none", kinds(r.AtoB), kinds(r.BtoA))
+	}
+	if got := c.Eval.Expander.Exclude.ASNs; !slices.Equal(got, []types.ASN{1}) {
+		t.Errorf("Check changed the caller's Exclude: %v", got)
+	}
+}
+
+// Ruling R6: a side whose only terms are undecided is reported, never dropped.
+func TestUndecidedSides(t *testing.T) {
+	const (
+		expUnd = "export: to AS2 192.0.2.9 announce ANY" // router not given
+		impUnd = "import: from AS1 192.0.2.1 accept ANY" // router not given
+	)
+	for _, c := range []struct {
+		name string
+		a, b string
+		atob []string
+	}{
+		{name: "exporter only undecided, importer has no term",
+			a: autNum(1, expUnd), b: autNum(2, "import: from AS3 accept ANY"),
+			atob: []string{"undecided[no-import:" + WhyExporterUndecided + "]"}},
+		{name: "importer only undecided, exporter has no term",
+			a: autNum(1, "export: to AS3 announce ANY"), b: autNum(2, impUnd),
+			atob: []string{"undecided[no-export:" + WhyImporterUndecided + "]"}},
+		{name: "both only undecided",
+			a: autNum(1, expUnd), b: autNum(2, impUnd),
+			atob: []string{"undecided[no-import:" + WhyExporterUndecided + "]", "undecided[no-export:" + WhyImporterUndecided + "]"}},
+		{name: "exporter decided, importer only undecided",
+			a: autNum(1, "export: to AS2 announce AS-ONE"), b: autNum(2, impUnd),
+			atob: []string{"undecided[no-import:" + WhyImporterUndecided + "]"}},
+		{name: "importer decided, exporter only undecided",
+			a: autNum(1, expUnd), b: autNum(2, "import: from AS1 accept AS-ONE"),
+			atob: []string{"undecided[no-export:" + WhyExporterUndecided + "]"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := check(t, checker(t, c.a, c.b), Pair{A: 1, B: 2, AF: v4})
+			if got := kinds(r.AtoB); !slices.Equal(got, c.atob) {
+				t.Errorf("AtoB %v, want %v", got, c.atob)
+			}
+			for _, f := range r.AtoB.Findings {
+				if f.Severity != ast.Info {
+					t.Errorf("%v: severity %v, want Info", f.Kind, f.Severity)
+				}
+				if c.name == "both only undecided" && (f.Ranges != nil || f.Example.IsValid()) {
+					t.Errorf("finding with no space: Ranges %v Example %v", f.Ranges, f.Example)
+				}
+			}
+		})
 	}
 }

@@ -33,8 +33,20 @@ import (
 // per-call state, so one value serves concurrent calls; wrap Eval.Src in
 // resolve.Cache to share lookups across them.
 type Checker struct {
-	Eval      peval.Evaluator // Src, Expander limits, Source (registry)
-	MaxRanges int             // cap on Finding.Ranges; 0 means 64
+	// Eval reads both sides' policies: Src, Expander limits, Source
+	// (registry). Expander.Exclude is ignored: consistency compares the
+	// policies' text, and an exclusion would make accepted routes look
+	// refused.
+	Eval      peval.Evaluator
+	MaxRanges int // cap on Finding.Ranges; 0 means 64
+}
+
+// eval is c.Eval with Expander.Exclude cleared: every evaluation consist
+// makes goes through it.
+func (c *Checker) eval() *peval.Evaluator {
+	e := c.Eval
+	e.Expander.Exclude = resolve.Exclusion{}
+	return &e
 }
 
 func (c *Checker) maxRanges() int {
@@ -44,8 +56,9 @@ func (c *Checker) maxRanges() int {
 	return 64
 }
 
-// Pair is one BGP session seen from both ends, in one address family. The
-// routers are optional: a term that needs one becomes Undecided, as in peval.
+// Pair is one BGP session seen from both ends, in one address family:
+// ipv4.unicast or ipv6.unicast. The routers are optional: a term that needs
+// one becomes Undecided, as in peval.
 type Pair struct {
 	A, B       types.ASN
 	AF         types.AddrFamily
@@ -82,8 +95,8 @@ type Finding struct {
 	Severity ast.Severity // Warning or Info, by Kind
 	AS       types.ASN    // NoAutNum only: the AS whose aut-num is missing
 
-	Example   netip.Prefix        // one prefix in Ranges (none for NoAutNum)
-	Ranges    []types.PrefixRange // the prefixes concerned, canonical (types.PrefixSpace.Ranges)
+	Example   netip.Prefix        // one prefix in Ranges; zero when the finding names no prefix
+	Ranges    []types.PrefixRange // the prefixes concerned, canonical (types.PrefixSpace.Ranges); nil when none
 	Truncated bool                // Ranges stopped at Checker.MaxRanges
 
 	// Given lists the AS-path and community tests a route must also pass for
@@ -143,16 +156,18 @@ func (c *Checker) session(local, peer types.ASN, lrtr, prtr netip.Addr, af types
 
 // Check compares A's export toward B with B's import from A (AtoB), and
 // B's export toward A with A's import from B (BtoA). A missing aut-num is a
-// NoAutNum finding in each direction, not an error. The error is a limit, a
-// cancelled context, or a Source failure.
+// NoAutNum finding in each direction, not an error. The error is an invalid
+// Pair (an AS unset, A equal to B, or AF not ipv4.unicast or ipv6.unicast),
+// a limit, a cancelled context, or a Source failure.
 func (c *Checker) Check(ctx context.Context, p Pair) (Report, error) {
 	switch {
 	case p.A == 0 || p.B == 0:
 		return Report{}, errors.New("consist: Pair.A and Pair.B must be set")
 	case p.A == p.B:
 		return Report{}, errors.New("consist: Pair.A and Pair.B are the same AS")
-	case p.AF == (types.AddrFamily{}):
-		return Report{}, errors.New("consist: Pair.AF must be set")
+	case p.AF != (types.AddrFamily{AFI: types.AFIv4, SAFI: types.SAFIUnicast}) &&
+		p.AF != (types.AddrFamily{AFI: types.AFIv6, SAFI: types.SAFIUnicast}):
+		return Report{}, fmt.Errorf("consist: Pair.AF %v: must be ipv4.unicast or ipv6.unicast", p.AF)
 	}
 	r := Report{Pair: p, AtoB: Direction{From: p.A, To: p.B}, BtoA: Direction{From: p.B, To: p.A}}
 	aExp, aImp, aErr := c.policies(ctx, c.session(p.A, p.B, p.ARtr, p.BRtr, p.AF))
@@ -183,10 +198,11 @@ func (c *Checker) Check(ctx context.Context, p Pair) (Report, error) {
 // policies evaluates s.Local's export and import for the session. When both
 // aut-nums are missing, Check reports A's: an error wrapping ErrNotFound.
 func (c *Checker) policies(ctx context.Context, s peval.Session) (exp, imp peval.Policy, err error) {
-	if exp, err = c.Eval.Export(ctx, s); err != nil {
+	e := c.eval()
+	if exp, err = e.Export(ctx, s); err != nil {
 		return
 	}
-	imp, err = c.Eval.Import(ctx, s)
+	imp, err = e.Import(ctx, s)
 	return
 }
 
@@ -261,7 +277,17 @@ func (c *Checker) direction(exp, imp side) []Finding {
 	var out []Finding
 	switch {
 	case !exp.clauses && !imp.clauses:
-		return nil
+		// Neither side has a decided clause. The exporter's undecided terms
+		// may export to To, so the direction may be NoImport; the importer's
+		// may import from From, so it may be NoExport. Those terms name no
+		// prefix Check can state: the findings have no space.
+		if exp.undecided {
+			out = append(out, c.finish(Finding{Kind: Undecided, Of: NoImport, Why: WhyExporterUndecided}, types.PrefixSpace{}))
+		}
+		if imp.undecided {
+			out = append(out, c.finish(Finding{Kind: Undecided, Of: NoExport, Why: WhyImporterUndecided}, types.PrefixSpace{}))
+		}
+		return out
 	case exp.clauses && !imp.clauses:
 		f := Finding{Kind: NoImport, Export: indexes(exp.conjs, types.FullSpace(types.AFIAny))}
 		if imp.undecided {
