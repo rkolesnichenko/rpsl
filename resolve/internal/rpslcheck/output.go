@@ -33,16 +33,22 @@ func (w *writer) emit(v any) {
 }
 
 // attrLines maps an aut-num's attribute positions to their line numbers in
-// its text: kind "import" (import:, mp-import:), "export" or "default".
+// its text, counted from its first attribute (line 1) whatever positions
+// the object was decoded with: kind "import" (import:, mp-import:),
+// "export" or "default".
 func attrLines(an object.AutNum, kind string) []int {
 	raw := an.Raw()
 	if raw == nil {
 		return nil
 	}
 	var out []int
-	for _, a := range raw.Attributes() {
+	first := 0
+	for i, a := range raw.Attributes() {
+		if i == 0 {
+			first = a.Span.StartLine
+		}
 		if a.Name == kind || a.Name == "mp-"+kind {
-			out = append(out, a.Span.StartLine)
+			out = append(out, a.Span.StartLine-first+1)
 		}
 	}
 	return out

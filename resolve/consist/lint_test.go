@@ -413,3 +413,47 @@ func TestLintFilterNotEvaluable(t *testing.T) {
 		})
 	}
 }
+
+// Ruling R15 (completing R8): a member-of: claimant aut-num is kept whole by
+// a Corpus, positions and all, yet its issues' spans are relative to the
+// object, as every other aut-num's are.
+func TestLintSpansAreObjectRelative(t *testing.T) {
+	const dump = `route: 10.1.0.0/16
+origin: AS65011
+mnt-by: MNT-A
+source: RIPE
+
+as-set: AS-CLAIM
+members: AS65012
+mbrs-by-ref: MNT-A
+mnt-by: MNT-A
+source: RIPE
+
+# a comment before the object
+aut-num: AS65010
+as-name: TEN
+member-of: AS-CLAIM
+import: from AS65011 accept ANY
+import: from AS65011 accept {10.1.0.0/16}
+mnt-by: MNT-A
+source: RIPE
+`
+	l := &resolve.DumpLoader{Sources: []string{"RIPE"}, KeepPolicy: true}
+	if err := l.Read(strings.NewReader(dump)); err != nil {
+		t.Fatal(err)
+	}
+	c := &Checker{Eval: peval.Evaluator{Src: l.Source()}}
+	is := lint(t, c, 65010)
+	var got []string
+	for _, i := range is {
+		if i.Rule == RuleShadowed {
+			got = append(got, fmt.Sprintf("L%d-%d C%d B%d", i.Span.StartLine, i.Span.EndLine, i.Span.StartCol, i.Span.StartByte))
+		}
+	}
+	// The second import: is the object's fifth line, 82 bytes in:
+	// "aut-num: AS65010\n" (17), "as-name: TEN\n" (13),
+	// "member-of: AS-CLAIM\n" (20), "import: from AS65011 accept ANY\n" (32).
+	if want := []string{"L5-5 C1 B82"}; !slices.Equal(got, want) {
+		t.Errorf("shadowed spans %v, want %v; issues %v", got, want, is)
+	}
+}

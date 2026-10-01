@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/rkolesnichenko/rpsl/ast"
+	"github.com/rkolesnichenko/rpsl/lexer"
 	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/policy"
 	"github.com/rkolesnichenko/rpsl/resolve"
@@ -37,7 +38,9 @@ func Rules() []string {
 }
 
 // Issue is a Diagnostic — Rule, Severity, Message, and the Span of the
-// attribute inside the aut-num's text — plus where it applies. Identical
+// attribute inside the aut-num's text, relative to the object (its first
+// attribute is line 1 and starts at byte 0, however the Source decoded it)
+// — plus where it applies. Identical
 // issues across sessions are merged: Peers and AFs list every session that
 // has it, ascending. An issue no one attribute carries (a peering's missing
 // set, a limit, a session's filter that cannot be evaluated, a peer's
@@ -198,6 +201,7 @@ func isLimit(err error) bool {
 type linter struct {
 	an    object.AutNum
 	attrs map[string][]ast.Attribute // "import", "export", "default" -> those attributes (and their mp- forms), in order
+	first lexer.Span                 // the object's first attribute: spans are made relative to it
 	m     map[issueKey]*Issue
 	// reported holds the sets the static walk (sets) found missing, per
 	// attribute; a session reports a missing set for an attribute only when
@@ -224,7 +228,10 @@ type issueKey struct {
 func newLinter(an object.AutNum) *linter {
 	l := &linter{an: an, attrs: map[string][]ast.Attribute{}, m: map[issueKey]*Issue{}, reported: map[setKey]bool{}}
 	if raw := an.Raw(); raw != nil {
-		for _, a := range raw.Attributes() {
+		for i, a := range raw.Attributes() {
+			if i == 0 {
+				l.first = a.Span
+			}
 			switch a.Name {
 			case "import", "mp-import":
 				l.attrs["import"] = append(l.attrs["import"], a)
@@ -242,9 +249,9 @@ func newLinter(an object.AutNum) *linter {
 // with peer (0 or anyPeer: none) in af (nil: none).
 func (l *linter) add(rule, kind string, index int, msg string, peer types.ASN, af *types.AddrFamily) {
 	var name string
-	span := ast.Attribute{}.Span // a lexer.Span; lexer is only an indirect requirement of this module
+	var span lexer.Span
 	if index >= 0 && index < len(l.attrs[kind]) {
-		name, span = l.attrs[kind][index].Name, l.attrs[kind][index].Span
+		name, span = l.attrs[kind][index].Name, objectSpan(l.attrs[kind][index].Span, l.first)
 	} else if index >= 0 {
 		name = kind // built by hand: no text to point at
 	}
@@ -260,6 +267,23 @@ func (l *linter) add(rule, kind string, index int, msg string, peer types.ASN, a
 	if af != nil && !slices.Contains(is.AFs, *af) {
 		is.AFs = append(is.AFs, *af)
 	}
+}
+
+// objectSpan returns sp, a span inside an object whose first attribute
+// spans first, relative to the object: lines counted from the first
+// attribute's (line 1), byte offsets from its first byte; columns are kept.
+// An object decoded from a dump or a mirror, as a Corpus keeps a member-of:
+// claimant, carries the stream's positions; one from irrd or whois, or kept
+// as text, its own already, and is returned unchanged.
+func objectSpan(sp, first lexer.Span) lexer.Span {
+	if first.StartLine == 0 {
+		return sp
+	}
+	sp.StartLine -= first.StartLine - 1
+	sp.EndLine -= first.StartLine - 1
+	sp.StartByte -= first.StartByte
+	sp.EndByte -= first.StartByte
+	return sp
 }
 
 // policy lints one evaluated import or export policy.

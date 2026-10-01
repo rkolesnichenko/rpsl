@@ -285,3 +285,47 @@ source: RIPE
 		}
 	}
 }
+
+// Ruling R15 (completing R8): line numbers are the object's own, for a
+// member-of: claimant aut-num a Corpus keeps whole too.
+func TestClaimantLines(t *testing.T) {
+	const objs = `route: 10.1.0.0/16
+origin: AS65011
+mnt-by: MNT-A
+source: RIPE
+
+as-set: AS-CLAIM
+members: AS65012
+mbrs-by-ref: MNT-A
+mnt-by: MNT-A
+source: RIPE
+
+aut-num: AS65010
+as-name: TEN
+member-of: AS-CLAIM
+import: from AS65011 accept ANY
+import: from AS65011 accept {10.1.0.0/16}
+export: to AS65011 announce ANY
+mnt-by: MNT-A
+source: RIPE
+
+aut-num: AS65011
+as-name: ELEVEN
+import: from AS65010 accept {10.9.0.0/16}
+mnt-by: MNT-A
+source: RIPE
+`
+	path := filepath.Join(t.TempDir(), "claimant.rpsl")
+	if err := os.WriteFile(path, []byte(objs), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errw, _ := run(t, "-dump", path, "-af", "ipv4", "AS65010")
+	for _, want := range []string{
+		"warning lint/shadowed import (line 5):",
+		"AS65010's export (line 6) permits announcing routes",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("want %q in:\n%s%s", want, out, errw)
+		}
+	}
+}
