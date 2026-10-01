@@ -160,3 +160,119 @@ func TestSpaceString(t *testing.T) {
 		t.Errorf("String %q", got)
 	}
 }
+
+func TestSpaceOperations(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		a, b   []string
+		union  []string
+		inter  []string
+		minus  []string
+		subset bool
+	}{
+		{
+			name:  "disjoint",
+			a:     []string{"10.0.0.0/24"},
+			b:     []string{"10.0.1.0/24"},
+			union: []string{"10.0.0.0/23^24"},
+			inter: nil,
+			minus: []string{"10.0.0.0/24"},
+		},
+		{
+			name:   "a inside b",
+			a:      []string{"10.0.0.0/24^25"},
+			b:      []string{"10.0.0.0/24^+"},
+			union:  []string{"10.0.0.0/24^+"},
+			inter:  []string{"10.0.0.0/24^25"},
+			minus:  nil,
+			subset: true,
+		},
+		{
+			name:  "a hole: every /24 of 10.0.0.0/23 but one",
+			a:     []string{"10.0.0.0/23^24"},
+			b:     []string{"10.0.0.0/24"},
+			union: []string{"10.0.0.0/23^24"},
+			inter: []string{"10.0.0.0/24"},
+			minus: []string{"10.0.1.0/24"},
+		},
+		{
+			name:  "minus a deeper prefix of a length a holds above",
+			a:     []string{"10.0.0.0/8^24"},
+			b:     []string{"10.0.0.0/24"},
+			union: []string{"10.0.0.0/8^24"},
+			inter: []string{"10.0.0.0/24"},
+			minus: []string{"10.0.1.0/24", "10.0.2.0/23^24", "10.0.4.0/22^24", "10.0.8.0/21^24", "10.0.16.0/20^24",
+				"10.0.32.0/19^24", "10.0.64.0/18^24", "10.0.128.0/17^24", "10.1.0.0/16^24", "10.2.0.0/15^24",
+				"10.4.0.0/14^24", "10.8.0.0/13^24", "10.16.0.0/12^24", "10.32.0.0/11^24", "10.64.0.0/10^24", "10.128.0.0/9^24"},
+		},
+		{
+			name:  "minus one length of a window",
+			a:     []string{"10.0.0.0/24^24-26"},
+			b:     []string{"10.0.0.0/24^25"},
+			union: []string{"10.0.0.0/24^24-26"},
+			inter: []string{"10.0.0.0/24^25"},
+			minus: []string{"10.0.0.0/24", "10.0.0.0/24^26"},
+		},
+		{
+			name:  "union lifts",
+			a:     []string{"10.0.0.0/25^25-26"},
+			b:     []string{"10.0.0.128/25^25-26"},
+			union: []string{"10.0.0.0/24^25-26"},
+			inter: nil,
+			minus: []string{"10.0.0.0/25^25-26"},
+		},
+		{
+			name:   "families apart",
+			a:      []string{"10.0.0.0/24", "2001:db8::/32^48"},
+			b:      []string{"2001:db8::/32^+"},
+			union:  []string{"10.0.0.0/24", "2001:db8::/32^+"},
+			inter:  []string{"2001:db8::/32^48"},
+			minus:  []string{"10.0.0.0/24"},
+			subset: false,
+		},
+		{
+			name:   "empty operands",
+			a:      nil,
+			b:      []string{"10.0.0.0/24"},
+			union:  []string{"10.0.0.0/24"},
+			inter:  nil,
+			minus:  nil,
+			subset: true,
+		},
+	} {
+		a, b := spaceOf(t, c.a...), spaceOf(t, c.b...)
+		for _, op := range []struct {
+			name string
+			got  PrefixSpace
+			want []string
+		}{
+			{"Union", a.Union(b), c.union},
+			{"Intersect", a.Intersect(b), c.inter},
+			{"Minus", a.Minus(b), c.minus},
+		} {
+			if got := rangeStrings(op.got); !slices.Equal(got, op.want) {
+				t.Errorf("%s: %s = %v, want %v", c.name, op.name, got, op.want)
+			}
+			if !op.got.Equal(spaceOf(t, op.want...)) {
+				t.Errorf("%s: %s is not canonical: not Equal to its own ranges rebuilt", c.name, op.name)
+			}
+		}
+		if got := a.Subset(b); got != c.subset {
+			t.Errorf("%s: Subset %v, want %v", c.name, got, c.subset)
+		}
+	}
+}
+
+// The operands are never changed: an operation shares their nodes but
+// builds new ones where it differs.
+func TestSpaceOperandsUnchanged(t *testing.T) {
+	a := spaceOf(t, "10.0.0.0/25^25-26")
+	b := spaceOf(t, "10.0.0.128/25^25-26")
+	before := a.String() + b.String()
+	_ = a.Union(b)
+	_ = a.Minus(b)
+	_ = a.Intersect(b)
+	if after := a.String() + b.String(); after != before {
+		t.Errorf("operands changed: %s, then %s", before, after)
+	}
+}
