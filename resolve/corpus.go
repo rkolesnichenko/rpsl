@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/rkolesnichenko/rpsl/ast"
+	"github.com/rkolesnichenko/rpsl/lexer"
 	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/types"
 )
@@ -33,6 +35,15 @@ type Corpus struct {
 	// and InetRtr with ErrNoPolicy rather than serve that partial subset.
 	KeepPolicy bool
 
+	// IndexPeers keeps, for every aut-num, the AS numbers its import, export
+	// and default peerings name, so that a MemSource built from the corpus
+	// is a PolicyIndex whose NamedBy answers (otherwise ErrNoIndex). It
+	// implies KeepPolicy. Only AS numbers are kept, never the decoded
+	// policies. Set it before the first Put. A DumpLoader copies its own
+	// IndexPeers onto its Corpus at each Read, so a caller merging into a
+	// loader's Corpus before any Read sets Corpus.IndexPeers itself.
+	IndexPeers bool
+
 	whole   map[wholeKey]held
 	routes  map[routeKey]struct{}
 	sources map[string]string // upper-case source name -> the one copy kept
@@ -51,11 +62,16 @@ type routeKey struct {
 }
 
 type held struct {
-	obj  object.Object
-	text string // an aut-num or inet-rtr kept as text (KeepPolicy); obj is nil then
-	key  wholeKey
-	seq  uint64 // load order: MemSource's ties go to the object loaded first
+	obj   object.Object
+	text  string      // an aut-num or inet-rtr kept as text (KeepPolicy); obj is nil then
+	named []types.ASN // an aut-num kept as text, with IndexPeers: the ASes its peerings name
+	key   wholeKey
+	seq   uint64 // load order: MemSource's ties go to the object loaded first
 }
+
+// keepPolicy reports whether aut-nums and inet-rtrs are kept whole or as
+// text: KeepPolicy, or IndexPeers, which implies it.
+func (c *Corpus) keepPolicy() bool { return c.KeepPolicy || c.IndexPeers }
 
 // Put keeps what the engine needs of o, replacing any object with its class,
 // primary key and source. It reports whether anything of o is kept; when
@@ -111,9 +127,13 @@ func (c *Corpus) Put(o object.Object) bool {
 		c.putWhole(k, o)
 		return true
 	}
-	if c.KeepPolicy && (class == "aut-num" || class == "inet-rtr") {
+	if c.keepPolicy() && (class == "aut-num" || class == "inet-rtr") {
 		if raw := o.Raw(); raw != nil {
-			c.putText(k, raw.String())
+			var named []types.ASN
+			if an, ok := o.(object.AutNum); ok && c.IndexPeers {
+				named = peeringASNs(an)
+			}
+			c.putText(k, textFrom(raw), named)
 		} else {
 			c.putWhole(k, o) // built by hand: no text to keep
 		}
@@ -162,14 +182,46 @@ func (c *Corpus) putWhole(k wholeKey, o object.Object) {
 	c.whole[k] = held{obj: o, key: k, seq: c.seq}
 }
 
+// textFrom returns raw's serialized text starting at its first attribute
+// line, dropping the blank, comment and malformed lines the stream attached
+// before the object (ast.Object owns them so the *stream's* own round-trip
+// stays byte-exact; see rpsl.ParseWith). A Corpus entry kept as text is later
+// re-decoded on its own (rpsl.ParseObject, in MemSource.AutNum/InetRtr), so
+// keeping that leading trivia would shift every attribute's re-decoded line
+// by the trivia's own line count.
+//
+// The scan uses the same line rule the streamer itself splits objects by
+// (lexer.StartsAttribute — a blank line, a comment, and a malformed line all
+// fail it and are trivia the stream can attach ahead of an object), not a
+// content search: a leading comment can quote the object's first line
+// verbatim ("# aut-num: AS1" followed by the real "aut-num: AS1"), which a
+// strings.Index on the attribute's raw bytes would match inside the comment
+// itself, understating how much trivia to drop.
+func textFrom(raw *ast.Object) string {
+	text := raw.String()
+	rest, off := text, 0
+	for len(rest) > 0 {
+		line, eol := rest, len(rest)
+		if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
+			line, eol = rest[:nl], nl+1
+		}
+		if lexer.StartsAttribute(strings.TrimSuffix(line, "\r")) {
+			return text[off:]
+		}
+		off += eol
+		rest = rest[eol:]
+	}
+	return text
+}
+
 // putText is putWhole for an object kept as its text.
-func (c *Corpus) putText(k wholeKey, text string) {
+func (c *Corpus) putText(k wholeKey, text string, named []types.ASN) {
 	if h, ok := c.whole[k]; ok {
-		c.whole[k] = held{text: text, key: k, seq: h.seq}
+		c.whole[k] = held{text: text, named: named, key: k, seq: h.seq}
 		return
 	}
 	c.seq++
-	c.whole[k] = held{text: text, key: k, seq: c.seq}
+	c.whole[k] = held{text: text, named: named, key: k, seq: c.seq}
 }
 
 // intern returns the one copy of a source name the corpus keeps, upper-case:
@@ -284,8 +336,12 @@ func (c *Corpus) Merge(other *Corpus) {
 		// any earlier object of its identity removed.
 		k := h.key
 		k.source = c.intern(k.source)
-		if c.KeepPolicy {
-			c.putText(k, h.text)
+		if c.keepPolicy() {
+			named := h.named
+			if named == nil && c.IndexPeers && k.class == "aut-num" {
+				named = namedFromText(h.text) // other kept no index: derive it once, here
+			}
+			c.putText(k, h.text, named)
 		} else {
 			delete(c.whole, k)
 		}
@@ -358,12 +414,14 @@ func (c *Corpus) build(dflt func(string) bool, precedence []string) *MemSource {
 	// ignores every other class.
 	s.autnums = map[types.ASN][]policyEntry{}
 	s.rtrs = map[string][]policyEntry{}
-	// Without KeepPolicy the corpus holds only the aut-nums and inet-rtrs that
-	// claim membership of a set: a policy lookup over them would be a partial
-	// answer posing as a whole one, so the MemSource serves none (ErrNoPolicy).
-	s.policy = c.KeepPolicy
+	// Without KeepPolicy (or IndexPeers, which implies it) the corpus holds
+	// only the aut-nums and inet-rtrs that claim membership of a set: a
+	// policy lookup over them would be a partial answer posing as a whole
+	// one, so the MemSource serves none (ErrNoPolicy).
+	s.policy = c.keepPolicy()
+	s.index = c.IndexPeers
 	for _, h := range hs {
-		s.addPolicy(h.key.class, h.key.pk, h.key.source, h.obj, h.text)
+		s.addPolicy(h.key.class, h.key.pk, h.key.source, h.obj, h.text, h.named)
 	}
 	s.finish()
 	for rk := range c.routes {

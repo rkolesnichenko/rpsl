@@ -9,6 +9,49 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+## [0.23.0] - Unreleased
+
+### Added
+
+- `types.PrefixSpace`: an exact set of prefixes of both families, closed under `Union`,
+  `Intersect` and `Minus`, built from `PrefixRange`s with `SpaceOf` or `FullSpace`, and never
+  enumerating prefixes (`::/0^0-128` is one node). `Subset`, `Equal`, `Contains`, `Example` and
+  `Ranges` read it.
+- `resolve.Conjunct.Space`: a normal-form conjunct's prefix region as a `types.PrefixSpace`.
+- `resolve.PolicyIndex` (`AutNums`, `NamedBy`) and `resolve.ErrNoIndex`: a reverse "who names me"
+  index over a `Source`'s aut-nums, for the operator and a registry sweep.
+- `Corpus.IndexPeers` and `DumpLoader.IndexPeers`: build that index while loading, keeping AS
+  numbers only, never decoded policies.
+- `AutNums` and `NamedBy` on `MemSource`, `Cache` and `rpki.Filter`.
+- `resolve/consist`: `Checker.Check` compares what one neighbour's `export:` permits announcing
+  with what the other's `import:` accepts, both directions, in one address family — exact for
+  prefixes, conditional (`Finding.Given`) or `Undecided` for AS-path and community tests, never
+  guessed, and never assumed equal across the session (the importer reads a route after the
+  exporter's prepend and export actions). An undecided term on either side is reported, never
+  read as agreement, and a direction where neither side has any term is `Direction.NoPolicy`.
+  `Checker.Lint` reports what is dead or wrong in one aut-num's own policies
+  (`lint/shadowed`, `lint/empty`, `lint/missing-set`, `lint/missing-router`, `lint/no-aut-num`,
+  `lint/undecided`, `lint/limit` — new rows in `docs/diagnostics.md`), and `Checker.Peers` lists
+  an aut-num's peers: those its peerings name directly (`Forward`), those they reach only through
+  an as-set or a peering-set (`ViaSets`), and (over a `PolicyIndex`) those naming it (`Reverse`).
+  `Lint` runs sessions toward `ViaSets` only with `Checker.SetPeers` — an exchange's as-set can
+  name tens of thousands of ASes — and otherwise lints each set peering through one session
+  toward the lowest AS it denotes. `Pair`, `Report`, `Direction`,
+  `Finding`, `Kind`, `Issue` and `Whys()` round out the API.
+- `rpslcheck` (`resolve/cmd/rpslcheck`; logic in `resolve/internal/rpslcheck`): lint an AS and
+  check it against its neighbours, check a named pair, or `-sweep` a dump and report totals.
+  It checks direct and reverse peers; the peers named only through sets are counted ("peers
+  through sets, not checked", JSON `via_sets_skipped`) and checked with `-set-peers`.
+  Release binaries alongside `rpslq`'s and `rpslconf`'s. See `docs/rpslcheck.md`.
+- `FuzzPrefixSpace` (`types`): the fuzz targets are now 41.
+
+### Known limits
+
+- `Checker.Lint` evaluates each attribute once per session, so its time grows with the
+  aut-num's size times its number of peers: an aut-num with N peers, one import and one export
+  each, took 29 ms at N=250, 108 ms at N=500 and 396 ms at N=1000. A sweep's `-check-timeout`
+  bounds it; memoizing per-attribute evaluation within one lint is a follow-up.
+
 ## [0.22.0] - 2026-09-30
 
 ### Added

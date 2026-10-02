@@ -8,7 +8,7 @@ condition within a major version — and `Severity` follows one convention:
   the typed result (and from any expansion built on it). Filtering on
   `d.Severity >= rpsl.Error` finds everything Decode dropped.
 - **Warning** — the value was used, but it is suspect or not what RPSL allows.
-- **Info** — advisory only (none are emitted today).
+- **Info** — advisory only (the `lint/` rules below are the only ones emitted).
 
 `<class>` stands for an RPSL class (`route`, `as-set`, …) and `<attr>` for an
 attribute of it.
@@ -116,3 +116,46 @@ A discarded object never fails the file it came in (draft-ietf-grow-nrtm-v4
 §9.2). This rule lives in the `resolve` module, so it is listed here rather
 than in a table (`resolve/nrtm4`'s `TestDiscardRuleIsDocumented` holds this
 paragraph to the code).
+
+## `lint/` — policy lint (`resolve/consist`)
+
+`consist.Checker.Lint` reports what is wrong or dead in an aut-num's
+policies as `Issue`s, each a `Diagnostic` with one of these rules. They live
+in the `resolve` module, so they are listed here rather than in a table
+(`resolve/consist`'s `TestLintRulesAreDocumented` holds this list to the
+code):
+
+- **`lint/shadowed`** (Warning) — every route a term accepts is accepted by an
+  earlier decided term (per AS-path and community test signature), so its
+  actions never apply. Partial shadowing is not reported.
+- **`lint/empty`** (Info) — a term's filter, or a default's `networks` filter,
+  accepts no route.
+- **`lint/missing-set`** (Warning) — a filter, a peering or a router
+  expression names a set the source does not have (or one whose class is
+  not its name's, as the engine treats it). A set the policy names
+  directly is reported against its attribute, whether or not any session
+  reaches it; a set missing inside one that exists (a member of an as-set,
+  say) is reported for the sessions that expand it.
+- **`lint/missing-router`** (Warning) — a peering names an inet-rtr the source
+  does not have.
+- **`lint/no-aut-num`** (Warning) — a peering names an AS whose aut-num the
+  source does not have. Checked for each peer Lint runs a session toward: an
+  AS named only through a set is one with `Checker.SetPeers`, or as the one
+  representative of its set peering.
+- **`lint/undecided`** (Info) — a term `peval` cannot decide for a session (a
+  router not given, a peering regexp, another protocol); the message gives
+  the reason. A session whose filter cannot be evaluated at all — it names a
+  set that reaches `AS-ANY` (inside an AS-path regexp, say), or has no normal
+  form, such as a cycle of filter-sets through a regexp — is reported the
+  same way, against no attribute, with the error as its message; the other
+  sessions are still linted. `Check` returns that error.
+- Sessions run toward every AS the aut-num's peerings name and every aut-num
+  naming it (when the source keeps a peer index). A policy toward `AS-ANY` is
+  linted through a session with the reserved AS4294967295 (RFC 7300), never
+  a real peer; its issues list no peer, and a term that depends on the peer
+  (`PeerAS` or a set template, directly, in a regexp or inside a filter-set
+  at any depth, or a normal form that changes toward AS65535) is left out of
+  its `lint/empty` and `lint/shadowed`. An issue's span is relative to the
+  aut-num's first attribute, however the source decoded it.
+- **`lint/limit`** (Warning) — a session's evaluation hit a limit; the other
+  sessions are still linted.

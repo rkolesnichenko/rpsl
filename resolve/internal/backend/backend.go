@@ -28,6 +28,7 @@ type Options struct {
 	SrcMembers bool       // over an IRRd server, also fetch each set whole for its src-members:
 	VRPs       *rpki.VRPs // with Dumps, held as pseudo route objects of the registry RPKI
 	KeepPolicy bool       // dumps: keep aut-nums and inet-rtrs, so Src serves policy too
+	IndexPeers bool       // dumps: also keep the reverse peer index (resolve.Corpus.IndexPeers); implies KeepPolicy
 }
 
 // Backend is the source Options describes: the default one, by Options'
@@ -56,7 +57,7 @@ func Open(o Options) (*Backend, error) {
 		}
 	}
 	if len(o.Dumps) > 0 {
-		l := &resolve.DumpLoader{Sources: prio, KeepPolicy: o.KeepPolicy}
+		l := &resolve.DumpLoader{Sources: prio, KeepPolicy: o.KeepPolicy, IndexPeers: o.IndexPeers}
 		for _, name := range o.Dumps {
 			if err := ReadInput(name, l.Read); err != nil {
 				return nil, err

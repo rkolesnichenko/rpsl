@@ -8,4 +8,4 @@ require (
 	github.com/rkolesnichenko/rpsl/types v0.22.0
 )
 
-require github.com/rkolesnichenko/rpsl/lexer v0.22.0 // indirect
+require github.com/rkolesnichenko/rpsl/lexer v0.22.0

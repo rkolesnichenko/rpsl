@@ -41,15 +41,18 @@ resolve → object → policy → types → ast → lexer (never the reverse).
   with the local directories, so edits are seen across modules at once. Bump them only when releasing.
 - `Diagnostic`/`Severity` live in the `ast` module (so `object` can emit them); `rpsl` re-exports via aliases.
 - Net-using Source backends are isolated in `resolve/` sub-packages (irrd/whois/rdap/nrtm4) to keep core `resolve` socket-free.
-- `resolve/peval` (policy evaluation for one BGP session) and `resolve/rtconfig` (router
-  configuration from an evaluated policy: Cisco IOS/IOS-XE, Junos, Cisco IOS-XR, BIRD 2) sit
-  beside `resolve`, pure like it — no `net` either. `resolve/internal/backend` (shared
-  server/dump opening for rpslq and rpslconf), `resolve/internal/routemodel` (test-only
-  AS-path-regexp-vs-path oracle), `resolve/internal/cfgsim` (test-only: reads router
+- `resolve/peval` (policy evaluation for one BGP session), `resolve/rtconfig` (router
+  configuration from an evaluated policy: Cisco IOS/IOS-XE, Junos, Cisco IOS-XR, BIRD 2) and
+  `resolve/consist` (neighbour policy consistency and one-aut-num lint, built on `peval`) sit
+  beside `resolve`, pure like it — no `net` either. `types.PrefixSpace`, the exact prefix-set
+  algebra `consist` compares with, is in the `types` leaf, not in `resolve`. `resolve/internal/backend`
+  (shared server/dump opening for rpslq, rpslconf and rpslcheck), `resolve/internal/routemodel`
+  (test-only AS-path-regexp-vs-path oracle), `resolve/internal/cfgsim` (test-only: reads router
   configuration and decides routes against it, the semantic oracle for `rtconfig`),
-  `resolve/internal/buildinfo` (the version `-v` prints, for rpslq and rpslconf) and
+  `resolve/internal/buildinfo` (the version `-v` prints, for rpslq, rpslconf and rpslcheck),
   `resolve/internal/rpslconf` (the `rpslconf` command's logic, both modes; `resolve/cmd/rpslconf`
-  is the shim) are internal packages alongside it.
+  is the shim) and `resolve/internal/rpslcheck` (the `rpslcheck` command's logic;
+  `resolve/cmd/rpslcheck` is the shim) are internal packages alongside it.
 - Tests use in-process fake servers over a localhost listener + a `Dial` hook (no real network);
   the bgpq4 differential runs bgpq4 against an in-process IRRd (`resolve/internal/irrtest`) when bgpq4
   is installed; the snapshot goldens are its checked-in output; a live diff is opt-in via env vars.
@@ -190,6 +193,15 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
     it, matching AS-path regexps against paths (test-only, like routemodel), so it must model
     each vendor's documented semantics, including rtconfig's own Junos policy-chain OR (D12).
 
+- **Consistency (`resolve/consist`) is exact or undecided.**
+  - Prefix parts compare through `types.PrefixSpace`, which never enumerates and must stay canonical (lift and push-down in `merge`).
+  - AS-path and community tests compare by identity (sorted normal-form text): a finding over them carries `Given`, and anything else is `Undecided`. A regexp is never evaluated.
+  - Never across the session boundary: the importer reads the route after the exporter's prepend and export actions, so an importer conjunct with an AS-path test is never "sure", nor one with a community test when the exporter's clause changes communities — and symmetrically for NotExported, an export conjunct with an AS-path test is never "sure", nor one with a community test when its own clause changes communities. The model (resolve/consist_model_test.go) applies the boundary; keep it.
+  - An undecided term on the importer demotes NotImported; one on the exporter demotes NotExported. Beside decided clauses on both sides, an undecided term also adds Undecided (exporter's: Of NotImported; importer's: Of NotExported) over the family less the other side's conjuncts with no symbolic test.
+  - A direction where neither side has any term is `Direction.NoPolicy` ("no policy either way"), never "consistent".
+  - "Announces" means "permits announcing" (policy text, not a RIB).
+  - `Corpus.IndexPeers` keeps AS numbers only, never decoded policies.
+
 ## Scope guardrails
 
 - Do NOT evaluate AS-path regexps (`<...>`) against live BGP paths — parse them to an AST and stop.
@@ -206,9 +218,9 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   (all six modules incl. examples/bulk-ripe under -race, gofmt, invariants) with
   `scripts/check.sh`; `FUZZTIME=15s scripts/check.sh` also runs every fuzz target.
 - `go test -run 'TestRoundTrip|TestStreamRoundTrip' .` — the lossless guard (root module).
-- Fuzz (40 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
+- Fuzz (41 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
   FuzzFormat (ast); FuzzParseSetName, FuzzParseRangeOperator, FuzzParsePrefixRange,
-  FuzzParseRouterID, FuzzParseSetRef (types); FuzzParseStream, FuzzDecode (root);
+  FuzzParseRouterID, FuzzParseSetRef, FuzzPrefixSpace (types); FuzzParseStream, FuzzDecode (root);
   FuzzParseSrcMember (object); FuzzParseImport,
   FuzzParseASPathRegexp, FuzzParseFilter, FuzzParsePeering, FuzzParseInject,
   FuzzParseComponents, FuzzParseAggrMtd, FuzzParseIfaddr, FuzzParseInterface, FuzzParsePeer,
@@ -218,6 +230,7 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   FuzzAggregate (resolve/internal/filtergen); FuzzReadJSON, FuzzApplySLURM (resolve/rpki);
   FuzzParseNotification, FuzzReadDelta (resolve/nrtm4); FuzzCorpusDelete, FuzzNormalizeFilter (resolve);
   FuzzTranslateRegexp (resolve/rtconfig); FuzzParseTemplate (resolve/internal/rpslconf).
+  Verify the count with `grep -o '"[^"]* Fuzz[A-Za-z]*"' scripts/check.sh | wc -l`.
 - Never slice a string at an offset found in a transformed copy of it (`strings.ToUpper` can
   lengthen UTF-8): v0.19.0 panicked on "ɐ" (2 bytes) → "Ɐ" (3). Match case-insensitively in place.
 - Opt-in: `RPSL_REALDATA=$PWD/.data go test -run TestRealData ./examples/bulk-ripe/bulk`
@@ -231,7 +244,11 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   `RPSL_LIVE=1 go test -run TestLiveRIPE ./resolve/nrtm4` (RIPE's NRTMv4 signature and newest delta),
   `RPSL_LIVE_NRTM=1 … -run TestLiveRIPEMirror` (a full RIPE mirror, ~400 MB);
   `RPSL_REALDATA=$PWD/.data go test -run TestRealDataPeval ./resolve` (a sample of RIPE's
-  aut-nums, import/export evaluated toward every named peer in both families).
+  aut-nums, import/export evaluated toward every named peer in both families);
+  `RPSL_REALDATA=$PWD/.data go test -run TestRealDataConsist ./resolve/consist` (a full RIPE
+  sweep: every aut-num linted, every forward-reachable pair checked in both families, each
+  `Lint`/`Peers` call and each `Check` under its own time budget; `RPSL_CONSIST_SAMPLE=N` sweeps
+  a random sample of `N` aut-nums instead).
 - `rpslq` (resolve/cmd/rpslq; logic in resolve/internal/rpslq, formats in resolve/internal/filtergen)
   is bgpq4 on this engine: bgpq4's getopt command line, every vendor/kind/shape, and -A as a
   node-for-node port of bgpq4's radix tree (filtergen/tree.go) — don't "improve" its
@@ -256,18 +273,34 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   (resolve/testdata/rtconfig/golden) from a live `rtconfig`; divergences D1–D18 are recorded (all but the run-to-run D18 pinned) in
   resolve/testdata/rtconfig/divergences.md. `bird -p` (resolve/internal/cfgsim.BIRDSyntax) checks
   a BIRD writer's output against the real parser when `bird` is installed; it is skipped otherwise.
+- `rpslcheck` (resolve/cmd/rpslcheck; logic in resolve/internal/rpslcheck, the comparison in
+  resolve/consist) has three modes: one AS (lint it, then check it against every peer, Forward
+  and Reverse), a named pair (lint both, check that pair) and `-sweep` (audit every aut-num in
+  one or more `-dump` files, with totals). Peers named only through as-sets/peering-sets
+  (`PeerList.ViaSets`; IXP sets reach ~59k ASes, 7.3M pairs over RIPE) are checked only with
+  `-set-peers` (`Checker.SetPeers`); otherwise one AS notes them on stderr, a sweep counts them
+  ("peers through sets, not checked", JSON `via_sets_skipped`), and Lint gives each set peering
+  one representative session (its lowest AS) instead (Ruling R20). `-sweep` is dump-only — walking a registry live would
+  be hundreds of thousands of queries against someone else's service, and the reverse peer index
+  (`resolve.PolicyIndex.NamedBy`) only exists over a `Corpus`. Exit status: 0 no Warning, 1 a
+  Warning, 2 a bad command line, 3 could not complete (an unreachable server, a missing aut-num,
+  the whole run's own `-timeout`, or outside a sweep a limit or a session that cannot be
+  evaluated); inside a sweep a pair or aut-num over a limit, not decidable, or over its own
+  `-check-timeout` is counted, not fatal. `TestGoldens` (resolve/internal/rpslcheck) holds its
+  text and JSON output to `resolve/testdata/rpslcheck/*.golden`; `RPSL_RPSLCHECK_UPDATE=1`
+  rewrites them (review the diff). See docs/rpslcheck.md.
 - Releasing: `scripts/release.sh vX.Y.Z` does RELEASING.md's steps (tag order lexer/types → ast →
   root → resolve), waits for the proxy, verifies from an empty module cache, and resumes after a
-  failure; it also builds rpslq's and rpslconf's binaries (5 platforms each, from the published
-  module) and attaches them to the GitHub release. `docs/rpslq.md` is rpslq's page for bgpq4
-  users. Rehearse first with
+  failure; it also builds rpslq's, rpslconf's and rpslcheck's binaries (5 platforms each, from the
+  published module) and attaches them to the GitHub release. `docs/rpslq.md` is rpslq's page for
+  bgpq4 users. Rehearse first with
   `scripts/release-dryrun.sh` (runs release.sh against a bare repo and
   a local proxy; publishes nothing) — alone, not beside check.sh. Never query the proxy for an
   unpushed tag: it caches the miss for ~30 minutes.
 - Performance: `scripts/bench.sh [ref]` compares benchmarks with a ref (default: latest tag).
 - Leaf isolation: `cd types && go list -deps ./... | grep rkolesnichenko` must show only itself.
-- Engine purity: `cd resolve && go list -deps . ./peval ./rtconfig` must NOT include `net`
-  (sockets live only in resolve/irrd, resolve/whois, resolve/rdap).
+- Engine purity: `cd resolve && go list -deps . ./peval ./rtconfig ./consist` must NOT include
+  `net` (sockets live only in resolve/irrd, resolve/whois, resolve/rdap).
 - A `resolve`-module test that reads a file outside `resolve/` (a docs/*.md contract, such as
   `TestRpslconfDocs`) skips when `../../go.work` is absent: `resolve` publishes on its own, and
   release.sh step 6 tests that published zip from an empty module cache, where nothing outside

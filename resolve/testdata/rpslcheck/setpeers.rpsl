@@ -1,0 +1,48 @@
+route: 10.10.0.0/16
+origin: AS65010
+mnt-by: MNT-A
+source: RIPE
+
+route: 10.11.0.0/16
+origin: AS65011
+mnt-by: MNT-A
+source: RIPE
+
+route: 10.13.0.0/16
+origin: AS65013
+mnt-by: MNT-A
+source: RIPE
+
+as-set: AS-IX
+members: AS65011, AS65012, AS65014
+mnt-by: MNT-A
+source: RIPE
+
+aut-num: AS65010
+as-name: TEN
+import: from AS65013 accept AS65013
+import: from AS-IX accept ANY
+import: from AS-IX accept AS-IX
+export: to AS-IX announce AS65010
+export: to AS65013 announce AS65010
+mnt-by: MNT-A
+source: RIPE
+
+aut-num: AS65011
+as-name: ELEVEN
+import: from AS65010 accept AS65010
+export: to AS65010 announce AS65011
+mnt-by: MNT-A
+source: RIPE
+
+aut-num: AS65012
+as-name: TWELVE
+mnt-by: MNT-A
+source: RIPE
+
+aut-num: AS65013
+as-name: THIRTEEN
+import: from AS65010 accept AS65010
+export: to AS65010 announce AS65013
+mnt-by: MNT-A
+source: RIPE

@@ -204,6 +204,23 @@ type AddrFamily struct { AFI AFI; SAFI SAFI } // RFC 4012 afi dictionary
 
 The `^operator` parsing on prefix ranges is one of the spots regex parsers fumble; making it a first-class type with an explicit `Materialize` (and a hard cap) keeps the fan-out controllable.
 
+`PrefixSpace` (v0.23.0) is the exact counterpart: not one range but an exact
+set of prefixes, closed under union, intersection and difference, built from
+`PrefixRange`s with `SpaceOf`. Internally it is a canonical binary trie per
+address family — one node per prefix a bit is set at, a length mask per node
+saying which lengths under it are in the set — so it never enumerates:
+`::/0^0-128` is one node, and the cost of an operation is bounded by the
+ranges it was built from times the prefix length, never by how many
+prefixes that denotes. The canonical form (a bit lifted to the highest node
+where it holds, never duplicated under both children, no empty node) makes
+two spaces holding the same set structurally identical, so `Equal` is exact
+and `Ranges` yields a unique, disjoint cover. `Contains`, `Example` (IPv4
+first: the shortest IPv4 prefix in the set, then the lowest address; only an
+IPv6-only space yields an IPv6 one — "shortest" means nothing across
+families) and the merge operations are proved against a brute-force model
+that builds the same sets by enumerating a small universe prefix by prefix
+(design §11 item 3).
+
 ---
 
 ## 6. Typed objects (`object`)
@@ -895,6 +912,155 @@ differential, holds `rtconfig`'s output and `rpslconf`'s to each other
 (`resolve/rtconfig_irrtoolset_test.go`) — the semantics a vendor's own
 documentation specifies, ported once, applied to both.
 
+### 8.12 Policy consistency and lint (`resolve/consist`)
+
+`resolve/consist` (v0.23.0) is the consumer §8.10 named next: whether two
+neighbours' policies agree, and what is wrong or dead in one aut-num's own.
+It is pure like `peval`, built entirely on top of it — no new I/O. The one
+new limit is `Checker.MaxRanges`, a cap (default 64) on how many ranges a
+single `Finding.Ranges` lists; past it the finding is marked `Truncated`
+rather than growing without bound, the same discipline `peval`'s and the
+`Expander`'s own limits follow.
+
+**What `Check` compares.** For a `Pair` (two ASNs, one address family —
+`ipv4.unicast` or `ipv6.unicast`, never multicast), `Check` evaluates A's
+`export:` toward B and B's `import:` from A (and the reverse) through
+`peval`, and compares what each side's decided clauses *accept*, not what
+they *do*: communities an action sets, preferences, next-hops — none of
+that is consistency's business, only whether a route passes. A customer's
+`export: to AS2 announce ANY` toward a provider whose `import:` accepts only
+`AS-CUST` is a finding: "announces" always means "permits announcing" — the
+comparison is of policy text, never of a RIB, so the finding stands whether
+or not the customer is sending anything today.
+
+**The comparison is exact for prefixes, by signature for everything else.**
+Each decided conjunct's prefix part becomes a `types.PrefixSpace` via
+`resolve.Conjunct.Space` (ANY trimmed to the session's family). Conjuncts are
+grouped by *signature* — their sorted AS-path and community tests, as
+normal-form text — and compared group by group: for each signature T on the
+exporting side, `Sure_T` is the union of importing-side spaces whose
+signature is a subset of T and whose tests read a route the same on both
+sides of the session (a route passing T passes those too, so it is surely
+accepted), and `Maybe_T` the rest. The importer reads a route after the
+exporter prepends its AS and applies its export actions — the export filter
+matches the path before the prepend, as `rtconfig` renders it — so a test is
+never assumed equal across the boundary: an importing conjunct with an
+AS-path test is never sure, and one with a community test only when the
+exporter's clauses of `E_T` change no community (for the reverse
+comparison, when the exporting conjunct's own clause does not). Identical
+regexps on both sides are therefore `Undecided`, not "compared exactly".
+What the exporter permits (`E_T`) less
+`Sure_T` is the disagreement; the part of it inside `Maybe_T` is `Undecided`
+(the other side's extra test might still accept or refuse it), and the part
+outside it is a concrete finding — `NotImported` (Warning) one way,
+`NotExported` (Info) the other. A non-empty signature makes a finding
+conditional: it carries `Given`, the tests a route must also pass, rather
+than being silently dropped or silently asserted — `types.PrefixSpace`
+decides prefixes exactly, but an AS-path regexp or a community test is never
+evaluated (§13), so anything resting on one is stated as a condition, never
+assumed true.
+
+**Demotion.** A side with any term `peval` could not decide for the session
+(a router not given, a peering regexp, another protocol) might still cover
+more than its decided clauses show — so every `NotImported` finding is
+demoted to `Undecided` when the importer has an undecided term, and every
+`NotExported` to `Undecided` when the exporter does. This is the same
+principle as `peval.Undecided`: never report a disagreement that an
+unevaluated term could in fact resolve. The converse holds too: an
+exporter's undecided term may announce any route of the family, so when
+both sides have decided clauses it adds `Undecided{Of: NotImported, Why:
+WhyExporterUndecided}` over the family's space less the importer's
+conjuncts with no symbolic test (the only ones sure to take any route
+that crosses the session), naming the undecided terms' attributes — and an
+importer's undecided term adds `Undecided{Of: NotExported, Why:
+WhyImporterUndecided}` over the family less the exporter's. A direction
+with an undecided term on either side is reported consistent only when the
+other side's test-free clauses already accept (or announce) everything the
+undecided term could.
+
+**One-sided policies.** These apply only where one side has no decided
+clause at all toward the peer (a side with any decided clause always goes
+through the signature comparison above instead). `NoImport` fires when the
+exporter has decided export terms and the importer has none (Warning:
+likely a stale or missing `import:`); `NoExport` the same the other way
+(Info: the importer accepting more than the exporter promises is the common,
+harmless shape). A decided side that permits nothing in the family is read
+as having no decided clause: a finding over it would name no prefix, and
+the two-sided path reports nothing for it either. The same demotion as
+above applies here too: an importer
+with no decided term but an undecided one might still cover the exporter, so
+the finding is `Undecided{Of: NoImport, Why: WhyImporterUndecided}` instead
+of a bare `NoImport` — and symmetrically for `NoExport`. When *neither* side
+has a decided clause, an exporter's undecided term can still mean it exports
+(`Undecided{Of: NoImport, Why: WhyExporterUndecided}`) and an importer's
+undecided term can still mean it imports (`Undecided{Of: NoExport, Why:
+WhyImporterUndecided}`); both can fire together, with no prefix to name.
+Only when neither side has any term for the other — decided or not — is
+there no finding, and the direction is marked `NoPolicy`: the registry
+simply does not show a peering, which `rpslcheck` prints as "no policy
+either way" rather than "consistent". `NoAutNum` is
+one finding each way when an aut-num named in the `Pair` is missing from the
+`Source` entirely; nothing else about the pair is compared.
+
+**Lint.** `Lint` evaluates one aut-num's import, export and default policies
+toward the peers `Peers` finds: forward, the AS numbers its own peerings name
+directly; reverse, who names it back, when the `Source` keeps an index; and,
+with `Checker.SetPeers`, `ViaSets`, the ASes its peerings reach only through
+an as-set or a peering-set. Those are kept apart because an exchange's as-set
+can name tens of thousands of ASes — 160 RIPE aut-nums name more than 5,000
+peers each that way, 7.3 million pairs in all — so a sweep checks them only
+on request. Without `SetPeers`, each set peering that denotes none of the
+listed peers is linted through one representative session, toward the
+lowest AS it denotes, so its terms are still linted at the cost of one
+session rather than one per member. A
+policy toward `AS-ANY` is linted through one extra session toward the
+reserved `AS4294967295` (RFC 7300), never a real peer — its issues list no
+peer — and, since a term that depends on the peer means nothing without a
+real one, such a term is left out of that one session's `lint/empty` and
+`lint/shadowed` checks (its other terms are still linted normally). A term
+depends on the peer when its filter names `PeerAS` or a set template —
+directly, in an AS-path regexp, or inside a filter-set it names, at any
+depth — or when its normal form differs as the session is evaluated again
+toward `AS65535`, RFC 7300's other reserved AS (neither originates a route,
+so `PeerAS` as a prefix filter is the same toward both; the filter-set walk
+is what finds it). An `Issue`'s span is relative to the object's first
+attribute, however the `Source` decoded it: a `Corpus` keeps a `member-of:`
+claimant whole, with the dump's positions. `Lint` reports what is dead or wrong: `lint/shadowed` (an earlier decided clause
+already covers everything a later one would ever match — computed by the
+same per-signature subset test `Check` uses, so it is exact: an undecided
+term can only ever add routes an earlier clause does not already cover, so
+it can never turn a truly shadowed clause into a live one, which is why
+shadowing is never a guess, unlike most of what `Lint` reports), `lint/empty`
+(a clause's filter accepts nothing), `lint/missing-set`/`missing-router`/
+`no-aut-num` (a referenced object the `Source` lacks — found by a static walk
+of the policy text for what it names directly, and by the per-session
+`peval.Policy.Missing()` for what a set nests), and `lint/undecided` (a term
+`peval` could not decide, or a session whose filter has no normal form at
+all — `*resolve.AnySetError`, `*resolve.NotEnumerableError` — which makes
+that one session undecidable without aborting the rest of the lint). Its
+cost grows with the aut-num's size times its peers, since each attribute is
+evaluated once per session — a known limit, bounded in a sweep by the
+per-check budget (measured: an aut-num with N peers, one import and one
+export each, 29 ms at N=250, 108 ms at N=500, 396 ms at N=1000).
+
+**The reverse index (`resolve.PolicyIndex`).** No IRR query answers "who
+names me" — `Lint`'s reverse peers, and a sweep's own pair list, need it
+without re-scanning every aut-num per lookup. `Corpus.IndexPeers` (implying
+`KeepPolicy`) parses each aut-num's policies once at load time to record just
+the AS numbers its peerings name directly, in a map keyed by the named AS —
+the parsed policies themselves are dropped at once, so the corpus memory
+rule (§8.9) still holds: the index costs a map of ASNs, not a second copy of
+any object. Peerings through an as-set are not indexed (expanding every
+as-set peering in a registry at load time is unbounded); those are still
+found, per call, by expanding the forward side's own as-set peerings under
+the `Expander`'s limits — `PeerList.ViaSets`.
+
+The CLI is `rpslcheck` (`resolve/cmd/rpslcheck`, logic in
+`resolve/internal/rpslcheck`): one AS against its peers, a named pair, or a
+`-sweep` of a dump with totals. It checks direct and reverse peers; the peers
+named only through sets it counts, and checks with `-set-peers`. See `docs/rpslcheck.md` for its modes,
+output and exit status.
+
 ## 9. Top-level façade
 
 ```go
@@ -986,9 +1152,9 @@ The correctness bar is "matches the tools operators already trust," so testing i
 
 1. **Golden round-trip corpus.** A directory of real objects from RIPE/RADB/ARIN; assert `Parse → String` is byte-identical. This guards the lossless property and catches lexer regressions.
 2. **Policy tests from the RFCs.** Table tests for the grammar's forms, and every routing-policy example in RFC 2622, 2650 and 4012 kept verbatim in `policy/testdata/rfc-examples.txt`: each must parse clean, except the one the parser rejects on purpose (RFC 2622's `NOT` in a peering).
-3. **A model of the engine.** Random IRRs — as-sets and route-sets in two sources, range operators on every kind of member, indirect members honored and rejected, cycles, missing and invalid members, `AS-ANY` — are expanded by the engine and by a brute-force oracle that evaluates RFC 2622 straight from the generator's model, never from parsed text. They must agree on AS numbers, prefixes of each family, `Missing()`, and on `MaxDepth`/`MaxPrefixes` holding exactly at the true depth and size. The same IRRs are served by `resolve/internal/irrtest`, an in-process server that answers the IRRd and whois protocols as IRRd does, so `irrd.Source`, `whois.Source` and `MemSource` are held to the same oracle. With random ROAs added, the oracle also applies RFC 6811 from the model: `rpki.Filter` over `MemSource` (with and without `WriteRPSL`'s pseudo objects), the backends against `irrtest` in IRRd's RPKI-aware mode (its own port of IRRd's validator and pseudo-object rendering), and `Filter` over a server that is not RPKI-aware must all agree with it. The NRTMv4 client is held to `resolve/internal/nrtmtest`, an independent server that follows the draft: random histories of changes, snapshots, expiring deltas and new sessions, with clients joining late, after each of which the mirror must equal the server's database object for object and in every expansion; and each way a server can misbehave — a corrupt or rewritten file, a key it was never given, a gap in the deltas, an older notification file — must leave the mirror where it was. **The filter model** (`TestModelNormalizeFilter`) checks `NormalizeFilter` the same way, route by route: the model decides whether a random filter (NOT/AND/OR, prefix lists, AS numbers, route-sets, as-sets and filter-sets, range operators, regexps with sets, classes and `~*`, communities, `PeerAS`, set templates such as `AS1:AS-CUST:PeerAS`) accepts a sampled route, matching its regexps with its own Go translation, and `routemodel.Match` (`resolve/internal/routemodel`, a brute-force RFC matcher) must find that `NormalizeFilter`'s normal form, and its text read back, accept exactly the same routes. Its filters name no set that reaches `AS-ANY`, and it runs over `MemSource` only. Whenever `EvalFilter` succeeds it must equal the normal form's one pure conjunct (or none), `MaxConjuncts` (`TestModelMaxConjuncts`) holds at exactly the true count, and with a random `Exclude` (`TestModelNormalizeExclude`) every route the normal form accepts is one the model accepts without it. The model's translation and `routemodel` are the only code that matches an AS-path regexp against a concrete path, and both are test-only. **The policy model** (`TestModelPolicy`, `TestModelPolicyBackends`) does the same for `resolve/peval`: random policies of one of four kinds, drawn per aut-num — `import:`, `export:`, `import-via:` or `default:`, each with its mp- form (EXCEPT/REFINE, lists, attributes with and without afi clauses, peering-sets, AS expressions, router addresses, inet-rtr names, rtr-sets, protocols, set templates) — are evaluated by `peval.Evaluator`'s `Import`, `Export`, `ImportVia` or `Default` and by an oracle that applies RFC 2622 §6 per route directly from the generator's model — first term whose peering and filter match, its actions — without `Flatten`, marking a term Undecided exactly when a needed router is not given. For `import-via:` a term covers the session when its via peering (a route server) does, and its filter binds `PeerAS` to the remote peering's AS when that is one AS number, the term being Undecided when its filter names the peer and the remote peering does not; for `default:` the oracle gives the attributes that cover the session, their actions, and route by route what each `networks` filter accepts. Checked over `MemSource`, `Corpus` with `KeepPolicy`, and `irrd`/`whois` against `irrtest`, and with a random `Exclude` (`TestModelPolicyExclude`, over `MemSource`) the clauses that cover a session are unchanged and what peval accepts — for a default, what its `networks` filter accepts — is a subset of the model's. `export-via:` is covered by table tests in `resolve/peval`, not by the model. **The printer model** (`TestPrintersMatchPeval`, `resolve/printer_model_test.go`) extends the policy model to `resolve/rtconfig`: for the same random import/export policies, each vendor's rendered configuration — read by `cfgsim`, the semantic oracle §8.11 describes — must decide every sampled route, and give it the same actions, that `peval.Policy` itself decided; a printer's job is to reproduce `peval`'s answer, not to be checked against a second oracle. `FuzzTranslateRegexp` holds every AS-path regexp `resolve/rtconfig` can translate to the same property the filter model holds `NormalizeFilter`'s regexps to (item 5): a dialect's matcher (`cfgsim.MatchIOS`/`MatchJunos`/`MatchBIRD`) run on the translated form must agree with `routemodel.MatchPath`, the brute-force RFC matcher, over a fixed set of synthetic paths, for every regexp the translation does not itself refuse as unsupported.
+3. **A model of the engine.** Random IRRs — as-sets and route-sets in two sources, range operators on every kind of member, indirect members honored and rejected, cycles, missing and invalid members, `AS-ANY` — are expanded by the engine and by a brute-force oracle that evaluates RFC 2622 straight from the generator's model, never from parsed text. They must agree on AS numbers, prefixes of each family, `Missing()`, and on `MaxDepth`/`MaxPrefixes` holding exactly at the true depth and size. The same IRRs are served by `resolve/internal/irrtest`, an in-process server that answers the IRRd and whois protocols as IRRd does, so `irrd.Source`, `whois.Source` and `MemSource` are held to the same oracle. With random ROAs added, the oracle also applies RFC 6811 from the model: `rpki.Filter` over `MemSource` (with and without `WriteRPSL`'s pseudo objects), the backends against `irrtest` in IRRd's RPKI-aware mode (its own port of IRRd's validator and pseudo-object rendering), and `Filter` over a server that is not RPKI-aware must all agree with it. The NRTMv4 client is held to `resolve/internal/nrtmtest`, an independent server that follows the draft: random histories of changes, snapshots, expiring deltas and new sessions, with clients joining late, after each of which the mirror must equal the server's database object for object and in every expansion; and each way a server can misbehave — a corrupt or rewritten file, a key it was never given, a gap in the deltas, an older notification file — must leave the mirror where it was. **The filter model** (`TestModelNormalizeFilter`) checks `NormalizeFilter` the same way, route by route: the model decides whether a random filter (NOT/AND/OR, prefix lists, AS numbers, route-sets, as-sets and filter-sets, range operators, regexps with sets, classes and `~*`, communities, `PeerAS`, set templates such as `AS1:AS-CUST:PeerAS`) accepts a sampled route, matching its regexps with its own Go translation, and `routemodel.Match` (`resolve/internal/routemodel`, a brute-force RFC matcher) must find that `NormalizeFilter`'s normal form, and its text read back, accept exactly the same routes. Its filters name no set that reaches `AS-ANY`, and it runs over `MemSource` only. Whenever `EvalFilter` succeeds it must equal the normal form's one pure conjunct (or none), `MaxConjuncts` (`TestModelMaxConjuncts`) holds at exactly the true count, and with a random `Exclude` (`TestModelNormalizeExclude`) every route the normal form accepts is one the model accepts without it. The model's translation and `routemodel` are the only code that matches an AS-path regexp against a concrete path, and both are test-only. **The policy model** (`TestModelPolicy`, `TestModelPolicyBackends`) does the same for `resolve/peval`: random policies of one of four kinds, drawn per aut-num — `import:`, `export:`, `import-via:` or `default:`, each with its mp- form (EXCEPT/REFINE, lists, attributes with and without afi clauses, peering-sets, AS expressions, router addresses, inet-rtr names, rtr-sets, protocols, set templates) — are evaluated by `peval.Evaluator`'s `Import`, `Export`, `ImportVia` or `Default` and by an oracle that applies RFC 2622 §6 per route directly from the generator's model — first term whose peering and filter match, its actions — without `Flatten`, marking a term Undecided exactly when a needed router is not given. For `import-via:` a term covers the session when its via peering (a route server) does, and its filter binds `PeerAS` to the remote peering's AS when that is one AS number, the term being Undecided when its filter names the peer and the remote peering does not; for `default:` the oracle gives the attributes that cover the session, their actions, and route by route what each `networks` filter accepts. Checked over `MemSource`, `Corpus` with `KeepPolicy`, and `irrd`/`whois` against `irrtest`, and with a random `Exclude` (`TestModelPolicyExclude`, over `MemSource`) the clauses that cover a session are unchanged and what peval accepts — for a default, what its `networks` filter accepts — is a subset of the model's. `export-via:` is covered by table tests in `resolve/peval`, not by the model. **The printer model** (`TestPrintersMatchPeval`, `resolve/printer_model_test.go`) extends the policy model to `resolve/rtconfig`: for the same random import/export policies, each vendor's rendered configuration — read by `cfgsim`, the semantic oracle §8.11 describes — must decide every sampled route, and give it the same actions, that `peval.Policy` itself decided; a printer's job is to reproduce `peval`'s answer, not to be checked against a second oracle. `FuzzTranslateRegexp` holds every AS-path regexp `resolve/rtconfig` can translate to the same property the filter model holds `NormalizeFilter`'s regexps to (item 5): a dialect's matcher (`cfgsim.MatchIOS`/`MatchJunos`/`MatchBIRD`) run on the translated form must agree with `routemodel.MatchPath`, the brute-force RFC matcher, over a fixed set of synthetic paths, for every regexp the translation does not itself refuse as unsupported. **The consistency model** (`TestModelConsist`, `TestModelConsistBackends`, `resolve/consist_model_test.go`) extends the policy model's generator to pairs: two aut-nums with import and export toward each other, drawn with the same shapes (EXCEPT/REFINE, afi clauses, as-set and AS-number peerings, regexps with sets, community tests, routers given and not), and a per-route oracle that evaluates both sides from the model directly, regexps included, as the filter and policy models' oracles do. Soundness: an unconditional `NotImported`/`NotExported` example is announced and refused (or accepted) on every sampled path and community set with that prefix, and a conditional one (`Given`) holds for every sampled route passing it. Completeness: every sampled route the model finds announced and refused lies in a `NotImported` finding's ranges with its `Given` satisfied, unless an `Undecided` finding's ranges cover it instead — the same for `NotExported`, `NoImport`, `NoExport` and `NoAutNum` — with `MaxRanges` set high enough that nothing truncates. Checked over `MemSource`, a `Corpus` with `KeepPolicy` and `IndexPeers`, and `irrd`/`whois` against `irrtest`; `NamedBy` is additionally held to a brute-force scan of the generated aut-nums, before and after random replacements and deletes. **Exactness on pure-prefix policies** (`TestModelConsistExact`): for policies the generator draws with no symbolic tests at all, both directions (including `lint/shadowed`) must equal the oracle's exactly over a small enumerable universe — the one case where "exact or undecided" has no undecided left to fall back on, so the two must agree precisely rather than merely never disagreeing. **`PrefixSpace`'s own model** (`TestSpaceAgainstBruteForce`, `types/prefixspace_model_test.go`) builds the same sets a second way — one element at a time, over a small universe of IPv4 prefixes under `10.0.0.0/24` and IPv6 under `2001:db8::/120`, plus ranges that reach above or past that universe — and requires every operation, `Subset`, `Example` and `Equal` to agree with the brute-force answer; `SpaceOf(Ranges()...)` must be `Equal` to the space it came from, with disjoint ranges.
 4. **Differential expansion vs. `bgpq4`.** A real `bgpq4` binary queries `irrtest` serving the same objects the engine expands (bgpq4 recurses through as-sets itself with `-L`; route-sets it asks the server to resolve with `!i…,1`, which `irrtest` implements as IRRd does). Random IRRs must expand identically, AS numbers and both families' prefixes; the golden expansions of the snapshot in `resolve/testdata` are bgpq4's own output, re-checked whenever bgpq4 is installed (CI installs it). Where the two knowingly differ — bgpq4 drops the single-length `^n` form (a bgpq4 bug), neither IRRd nor bgpq4 applies range operators on set and AS members, bgpq4 follows route-sets listed in as-sets — the difference is pinned in `resolve/testdata/bgpq4/divergences.md` and a test, so a change on either side fails. `rpslq` is held to the binary the same way, over every vendor, kind of list and shape (`-A`, `-R`, `-r`, `-s`, `-W`, `-w`, …) and `EXCEPT`, with its own divergences pinned alongside. An opt-in run (`RPSL_REALDATA`) does the same for the largest and a random sample of real RIPE sets. `rpslq --dump --rpki` is held to bgpq4 against an RPKI-aware `irrtest` holding the same objects and ROAs, with bgpq4 recursing itself and letting the server expand, with the pseudo source selected and not. An older opt-in diff against bgpq4 on a live IRR runs when `RPSL_BGPQ4_SERVER`/`RPSL_BGPQ4_SET` are set. **`TestPevalMatchesIRRToolSet`** does the same for `resolve/peval`'s underlying `NormalizeFilter`, against IRRToolSet 5.1.3's `peval` when it is on `PATH` (the Homebrew bottle works: the test gives `peval` its server through `IRR_HOST`/`IRR_PORT`/`IRR_SOURCES`, since the arm64 build ignores its command-line options) — but only on the filters IRRToolSet gets right: prefix lists, bare AS numbers, AND, OR and NOT over prefix lists, all IPv4. IRRToolSet's own bugs (substituting `0.0.0.0/0` for an unresolvable set member, dropping NOT over an AS-derived term, enumerating IPv6 ranges without end, and others) are pinned, each with the input that shows it, in `resolve/testdata/rtconfig/divergences.md`, numbered D1–D18 (D1–D10 from the design spec's spike; D11–D13 found writing this release's plan; D14–D16 found by the rtconfig differential below, D17 by the peval differential against the Linux build, D18 in CI: IOS-XR community-sets that vary from run to run, which no test can pin); the filter model (item 3) is the oracle for everything outside that narrow overlap. **The rtconfig differential** (`TestRtconfigMatches`, `TestRtconfigGoldens`, `resolve/rtconfig_irrtoolset_test.go`) runs the same idea for template mode: IRRToolSet's `rtconfig` writes IOS, Junos and IOS-XR configuration, over the same `irrtest` server, for random policies restricted to the shapes it renders correctly (prefix lists and bare AS numbers, NOT over prefix lists only, AS-path regexps over AS numbers, positive community tests, Junos run with `-junos_and_not_or`), and `cfgsim` decides synthetic routes against both configurations, which must agree. Three shapes it draws are wrong on one vendor only and are set aside for that vendor there (D14–D16); seeds are drawn until every vendor has compared 30 policies in full (at most 200 — fewer fails the test). `TestRtconfigGoldens` holds `rtconfig`'s output for two fixed templates to checked-in goldens (`resolve/testdata/rtconfig/golden`), so the comparison runs even without `rtconfig` installed; `RPSL_RTCONFIG_UPDATE=1` rewrites them after a reviewed diff. Both this differential and `TestPevalMatchesIRRToolSet` build IRRToolSet 5.1.3 themselves when it is not already on `PATH` — `scripts/build-irrtoolset.sh`, which CI runs so the differentials execute on every push; Homebrew's bottle works too, but for Cisco IOS only, since its arm64 build ignores its command line.
-5. **Fuzzing** (`go test -fuzz`) of every parser that takes untrusted text — lexer, attribute lists, set names, set references (`FuzzParseSetRef`: what it accepts, `String()` parses back to an equal ref, and its source matches `[A-Z0-9_-]+`), range operators, prefix ranges, the stream, decoding, editing, src-members items (`FuzzParseSrcMember`: an accepted member's `Ref()` round-trips), the policy parser (import, filter, peering, AS-path regexp, and `FuzzParseMPFilter` for the mp-filter/afi-prefix form), what the network backends read from a server (the IRRd frame reader, member list and `!j-*` registry list — `FuzzParseRegistries`: only canonical names of listed lines, never a "Database unknown" one — the whois response scanner), the NRTMv4 notification file and delta reader (what is accepted holds the §6.3 rules), the VRP export and SLURM readers (what they accept is well-formed and its pseudo objects load back one per VRP; a SLURM file only drops VRPs it may and adds those it asserts), `FuzzNormalizeFilter` (no panic, `MaxConjuncts` holds, and `String()` parses back to a filter the route model says matches the same sampled routes), `FuzzTranslateRegexp` (no panic, and every vendor's translation of an AS-path regexp agrees with the RFC matcher over synthetic paths, or is refused as unsupported — item 3), `FuzzParseTemplate` (`resolve/internal/rpslconf`: no panic, every item's text concatenates back to the input read so far — a template is a total partition, like the lexer — every command's `Raw` parses back to an equal `Command`, and only a known or deferred command name is accepted), and rpslq's port of bgpq4's aggregation (any prefix set, aggregated and refined, without a panic — bgpq4 aborts on an "unreachable point" — and aggregation losing and adding nothing) — for properties, not only for panics:
+5. **Fuzzing** (`go test -fuzz`) of every parser that takes untrusted text — lexer, attribute lists, set names, set references (`FuzzParseSetRef`: what it accepts, `String()` parses back to an equal ref, and its source matches `[A-Z0-9_-]+`), range operators, prefix ranges, the stream, decoding, editing, src-members items (`FuzzParseSrcMember`: an accepted member's `Ref()` round-trips), the policy parser (import, filter, peering, AS-path regexp, and `FuzzParseMPFilter` for the mp-filter/afi-prefix form), what the network backends read from a server (the IRRd frame reader, member list and `!j-*` registry list — `FuzzParseRegistries`: only canonical names of listed lines, never a "Database unknown" one — the whois response scanner), the NRTMv4 notification file and delta reader (what is accepted holds the §6.3 rules), the VRP export and SLURM readers (what they accept is well-formed and its pseudo objects load back one per VRP; a SLURM file only drops VRPs it may and adds those it asserts), `FuzzNormalizeFilter` (no panic, `MaxConjuncts` holds, and `String()` parses back to a filter the route model says matches the same sampled routes), `FuzzTranslateRegexp` (no panic, and every vendor's translation of an AS-path regexp agrees with the RFC matcher over synthetic paths, or is refused as unsupported — item 3), `FuzzParseTemplate` (`resolve/internal/rpslconf`: no panic, every item's text concatenates back to the input read so far — a template is a total partition, like the lexer — every command's `Raw` parses back to an equal `Command`, and only a known or deferred command name is accepted), `FuzzPrefixSpace` (`types`: an operation sequence decoded from bytes, no panic, and the same agreement with the brute-force model item 3's `TestSpaceAgainstBruteForce` checks — membership, `Equal`, `Subset`, canonical `Ranges`), and rpslq's port of bgpq4's aggregation (any prefix set, aggregated and refined, without a panic — bgpq4 aborts on an "unreachable point" — and aggregation losing and adding nothing) — for properties, not only for panics:
    - every token's span and segments point at its bytes, and its kind follows the line rules the stream shares;
    - the stream is lossless, splits objects where the lexer sees them end, yields each object exactly as `ParseObject` reads its text (positions shifted), resumes after a break, and under caps drops only whole, diagnosed objects;
    - `Append`/`Set` produce text that parses back to exactly the edit, other attributes' bytes untouched;
@@ -996,7 +1162,7 @@ The correctness bar is "matches the tools operators already trust," so testing i
    - policy diagnostics stay in the value and under the cap, the AST under the nesting cap, and keyword case or extra whitespace change nothing.
 6. **Engine property tests** with synthetic set graphs (cyclic and deep nestings, operator cycles) against brute-force oracles, to verify results, limits and termination, and an oracle for `RangeOperator.Apply` against the per-prefix meaning of RFC 2622 §2.
 7. **Contracts.** Every attribute a validation profile lists lands in its own field of the typed struct (`TestEveryAttributeLandsInItsOwnField`), an attribute decodes to the same type in every class that has it (`TestAttributeTypesAgreeAcrossClasses`), and every diagnostic rule the library emits is in `docs/diagnostics.md` with its severity, and every rule listed there is emitted (`TestDiagnosticRulesAreDocumented`).
-8. **Real-data regression** (opt-in, `RPSL_REALDATA`). Streams the public dumps of sixteen registries (`scripts/fetch-irr-dumps.sh`: every split class of RIPE and APNIC; ARIN, AFRINIC, LACNIC and RADB; and the ten IRRs RADB mirrors, such as NTTCOM, ALTDB and JPIRR; about 13.3 million objects) and checks that the stream is lossless, raises no stream-level diagnostics, decodes every route and route6 to a valid prefix, and puts Errors of any one family on at most 0.1 % of objects (at least 3 tolerated). RIPE's dumps are also validated against the RIPE profile, RADB's and its mirrors' against the IRRd profile, and ARIN's against the ARIN profile — each against the software that registry runs; the other registries run their own. What a registry's dump does to its data (RIPE removes some `auth:` lines, ARIN ends with a line reading `EOF`) is listed per registry with its reason, and a problem in a registry's own data too frequent for the error limit (person names where a NIC handle belongs, in RADB and its mirrors) is declared the same way, counted by cause rather than tolerated in bulk, and a registry whose data misuses RPSL more often than the limit allows (TC's aut-nums) raises that one family's limit, with its reason. For RIPE and APNIC it then expands the largest real as-sets and route-sets twice, in opposite input orders, and requires identical results. `TestRealDataPeval` (`resolve/peval_realdata_test.go`) evaluates a sample of RIPE's aut-nums' import and export policies toward every named peer, in both families, over RIPE's dumps loaded with `KeepPolicy`, and renders each evaluated policy for all four `resolve/rtconfig` vendors, counting refusals by cause; nothing may fail except by a limit, a timeout, a filter that cannot be normalized, or a vendor's own `*rtconfig.UnsupportedError`, and a rendered configuration `cfgsim` cannot read back is a failure.
+8. **Real-data regression** (opt-in, `RPSL_REALDATA`). Streams the public dumps of sixteen registries (`scripts/fetch-irr-dumps.sh`: every split class of RIPE and APNIC; ARIN, AFRINIC, LACNIC and RADB; and the ten IRRs RADB mirrors, such as NTTCOM, ALTDB and JPIRR; about 13.3 million objects) and checks that the stream is lossless, raises no stream-level diagnostics, decodes every route and route6 to a valid prefix, and puts Errors of any one family on at most 0.1 % of objects (at least 3 tolerated). RIPE's dumps are also validated against the RIPE profile, RADB's and its mirrors' against the IRRd profile, and ARIN's against the ARIN profile — each against the software that registry runs; the other registries run their own. What a registry's dump does to its data (RIPE removes some `auth:` lines, ARIN ends with a line reading `EOF`) is listed per registry with its reason, and a problem in a registry's own data too frequent for the error limit (person names where a NIC handle belongs, in RADB and its mirrors) is declared the same way, counted by cause rather than tolerated in bulk, and a registry whose data misuses RPSL more often than the limit allows (TC's aut-nums) raises that one family's limit, with its reason. For RIPE and APNIC it then expands the largest real as-sets and route-sets twice, in opposite input orders, and requires identical results. `TestRealDataPeval` (`resolve/peval_realdata_test.go`) evaluates a sample of RIPE's aut-nums' import and export policies toward every named peer, in both families, over RIPE's dumps loaded with `KeepPolicy`, and renders each evaluated policy for all four `resolve/rtconfig` vendors, counting refusals by cause; nothing may fail except by a limit, a timeout, a filter that cannot be normalized, or a vendor's own `*rtconfig.UnsupportedError`, and a rendered configuration `cfgsim` cannot read back is a failure. `TestRealDataConsist` (`resolve/consist/consist_realdata_test.go`) sweeps RIPE's aut-nums whole, each `Lint`/`Peers` call and each `Check` under its own time budget: every unordered pair a forward peering reaches, checked once, in both families. **Invariant:** each unconditional `NotImported` finding's example is independently re-checked against the two sides' own clause spaces with `PrefixSpace.Contains`, so the comparison machinery and the algebra it is built on are held to agree on every case the sweep actually meets, not only on synthetic ones. `docs/rpslcheck.md` carries the measured totals of one such run.
 9. **Live smoke test** (opt-in, `RPSL_LIVE=1`). Queries RADB (over both the IRRd protocol and whois), RIPE whois and RIPE RDAP read-only and asserts only stable facts (AS3333 originates 193.0.0.0/21; a made-up set is not found). It caught IRRd closing the connection after one command without `!!`, and IRRd's whois parser needing every flag before `-i`. `TestRIPETemplatesAreCurrent` (in `object`, same switch) compares the RIPE template fixtures with whois.ripe.net, so a template change there fails a test here. The RPKI checks run on the same switches: `TestRealDataRPKI` validates every registry's routes with the VRPs NTT exports for IRRd — RADB's and NTT's exports, filtered by their RPKI-aware IRRds, must be nearly clean (at most 1 %, for ROAs issued since) — and `TestLiveRPKIAgreesWithRADB` samples BELL's unfiltered routes and requires RADB to hide those `Validate` finds invalid and serve the valid ones; `TestLivePseudoObjectIsCurrent` holds `WriteRPSL` to RADB's rendering. `TestLiveRIPE` (in `resolve/nrtm4`, same switch) verifies the RIPE Database's NRTMv4 notification file with the key RIPE publishes and parses its newest delta; `RPSL_LIVE_NRTM=1` mirrors the whole RIPE Database.
 
 10. **Benchmarks** of every hot path — the lexer, the stream, decoding and validation, the policy parser, the expansion engine — on inputs generated in code, and (opt-in, `RPSL_REALDATA`) on the RIPE dumps. `check.sh` runs each once so none breaks unnoticed; `scripts/bench.sh` compares two refs on one machine with `benchstat`. Nothing times them in CI, where shared runners make timing meaningless.
@@ -1024,7 +1190,7 @@ sub-grammar of RFC 2622 §8.1 and §9 parsed, the `policy` AST with canonical `S
 engine expanding every set class — including `EvalFilter` over the enumerable fragment of the
 filter language — with in-memory, dump and caching `Source`s, optional concurrency and the
 bgpq4 differential, the three live backends in `resolve/{irrd,whois,rdap}`, and the `auth`
-package for RFC 2725 and RIPE's `mnt-irt:` consent rule, and RPKI-aware expansion as IRRd 4 does it (`resolve/rpki`, §8.7), and NRTMv4 mirroring (`resolve/nrtm4`, §8.8), and policy evaluation (`resolve/peval`, §8.10) and `rpslconf -e`. v0.22.0 adds the last piece: router configuration for Cisco IOS/IOS-XE, Junos, Cisco IOS-XR and BIRD 2 (`resolve/rtconfig`, §8.11), and `rpslconf`'s template mode, which reads `RtConfig`'s `@RtConfig` command language and drives it. See [README.md#Status](../README.md#status) for the same matrix in
+package for RFC 2725 and RIPE's `mnt-irt:` consent rule, and RPKI-aware expansion as IRRd 4 does it (`resolve/rpki`, §8.7), and NRTMv4 mirroring (`resolve/nrtm4`, §8.8), and policy evaluation (`resolve/peval`, §8.10) and `rpslconf -e`. v0.22.0 adds the last piece: router configuration for Cisco IOS/IOS-XE, Junos, Cisco IOS-XR and BIRD 2 (`resolve/rtconfig`, §8.11), and `rpslconf`'s template mode, which reads `RtConfig`'s `@RtConfig` command language and drives it. v0.23.0 ships the consumer that follows from having both `peval` and a prefix-set algebra: `types.PrefixSpace` (§5), policy consistency checking and lint (`resolve/consist`, §8.12), and `rpslcheck`, the CLI for both. See [README.md#Status](../README.md#status) for the same matrix in
 shipping form.
 
 Three limits are deliberate and are not gaps. AS-path regexps are parsed but never evaluated

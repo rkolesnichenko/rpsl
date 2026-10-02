@@ -24,6 +24,10 @@ type MemSource struct {
 	rtrs    map[string][]policyEntry     // upper-case inet-rtr name -> copies, precedence order
 	rank    func(source string) int      // precedence rank; lower wins, ties keep load order
 	policy  bool                         // serves aut-nums and inet-rtrs (else AutNum/InetRtr are ErrNoPolicy)
+
+	index      bool                      // keeps namedBy (NewMemSource always; a Corpus's MemSource when IndexPeers)
+	namedBy    map[types.ASN][]types.ASN // AS -> the aut-nums naming it, ascending
+	autnumList []types.ASN               // every aut-num served, ascending
 }
 
 // memSet is one copy of a set and its upper-case source.
@@ -62,6 +66,7 @@ func newMemSource(objs []object.Object, sourcePrecedence []string, dflt func(str
 		autnums: map[types.ASN][]policyEntry{},
 		rtrs:    map[string][]policyEntry{},
 		policy:  true, // it indexes every aut-num and inet-rtr it is given
+		index:   true, // it keeps a peer index for every aut-num it is given
 	}
 	s.rank = func(source string) int {
 		for i, src := range sourcePrecedence {
@@ -88,11 +93,11 @@ func newMemSource(objs []object.Object, sourcePrecedence []string, dflt func(str
 			// An aut-num whose key did not decode is no AS (claimant agrees):
 			// addPolicy would otherwise index it under the AS0 it defaults to.
 			if _, _, _, ok := claimant(t); ok {
-				s.addPolicy("aut-num", t.AS.String(), t.Source, t, "")
+				s.addPolicy("aut-num", t.AS.String(), t.Source, t, "", nil)
 			}
 		case object.InetRtr:
 			if rtrKey(t.Name) != "" {
-				s.addPolicy("inet-rtr", t.Name, t.Source, t, "")
+				s.addPolicy("inet-rtr", t.Name, t.Source, t, "", nil)
 			}
 		}
 	}
@@ -112,6 +117,7 @@ func (s *MemSource) finish() {
 	for _, es := range s.rtrs {
 		sort.SliceStable(es, func(i, j int) bool { return s.rank(es[i].source) < s.rank(es[j].source) })
 	}
+	s.buildIndex()
 }
 
 func (s *MemSource) admits(source string) bool {

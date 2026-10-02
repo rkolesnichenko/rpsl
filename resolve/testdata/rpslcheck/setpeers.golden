@@ -1,0 +1,11 @@
+AS65010 lint
+  warning lint/shadowed import (line 5): import term AS-IX | AS-IX never decides: earlier terms accept every route it accepts [AS65011; ipv4.unicast]
+AS65010 -> AS65011 ipv4.unicast: consistent
+AS65011 -> AS65010 ipv4.unicast
+  info not-exported: AS65010's import (line 4) accepts routes AS65011's export does not permit announcing: 0.0.0.0/0^0-15, 0.0.0.0/0^17-32, 0.0.0.0/5^16, … (18 ranges; e.g. 0.0.0.0/0)
+AS65010 -> AS65011 ipv6.unicast: no policy either way
+AS65011 -> AS65010 ipv6.unicast: no policy either way
+AS65010 -> AS65013 ipv4.unicast: consistent
+AS65013 -> AS65010 ipv4.unicast: consistent
+AS65010 -> AS65013 ipv6.unicast: no policy either way
+AS65013 -> AS65010 ipv6.unicast: no policy either way

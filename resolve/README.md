@@ -343,6 +343,33 @@ none of it. This is trimmed from a runnable `Example` test
 template mode, which drives `rtconfig` from IRRToolSet's own `@RtConfig`
 command language.
 
+## Policy consistency (`consist`)
+
+`resolve/consist` is the consumer `peval` was built toward: whether two
+neighbours' policies agree. For a `Pair` — two ASNs, one address family —
+`Checker.Check` compares what one side's `export:` permits announcing with
+what the other's `import:` accepts, both directions, and `Lint` reports what
+is dead or wrong in one aut-num's own policies.
+
+```go
+c := &consist.Checker{Eval: peval.Evaluator{Src: resolve.NewMemSource(objs)}}
+rep, err := c.Check(ctx, consist.Pair{A: 1, B: 2, AF: types.AddrFamily{AFI: types.AFIv4, SAFI: types.SAFIUnicast}})
+for _, f := range rep.AtoB.Findings {
+	fmt.Println(f.Kind, f.Severity, f.Example) // not-imported warning 0.0.0.0/0
+}
+```
+
+This is trimmed from a runnable `Example` test
+([`consist/example_test.go`](consist/example_test.go)): a customer
+announcing `ANY` to a provider that accepts only the customer's own routes.
+
+The comparison is exact or undecided: prefix parts are decided exactly, with
+a new prefix-set algebra (`types.PrefixSpace`); AS-path and community tests
+are compared by identity only, so a finding over one is conditional
+(`Given`) rather than guessed, and anything neither decided nor conditional
+is `Undecided`. [`docs/rpslcheck.md`](../docs/rpslcheck.md) is the operator's
+page for the `rpslcheck` command built on this package.
+
 ## Concurrency
 
 `Expander.Concurrency` fetches a whole breadth-first level at once, which hides
