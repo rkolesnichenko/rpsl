@@ -139,7 +139,9 @@ code):
 - **`lint/missing-router`** (Warning) — a peering names an inet-rtr the source
   does not have.
 - **`lint/no-aut-num`** (Warning) — a peering names an AS whose aut-num the
-  source does not have.
+  source does not have. Checked for each peer Lint runs a session toward: an
+  AS named only through a set is one with `Checker.SetPeers`, or as the one
+  representative of its set peering.
 - **`lint/undecided`** (Info) — a term `peval` cannot decide for a session (a
   router not given, a peering regexp, another protocol); the message gives
   the reason. A session whose filter cannot be evaluated at all — it names a

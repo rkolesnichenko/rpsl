@@ -224,19 +224,35 @@ const (
 // Whys returns every Why value Check can report, as peval.Whys does.
 func Whys() []string
 
-// Peers lists the AS numbers as's import, export and default peerings name.
+// Peers lists the AS numbers as's import, export and default peerings name:
+// directly (Forward) and only through an as-set or a peering-set (ViaSets).
 // AS0 is reserved (RFC 7607) and never a session's peer: a peering naming
-// it, directly or through a set, adds "AS0" to Skipped instead of to either
-// list.
+// it, directly or through a set, adds "AS0" to Skipped instead of to any
+// list. Neither list holds as itself.
 func (c *Checker) Peers(ctx context.Context, as types.ASN) (PeerList, error)
 
 type PeerList struct {
-	Forward []types.ASN // named by as's peerings, as-sets and peering-sets expanded; ascending
+	Forward []types.ASN // named directly: an AS number anywhere in a peering's AS expression (either side of OR, AND, EXCEPT); ascending
+	ViaSets []types.ASN // reached only by expanding an as-set or a peering-set (every AS a peering-set's peerings name included); ascending, none in Forward
 	Reverse []types.ASN // aut-nums whose peerings name as (resolve.PolicyIndex only); ascending
 	Skipped []string    // peerings that name no AS list: AS-ANY, set templates, regexps, as written; and "AS0"; sorted
 	NoIndex bool        // the Source keeps no reverse index (not a PolicyIndex, or ErrNoIndex), so Reverse is empty
 }
+
+// Checker.SetPeers: Lint also evaluates sessions toward ViaSets — there can
+// be very many. Default false.
+SetPeers bool
 ```
+
+**Direct peers and peers through sets (Ruling R20).** RIPE has 160
+aut-nums whose peerings name more than 5,000 peers each, nearly all of them
+through an exchange's as-set (the largest about 59,000); with every
+set-expanded peer a pair, a registry sweep faces 7.3 million pairs, days of
+`Check`s. So `Peers` keeps the two apart: `Forward` is what a peering names
+directly, `ViaSets` what it reaches only through an as-set or a peering-set
+(a peering-set's peerings are "through a set" whatever they name), and
+`Lint` and `rpslcheck` check `ViaSets` only on request (`SetPeers`,
+`-set-peers`).
 
 ### 4.2 Semantics
 
@@ -350,8 +366,11 @@ receives the route.
 
 ```go
 // Lint evaluates as's import, export and default policies toward each peer
-// in Peers' Forward ∪ Reverse lists, in ipv4.unicast and ipv6.unicast, with
-// no routers given, and reports what is wrong or dead in them. A policy
+// in Peers' Forward ∪ Reverse lists (∪ ViaSets with SetPeers), in
+// ipv4.unicast and ipv6.unicast, with no routers given, and reports what is
+// wrong or dead in them. Without SetPeers, each set peering that denotes
+// none of those peers is linted through one representative session toward
+// the lowest AS it denotes. A policy
 // toward AS-ANY is linted through one extra session with the reserved
 // AS4294967295 (RFC 7300, never a real peer); that session's issues list no
 // peer, and a term that depends on the peer is left out of that session's
@@ -404,7 +423,17 @@ type Issue struct {
   reported.
 - **`lint/empty` and `lint/missing-set` together.** A clause that is empty
   because its sets are missing gets both.
-- **Sessions run toward Forward ∪ Reverse**, and, for a policy naming
+- **Sessions run toward Forward ∪ Reverse** (∪ ViaSets with `SetPeers`),
+  and, without `SetPeers`, one representative session per set peering — a
+  peering whose AS expression names an as-set, or a peering-set; AS-ANY's
+  is the sentinel's — that denotes no peer already listed: toward the
+  lowest AS it denotes (AND, OR and EXCEPT applied; never the aut-num
+  itself, AS0 or the sentinel), taken in document order, so a later set
+  peering sharing that AS needs none of its own and no peer is evaluated
+  twice. Its issues list that peer as any session's do. A set peering
+  is so still linted (a `from AS-IX accept ANY` shadowing a later
+  `from AS-IX accept AS-ONE`) at the cost of one session, not one per
+  member (Ruling R20). For a policy naming
   AS-ANY, also toward the reserved AS4294967295 sentinel, whose session
   leaves out of its `lint/empty`/`lint/shadowed` checks any term that
   depends on the peer (it means nothing without a real one): one whose
@@ -471,8 +500,8 @@ to the `Corpus` they build.
   `ErrNoIndex` otherwise. `Cache` and `rpki.Filter` pass both through when
   their inner Source is a `PolicyIndex`, and return `ErrNoIndex` when not.
 - Peerings through as-sets are not reverse-indexed: expanding every as-set
-  peering in a registry at load is unbounded. Forward peers still expand
-  them, under the Expander's limits.
+  peering in a registry at load is unbounded. `Peers` still expands them
+  per call, under the Expander's limits, into `ViaSets`.
 - `Corpus.Put` (and `Merge`'s copied text) keeps a policy object's text from
   its first attribute line on — the leading blank/comment trivia a dump or
   mirror carries before the object is dropped, since it carries no meaning
@@ -491,7 +520,7 @@ Backends open through `resolve/internal/backend` with the flags `rpslq` and
 `rpslconf` take: `-h`, `-p`, `-s`, `--whois`, `--dump files…`.
 
 ```
-rpslcheck AS65001            lint AS65001, then check it against every peer (Forward and Reverse), both families
+rpslcheck AS65001            lint AS65001, then check it against every peer (Forward and Reverse; ViaSets with -set-peers), both families
 rpslcheck AS65001 AS65002    check that one pair, and lint both
 rpslcheck -sweep -dump …     audit every aut-num in the dumps
   -af ipv4|ipv6|both         families (default both)
@@ -500,6 +529,7 @@ rpslcheck -sweep -dump …     audit every aut-num in the dumps
   -c N                       concurrent checks (default GOMAXPROCS)
   -timeout D                 give up on the whole run after D (0: never); a sweep has none unless this is given (default 10m for one AS or a pair)
   -check-timeout D           sweep only: each aut-num's peer list, its lint, and each pair's check gets its own D (default 1m; 0: no limit)
+  -set-peers                 also check, and lint toward, the peers named only through sets (ViaSets)
   -v                         version
 ```
 
@@ -514,14 +544,23 @@ rpslcheck -sweep -dump …     audit every aut-num in the dumps
   families; `rpslcheck` writes (and counts toward the exit status and the
   totals) only the issues of a chosen family, and those of none (the static
   ones).
-- **The sweep** builds the pairs from `AutNums()` and each aut-num's forward
-  peers, each unordered pair once (whichever side names it first), in each
-  family asked for. Each aut-num's `Peers`, then its `Lint`, and each pair's
+- **Peers through sets (Ruling R20).** Without `-set-peers`, one AS is
+  checked against its Forward and Reverse peers, and a stderr note says how
+  many ViaSets peers that leaves unchecked ("N peers named through sets are
+  not checked; -set-peers checks them"); a sweep pairs Forward peers only and
+  counts the rest. `-set-peers` sets `Checker.SetPeers` and adds ViaSets to
+  the peers checked and to the sweep's pairs.
+- **The sweep** builds the pairs from `AutNums()` and each aut-num's Forward
+  peers (and ViaSets with `-set-peers`), each unordered pair once (whichever
+  side names it first), in each family asked for. Each aut-num's `Peers`, then its `Lint`, and each pair's
   `Check` runs under its own `-check-timeout` budget, independent of the
   others, so a lint that runs out never drops a pair; the output is the
   same for any `-c` as long as no call runs past its budget. It ends with
   totals:
   - aut-nums swept, pairs and directions checked;
+  - "peers through sets, not checked" (JSON `via_sets_skipped`) — each
+    aut-num's ViaSets peers whose pair no other aut-num's Forward peers
+    bring into the sweep; 0 with `-set-peers`;
   - directions by outcome (consistent, no policy either way — counted apart,
     never as consistent — each Kind, Undecided by Why);
   - lint issues by rule;
@@ -648,7 +687,9 @@ building and checking `rpslcheck` (`scripts/release-dryrun.sh`).
 ### 8.5 Real data (opt-in, `RPSL_REALDATA`)
 
 - Sweep RIPE: all of it if it runs in minutes, a seeded sample otherwise.
-  Measure the time and the cost of `IndexPeers`.
+  Measure the time and the cost of `IndexPeers`. Pairs are each aut-num's
+  Forward and Reverse peers; ViaSets peers no pair covers are counted ("via
+  sets, not checked"), as `rpslcheck`'s sweep counts them (Ruling R20).
 - **Invariant:** each unconditional NotImported example is re-checked against
   the two sides' clause spaces with `Contains`, so the comparison and the
   algebra agree on every case they meet.

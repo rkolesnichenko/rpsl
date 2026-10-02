@@ -276,7 +276,11 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
 - `rpslcheck` (resolve/cmd/rpslcheck; logic in resolve/internal/rpslcheck, the comparison in
   resolve/consist) has three modes: one AS (lint it, then check it against every peer, Forward
   and Reverse), a named pair (lint both, check that pair) and `-sweep` (audit every aut-num in
-  one or more `-dump` files, with totals). `-sweep` is dump-only — walking a registry live would
+  one or more `-dump` files, with totals). Peers named only through as-sets/peering-sets
+  (`PeerList.ViaSets`; IXP sets reach ~59k ASes, 7.3M pairs over RIPE) are checked only with
+  `-set-peers` (`Checker.SetPeers`); otherwise one AS notes them on stderr, a sweep counts them
+  ("peers through sets, not checked", JSON `via_sets_skipped`), and Lint gives each set peering
+  one representative session (its lowest AS) instead (Ruling R20). `-sweep` is dump-only — walking a registry live would
   be hundreds of thousands of queries against someone else's service, and the reverse peer index
   (`resolve.PolicyIndex.NamedBy`) only exists over a `Corpus`. Exit status: 0 no Warning, 1 a
   Warning, 2 a bad command line, 3 could not complete (an unreachable server, a missing aut-num,

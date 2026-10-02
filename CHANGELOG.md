@@ -32,10 +32,16 @@ same version (see [RELEASING.md](RELEASING.md)).
   `Checker.Lint` reports what is dead or wrong in one aut-num's own policies
   (`lint/shadowed`, `lint/empty`, `lint/missing-set`, `lint/missing-router`, `lint/no-aut-num`,
   `lint/undecided`, `lint/limit` — new rows in `docs/diagnostics.md`), and `Checker.Peers` lists
-  an aut-num's forward and (over a `PolicyIndex`) reverse peers. `Pair`, `Report`, `Direction`,
+  an aut-num's peers: those its peerings name directly (`Forward`), those they reach only through
+  an as-set or a peering-set (`ViaSets`), and (over a `PolicyIndex`) those naming it (`Reverse`).
+  `Lint` runs sessions toward `ViaSets` only with `Checker.SetPeers` — an exchange's as-set can
+  name tens of thousands of ASes — and otherwise lints each set peering through one session
+  toward the lowest AS it denotes. `Pair`, `Report`, `Direction`,
   `Finding`, `Kind`, `Issue` and `Whys()` round out the API.
 - `rpslcheck` (`resolve/cmd/rpslcheck`; logic in `resolve/internal/rpslcheck`): lint an AS and
   check it against its neighbours, check a named pair, or `-sweep` a dump and report totals.
+  It checks direct and reverse peers; the peers named only through sets are counted ("peers
+  through sets, not checked", JSON `via_sets_skipped`) and checked with `-set-peers`.
   Release binaries alongside `rpslq`'s and `rpslconf`'s. See `docs/rpslcheck.md`.
 - `FuzzPrefixSpace` (`types`): the fuzz targets are now 41.
 

@@ -34,8 +34,10 @@ with `SHA256SUMS`. `rpslcheck -v` prints the binary's version.
 `rpslcheck` has three modes.
 
 **One AS**, against a live server: lint it, then check it against every peer
-its own policies name (Forward) and, over a dump, every aut-num naming it
-back (Reverse), in both families.
+its own policies name directly (Forward) and, over a dump, every aut-num
+naming it back (Reverse), in both families — and, with `-set-peers`, every
+peer its policies name only through an as-set or a peering-set (see "Peers
+through sets" below).
 
 ```sh
 rpslcheck -h whois.radb.net AS65001
@@ -73,6 +75,7 @@ Generated from `rpslcheck -help`:
 | `-c` | `GOMAXPROCS` | `N` checks at once; the output is the same for any `N` while no call runs past `-check-timeout` |
 | `-timeout` | `10m0s` | give up on the whole run after this long (0: never); a `-sweep` has no deadline unless this is given |
 | `-check-timeout` | `1m0s` | sweep: give each aut-num's peer list, its lint, and each pair's check this long, each its own budget, counting the ones that run out (0: no limit) |
+| `-set-peers` | off | also check (and lint toward) the peers named only through as-sets and peering-sets; there can be tens of thousands |
 | `-v` | — | print rpslcheck's version and exit |
 
 ## Reading the output
@@ -151,8 +154,11 @@ alone.
 
 `rpslcheck AS65001` (and the pair and sweep modes) also print `AS65001`'s
 lint: what is wrong or dead in its own import, export and default policies,
-evaluated toward every peer it names and, over a dump, every aut-num naming
-it back. Same severities as [`docs/diagnostics.md`](diagnostics.md):
+evaluated toward every peer it names directly and, over a dump, every
+aut-num naming it back (and with `-set-peers`, every peer it names through a
+set; without it, each peering through a set that reaches none of those peers
+is linted toward one of its members, the lowest AS it names). Same
+severities as [`docs/diagnostics.md`](diagnostics.md):
 
 | Rule | Severity | Fires when |
 | --- | --- | --- |
@@ -160,7 +166,7 @@ it back. Same severities as [`docs/diagnostics.md`](diagnostics.md):
 | `lint/empty` | Info | A term's filter, or a `default:`'s `networks` filter, accepts no route. |
 | `lint/missing-set` | Warning | A filter, a peering or a router expression names a set the source does not have. |
 | `lint/missing-router` | Warning | A peering names an inet-rtr the source does not have. |
-| `lint/no-aut-num` | Warning | A peering names an AS whose aut-num the source does not have. |
+| `lint/no-aut-num` | Warning | A peering names an AS whose aut-num the source does not have (an AS named only through a set: with `-set-peers`, or as its peering's representative). |
 | `lint/undecided` | Info | A term `peval` cannot decide for a session, or a session whose filter cannot be evaluated at all (it names a set reaching `AS-ANY`, or has no normal form); the other sessions are still linted. |
 | `lint/limit` | Warning | A session's evaluation hit a limit; the other sessions are still linted. |
 
@@ -234,13 +240,35 @@ and says so on stderr:
 rpslcheck: note: the source keeps no reverse index (only -dump does), so networks that name AS65001 without being named back are not checked
 ```
 
+## Peers through sets
+
+A peering can name its peers through an as-set or a peering-set:
+`import: from AS-DECIX accept ANY` names every member of the exchange's set.
+Such sets are large — on RIPE's data, 160 aut-nums name more than 5,000
+peers each this way, the largest about 59,000, and checking every one would
+make a registry sweep 7.3 million pairs, days of work. So `rpslcheck` checks
+by default only the peers a policy names directly, as an AS number, and the
+aut-nums naming it back; the peers named only through sets
+(`consist.PeerList.ViaSets`) are checked with `-set-peers`. Without it, one
+AS's mode says on stderr how many it left out:
+
+```
+rpslcheck: note: 2 peers named through sets are not checked; -set-peers checks them
+```
+
+and a sweep counts them in its totals. Its lint still covers a peering
+through a set: each one that reaches none of the peers already linted is
+evaluated toward its lowest AS, so a term such a peering makes dead is still
+reported (with that AS as its peer).
+
 ## Sweeps
 
 `-sweep` only runs over `-dump`: walking a whole registry over a live server
 would be hundreds of thousands of queries against someone else's service,
 and no registry offers that as a query in the first place. It lints every
-aut-num the dumps hold, checks every unordered pair an aut-num's forward
-peerings reach (each pair once, whichever side names it first), in each
+aut-num the dumps hold, checks every unordered pair an aut-num's peerings
+name directly — and, with `-set-peers`, those they reach through sets — (each
+pair once, whichever side names it first), in each
 family `-af` asks for, and prints totals. Each aut-num's peer list, then its
 lint, and each pair's check runs under its own `-check-timeout` budget; the
 peer list comes first, so a lint that runs out never drops a pair. Output
@@ -265,6 +293,9 @@ the JSON `totals` record both carry:
 
 - `aut-nums` swept;
 - `pairs checked (per family)` and `directions` (two per pair);
+- `peers through sets, not checked` — an aut-num's peers named only through
+  an as-set or a peering-set whose pair no aut-num's direct peers bring into
+  the sweep, one per aut-num and peer (0 with `-set-peers`);
 - `directions consistent`;
 - `directions with no policy either way` — neither side has a term toward
   the other in that family; counted here, never as consistent;
@@ -292,7 +323,7 @@ Each line's `type` field picks its shape (fields from
 | `finding` | `from`, `to`, `af`, `kind`, `of`, `severity`, `as`, `example`, `ranges`, `truncated`, `given`, `export_lines`, `import_lines`, `why` |
 | `limit` | `a`, `b`, `af`, `error` — a sweep pair over a limit or not decidable |
 | `timeout` | a peer list or a lint: `as`, `error` (beginning `peers: ` or `lint: `); a check: `a`, `b`, `af`, `error` — over `-check-timeout` |
-| `totals` | `autnums`, `pairs`, `directions`, `consistent`, `no_policy`, `kinds`, `rules`, `limits`, `timeouts`, `top` (`[{as, warnings}]`) |
+| `totals` | `autnums`, `pairs`, `via_sets_skipped`, `directions`, `consistent`, `no_policy`, `kinds`, `rules`, `limits`, `timeouts`, `top` (`[{as, warnings}]`) |
 
 A field omitted from a record (Go's `omitempty`) does not apply to that
 finding or issue — a `no-aut-num` finding has no `ranges`, a consistent
@@ -382,9 +413,9 @@ RPSL_CONSIST_SAMPLE=5000 RPSL_REALDATA=$PWD/.data go test -run TestRealDataConsi
   that is wider than a business relationship would allow — only wider than
   the neighbour's own stated import.
 - **Reverse-indexing as-set peerings.** The peer index used for a dump's
-  Reverse list and for a sweep's pairs only indexes a peering written as a
-  bare AS number; a peering written only as an as-set is found via Forward
-  expansion from the other side, not via the index.
+  Reverse list only indexes a peering written as a bare AS number; a
+  peering written only as an as-set is found by expanding it from the
+  other side (`ViaSets`, checked with `-set-peers`), not via the index.
 - **Evaluating regexps or community tests.** Both are compared by identity
   only (`given:`), never matched against a route — the library never
   evaluates an AS-path regexp or a community test against live data.

@@ -1002,8 +1002,16 @@ one finding each way when an aut-num named in the `Pair` is missing from the
 `Source` entirely; nothing else about the pair is compared.
 
 **Lint.** `Lint` evaluates one aut-num's import, export and default policies
-toward every peer `Peers` finds (forward: its own peerings, as-sets
-expanded; reverse: who names it back, when the `Source` keeps an index). A
+toward the peers `Peers` finds: forward, the AS numbers its own peerings name
+directly; reverse, who names it back, when the `Source` keeps an index; and,
+with `Checker.SetPeers`, `ViaSets`, the ASes its peerings reach only through
+an as-set or a peering-set. Those are kept apart because an exchange's as-set
+can name tens of thousands of ASes — 160 RIPE aut-nums name more than 5,000
+peers each that way, 7.3 million pairs in all — so a sweep checks them only
+on request. Without `SetPeers`, each set peering that denotes none of the
+listed peers is linted through one representative session, toward the
+lowest AS it denotes, so its terms are still linted at the cost of one
+session rather than one per member. A
 policy toward `AS-ANY` is linted through one extra session toward the
 reserved `AS4294967295` (RFC 7300), never a real peer — its issues list no
 peer — and, since a term that depends on the peer means nothing without a
@@ -1044,11 +1052,12 @@ rule (§8.9) still holds: the index costs a map of ASNs, not a second copy of
 any object. Peerings through an as-set are not indexed (expanding every
 as-set peering in a registry at load time is unbounded); those are still
 found, per call, by expanding the forward side's own as-set peerings under
-the `Expander`'s limits.
+the `Expander`'s limits — `PeerList.ViaSets`.
 
 The CLI is `rpslcheck` (`resolve/cmd/rpslcheck`, logic in
 `resolve/internal/rpslcheck`): one AS against its peers, a named pair, or a
-`-sweep` of a dump with totals. See `docs/rpslcheck.md` for its modes,
+`-sweep` of a dump with totals. It checks direct and reverse peers; the peers
+named only through sets it counts, and checks with `-set-peers`. See `docs/rpslcheck.md` for its modes,
 output and exit status.
 
 ## 9. Top-level façade
