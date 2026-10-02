@@ -24,8 +24,11 @@ import (
 )
 
 // TestRealDataConsist (opt-in: RPSL_REALDATA) sweeps RIPE: every aut-num,
-// or RPSL_CONSIST_SAMPLE of them (seeded), linted and checked against its
-// forward peers in both families, each unordered pair once. It measures the load (time, heap with
+// or RPSL_CONSIST_SAMPLE of them (seeded), linted and checked against the
+// peers its peerings name directly (Forward) and those naming it (Reverse)
+// in both families, each unordered pair once; the peers named only through
+// sets (ViaSets, Ruling R20) are counted, as rpslcheck's sweep counts them,
+// and not checked. It measures the load (time, heap with
 // and without IndexPeers) and the sweep, and holds every unconditional
 // not-imported finding to the two sides' clause spaces: its example lies in
 // a pure export conjunct and in no import conjunct. Each call has its own
@@ -115,6 +118,9 @@ func TestRealDataConsist(t *testing.T) {
 
 	var mu sync.Mutex
 	stats := map[string]int{}
+	// Each aut-num's ViaSets, counted after the sweep where no pair checked
+	// already covers it.
+	viaSets := map[types.ASN][]types.ASN{}
 	count := func(k string, n int) { mu.Lock(); stats[k] += n; mu.Unlock() }
 	start := time.Now()
 	sem := make(chan struct{}, runtime.GOMAXPROCS(0))
@@ -147,7 +153,10 @@ func TestRealDataConsist(t *testing.T) {
 			for _, is := range issues {
 				count("lint: "+is.Rule, 1)
 			}
-			for _, peer := range pl.Forward {
+			mu.Lock()
+			viaSets[as] = pl.ViaSets
+			mu.Unlock()
+			for _, peer := range slices.Concat(pl.Forward, pl.Reverse) {
 				if !claim(as, peer) {
 					continue // the pair is checked from peer's side
 				}
@@ -206,6 +215,13 @@ func TestRealDataConsist(t *testing.T) {
 		}(as)
 	}
 	wg.Wait()
+	for as, via := range viaSets {
+		for _, peer := range via {
+			if !claimed[pairKey{min(as, peer), max(as, peer)}] {
+				stats["via sets, not checked"]++
+			}
+		}
+	}
 	keys := make([]string, 0, len(stats))
 	for k := range stats {
 		keys = append(keys, k)

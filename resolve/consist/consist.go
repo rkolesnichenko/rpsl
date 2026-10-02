@@ -44,6 +44,12 @@ type Checker struct {
 	// refused.
 	Eval      peval.Evaluator
 	MaxRanges int // cap on Finding.Ranges; 0 means 64
+	// SetPeers makes Lint evaluate a session toward every peer in
+	// PeerList.ViaSets too, the ASes named only through as-sets and
+	// peering-sets — there can be very many: an exchange's as-set names
+	// tens of thousands. Without it, each set peering is linted through one
+	// representative session (Lint).
+	SetPeers bool
 }
 
 // eval is c.Eval with Expander.Exclude cleared: every evaluation consist

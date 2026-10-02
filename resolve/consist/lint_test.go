@@ -33,8 +33,13 @@ func TestPeers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []types.ASN{2, 3, 6, 7}; !slices.Equal(pl.Forward, want) {
+	// Ruling R20: Forward is what the peerings name directly; AS-PEERS's
+	// AS3 and PRNG-X's AS7 are named only through sets.
+	if want := []types.ASN{2, 6}; !slices.Equal(pl.Forward, want) {
 		t.Errorf("Forward %v, want %v", pl.Forward, want)
+	}
+	if want := []types.ASN{3, 7}; !slices.Equal(pl.ViaSets, want) {
+		t.Errorf("ViaSets %v, want %v", pl.ViaSets, want)
 	}
 	if want := []string{"AS-ANY", "AS1:AS-CUST:PeerAS"}; !slices.Equal(pl.Skipped, want) {
 		t.Errorf("Skipped %v, want %v", pl.Skipped, want)
@@ -436,11 +441,14 @@ func TestPeersAS0(t *testing.T) {
 		name    string
 		objects []string
 		forward []types.ASN
+		via     []types.ASN
 	}{
-		{"direct", []string{autNum(1, "import: from AS0 accept ANY", "export: to AS0 announce AS1")}, nil},
+		{"direct", []string{autNum(1, "import: from AS0 accept ANY", "export: to AS0 announce AS1")}, nil, nil},
 		{"through an as-set", []string{autNum(1, "import: from AS-IX accept ANY"), autNum(2),
-			"as-set: AS-IX\nmembers: AS0, AS2\nmnt-by: MNT-A\nsource: RIPE\n"}, []types.ASN{2}},
-		{"mp-import", []string{autNum(1, "mp-import: afi ipv6.unicast from AS0 accept ANY", "import: from AS-ANY accept ANY")}, nil},
+			"as-set: AS-IX\nmembers: AS0, AS2\nmnt-by: MNT-A\nsource: RIPE\n"}, nil, []types.ASN{2}},
+		{"mp-import", []string{autNum(1, "mp-import: afi ipv6.unicast from AS0 accept ANY", "import: from AS-ANY accept ANY")}, nil, nil},
+		{"through a peering-set", []string{autNum(1, "import: from PRNG-Z accept ANY"),
+			"peering-set: PRNG-Z\npeering: AS0\npeering: AS2\nmnt-by: MNT-A\nsource: RIPE\n"}, nil, []types.ASN{2}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ch := checker(t, c.objects...)
@@ -448,8 +456,9 @@ func TestPeersAS0(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !slices.Equal(pl.Forward, c.forward) || !slices.Contains(pl.Skipped, "AS0") || slices.Contains(pl.Reverse, 0) {
-				t.Errorf("Forward %v Skipped %v Reverse %v, want Forward %v and AS0 skipped", pl.Forward, pl.Skipped, pl.Reverse, c.forward)
+			if !slices.Equal(pl.Forward, c.forward) || !slices.Equal(pl.ViaSets, c.via) || !slices.Contains(pl.Skipped, "AS0") || slices.Contains(pl.Reverse, 0) {
+				t.Errorf("Forward %v ViaSets %v Skipped %v Reverse %v, want Forward %v, ViaSets %v and AS0 skipped",
+					pl.Forward, pl.ViaSets, pl.Skipped, pl.Reverse, c.forward, c.via)
 			}
 			if !slices.IsSorted(pl.Skipped) || len(slices.Compact(slices.Clone(pl.Skipped))) != len(pl.Skipped) {
 				t.Errorf("Skipped %v: not sorted or repeated", pl.Skipped)
@@ -608,5 +617,127 @@ func TestLintPeerAutNumSource(t *testing.T) {
 	r := check(t, c, Pair{A: 1, B: 2, AF: v4})
 	if kinds(r.AtoB)[0] != "no-aut-num" {
 		t.Errorf("Check: AtoB %v", kinds(r.AtoB))
+	}
+}
+
+// Ruling R20: Forward is the AS numbers a peering names directly — on either
+// side of OR, AND and EXCEPT too — and ViaSets those reached only through an
+// as-set or a peering-set (an AS number a peering-set's peering names
+// included), ascending, without repeats, never in Forward.
+func TestPeersViaSets(t *testing.T) {
+	const ixp = "as-set: AS-IXP\nmembers: AS6, AS4, AS5, AS-PEERS\nmnt-by: MNT-A\nsource: RIPE\n"
+	const prng = "peering-set: PRNG-Y\npeering: AS8\npeering: AS-IXP\nmnt-by: MNT-A\nsource: RIPE\n"
+	for _, c := range []struct {
+		name         string
+		lines        []string
+		forward, via []types.ASN
+	}{
+		{"an AS beside a set", []string{"import: from AS2 OR AS-PEERS accept ANY"}, []types.ASN{2}, []types.ASN{3}},
+		{"an AS on EXCEPT's right", []string{"import: from AS-IXP EXCEPT AS4 accept ANY"}, []types.ASN{4}, []types.ASN{3, 5, 6}},
+		{"named directly and through a set", []string{"import: from AS3 accept ANY", "export: to AS-PEERS announce AS1"}, []types.ASN{3}, nil},
+		{"a peering-set's AS and set", []string{"import: from PRNG-Y accept ANY"}, nil, []types.ASN{3, 4, 5, 6, 8}},
+		{"one set named twice", []string{"import: from AS-IXP accept ANY", "export: to AS-IXP announce AS1", "default: to AS-IXP"}, nil, []types.ASN{3, 4, 5, 6}},
+		{"a missing set", []string{"import: from AS-NOPE accept ANY"}, nil, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			pl, err := checker(t, autNum(1, c.lines...), ixp, prng).Peers(context.Background(), 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(pl.Forward, c.forward) || !slices.Equal(pl.ViaSets, c.via) {
+				t.Errorf("Forward %v ViaSets %v, want %v %v", pl.Forward, pl.ViaSets, c.forward, c.via)
+			}
+		})
+	}
+}
+
+// Ruling R20: by default Lint runs no session toward each AS named only
+// through a set, but one toward the lowest AS a set peering denotes when no
+// other session's peer is among them, so the set peering's terms are still
+// linted; with SetPeers it runs one toward every AS in ViaSets.
+func TestLintSetPeers(t *testing.T) {
+	const ixp = "as-set: AS-IXP\nmembers: AS6, AS4, AS5\nmnt-by: MNT-A\nsource: RIPE\n"
+	const ixp2 = "as-set: AS-IXP2\nmembers: AS9, AS6\nmnt-by: MNT-A\nsource: RIPE\n"
+	for _, c := range []struct {
+		name     string
+		objects  []string
+		setPeers bool
+		want     []string // full issueText, in order
+	}{
+		{
+			name:    "the representative peer",
+			objects: []string{autNum(1, "import: from AS-IXP accept ANY", "import: from AS-IXP accept AS-ONE"), autNum(4), autNum(5), autNum(6), ixp},
+			want:    []string{"lint/shadowed import#1 L4: import term AS-IXP | AS-ONE never decides: earlier terms accept every route it accepts [AS4] [ipv4.unicast]"},
+		},
+		{
+			name:     "every peer, with SetPeers",
+			objects:  []string{autNum(1, "import: from AS-IXP accept ANY", "import: from AS-IXP accept AS-ONE"), autNum(4), autNum(5), autNum(6), ixp},
+			setPeers: true,
+			want:     []string{"lint/shadowed import#1 L4: import term AS-IXP | AS-ONE never decides: earlier terms accept every route it accepts [AS4 AS5 AS6] [ipv4.unicast]"},
+		},
+		{
+			// AS-PEERS is AS1 (the aut-num itself) and AS3.
+			name:    "the aut-num's own AS is never the representative",
+			objects: []string{autNum(1, "import: from AS-PEERS accept ANY", "import: from AS-PEERS accept AS-ONE"), autNum(3)},
+			want:    []string{"lint/shadowed import#1 L4: import term AS-PEERS | AS-ONE never decides: earlier terms accept every route it accepts [AS3] [ipv4.unicast]"},
+		},
+		{
+			// Only the representative's missing aut-num is reported.
+			name:    "lint/no-aut-num for the representative only",
+			objects: []string{autNum(1, "import: from AS-IXP accept ANY"), ixp},
+			want:    []string{"lint/no-aut-num #-1 L0: AS4's aut-num is not in the source [AS4] []"},
+		},
+		{
+			name:     "lint/no-aut-num for every peer, with SetPeers",
+			objects:  []string{autNum(1, "import: from AS-IXP accept ANY"), ixp},
+			setPeers: true,
+			want: []string{
+				"lint/no-aut-num #-1 L0: AS4's aut-num is not in the source [AS4] []",
+				"lint/no-aut-num #-1 L0: AS5's aut-num is not in the source [AS5] []",
+				"lint/no-aut-num #-1 L0: AS6's aut-num is not in the source [AS6] []",
+			},
+		},
+		{
+			// A direct peer among the set's members stands for it: no
+			// session toward AS4.
+			name:    "a direct peer in the set",
+			objects: []string{autNum(1, "import: from AS5 accept ANY", "import: from AS-IXP accept AS-ONE"), autNum(4), autNum(5), autNum(6), ixp},
+			want:    []string{"lint/shadowed import#1 L4: import term AS-IXP | AS-ONE never decides: earlier terms accept every route it accepts [AS5] [ipv4.unicast]"},
+		},
+		{
+			// The representative is one the peering denotes: AS4 is not.
+			name:    "a set less an AS",
+			objects: []string{autNum(1, "import: from AS-IXP EXCEPT AS4 accept ANY", "import: from AS-IXP EXCEPT AS4 accept AS-ONE"), autNum(4), autNum(5), autNum(6), ixp},
+			want:    []string{"lint/shadowed import#1 L4: import term AS-IXP EXCEPT AS4 | AS-ONE never decides: earlier terms accept every route it accepts [AS5] [ipv4.unicast]"},
+		},
+		{
+			// AS-IXP2's AS6 is not a session's peer once AS-IXP has AS4:
+			// AS-IXP2 has its own representative, AS6; a third peering of
+			// AS-IXP needs none.
+			name: "two sets",
+			objects: []string{autNum(1, "import: from AS-IXP accept {10.9.0.0/16}", "import: from AS-IXP2 accept ANY",
+				"import: from AS-IXP2 accept AS-ONE", "import: from AS-IXP accept {10.9.0.0/16}"), autNum(4), autNum(5), autNum(6), autNum(9), ixp, ixp2},
+			want: []string{
+				"lint/shadowed import#2 L5: import term AS-IXP2 | AS-ONE never decides: earlier terms accept every route it accepts [AS6] [ipv4.unicast]",
+				"lint/shadowed import#3 L6: import term AS-IXP | {10.9.0.0/16} never decides: earlier terms accept every route it accepts [AS4 AS6] [ipv4.unicast]",
+			},
+		},
+		{
+			name:    "a peering-set",
+			objects: []string{autNum(1, "import: from PRNG-X accept ANY", "import: from PRNG-X accept AS-ONE"), autNum(7), "peering-set: PRNG-X\npeering: AS7\nmnt-by: MNT-A\nsource: RIPE\n"},
+			want:    []string{"lint/shadowed import#1 L4: import term PRNG-X | AS-ONE never decides: earlier terms accept every route it accepts [AS7] [ipv4.unicast]"},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ch := checker(t, c.objects...)
+			ch.SetPeers = c.setPeers
+			var got []string
+			for _, i := range lint(t, ch, 1) {
+				got = append(got, issueText(i))
+			}
+			if !slices.Equal(got, c.want) {
+				t.Errorf("issues\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(c.want, "\n"))
+			}
+		})
 	}
 }

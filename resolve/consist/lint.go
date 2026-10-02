@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -57,8 +58,13 @@ type Issue struct {
 var lintFamilies = []types.AddrFamily{{AFI: types.AFIv4, SAFI: types.SAFIUnicast}, {AFI: types.AFIv6, SAFI: types.SAFIUnicast}}
 
 // Lint evaluates as's import, export and default policies toward each peer
-// in Peers' Forward and Reverse lists, in ipv4.unicast and ipv6.unicast,
-// with no routers given, and reports what is wrong or dead in them. A policy
+// in Peers' Forward and Reverse lists — and ViaSets with Checker.SetPeers —
+// in ipv4.unicast and ipv6.unicast, with no routers given, and reports what
+// is wrong or dead in them. Without SetPeers, a peering through an as-set or
+// a peering-set that denotes none of those peers is linted through one
+// session toward the lowest AS it denotes, whose issues list that peer as
+// any session's do; a set peering that denotes one of them is linted
+// through that one's session. A policy
 // toward AS-ANY is linted through a session with the reserved AS4294967295
 // (RFC 7300), never a real peer: its issues list no peer, and a term that
 // depends on the peer is left out of that session's lint/empty and
@@ -81,7 +87,7 @@ func (c *Checker) Lint(ctx context.Context, as types.ASN) ([]Issue, error) {
 	if err != nil {
 		return nil, fmt.Errorf("consist: %w", err)
 	}
-	peers, err := c.Peers(ctx, as)
+	peers, groups, err := c.peers(ctx, as)
 	if isLimit(err) {
 		l := newLinter(ctx, ev, an)
 		l.add(RuleLimit, "", -1, err.Error(), 0, nil)
@@ -97,10 +103,7 @@ func (c *Checker) Lint(ctx context.Context, as types.ASN) ([]Issue, error) {
 	if err := l.routers(ctx, c); err != nil {
 		return nil, err
 	}
-	all := slices.Concat(peers.Forward, peers.Reverse)
-	slices.Sort(all)
-	all = slices.DeleteFunc(slices.Compact(all), func(a types.ASN) bool { return a == as || a == anyPeer })
-	for _, peer := range all {
+	for _, peer := range c.sessionPeers(as, peers, groups) {
 		if _, err := ev.Src.AutNum(ctx, peer, ev.Source); errors.Is(err, resolve.ErrNotFound) {
 			l.add(RuleNoAutNum, "", -1, fmt.Sprintf("%s's aut-num is not in the source", peer), peer, nil)
 		} else if err != nil {
@@ -119,6 +122,48 @@ func (c *Checker) Lint(ctx context.Context, as types.ASN) ([]Issue, error) {
 		return nil, l.err
 	}
 	return l.issues(), nil
+}
+
+// sessionPeers returns the peers Lint runs a session toward, ascending:
+// Forward and Reverse, ViaSets with SetPeers, and otherwise, for each set
+// peering (groups, in document order) that denotes no peer already listed,
+// the lowest AS it denotes, so its terms are still linted through one
+// session. Never as itself, AS0 or anyPeer.
+func (c *Checker) sessionPeers(as types.ASN, pl PeerList, groups []asSet) []types.ASN {
+	ok := func(a types.ASN) bool { return a != as && a != 0 && a != anyPeer }
+	in := map[types.ASN]bool{}
+	for _, list := range [][]types.ASN{pl.Forward, pl.Reverse} {
+		for _, a := range list {
+			if ok(a) {
+				in[a] = true
+			}
+		}
+	}
+	if c.SetPeers {
+		for _, a := range pl.ViaSets {
+			if ok(a) {
+				in[a] = true
+			}
+		}
+	} else {
+		for _, g := range groups {
+			var rep types.ASN
+			found := false
+			for a := range g.members {
+				if in[a] {
+					found = true
+					break
+				}
+				if ok(a) && (rep == 0 || a < rep) {
+					rep = a
+				}
+			}
+			if !found && rep != 0 {
+				in[rep] = true
+			}
+		}
+	}
+	return slices.Sorted(maps.Keys(in))
 }
 
 // anyPeer is the peer of the session through which a policy toward AS-ANY is
