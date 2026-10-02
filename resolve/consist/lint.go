@@ -483,13 +483,21 @@ func (l *linter) deeper(m types.SetRef, peer types.ASN, kind string, index int) 
 // depth): what it accepts depends on who the peer is. The two evaluations
 // toward the sentinel cannot see PeerAS as a prefix filter, since neither
 // reserved AS originates a route.
+//
+// It is a plain reachability walk, fresh for this one call: visited records
+// every filter-set looked into and is never un-marked, so a cycle back to an
+// ancestor and a diamond of two paths into the same descendant are the same
+// case — the set holds nothing new to find the second time, whichever shape
+// led there — and the walk fetches and scans each reachable filter-set at
+// most once (linear in the sets reachable from f, not in the number of paths
+// through them).
 func (l *linter) peerDependent(f policy.Filter) bool {
 	return l.peerDependentOn(f, map[string]bool{})
 }
 
-// peerDependentOn is peerDependent threaded with visiting, the filter-sets
-// on the current recursion path (see filterSetDependent).
-func (l *linter) peerDependentOn(f policy.Filter, visiting map[string]bool) bool {
+// peerDependentOn is peerDependent threaded with visited, the filter-sets
+// already looked into by this call (see filterSetDependent).
+func (l *linter) peerDependentOn(f policy.Filter, visited map[string]bool) bool {
 	switch x := f.(type) {
 	case policy.FilterPeerAS, policy.FilterSetTemplate:
 		return true
@@ -498,13 +506,13 @@ func (l *linter) peerDependentOn(f policy.Filter, visiting map[string]bool) bool
 	case policy.FilterPathRE:
 		return x.Regexp != nil && pathPeerDependent(x.Regexp.Body)
 	case policy.FilterSetRef:
-		return l.filterSetDependent(x.Name, visiting)
+		return l.filterSetDependent(x.Name, visited)
 	case policy.FilterAnd:
-		return slices.ContainsFunc(x.Terms, func(t policy.Filter) bool { return l.peerDependentOn(t, visiting) })
+		return slices.ContainsFunc(x.Terms, func(t policy.Filter) bool { return l.peerDependentOn(t, visited) })
 	case policy.FilterOr:
-		return slices.ContainsFunc(x.Terms, func(t policy.Filter) bool { return l.peerDependentOn(t, visiting) })
+		return slices.ContainsFunc(x.Terms, func(t policy.Filter) bool { return l.peerDependentOn(t, visited) })
 	case policy.FilterNot:
-		return l.peerDependentOn(x.Inner, visiting)
+		return l.peerDependentOn(x.Inner, visited)
 	}
 	return false
 }
@@ -521,10 +529,16 @@ type fltrObjEntry struct {
 // filterSetObject fetches the filter-set n's object, caching the fetch (not
 // the dependence it implies — see filterSetDependent) across the whole Lint
 // call. A Source failure other than ErrNotFound is kept for Lint to return.
+// A context already cancelled or past its deadline is reported as the fetch's
+// error without a call to the Source, so a walk over many filter-sets stops
+// promptly once the caller gives up rather than running every fetch out.
 func (l *linter) filterSetObject(n types.SetName) (fs object.FilterSet, ok bool, err error) {
 	k := n.String()
 	if e, cached := l.fltrObj[k]; cached {
 		return e.fs, e.ok, e.err
+	}
+	if cerr := l.ctx.Err(); cerr != nil {
+		return object.FilterSet{}, false, cerr
 	}
 	var e fltrObjEntry
 	set, ferr := l.ev.Src.GetSet(l.ctx, types.Ref(n))
@@ -546,25 +560,30 @@ func (l *linter) filterSetObject(n types.SetName) (fs object.FilterSet, ok bool,
 }
 
 // filterSetDependent reports whether the filter-set n's filters depend on
-// the peer, at any depth. The object behind each name is fetched at most
-// once per Lint call (filterSetObject), but dependence is never memoized
-// across top-level queries: a name already on the current recursion path
-// (visiting) contributes "not dependent via this path" rather than a cached
-// answer, since that path's true/false has not been decided yet — caching it
-// could permanently hide a PeerAS another member of the cycle reaches. The
-// cycle's overall answer is the OR over every path out of it, so a cycle can
-// never hide a reachable PeerAS, only fail to find one through itself alone.
-// A missing set, or one whose class is not filter-set, does not depend on
-// the peer; a Source failure is kept for Lint to return, and counts as
-// dependent.
-func (l *linter) filterSetDependent(n types.SetName, visiting map[string]bool) bool {
+// the peer, at any depth, as one step of peerDependentOn's reachability
+// walk: n is marked in visited before it is scanned and never un-marked, so
+// a second reference to n within the same call — by a cycle back to an
+// ancestor or by a second, independent path (a diamond) — is answered
+// immediately as "nothing new here" without being fetched or scanned again.
+// That is sound for reachability (unlike memoizing a final true/false per
+// set across separate calls, which is what let a cycle hide a PeerAS before
+// this fix): what n itself and everything reachable from it can show was
+// already being discovered, by this same walk, the first time n was
+// reached, and dependence is only ever an OR over the whole reachable set,
+// never conditioned on which path a set was reached by. A missing set, or
+// one whose class is not filter-set, does not depend on the peer; a Source
+// failure — including the walk's own context expiring mid-fetch — is kept
+// for Lint to return, and counts as dependent, so lint stays silent about a
+// term rather than risk a wrong shadowed or empty finding.
+func (l *linter) filterSetDependent(n types.SetName, visited map[string]bool) bool {
 	if n.Class() != types.ClassFilterSet {
 		return false
 	}
 	k := n.String()
-	if visiting[k] {
+	if visited[k] {
 		return false
 	}
+	visited[k] = true
 	fs, ok, err := l.filterSetObject(n)
 	if err != nil {
 		if l.err == nil {
@@ -575,10 +594,7 @@ func (l *linter) filterSetDependent(n types.SetName, visiting map[string]bool) b
 	if !ok {
 		return false
 	}
-	visiting[k] = true
-	dep := fs.Filter != nil && l.peerDependentOn(fs.Filter, visiting) || fs.MpFilter != nil && l.peerDependentOn(fs.MpFilter, visiting)
-	delete(visiting, k)
-	return dep
+	return fs.Filter != nil && l.peerDependentOn(fs.Filter, visited) || fs.MpFilter != nil && l.peerDependentOn(fs.MpFilter, visited)
 }
 
 func asExprTemplate(e policy.ASExpr) bool {

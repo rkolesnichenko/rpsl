@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rkolesnichenko/rpsl/ast"
 	"github.com/rkolesnichenko/rpsl/object"
@@ -330,6 +331,56 @@ func TestLintWithoutConcretePeers(t *testing.T) {
 				t.Errorf("issues\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(c.want, "\n"))
 			}
 		})
+	}
+}
+
+// TestLintFilterSetDiamondIsLinear builds a 30-level diamond: FLTR-D0 is a
+// plain prefix, and for i=1..30, FLTR-DAi and FLTR-DBi each just name
+// FLTR-D(i-1), while FLTR-Di is "FLTR-DAi OR FLTR-DBi" — two independent
+// paths down to every lower level, with no PeerAS anywhere. Without the
+// reachability fix (a walk that revisits a set once per path into it rather
+// than once overall), the number of (set, path) visits doubles per level —
+// 2^30 — so this completes only because peerDependent now visits each
+// reachable filter-set at most once. Run with a hard deadline, not
+// wall-clock timing, since a regression here is "doesn't finish," not
+// "finishes slower."
+func TestLintFilterSetDiamondIsLinear(t *testing.T) {
+	const levels = 30
+	objects := []string{"filter-set: FLTR-D0\nfilter: {10.1.0.0/16}\nmnt-by: MNT-A\nsource: RIPE\n"}
+	for i := 1; i <= levels; i++ {
+		objects = append(objects,
+			fmt.Sprintf("filter-set: FLTR-DA%d\nfilter: FLTR-D%d\nmnt-by: MNT-A\nsource: RIPE\n", i, i-1),
+			fmt.Sprintf("filter-set: FLTR-DB%d\nfilter: FLTR-D%d\nmnt-by: MNT-A\nsource: RIPE\n", i, i-1),
+			fmt.Sprintf("filter-set: FLTR-D%d\nfilter: FLTR-DA%d OR FLTR-DB%d\nmnt-by: MNT-A\nsource: RIPE\n", i, i, i))
+	}
+	objects = append(objects, autNum(1, fmt.Sprintf("import: from AS-ANY accept FLTR-D%d", levels)))
+	c := checker(t, objects...)
+	// Each level is two filter-set hops (Di -> DAi/DBi -> D(i-1)); raise the
+	// engine's own MaxDepth past that so the real evaluation (which the
+	// design already holds to memoize a filter-set's inlining, so is not
+	// itself exponential here) completes and this test reaches the
+	// peerDependent walk under test, rather than stopping at a lint/limit.
+	c.Eval.Expander.MaxDepth = 10 * levels
+
+	type result struct {
+		is  []Issue
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		is, err := c.Lint(context.Background(), 1)
+		done <- result{is, err}
+	}()
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatalf("Lint: %v", r.err)
+		}
+		if len(r.is) != 0 {
+			t.Errorf("issues %v, want none", r.is)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Lint did not return within 5s: filterSetDependent is re-walking the diamond exponentially")
 	}
 }
 
