@@ -284,6 +284,42 @@ func TestLintWithoutConcretePeers(t *testing.T) {
 				"filter-set: FLTR-PLAIN\nfilter: {10.1.0.0/16}\nmnt-by: MNT-A\nsource: RIPE\n"},
 			want: []string{"lint/shadowed import#1 L4: import term AS-ANY | FLTR-PLAIN never decides: earlier terms accept every route it accepts [] [ipv4.unicast]"},
 		},
+		{
+			// A cycle of filter-sets: FLTR-A reaches PeerAS only through
+			// FLTR-C, and FLTR-B reaches PeerAS only through FLTR-A. Computed
+			// from the FLTR-B term (FLTR-A not visited yet), this already
+			// worked before the fix.
+			name: "AS-ANY with PeerAS behind a filter-set cycle",
+			objects: []string{autNum(1, "import: from AS-ANY accept {10.1.0.0/16}", "import: from AS-ANY accept FLTR-B"),
+				"filter-set: FLTR-A\nfilter: FLTR-B OR FLTR-C\nmnt-by: MNT-A\nsource: RIPE\n",
+				"filter-set: FLTR-B\nfilter: FLTR-A OR {10.1.0.0/16}\nmnt-by: MNT-A\nsource: RIPE\n",
+				"filter-set: FLTR-C\nfilter: PeerAS\nmnt-by: MNT-A\nsource: RIPE\n"},
+		},
+		{
+			// The same cycle, with a term for FLTR-A evaluated first: that
+			// walk reaches FLTR-B while FLTR-A is still on the recursion
+			// stack, so FLTR-B's own PeerAS dependence (via FLTR-A, FLTR-C)
+			// must not be memoized as the cycle's placeholder "false" — else
+			// the later FLTR-B term is wrongly treated as peer-independent
+			// and wrongly shadowed by the prefix term.
+			name: "AS-ANY with PeerAS behind a filter-set cycle, FLTR-A first",
+			objects: []string{autNum(1, "import: from AS-ANY accept FLTR-A", "import: from AS-ANY accept {10.1.0.0/16}", "import: from AS-ANY accept FLTR-B"),
+				"filter-set: FLTR-A\nfilter: FLTR-B OR FLTR-C\nmnt-by: MNT-A\nsource: RIPE\n",
+				"filter-set: FLTR-B\nfilter: FLTR-A OR {10.1.0.0/16}\nmnt-by: MNT-A\nsource: RIPE\n",
+				"filter-set: FLTR-C\nfilter: PeerAS\nmnt-by: MNT-A\nsource: RIPE\n"},
+		},
+		{
+			// The tighter variant: FLTR-B is only FLTR-A (no prefix literal
+			// of its own), so the same stale "false" makes FLTR-B's real,
+			// peer-dependent filter evaluate as truly empty toward the
+			// sentinel instead of being skipped — a false lint/empty rather
+			// than a false lint/shadowed.
+			name: "AS-ANY with PeerAS behind a filter-set self-cycle, FLTR-A first",
+			objects: []string{autNum(1, "import: from AS-ANY accept FLTR-A", "import: from AS-ANY accept {10.1.0.0/16}", "import: from AS-ANY accept FLTR-B"),
+				"filter-set: FLTR-A\nfilter: FLTR-B OR FLTR-C\nmnt-by: MNT-A\nsource: RIPE\n",
+				"filter-set: FLTR-B\nfilter: FLTR-A\nmnt-by: MNT-A\nsource: RIPE\n",
+				"filter-set: FLTR-C\nfilter: PeerAS\nmnt-by: MNT-A\nsource: RIPE\n"},
+		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			var got []string

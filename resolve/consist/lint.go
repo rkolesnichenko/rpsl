@@ -280,11 +280,13 @@ type linter struct {
 	attrs map[string][]ast.Attribute // "import", "export", "default" -> those attributes (and their mp- forms), in order
 	first lexer.Span                 // the object's first attribute: spans are made relative to it
 	m     map[issueKey]*Issue
-	// For filterSetDependent: the lookups' context and Evaluator, what each
-	// filter-set was found to be, and the first Source failure met.
+	// For filterSetDependent: the lookups' context and Evaluator, each
+	// filter-set fetched at most once (fltrObj), and the first Source
+	// failure met. Dependence itself is not memoized across top-level
+	// queries — see filterSetDependent.
 	ctx     context.Context
 	ev      *peval.Evaluator
-	fltrDep map[string]bool
+	fltrObj map[string]fltrObjEntry
 	err     error
 	// reported holds the sets the static walk (sets) found missing, per
 	// attribute; a session reports a missing set for an attribute only when
@@ -310,7 +312,7 @@ type issueKey struct {
 
 func newLinter(ctx context.Context, ev *peval.Evaluator, an object.AutNum) *linter {
 	l := &linter{an: an, attrs: map[string][]ast.Attribute{}, m: map[issueKey]*Issue{}, reported: map[setKey]bool{},
-		ctx: ctx, ev: ev, fltrDep: map[string]bool{}}
+		ctx: ctx, ev: ev, fltrObj: map[string]fltrObjEntry{}}
 	if raw := an.Raw(); raw != nil {
 		for i, a := range raw.Attributes() {
 			if i == 0 {
@@ -482,6 +484,12 @@ func (l *linter) deeper(m types.SetRef, peer types.ASN, kind string, index int) 
 // toward the sentinel cannot see PeerAS as a prefix filter, since neither
 // reserved AS originates a route.
 func (l *linter) peerDependent(f policy.Filter) bool {
+	return l.peerDependentOn(f, map[string]bool{})
+}
+
+// peerDependentOn is peerDependent threaded with visiting, the filter-sets
+// on the current recursion path (see filterSetDependent).
+func (l *linter) peerDependentOn(f policy.Filter, visiting map[string]bool) bool {
 	switch x := f.(type) {
 	case policy.FilterPeerAS, policy.FilterSetTemplate:
 		return true
@@ -490,51 +498,86 @@ func (l *linter) peerDependent(f policy.Filter) bool {
 	case policy.FilterPathRE:
 		return x.Regexp != nil && pathPeerDependent(x.Regexp.Body)
 	case policy.FilterSetRef:
-		return l.filterSetDependent(x.Name)
+		return l.filterSetDependent(x.Name, visiting)
 	case policy.FilterAnd:
-		return slices.ContainsFunc(x.Terms, l.peerDependent)
+		return slices.ContainsFunc(x.Terms, func(t policy.Filter) bool { return l.peerDependentOn(t, visiting) })
 	case policy.FilterOr:
-		return slices.ContainsFunc(x.Terms, l.peerDependent)
+		return slices.ContainsFunc(x.Terms, func(t policy.Filter) bool { return l.peerDependentOn(t, visiting) })
 	case policy.FilterNot:
-		return l.peerDependent(x.Inner)
+		return l.peerDependentOn(x.Inner, visiting)
 	}
 	return false
 }
 
+// fltrObjEntry caches one filterSetObject fetch: a filter-set's object is
+// looked up at most once per Lint call, however many times a cycle or
+// several clauses reach it.
+type fltrObjEntry struct {
+	fs  object.FilterSet
+	ok  bool // false: missing (or not a filter-set) — fs is unset
+	err error
+}
+
+// filterSetObject fetches the filter-set n's object, caching the fetch (not
+// the dependence it implies — see filterSetDependent) across the whole Lint
+// call. A Source failure other than ErrNotFound is kept for Lint to return.
+func (l *linter) filterSetObject(n types.SetName) (fs object.FilterSet, ok bool, err error) {
+	k := n.String()
+	if e, cached := l.fltrObj[k]; cached {
+		return e.fs, e.ok, e.err
+	}
+	var e fltrObjEntry
+	set, ferr := l.ev.Src.GetSet(l.ctx, types.Ref(n))
+	switch {
+	case errors.Is(ferr, resolve.ErrNotFound):
+		// e stays the zero value: not found, no error.
+	case ferr != nil:
+		e.err = ferr
+	default:
+		switch x := set.(type) {
+		case object.FilterSet:
+			e.fs, e.ok = x, true
+		case *object.FilterSet:
+			e.fs, e.ok = *x, true
+		}
+	}
+	l.fltrObj[k] = e
+	return e.fs, e.ok, e.err
+}
+
 // filterSetDependent reports whether the filter-set n's filters depend on
-// the peer, looking each set up once. A set being looked into (a cycle)
-// counts as not, the cycle's other sets deciding; a missing set, or one
-// whose class is not filter-set, does not depend on the peer; a Source
-// failure is kept for Lint to return, and counts as dependent.
-func (l *linter) filterSetDependent(n types.SetName) bool {
+// the peer, at any depth. The object behind each name is fetched at most
+// once per Lint call (filterSetObject), but dependence is never memoized
+// across top-level queries: a name already on the current recursion path
+// (visiting) contributes "not dependent via this path" rather than a cached
+// answer, since that path's true/false has not been decided yet — caching it
+// could permanently hide a PeerAS another member of the cycle reaches. The
+// cycle's overall answer is the OR over every path out of it, so a cycle can
+// never hide a reachable PeerAS, only fail to find one through itself alone.
+// A missing set, or one whose class is not filter-set, does not depend on
+// the peer; a Source failure is kept for Lint to return, and counts as
+// dependent.
+func (l *linter) filterSetDependent(n types.SetName, visiting map[string]bool) bool {
 	if n.Class() != types.ClassFilterSet {
 		return false
 	}
 	k := n.String()
-	if v, ok := l.fltrDep[k]; ok {
-		return v
-	}
-	l.fltrDep[k] = false // visiting
-	set, err := l.ev.Src.GetSet(l.ctx, types.Ref(n))
-	switch {
-	case errors.Is(err, resolve.ErrNotFound):
+	if visiting[k] {
 		return false
-	case err != nil:
+	}
+	fs, ok, err := l.filterSetObject(n)
+	if err != nil {
 		if l.err == nil {
 			l.err = err
 		}
-		l.fltrDep[k] = true
 		return true
 	}
-	var fs object.FilterSet
-	switch x := set.(type) {
-	case object.FilterSet:
-		fs = x
-	case *object.FilterSet:
-		fs = *x
+	if !ok {
+		return false
 	}
-	dep := fs.Filter != nil && l.peerDependent(fs.Filter) || fs.MpFilter != nil && l.peerDependent(fs.MpFilter)
-	l.fltrDep[k] = dep
+	visiting[k] = true
+	dep := fs.Filter != nil && l.peerDependentOn(fs.Filter, visiting) || fs.MpFilter != nil && l.peerDependentOn(fs.MpFilter, visiting)
+	delete(visiting, k)
 	return dep
 }
 
