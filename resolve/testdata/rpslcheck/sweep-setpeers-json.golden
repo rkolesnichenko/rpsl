@@ -1,0 +1,11 @@
+{"type":"issue","as":"AS65010","rule":"lint/shadowed","severity":"warning","message":"import term AS-IX | AS-IX never decides: earlier terms accept every route it accepts","attr":"import","index":2,"line":5,"peers":["AS65011"],"afs":["ipv4.unicast"]}
+{"type":"direction","from":"AS65010","to":"AS65011","af":"ipv4.unicast","findings":0}
+{"type":"direction","from":"AS65011","to":"AS65010","af":"ipv4.unicast","findings":1}
+{"type":"finding","from":"AS65011","to":"AS65010","af":"ipv4.unicast","kind":"not-exported","severity":"info","example":"0.0.0.0/0","ranges":["0.0.0.0/0^0-15","0.0.0.0/0^17-32","0.0.0.0/5^16","8.0.0.0/7^16","10.0.0.0/13^16","10.8.0.0/15^16","10.10.0.0/16","10.12.0.0/14^16","10.16.0.0/12^16","10.32.0.0/11^16","10.64.0.0/10^16","10.128.0.0/9^16","11.0.0.0/8^16","12.0.0.0/6^16","16.0.0.0/4^16","32.0.0.0/3^16","64.0.0.0/2^16","128.0.0.0/1^16"],"import_lines":[4]}
+{"type":"direction","from":"AS65010","to":"AS65011","af":"ipv6.unicast","findings":0,"no_policy":true}
+{"type":"direction","from":"AS65011","to":"AS65010","af":"ipv6.unicast","findings":0,"no_policy":true}
+{"type":"direction","from":"AS65010","to":"AS65013","af":"ipv4.unicast","findings":0}
+{"type":"direction","from":"AS65013","to":"AS65010","af":"ipv4.unicast","findings":0}
+{"type":"direction","from":"AS65010","to":"AS65013","af":"ipv6.unicast","findings":0,"no_policy":true}
+{"type":"direction","from":"AS65013","to":"AS65010","af":"ipv6.unicast","findings":0,"no_policy":true}
+{"type":"totals","autnums":4,"pairs":4,"via_sets_skipped":2,"directions":8,"consistent":3,"no_policy":4,"kinds":{"not-exported":1},"rules":{"lint/shadowed":1},"limits":0,"timeouts":0,"top":[{"as":"AS65010","warnings":1}]}

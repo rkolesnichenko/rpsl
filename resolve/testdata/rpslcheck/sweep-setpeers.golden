@@ -1,0 +1,13 @@
+AS65010 warning lint/shadowed import (line 5): import term AS-IX | AS-IX never decides: earlier terms accept every route it accepts [AS65011; ipv4.unicast]
+totals
+  aut-nums                                 4
+  pairs checked (per family)               4
+  peers through sets, not checked          2
+  directions                               8
+  directions consistent                    3
+  directions with no policy either way     4
+  directions with not-exported             1
+  lint/shadowed                            1
+  pairs over a limit or not decidable      0
+  checks over their time budget            0
+  most warnings: AS65010 (1)

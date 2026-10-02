@@ -8,6 +8,7 @@ AS65004 -> AS65002 ipv6.unicast warning no-aut-num: AS65004's aut-num is not in 
 totals
   aut-nums                                 4
   pairs checked (per family)               8
+  peers through sets, not checked          0
   directions                               16
   directions consistent                    3
   directions with no policy either way     7

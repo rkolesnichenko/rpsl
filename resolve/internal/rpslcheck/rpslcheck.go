@@ -55,6 +55,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	conc := fs.Int("c", runtime.GOMAXPROCS(0), "`N` checks at once; the output is the same for any N while no call runs past -check-timeout")
 	timeout := fs.Duration("timeout", 10*time.Minute, "give up on the whole run after this long (0: never); a -sweep has no deadline unless this is given")
 	checkTimeout := fs.Duration("check-timeout", time.Minute, "sweep: give each aut-num's peer list, its lint, and each pair's check this long, each its own budget, counting the ones that run out (0: no limit)")
+	setPeers := fs.Bool("set-peers", false, "also check (and lint toward) the peers named only through as-sets and peering-sets; there can be tens of thousands")
 	showVersion := fs.Bool("v", false, "print rpslcheck's version and exit")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -111,9 +112,9 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	w := newWriter(stdout, *asJSON)
 	src := resolve.NewCache(b.Src, 0)
 	if *sweep {
-		return runSweep(ctx, src, afs, *sample, *seed, *conc, *checkTimeout, w, stderr)
+		return runSweep(ctx, src, afs, *sample, *seed, *conc, *checkTimeout, *setPeers, w, stderr)
 	}
-	c := &consist.Checker{Eval: peval.Evaluator{Src: src}}
+	c := &consist.Checker{Eval: peval.Evaluator{Src: src}, SetPeers: *setPeers}
 	r := &runner{ctx: ctx, c: c, src: src, w: w, stderr: stderr, afs: afs}
 	if len(ases) == 1 {
 		return r.one(ases[0], afs)
@@ -200,7 +201,17 @@ func peerNote(noIndex bool, as string) string {
 	return fmt.Sprintf("rpslcheck: note: the source keeps no reverse index (only -dump does), so networks that name %s without being named back are not checked\n", as)
 }
 
-// one lints as and checks it against every peer, Forward and Reverse.
+// setPeersNote is the stderr note for n peers named only through sets and
+// left unchecked (no -set-peers).
+func setPeersNote(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("rpslcheck: note: %d peers named through sets are not checked; -set-peers checks them\n", n)
+}
+
+// one lints as and checks it against every peer, Forward and Reverse — and
+// ViaSets with -set-peers.
 func (r *runner) one(as types.ASN, afs []types.AddrFamily) int {
 	if code := r.lint(as); code != exitClean {
 		return code
@@ -210,7 +221,18 @@ func (r *runner) one(as types.ASN, afs []types.AddrFamily) int {
 		return r.fail(err)
 	}
 	fmt.Fprint(r.stderr, peerNote(pl.NoIndex, as.String()))
-	peers := append(slices.Clone(pl.Forward), pl.Reverse...)
+	peers := slices.Concat(pl.Forward, pl.Reverse)
+	if r.c.SetPeers {
+		peers = append(peers, pl.ViaSets...)
+	} else {
+		unchecked := 0
+		for _, a := range pl.ViaSets {
+			if _, ok := slices.BinarySearch(pl.Reverse, a); !ok { // Reverse is ascending
+				unchecked++
+			}
+		}
+		fmt.Fprint(r.stderr, setPeersNote(unchecked))
+	}
 	slices.Sort(peers)
 	for _, peer := range slices.Compact(peers) {
 		for _, af := range afs {

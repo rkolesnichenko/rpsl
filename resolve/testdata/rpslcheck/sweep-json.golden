@@ -23,4 +23,4 @@
 {"type":"finding","from":"AS65002","to":"AS65004","af":"ipv6.unicast","kind":"no-aut-num","severity":"warning","as":"AS65004"}
 {"type":"direction","from":"AS65004","to":"AS65002","af":"ipv6.unicast","findings":1}
 {"type":"finding","from":"AS65004","to":"AS65002","af":"ipv6.unicast","kind":"no-aut-num","severity":"warning","as":"AS65004"}
-{"type":"totals","autnums":4,"pairs":8,"directions":16,"consistent":3,"no_policy":7,"kinds":{"no-aut-num":4,"no-export":1,"not-imported":1},"rules":{"lint/empty":1,"lint/no-aut-num":1,"lint/shadowed":1},"limits":0,"timeouts":0,"top":[{"as":"AS65002","warnings":6},{"as":"AS65004","warnings":4},{"as":"AS65001","warnings":2}]}
+{"type":"totals","autnums":4,"pairs":8,"via_sets_skipped":0,"directions":16,"consistent":3,"no_policy":7,"kinds":{"no-aut-num":4,"no-export":1,"not-imported":1},"rules":{"lint/empty":1,"lint/no-aut-num":1,"lint/shadowed":1},"limits":0,"timeouts":0,"top":[{"as":"AS65002","warnings":6},{"as":"AS65004","warnings":4},{"as":"AS65001","warnings":2}]}

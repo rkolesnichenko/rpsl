@@ -16,7 +16,10 @@ import (
 	"github.com/rkolesnichenko/rpsl/resolve/internal/buildinfo"
 )
 
-const fixture = "../../testdata/rpslcheck/objects.rpsl"
+const (
+	fixture    = "../../testdata/rpslcheck/objects.rpsl"
+	setFixture = "../../testdata/rpslcheck/setpeers.rpsl" // AS65010 names AS-IX's members only through it
+)
 
 func run(t *testing.T, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
@@ -58,6 +61,11 @@ func TestGoldens(t *testing.T) {
 		{"pair-ipv6", []string{"-dump", fixture, "-af", "ipv6", "AS65001", "AS65002"}, 1}, // AS65002's lint/no-aut-num has no family: always written
 		{"sweep", []string{"-dump", fixture, "-sweep"}, 1},
 		{"sweep-json", []string{"-dump", fixture, "-sweep", "-json"}, 1},
+		{"setpeers", []string{"-dump", setFixture, "AS65010"}, 1},
+		{"setpeers-set-peers", []string{"-dump", setFixture, "-set-peers", "AS65010"}, 1},
+		{"sweep-setpeers", []string{"-dump", setFixture, "-sweep"}, 1},
+		{"sweep-setpeers-json", []string{"-dump", setFixture, "-sweep", "-json"}, 1},
+		{"sweep-setpeers-set-peers", []string{"-dump", setFixture, "-sweep", "-set-peers"}, 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			out, errw, code := run(t, c.args...)
@@ -272,7 +280,7 @@ source: RIPE
 	src := slowRouters{l.Source()}
 	afs, _ := families("both")
 	var out, errw bytes.Buffer
-	code := runSweep(context.Background(), src, afs, 0, 1, 1, 200*time.Millisecond, newWriter(&out, false), &errw)
+	code := runSweep(context.Background(), src, afs, 0, 1, 1, 200*time.Millisecond, false, newWriter(&out, false), &errw)
 	if code == exitFailed {
 		t.Fatalf("exit %d; stderr %s", code, errw.String())
 	}
@@ -347,5 +355,63 @@ func TestLintFollowsFamilies(t *testing.T) {
 	sw, _, _ := run(t, "-dump", fixture, "-af", "ipv6", "-sweep")
 	if strings.Contains(sw, "lint/shadowed") {
 		t.Errorf("sweep -af ipv6: an ipv4-only issue is written or counted:\n%s", sw)
+	}
+}
+
+// Ruling R20: AS65010 names AS65011, AS65012 and AS65014 only through
+// AS-IX. Without -set-peers, AS65011 is still checked (it names AS65010
+// back), the other two are not, and stderr says so; with it, all three are.
+func TestSetPeers(t *testing.T) {
+	out, errw, _ := run(t, "-dump", setFixture, "AS65010")
+	if want := "rpslcheck: note: 2 peers named through sets are not checked; -set-peers checks them\n"; !strings.Contains(errw, want) {
+		t.Errorf("stderr %q, want %q", errw, want)
+	}
+	for _, peer := range []string{"AS65012", "AS65014"} {
+		if strings.Contains(out, "-> "+peer) {
+			t.Errorf("%s is checked without -set-peers:\n%s", peer, out)
+		}
+	}
+	if !strings.Contains(out, "AS65010 -> AS65011 ipv4.unicast") {
+		t.Errorf("AS65011, a reverse peer, is not checked:\n%s", out)
+	}
+	out, errw, _ = run(t, "-dump", setFixture, "-set-peers", "AS65010")
+	if strings.Contains(errw, "named through sets") {
+		t.Errorf("-set-peers: stderr %q", errw)
+	}
+	for _, peer := range []string{"AS65011", "AS65012", "AS65014"} {
+		if !strings.Contains(out, "AS65010 -> "+peer+" ipv4.unicast") {
+			t.Errorf("-set-peers: %s is not checked:\n%s", peer, out)
+		}
+	}
+	// A peer list with nothing through sets writes no note.
+	if _, errw, _ := run(t, "-dump", fixture, "AS65001"); strings.Contains(errw, "named through sets") {
+		t.Errorf("stderr %q", errw)
+	}
+}
+
+// Ruling R20: a sweep pairs the peers named directly and counts the rest —
+// AS65010's AS65012 and AS65014; AS65011 is paired from its own side.
+func TestSweepCountsSetPeers(t *testing.T) {
+	out, _, _ := run(t, "-dump", setFixture, "-sweep")
+	for _, want := range []string{
+		"  pairs checked (per family)               4\n",
+		"  peers through sets, not checked          2\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("want %q in:\n%s", want, out)
+		}
+	}
+	js, _, _ := run(t, "-dump", setFixture, "-sweep", "-json")
+	if !strings.Contains(js, `"via_sets_skipped":2`) {
+		t.Errorf("JSON totals:\n%s", js)
+	}
+	out, _, _ = run(t, "-dump", setFixture, "-sweep", "-set-peers")
+	for _, want := range []string{
+		"  pairs checked (per family)               8\n",
+		"  peers through sets, not checked          0\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("-set-peers: want %q in:\n%s", want, out)
+		}
 	}
 }

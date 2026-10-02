@@ -1,0 +1,23 @@
+AS65010 warning lint/no-aut-num: AS65014's aut-num is not in the source [AS65014]
+AS65010 warning lint/shadowed import (line 5): import term AS-IX | AS-IX never decides: earlier terms accept every route it accepts [AS65011, AS65012, AS65014; ipv4.unicast]
+AS65010 -> AS65012 ipv4.unicast warning no-import: AS65010 exports to AS65012, and AS65012's import has nothing from AS65010
+AS65010 -> AS65014 ipv4.unicast warning no-aut-num: AS65014's aut-num is not in the source
+AS65014 -> AS65010 ipv4.unicast warning no-aut-num: AS65014's aut-num is not in the source
+AS65010 -> AS65014 ipv6.unicast warning no-aut-num: AS65014's aut-num is not in the source
+AS65014 -> AS65010 ipv6.unicast warning no-aut-num: AS65014's aut-num is not in the source
+totals
+  aut-nums                                 4
+  pairs checked (per family)               8
+  peers through sets, not checked          0
+  directions                               16
+  directions consistent                    3
+  directions with no policy either way     6
+  directions with no-aut-num               4
+  directions with no-export                1
+  directions with no-import                1
+  directions with not-exported             1
+  lint/no-aut-num                          1
+  lint/shadowed                            1
+  pairs over a limit or not decidable      0
+  checks over their time budget            0
+  most warnings: AS65010 (7), AS65014 (4), AS65012 (1)

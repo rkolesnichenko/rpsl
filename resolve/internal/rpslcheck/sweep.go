@@ -38,10 +38,11 @@ func parallel(n, conc int, fn func(i int)) {
 
 type lintResult struct {
 	issues   []consist.Issue
-	linted   bool // issues are the aut-num's lint
-	peers    []types.ASN
-	err      error    // the sweep cannot go on
-	timeouts []string // the peer list or the lint ran over its own budget: why, for each
+	linted   bool        // issues are the aut-num's lint
+	peers    []types.ASN // the pairs this aut-num names: Forward, and ViaSets with -set-peers
+	via      []types.ASN // ViaSets, without -set-peers: counted where no pair covers them
+	err      error       // the sweep cannot go on
+	timeouts []string    // the peer list or the lint ran over its own budget: why, for each
 }
 
 type checkResult struct {
@@ -91,8 +92,10 @@ func (b budget) overError() string { return fmt.Sprintf("over its time budget of
 // Each aut-num's peer list, its lint, and each pair's check runs under its
 // own budget, checkTimeout (0: none): one that runs out is counted and the
 // sweep goes on, while the run's own deadline or cancellation stops it. The
-// peer list comes first, so a lint that runs out never drops a pair.
-func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFamily, sample int, seed uint64, conc int, checkTimeout time.Duration, w *writer, stderr io.Writer) int {
+// peer list comes first, so a lint that runs out never drops a pair. The
+// pairs are each aut-num's Forward peers — and its ViaSets with setPeers;
+// without it, a ViaSets peer no pair covers is counted, not checked.
+func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFamily, sample int, seed uint64, conc int, checkTimeout time.Duration, setPeers bool, w *writer, stderr io.Writer) int {
 	pi, ok := src.(resolve.PolicyIndex)
 	if !ok {
 		fmt.Fprintln(stderr, "rpslcheck: -sweep: the source cannot list its aut-nums")
@@ -110,7 +113,7 @@ func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFam
 		ases = ases[:sample]
 		slices.Sort(ases)
 	}
-	c := &consist.Checker{Eval: peval.Evaluator{Src: src}}
+	c := &consist.Checker{Eval: peval.Evaluator{Src: src}, SetPeers: setPeers}
 	if !w.json {
 		w.only = ast.Warning
 	}
@@ -129,8 +132,10 @@ func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFam
 		case err != nil && !isLimit(err):
 			lr.err = err
 			return
+		case setPeers:
+			lr.peers = slices.Concat(pl.Forward, pl.ViaSets)
 		default:
-			lr.peers = pl.Forward
+			lr.peers, lr.via = pl.Forward, pl.ViaSets
 		}
 		lb := newBudget(ctx, checkTimeout)
 		defer lb.cancel()
@@ -184,6 +189,13 @@ func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFam
 			seen[k] = true
 			for _, af := range afs {
 				pairs = append(pairs, consist.Pair{A: k.a, B: k.b, AF: af})
+			}
+		}
+	}
+	for i, as := range ases {
+		for _, peer := range lints[i].via {
+			if !seen[pairKey{min(as, peer), max(as, peer)}] {
+				t.viaSets++
 			}
 		}
 	}
@@ -255,6 +267,7 @@ type totals struct {
 	autnums, pairs, directions, consistent, limits int            // limits: pairs over a limit or not decidable
 	noPolicy                                       int            // directions where neither side has a term toward the other
 	timeouts                                       int            // peer lists, lints and checks over their own time budget
+	viaSets                                        int            // (aut-num, peer) named only through sets that no pair of the sweep covers (no -set-peers)
 	kinds                                          map[string]int // directions with at least one finding of the kind ("undecided: <why>" by reason)
 	rules                                          map[string]int // lint issues by rule
 	warnings                                       map[types.ASN]int
@@ -345,6 +358,7 @@ func (t *totals) write(w *writer) {
 			Type       string         `json:"type"`
 			AutNums    int            `json:"autnums"`
 			Pairs      int            `json:"pairs"`
+			ViaSets    int            `json:"via_sets_skipped"`
 			Directions int            `json:"directions"`
 			Consistent int            `json:"consistent"`
 			NoPolicy   int            `json:"no_policy"`
@@ -353,13 +367,14 @@ func (t *totals) write(w *writer) {
 			Limits     int            `json:"limits"`
 			Timeouts   int            `json:"timeouts"`
 			Top        []entry        `json:"top"`
-		}{"totals", t.autnums, t.pairs, t.directions, t.consistent, t.noPolicy, t.kinds, t.rules, t.limits, t.timeouts, tops})
+		}{"totals", t.autnums, t.pairs, t.viaSets, t.directions, t.consistent, t.noPolicy, t.kinds, t.rules, t.limits, t.timeouts, tops})
 		return
 	}
 	fmt.Fprintln(w.out, "totals")
 	row := func(name string, n int) { fmt.Fprintf(w.out, "  %-40s %d\n", name, n) }
 	row("aut-nums", t.autnums)
 	row("pairs checked (per family)", t.pairs)
+	row("peers through sets, not checked", t.viaSets)
 	row("directions", t.directions)
 	row("directions consistent", t.consistent)
 	row("directions with no policy either way", t.noPolicy)
