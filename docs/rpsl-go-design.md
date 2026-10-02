@@ -974,8 +974,9 @@ conjuncts with no symbolic test (the only ones sure to take any route
 that crosses the session), naming the undecided terms' attributes — and an
 importer's undecided term adds `Undecided{Of: NotExported, Why:
 WhyImporterUndecided}` over the family less the exporter's. A direction
-with an undecided term on either side is never reported consistent on the
-strength of the decided clauses alone.
+with an undecided term on either side is reported consistent only when the
+other side's test-free clauses already accept (or announce) everything the
+undecided term could.
 
 **One-sided policies.** These apply only where one side has no decided
 clause at all toward the peer (a side with any decided clause always goes

@@ -129,9 +129,11 @@ An `Undecided` finding's `Of` says what it may be (`NotImported`,
 (`consist.Whys()`, verbatim):
 
 - `symbolic test on one side only` — an AS-path or community test the other
-  side does not hold, or holds only as the route crosses the session (the
-  same regexp on both sides; the same community test where the exporter's
-  clause changes communities).
+  side does not hold — or holds too, but cannot be compared across the
+  session boundary: the same AS-path regexp on both sides never settles it
+  (the importer reads the path after the exporter's prepend), and the same
+  community test settles it only when the exporter's clause changes no
+  community.
 - `importer has undecided terms` — the importing side's policy has a term
   `peval` cannot decide for this session (a router the pair does not give, a
   peering regexp, another protocol).
@@ -147,8 +149,8 @@ every prefix the importer does not accept unconditionally — every prefix
 outside its terms with no AS-path or community test — with the undecided
 terms' lines; and an importer's undecided term, the mirror (may be
 `not-exported`, `importer has undecided terms`). A direction with an
-undecided term is never `consistent` on the strength of the decided terms
-alone.
+undecided term is `consistent` only when the other side's test-free terms
+already accept (or announce) everything the undecided term could.
 
 ### Lint
 
@@ -276,6 +278,17 @@ is deterministic — the same for `-c 1` and `-c 8` — as long as no call runs
 past `-check-timeout`; one that does is counted, and whether a call near
 the budget finishes in time depends on the machine and its load.
 
+Every pair the sweep forms comes from some aut-num's own Forward peer list —
+the AS numbers its policy names directly as a bare ASN — never from
+`Reverse` (that index exists for one AS's own mode; a sweep walks every
+aut-num in the dump, so a pair either side's Forward names is formed once
+regardless of which side is walked first). A pair where neither side names
+the other directly, only through a set, is never checked — it falls under
+"peers through sets, not checked" below. `-sample` draws *aut-nums*, not
+pairs: it picks `N` of them at random and then pairs each one with its own
+Forward peers, so a pair is in the swept sample only when one of its two
+aut-nums was drawn.
+
 **Text output** writes one self-contained line per Warning — a lint issue or
 a finding at Warning severity — then the totals; with a full registry this
 is the only readable form. Info-severity findings (`not-exported`,
@@ -346,42 +359,57 @@ finding or issue — a `no-aut-num` finding has no `ranges`, a consistent
 
 `resolve/consist`'s own real-data test, `TestRealDataConsist`
 (`resolve/consist/consist_realdata_test.go`), swept RIPE's split dumps
-(fetched 2026-09-27) whole, run on 2026-10-01, each aut-num's Lint/Peers and
-each pair's Check under its own 60-second budget. One measured run, verbatim
+whole, each aut-num's Lint/Peers and each pair's Check under its own
+60-second budget. The dumps were fetched 2026-09-27 (`ls -l .data` shows
+`ripe/` — and `rpki/`, fetched alongside it — dated 2026-09-27; every other
+registry's directory is dated 2026-09-23, from an earlier fetch); the run
+below is from 2026-10-02, at commit `05b018e`. One measured run, verbatim
 (the totals depend on that budget and on the machine, so treat them as one
 run's, not a guarantee):
 
-| Measure | Value |
-| --- | --- |
-| Load, `KeepPolicy` | 7s, 545 MB |
-| Load, with `IndexPeers` | 7s, 549 MB |
-| Aut-nums swept | 39918 |
-| Wall time | 1h1m29s |
-| pairs | 561916 |
-| directions | 1123832 |
-| directions consistent | 452723 |
-| directions with no-aut-num | 209044 |
-| directions with no-export | 188811 |
-| directions with no-import | 196512 |
-| directions with not-exported | 30156 |
-| directions with not-exported (given) | 813 |
-| directions with not-imported | 9125 |
-| directions with not-imported (given) | 60 |
-| directions with undecided: exporter has undecided terms | 18911 |
-| directions with undecided: exporter has undecided terms (given) | 3 |
-| directions with undecided: importer has undecided terms | 19612 |
-| directions with undecided: symbolic test on one side only | 964 |
-| directions with undecided: symbolic test on one side only (given) | 16 |
-| lint: lint/empty | 51255 |
-| lint: lint/missing-router | 2526 |
-| lint: lint/missing-set | 7827325 |
-| lint: lint/no-aut-num | 52261 |
-| lint: lint/shadowed | 23710 |
-| lint: lint/undecided | 93356 |
-| not decidable | 2 |
-| timeout | 227 |
+```
+load: KeepPolicy 7s, 545 MB; with IndexPeers 7s, 549 MB
+39918 aut-nums swept in 1h5m52s:
+      directions                                                   954052
+      directions consistent                                        101063
+      directions with no policy either way                         304690
+      directions with no-aut-num                                   188584
+      directions with no-export                                    145108
+      directions with no-import                                    140524
+      directions with not-exported                                 27690
+      directions with not-exported (given)                         766
+      directions with not-imported                                 8875
+      directions with not-imported (given)                         58
+      directions with undecided: exporter has undecided terms      19254
+      directions with undecided: exporter has undecided terms (given) 3
+      directions with undecided: importer has undecided terms      19263
+      directions with undecided: symbolic test on one side only    911
+      directions with undecided: symbolic test on one side only (given) 16
+      lint: lint/empty                                             50710
+      lint: lint/missing-router                                    2526
+      lint: lint/missing-set                                       8011748
+      lint: lint/no-aut-num                                        40708
+      lint: lint/shadowed                                          25515
+      lint: lint/undecided                                         93447
+      not decidable                                                2
+      pairs                                                        477026
+      timeout                                                      91
+      via sets, not checked                                        7104372
+```
 
-No `verify timeout` was counted, and all 9125 unconditional `not-imported`
+Two rows are new since the pairing rule changed to direct peers only
+(Ruling R20). "directions with no policy either way" counts a direction
+where neither side has any term toward the other, decided or undecided, in
+that family (`Direction.NoPolicy`; see "Findings" above) — counted apart
+from `consistent`, never as one. "via sets, not checked" is each aut-num's
+`PeerList.ViaSets` that no pair checked already covers: peers reached only
+through an as-set or a peering-set (see "Peers through sets" above) —
+7,104,372 of them here, against 477,026 pairs the sweep actually checked.
+The sweep pairs only an aut-num's *direct* peers, Forward and Reverse, named
+as a bare AS number; a peer named only through a set is never drawn into a
+pair by this test, on either side.
+
+No `verify timeout` was counted, and all 8875 unconditional `not-imported`
 directions were independently re-checked against the two sides' clause
 spaces with no contradiction (the test's own soundness check on this run).
 `lint/missing-set` in particular moves noticeably between runs — a lint that

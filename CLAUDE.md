@@ -196,7 +196,7 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
 - **Consistency (`resolve/consist`) is exact or undecided.**
   - Prefix parts compare through `types.PrefixSpace`, which never enumerates and must stay canonical (lift and push-down in `merge`).
   - AS-path and community tests compare by identity (sorted normal-form text): a finding over them carries `Given`, and anything else is `Undecided`. A regexp is never evaluated.
-  - Never across the session boundary: the importer reads the route after the exporter's prepend and export actions, so an importer conjunct with an AS-path test is never "sure", nor one with a community test when the exporter's clause changes communities. The model (resolve/consist_model_test.go) applies the boundary; keep it.
+  - Never across the session boundary: the importer reads the route after the exporter's prepend and export actions, so an importer conjunct with an AS-path test is never "sure", nor one with a community test when the exporter's clause changes communities — and symmetrically for NotExported, an export conjunct with an AS-path test is never "sure", nor one with a community test when its own clause changes communities. The model (resolve/consist_model_test.go) applies the boundary; keep it.
   - An undecided term on the importer demotes NotImported; one on the exporter demotes NotExported. Beside decided clauses on both sides, an undecided term also adds Undecided (exporter's: Of NotImported; importer's: Of NotExported) over the family less the other side's conjuncts with no symbolic test.
   - A direction where neither side has any term is `Direction.NoPolicy` ("no policy either way"), never "consistent".
   - "Announces" means "permits announcing" (policy text, not a RIB).

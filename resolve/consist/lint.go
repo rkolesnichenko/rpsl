@@ -158,6 +158,8 @@ func (c *Checker) sessionPeers(as types.ASN, pl PeerList, groups []asSet) []type
 					rep = a
 				}
 			}
+			// rep is unused when found: a group already covered by a listed
+			// peer needs no representative.
 			if !found && rep != 0 {
 				in[rep] = true
 			}
