@@ -9,7 +9,7 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
-## [0.23.0] - Unreleased
+## [0.23.0] - 2026-10-02
 
 ### Added
 
@@ -987,7 +987,8 @@ The first release. There is no earlier version to migrate from.
   values do; a few common RP-attributes have typed helpers.
 - **`rdap` is not a `Source`.** RDAP serves registration data, not IRR sets.
 
-[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.23.0...HEAD
+[0.23.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.20.1...v0.21.0
 [0.20.1]: https://github.com/rkolesnichenko/rpsl/compare/v0.20.0...v0.20.1
