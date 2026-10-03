@@ -29,10 +29,14 @@ type route struct {
 }
 
 // NewRegistry builds a registry named name (an IRR source name, canonical
-// upper-case) from the objects of c whose source: is name; c's objects of
-// other sources are left out. c must keep policy (Corpus.KeepPolicy or
-// IndexPeers): a registry answers "!maut-num" and "!minet-rtr", and a
-// corpus that dropped its aut-nums would answer them "not found".
+// upper-case) from c, which must hold that one source alone: splitting a
+// dump or mirror by source is the loader's job, and objects of any other
+// source in c are not this registry's data. They are not removed, either:
+// the registry's routes and its unscoped lookups (c.SourceOf(name)) see only
+// name's objects, but a scoped lookup or a set's claims built from c would
+// still see the others. c must keep policy (Corpus.KeepPolicy or
+// IndexPeers): a registry answers "!maut-num" and "!minet-rtr", and a corpus
+// that dropped its aut-nums would answer them "not found".
 //
 // The registry shares nothing mutable with c: c may change afterwards.
 func NewRegistry(name string, serial uint64, c *resolve.Corpus) (*Registry, error) {

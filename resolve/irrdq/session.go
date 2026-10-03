@@ -154,7 +154,8 @@ var commands = map[rune]func(ctx context.Context, s *Session, snap *Snapshot, ar
 // selectSources answers "!s": "-lc" lists the selection, "-*" is accepted
 // and changes nothing (as IRRd 4.5.3 does), and a list of names selects
 // them, in the order given, when every one is a registry; otherwise the
-// selection stays as it was.
+// selection stays as it was. The list is split at commas only, as IRRd
+// splits it: a name with spaces around it is no registry.
 func (s *Session) selectSources(snap *Snapshot, arg string) Reply {
 	switch arg {
 	case "-lc":
@@ -164,7 +165,7 @@ func (s *Session) selectSources(snap *Snapshot, arg string) Reply {
 	}
 	var next []string
 	for _, n := range strings.Split(arg, ",") {
-		name, err := types.ParseSourceName(strings.TrimSpace(n))
+		name, err := types.ParseSourceName(n)
 		if err != nil || snap.byName[name] == nil {
 			return Fail("One or more selected sources are unavailable.")
 		}
@@ -176,7 +177,8 @@ func (s *Session) selectSources(snap *Snapshot, arg string) Reply {
 
 // serials answers "!j": NAME:N:0-<serial> per registry ("-" for serial 0),
 // then NAME:X:Database unknown for each name no registry has, each group in
-// the order asked; "-*" asks for every registry, in precedence order.
+// the order asked; "-*" asks for every registry, in precedence order. The
+// list is split at commas only, as IRRd splits it, and each name upper-cased.
 func serials(snap *Snapshot, arg string) Reply {
 	var names []string
 	if arg == "-*" {
@@ -188,7 +190,7 @@ func serials(snap *Snapshot, arg string) Reply {
 	}
 	var known, unknown []string
 	for _, n := range names {
-		up := strings.ToUpper(strings.TrimSpace(n))
+		up := strings.ToUpper(n)
 		r := snap.byName[up]
 		switch {
 		case r == nil:

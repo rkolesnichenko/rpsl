@@ -99,7 +99,8 @@ func TestSessionCommands(t *testing.T) {
 		{"!j-*", framed("RIPE:N:0-7\nRADB:N:-")},        // Refinement 6
 		{"!jradb,nosuch,ripe", framed("RADB:N:-\nRIPE:N:0-7\nNOSUCH:X:Database unknown")},
 		{"!sRADB,RIPE\n!s-lc", "C\n" + framed("RADB,RIPE")},
-		{"!s ripe , radb\n!s-lc", "C\n" + framed("RIPE,RADB")},
+		{"!s ripe , radb\n!s-lc", "F One or more selected sources are unavailable.\n" + framed("RIPE,RADB")}, // split at commas only: " radb" is no source
+		{"!jRIPE, RADB", framed("RIPE:N:0-7\n RADB:X:Database unknown")},
 		{"!sRIPE,\n!s-lc", "F One or more selected sources are unavailable.\n" + framed("RIPE,RADB")},
 		{"!s-*\n!s-lc", "C\n" + framed("RIPE,RADB")},
 		{"!t1000", "C\n"},

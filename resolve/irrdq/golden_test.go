@@ -129,18 +129,30 @@ func TestGoldens(t *testing.T) {
 			continue
 		}
 		n++
-		if why, ok := pending[g.Name]; ok {
-			t.Logf("%s: pending: %s", g.Name, why)
-			continue
-		}
 		got := replay(t, snap, g.Send)
-		if want, ok := diverges[g.Name]; ok {
-			if got != want {
-				t.Errorf("%s (%q), a pinned divergence:\n got %q\nwant %q", g.Name, g.Send, got, want)
+		pin, pinned := diverges[g.Name]
+		if pinned && irrdoracle.Compare(g.Kind, pin, g.Got) == nil {
+			t.Errorf("%s: the pinned divergence %q agrees with IRRd; remove it from diverges and divergences.md", g.Name, pin)
+		}
+		// A pending case is replayed too, so one that starts to pass is
+		// flagged rather than skipped for ever.
+		var err error
+		if pinned {
+			if got != pin {
+				err = fmt.Errorf("a pinned divergence:\n got %q\nwant %q", got, pin)
+			}
+		} else {
+			err = irrdoracle.Compare(g.Kind, got, g.Got)
+		}
+		if why, ok := pending[g.Name]; ok {
+			if err == nil {
+				t.Errorf("%s is pending (%s) but now agrees with IRRd (or its pin); remove it from pending", g.Name, why)
+			} else {
+				t.Logf("%s: pending: %s", g.Name, why)
 			}
 			continue
 		}
-		if err := irrdoracle.Compare(g.Kind, got, g.Got); err != nil {
+		if err != nil {
 			t.Errorf("%s (%q): %v", g.Name, g.Send, err)
 		}
 	}
