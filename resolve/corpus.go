@@ -229,15 +229,19 @@ func (c *Corpus) putWhole(k wholeKey, o object.Object) {
 // stream also attaches to the last object of a dump the blank, comment and
 // malformed lines after it (a dump's closing comment, ARIN's "EOF"), which
 // are no more the object's than the ones before it, so trailing blank,
-// comment and malformed lines are dropped. Any line between the first and
-// the last attribute line stays — a comment, or a blank line in an object
-// parsed on its own (rpsl.ParseObject keeps the attributes after it).
+// comment and malformed lines are dropped. Lines are read as the lexer reads
+// them: one led by a space, a tab or '+' continues an attribute only right
+// after an attribute or continuation line, and after a blank, comment or
+// malformed line it is malformed. Any line between the first and the last
+// attribute line stays — a comment, or a blank line in an object parsed on
+// its own (rpsl.ParseObject keeps the attributes after it).
 //
 // It is exported for servers that answer with an object as its registry
 // published it (resolve/irrdq): the same text a Corpus keeps.
 func ObjectText(raw *ast.Object) string {
 	text := raw.String()
 	start, end := -1, 0
+	inAttr := false // the previous line was an attribute or continuation line
 	for rest, off := text, 0; len(rest) > 0; {
 		line, eol := rest, len(rest)
 		if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
@@ -245,13 +249,19 @@ func ObjectText(raw *ast.Object) string {
 		}
 		line = strings.TrimSuffix(line, "\r")
 		switch {
-		case start < 0:
-			if lexer.StartsAttribute(line) {
-				start, end = off, off+eol
+		case lexer.IsBlankLine(line):
+			inAttr = false // kept only if an attribute line follows
+		case line[0] == ' ' || line[0] == '\t' || line[0] == '+':
+			if inAttr { // a continuation; otherwise malformed (the lexer's classify)
+				end = off + eol
 			}
-		case lexer.IsBlankLine(line): // kept only if an attribute line follows
-		case lexer.StartsAttribute(line) || line[0] == ' ' || line[0] == '\t' || line[0] == '+':
-			end = off + eol
+		case lexer.StartsAttribute(line):
+			if start < 0 {
+				start = off
+			}
+			end, inAttr = off+eol, true
+		default: // a comment or a malformed line
+			inAttr = false
 		}
 		off += eol
 		rest = rest[eol:]

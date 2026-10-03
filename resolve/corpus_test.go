@@ -792,3 +792,35 @@ func TestObjectTextKeepsAttributesAfterABlankLine(t *testing.T) {
 		t.Errorf("served %d imports, want 1", len(an.Imports))
 	}
 }
+
+// TestObjectTextLineRules: ObjectText reads lines as the lexer does. A line
+// led by a space, a tab or '+' continues an attribute only right after an
+// attribute or continuation line; after a blank, comment or malformed line it
+// is malformed (lexer/malformed-line), and trailing it is dropped like any
+// other trivia.
+func TestObjectTextLineRules(t *testing.T) {
+	const obj = "aut-num: AS1\nsource: RIPE\n"
+	for _, c := range []struct{ text, want string }{
+		{obj + "\n stray\n", obj},
+		{obj + "\n+\n", obj},
+		{obj + "\n  # c\n", obj},
+		{obj + "# c\n stray\n", obj},
+		{obj + "EOF\n\tstray\n", obj},
+		{"aut-num: AS1\r\nremarks: a\r\n b\r\n+\r\nsource: RIPE\r\n\r\n  # c\r\n", "aut-num: AS1\r\nremarks: a\r\n b\r\n+\r\nsource: RIPE\r\n"},
+		{"aut-num: AS1\n\n stray\nsource: RIPE\n\n stray\n", "aut-num: AS1\n\n stray\nsource: RIPE\n"},
+		{"aut-num: AS1\nremarks: a\n b\n\tc\n+ d\n", "aut-num: AS1\nremarks: a\n b\n\tc\n+ d\n"},
+	} {
+		o, _ := rpsl.ParseObject(c.text)
+		if got := resolve.ObjectText(o); got != c.want {
+			t.Errorf("ObjectText(%q) = %q, want %q", c.text, got, c.want)
+		}
+	}
+	// In a dump stream the last object owns the dump's closing lines.
+	var got []string
+	for o := range rpsl.Parse(strings.NewReader("as-set: AS-X\nsource: RIPE\n\n" + obj + "\n  # closing\n")) {
+		got = append(got, resolve.ObjectText(o))
+	}
+	if want := []string{"as-set: AS-X\nsource: RIPE\n", obj}; !slices.Equal(got, want) {
+		t.Errorf("stream: %q, want %q", got, want)
+	}
+}
