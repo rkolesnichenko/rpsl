@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/rkolesnichenko/rpsl/resolve/internal/irrtest"
+	"github.com/rkolesnichenko/rpsl/resolve/internal/rpsldtest"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/rpslq"
+	"github.com/rkolesnichenko/rpsl/resolve/irrdq"
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
@@ -71,7 +73,8 @@ func TestRpslqServerSideMatchesBgpq4(t *testing.T) {
 	for seed := uint64(0); seed < 20; seed++ {
 		r := rand.New(rand.NewPCG(seed, 13))
 		m := randomModel(r, true)
-		db := irrtest.New(m.texts(r)...).WithSources("RIPE", "RADB")
+		texts := m.texts(r)
+		db := irrtest.New(texts...).WithSources("RIPE", "RADB")
 		addr := db.IRRd(t)
 		var tops []string
 		for name := range newOracle(m).sets {
@@ -102,7 +105,48 @@ func TestRpslqServerSideMatchesBgpq4(t *testing.T) {
 		if !used {
 			t.Fatalf("seed %d: no \"!a\" query was sent", seed)
 		}
+
+		// rpsld over the same objects: bgpq4 and rpslq --server-expand (its
+		// "!a"), and rpslq expanding itself, write against it what they write
+		// against irrtest. rpsld holds one object per primary key, as a
+		// registry does, so both servers are given the last of each.
+		lt := lastOfEach(texts)
+		ref := irrtest.New(lt...).WithSources("RIPE", "RADB").IRRd(t)
+		served := rpsldtest.Serve(t, rpsldtest.Snapshot(t, lt, irrdq.SnapshotOptions{}, "RIPE", "RADB"))
+		for _, top := range tops {
+			for _, format := range rpslqFormats {
+				for _, fam := range []string{"-4", "-6"} {
+					args := append(append([]string{fam}, format...), top)
+					on := func(addr string, extra ...string) []string {
+						return append(append([]string{"-h", addr, "-S", modelSources}, extra...), args...)
+					}
+					want := runBgpq4Text(t, on(ref))
+					if got := runBgpq4Text(t, on(served)); got != want {
+						t.Fatalf("seed %d: bgpq4 %v against rpsld differs from irrtest:\nrpsld:\n%s\nirrtest:\n%s\nobjects:\n%s",
+							seed, args, got, want, strings.Join(lt, "\n"))
+					}
+					if got := runRpslqText(t, on(served, "--server-expand")); got != want {
+						t.Fatalf("seed %d: rpslq --server-expand %v against rpsld differs from bgpq4 against irrtest:\nrpsld:\n%s\nirrtest:\n%s\nobjects:\n%s",
+							seed, args, got, want, strings.Join(lt, "\n"))
+					}
+					if got, want := runRpslqText(t, on(served)), runRpslqText(t, on(ref)); got != want {
+						t.Fatalf("seed %d: rpslq %v against rpsld differs from irrtest:\nrpsld:\n%s\nirrtest:\n%s\nobjects:\n%s",
+							seed, args, got, want, strings.Join(lt, "\n"))
+					}
+				}
+			}
+		}
 	}
+}
+
+// runRpslqText runs rpslq in process and returns what it writes to stdout.
+func runRpslqText(t *testing.T, args []string) string {
+	t.Helper()
+	var out, errs bytes.Buffer
+	if code := rpslq.Run(context.Background(), args, &out, &errs); code != 0 {
+		t.Fatalf("rpslq %s: exit %d: %s", strings.Join(args, " "), code, errs.String())
+	}
+	return out.String()
 }
 
 // runBgpq4Text runs bgpq4 and returns what it writes to stdout.

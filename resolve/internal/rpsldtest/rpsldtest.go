@@ -16,13 +16,17 @@ import (
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/irrdq"
 	"github.com/rkolesnichenko/rpsl/resolve/irrdserver"
+	"github.com/rkolesnichenko/rpsl/resolve/rpki"
 )
 
 // Snapshot builds what rpsld serves for texts: a registry per source, in
 // the order given, each from a Corpus (KeepPolicy, KeepRouteText) of the
 // objects whose source: is that registry; objects of other sources are
-// dropped. Serial 0. It calls t.Fatal, so only the test's own goroutine may
-// call it.
+// dropped. Serial 0. With opts.VRPs set, a last registry rpki.PseudoSource
+// holds IRRd's pseudo route objects for them. With opts.Default nil, the
+// default sources are the ones given, so the pseudo registry is selected
+// only by a client that asks for it. It calls t.Fatal, so only the test's
+// own goroutine may call it.
 func Snapshot(t testing.TB, texts []string, opts irrdq.SnapshotOptions, sources ...string) *irrdq.Snapshot {
 	t.Helper()
 	corpora := map[string]*resolve.Corpus{}
@@ -50,6 +54,24 @@ func Snapshot(t testing.TB, texts []string, opts irrdq.SnapshotOptions, sources 
 			t.Fatal(err)
 		}
 		regs = append(regs, r)
+	}
+	if opts.VRPs != nil {
+		var pseudo strings.Builder
+		if err := opts.VRPs.WriteRPSL(&pseudo); err != nil {
+			t.Fatal(err)
+		}
+		l := &resolve.DumpLoader{KeepPolicy: true, KeepRouteText: true}
+		if err := l.Read(strings.NewReader(pseudo.String())); err != nil {
+			t.Fatal(err)
+		}
+		r, err := irrdq.NewRegistry(rpki.PseudoSource, 0, l.Corpus())
+		if err != nil {
+			t.Fatal(err)
+		}
+		regs = append(regs, r)
+	}
+	if opts.Default == nil {
+		opts.Default = sources
 	}
 	snap, err := irrdq.NewSnapshot(regs, opts)
 	if err != nil {

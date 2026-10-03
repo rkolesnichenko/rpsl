@@ -16,6 +16,8 @@ import (
 
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/irrtest"
+	"github.com/rkolesnichenko/rpsl/resolve/internal/rpsldtest"
+	"github.com/rkolesnichenko/rpsl/resolve/irrdq"
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
@@ -171,28 +173,39 @@ func TestBgpq4Differential(t *testing.T) {
 		r := rand.New(rand.NewPCG(seed, 7))
 		m := randomModel(r, true)
 		texts := m.texts(r)
-		addr := irrtest.New(texts...).WithSources("RIPE", "RADB").IRRd(t)
-		src := resolve.NewMemSource(decodeAll(t, texts), "RIPE", "RADB")
+		// rpsld holds one object per primary key, as a registry does, so it
+		// serves the last of each and the engine it is held to reads the same.
+		lt := lastOfEach(texts)
+		servers := []struct {
+			name, addr string
+			texts      []string
+		}{
+			{"irrtest", irrtest.New(texts...).WithSources("RIPE", "RADB").IRRd(t), texts},
+			{"rpsld", rpsldtest.Serve(t, rpsldtest.Snapshot(t, lt, irrdq.SnapshotOptions{}, "RIPE", "RADB")), lt},
+		}
 		var tops []string
 		for name := range newOracle(m).sets {
 			tops = append(tops, name)
 		}
 		sort.Strings(tops)
-		for _, top := range tops {
-			asns, v4, v6 := engineResults(t, src, top)
-			fail := func(what string, ours, theirs []string) {
-				t.Fatalf("seed %d %s %s:\nengine %v\nbgpq4  %v\nobjects:\n%s", seed, top, what, ours, theirs, strings.Join(texts, "\n"))
-			}
-			if setClass(top) == types.ClassAsSet {
-				if b := bgpq4ASNs(t, addr, modelSources, top); !slices.Equal(asns, b) {
-					fail("AS numbers", asns, b)
+		for _, sv := range servers {
+			src := resolve.NewMemSource(decodeAll(t, sv.texts), "RIPE", "RADB")
+			for _, top := range tops {
+				asns, v4, v6 := engineResults(t, src, top)
+				fail := func(what string, ours, theirs []string) {
+					t.Fatalf("seed %d, bgpq4 against %s, %s %s:\nengine %v\nbgpq4  %v\nobjects:\n%s", seed, sv.name, top, what, ours, theirs, strings.Join(sv.texts, "\n"))
 				}
-			}
-			if b := bgpq4Prefixes(t, addr, modelSources, top, false); !slices.Equal(v4, b) {
-				fail("IPv4 prefixes", v4, b)
-			}
-			if b := bgpq4Prefixes(t, addr, modelSources, top, true); !slices.Equal(v6, b) {
-				fail("IPv6 prefixes", v6, b)
+				if setClass(top) == types.ClassAsSet {
+					if b := bgpq4ASNs(t, sv.addr, modelSources, top); !slices.Equal(asns, b) {
+						fail("AS numbers", asns, b)
+					}
+				}
+				if b := bgpq4Prefixes(t, sv.addr, modelSources, top, false); !slices.Equal(v4, b) {
+					fail("IPv4 prefixes", v4, b)
+				}
+				if b := bgpq4Prefixes(t, sv.addr, modelSources, top, true); !slices.Equal(v6, b) {
+					fail("IPv6 prefixes", v6, b)
+				}
 			}
 		}
 	}

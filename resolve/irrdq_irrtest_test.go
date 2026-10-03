@@ -36,6 +36,15 @@ func sourceOf(o *ast.Object) string {
 // irrtest keeps every copy; the random model can draw a route or aut-num
 // twice in one source, so both are given the IRR a registry could hold.
 func lastOfEach(texts []string) []string {
+	var out []string
+	for _, i := range lastOfEachIndex(texts) {
+		out = append(out, texts[i])
+	}
+	return out
+}
+
+// lastOfEachIndex is the indexes of the texts lastOfEach keeps, in order.
+func lastOfEachIndex(texts []string) []int {
 	key := func(text string) string {
 		o, _ := rpsl.ParseObject(text)
 		obj, _ := object.Decode(o)
@@ -62,10 +71,10 @@ func lastOfEach(texts []string) []string {
 		keys[i] = key(text)
 		last[keys[i]] = i
 	}
-	var out []string
-	for i, text := range texts {
+	var out []int
+	for i := range texts {
 		if last[keys[i]] == i {
-			out = append(out, text)
+			out = append(out, i)
 		}
 	}
 	return out

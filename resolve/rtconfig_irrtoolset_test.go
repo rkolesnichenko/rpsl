@@ -26,7 +26,9 @@ import (
 	"github.com/rkolesnichenko/rpsl/resolve/internal/irrtest"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/routemodel"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/rpslconf"
+	"github.com/rkolesnichenko/rpsl/resolve/internal/rpsldtest"
 	"github.com/rkolesnichenko/rpsl/resolve/irrd"
+	"github.com/rkolesnichenko/rpsl/resolve/irrdq"
 	"github.com/rkolesnichenko/rpsl/resolve/peval"
 	"github.com/rkolesnichenko/rpsl/resolve/rtconfig"
 	"github.com/rkolesnichenko/rpsl/types"
@@ -428,7 +430,11 @@ func TestRtconfigMatches(t *testing.T) {
 		g.v4only = true
 		export := r.IntN(2) == 0
 		pol := rtconfigPolicy(r, g, export)
-		addr := irrtest.New(append(m.texts(r), pol)...).WithSources("RIPE", "RADB").WithLegacyClasses().IRRd(t)
+		texts := append(m.texts(r), pol)
+		addr := irrtest.New(texts...).WithSources("RIPE", "RADB").WithLegacyClasses().IRRd(t)
+		// rpsld over the same objects, which answers "!man" always: rtconfig
+		// must write against it what it writes against irrtest.
+		served := rpsldtest.Serve(t, rpsldtest.Snapshot(t, texts, irrdq.SnapshotOptions{}, "RIPE", "RADB"))
 		cmd := "import"
 		if export {
 			cmd = "export"
@@ -466,6 +472,17 @@ func TestRtconfigMatches(t *testing.T) {
 			theirs, err := runRtconfig(t, bin, addr, "RIPE,RADB", rtconfigArgs(v, true), tmpl)
 			if err != nil {
 				t.Fatalf("%s: rtconfig: %v\n%s", label, err, theirs)
+			}
+			fromRpsld, err := runRtconfig(t, bin, served, "RIPE,RADB", rtconfigArgs(v, true), tmpl)
+			if err != nil {
+				t.Fatalf("%s: rtconfig against rpsld: %v\n%s", label, err, fromRpsld)
+			}
+			switch {
+			case fromRpsld == theirs:
+			case v == "ciscoxr" && withoutCommSets(fromRpsld) == withoutCommSets(theirs):
+				t.Logf("%s: rtconfig against rpsld and irrtest differ in community-sets only (D18)", label)
+			default:
+				t.Fatalf("%s: rtconfig against rpsld differs from irrtest:\n%s\npolicy:\n%s", label, firstDiff(theirs, fromRpsld), pol)
 			}
 			ours, code, errOut := runRpslconf(addr, "RIPE,RADB", tmpl, "-config", v)
 			if code != 0 {

@@ -16,7 +16,9 @@ import (
 
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/irrtest"
+	"github.com/rkolesnichenko/rpsl/resolve/internal/rpsldtest"
 	"github.com/rkolesnichenko/rpsl/resolve/irrd"
+	"github.com/rkolesnichenko/rpsl/resolve/irrdq"
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
@@ -54,7 +56,9 @@ func TestPevalMatchesIRRToolSet(t *testing.T) {
 		texts := m.texts(r)
 		db := irrtest.New(texts...).WithSources("RIPE", "RADB")
 		addr := db.IRRd(t)
-		host, port, _ := net.SplitHostPort(addr)
+		// rpsld over the same objects: peval must write against it what it
+		// writes against irrtest.
+		served := rpsldtest.Serve(t, rpsldtest.Snapshot(t, texts, irrdq.SnapshotOptions{}, "RIPE", "RADB"))
 		ir := &irrd.Source{Addr: addr, Sources: []string{"RIPE", "RADB"}, Timeout: 5 * time.Second}
 		e := &resolve.Expander{Src: ir, AFI: types.AFIv4}
 		for i := 0; i < 10; i++ {
@@ -81,36 +85,46 @@ func TestPevalMatchesIRRToolSet(t *testing.T) {
 				}
 			}
 			slices.Sort(ours)
-			// A per-invocation deadline guards against a peval shape we have
-			// not seen: peval's default (non-compressed; the Homebrew build
-			// ignores -compressed) mode enumerates every concrete prefix, and
-			// a shape that reads as a wide or unbounded range can run for a
-			// very long time rather than erroring (see D2 above). 10s is
-			// generous next to peval's usual 7-40ms (spec §3).
-			cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			cmd := exec.CommandContext(cctx, bin)
-			cmd.Env = append(os.Environ(), "IRR_HOST="+host, "IRR_PORT="+port, "IRR_SOURCES=RIPE,RADB")
-			cmd.Stdin = strings.NewReader(text + "\n")
-			var out bytes.Buffer
-			cmd.Stdout, cmd.Stderr = &out, &out
-			err = cmd.Run()
-			cancel()
-			if err != nil {
-				raw := out.String()
-				if len(raw) > 2000 {
-					raw = raw[:2000] + "…"
-				}
-				t.Fatalf("seed %d: peval %s: %v\n%s", seed, text, err, raw)
-			}
-			theirs, err := pevalPrefixes(out.String(), text)
+			out := runPeval(t, bin, addr, text, seed)
+			theirs, err := pevalPrefixes(out, text)
 			if err != nil {
 				t.Errorf("seed %d: %s: %v", seed, text, err)
 			} else if !slices.Equal(ours, theirs) {
-				t.Errorf("seed %d: %s:\n  ours  %v\n  peval %v\n  raw   %s", seed, text, ours, theirs, strings.TrimSpace(out.String()))
+				t.Errorf("seed %d: %s:\n  ours  %v\n  peval %v\n  raw   %s", seed, text, ours, theirs, strings.TrimSpace(out))
+			}
+			if got := runPeval(t, bin, served, text, seed); got != out {
+				t.Errorf("seed %d: %s: peval against rpsld differs from irrtest:\n  rpsld   %s\n  irrtest %s\nobjects:\n%s",
+					seed, text, strings.TrimSpace(got), strings.TrimSpace(out), strings.Join(texts, "\n"))
 			}
 		}
 		ir.Close()
 	}
+}
+
+// runPeval runs peval on filter against the server at addr and returns all it
+// writes. A per-invocation deadline guards against a peval shape we have not
+// seen: peval's default (non-compressed; the Homebrew build ignores
+// -compressed) mode enumerates every concrete prefix, and a shape that reads
+// as a wide or unbounded range can run for a very long time rather than
+// erroring (D2). 10s is generous next to peval's usual 7-40ms (spec §3).
+func runPeval(t *testing.T, bin, addr, filter string, seed uint64) string {
+	t.Helper()
+	host, port, _ := net.SplitHostPort(addr)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin)
+	cmd.Env = append(os.Environ(), "IRR_HOST="+host, "IRR_PORT="+port, "IRR_SOURCES=RIPE,RADB")
+	cmd.Stdin = strings.NewReader(filter + "\n")
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Run(); err != nil {
+		raw := out.String()
+		if len(raw) > 2000 {
+			raw = raw[:2000] + "…"
+		}
+		t.Fatalf("seed %d: peval %s against %s: %v\n%s", seed, filter, addr, err, raw)
+	}
+	return out.String()
 }
 
 // pevalFilter draws a filter from what peval evaluates correctly.

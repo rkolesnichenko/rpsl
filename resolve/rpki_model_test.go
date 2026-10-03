@@ -15,8 +15,10 @@ import (
 
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/irrtest"
+	"github.com/rkolesnichenko/rpsl/resolve/internal/rpsldtest"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/rpslq"
 	"github.com/rkolesnichenko/rpsl/resolve/irrd"
+	"github.com/rkolesnichenko/rpsl/resolve/irrdq"
 	"github.com/rkolesnichenko/rpsl/resolve/rpki"
 	"github.com/rkolesnichenko/rpsl/resolve/whois"
 	"github.com/rkolesnichenko/rpsl/types"
@@ -152,7 +154,7 @@ func TestModelRPKIBackends(t *testing.T) {
 	for seed := uint64(0); seed < 150; seed++ {
 		r := rand.New(rand.NewPCG(seed, 5))
 		m := randomModel(r, false)
-		texts := m.texts(r)
+		texts, idx := m.textsOf(r)
 		roas := randomROAs(r, m)
 		var iroas []irrtest.ROA
 		for _, roa := range roas {
@@ -162,6 +164,11 @@ func TestModelRPKIBackends(t *testing.T) {
 		plain := irrtest.New(texts...).WithSources("RIPE", "RADB")
 		o := newOracle(m)
 		label := fmt.Sprintf("seed %d, ROAs %v", seed, roas)
+		v := vrpsOf(t, roas)
+		// rpsld holds one object per primary key, as a registry does.
+		lm, lt := m.lastOfEach(texts, idx)
+		lo := newOracle(lm)
+		rs := rpsldtest.Serve(t, rpsldtest.Snapshot(t, lt, irrdq.SnapshotOptions{VRPs: v}, "RIPE", "RADB"))
 		for _, srcs := range [][]string{{"RIPE", "RADB", "RPKI"}, {"RIPE", "RADB"}} {
 			oo := o.withRPKI(roas, len(srcs) == 3)
 			ir := &irrd.Source{Addr: aware.IRRd(t), Sources: srcs, Pipeline: 4, SrcMembers: true, Timeout: 5 * time.Second}
@@ -169,8 +176,13 @@ func TestModelRPKIBackends(t *testing.T) {
 			ir.Close()
 			wh := &whois.Source{Addr: aware.Whois(t), Sources: srcs, Timeout: 5 * time.Second}
 			checkModel(t, fmt.Sprintf("whois %s %v", label, srcs), oo, texts, wh, false)
+			loo := lo.withRPKI(roas, len(srcs) == 3)
+			rp := &irrd.Source{Addr: rs, Sources: srcs, Pipeline: 4, SrcMembers: true, Timeout: 5 * time.Second}
+			checkModel(t, fmt.Sprintf("rpsld %s %v", label, srcs), loo, lt, rp, false)
+			rp.Close()
+			rw := &whois.Source{Addr: rs, Sources: srcs, Timeout: 5 * time.Second}
+			checkModel(t, fmt.Sprintf("rpsld whois %s %v", label, srcs), loo, lt, rw, false)
 		}
-		v := vrpsOf(t, roas)
 		// "!i" folds a route-set's indirect route members into its answer, as
 		// prefixes Filter cannot tell from the members: the set lists.
 		folded := o.withRPKI(roas, false)
