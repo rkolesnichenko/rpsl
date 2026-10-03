@@ -19,8 +19,6 @@ import (
 // why; every other case must agree. Commands irrtest does not implement at
 // all (!r, -x, -M, text searches) are its scope, not its bugs.
 var skipped = map[string]string{
-	"session/t": "irrtest has no !t", "session/t-zero": "irrtest has no !t", "session/t-big": "irrtest has no !t",
-	"session/t-word": "irrtest has no !t", "session/t-empty": "irrtest has no !t",
 	"session/j-all":  "irrtest's serial is its object count (NAME:N:0-n); IRRd's plain load has none",
 	"session/j-ripe": "as session/j-all", "session/j-mixed": "as session/j-all", "session/j-lower": "as session/j-all",
 	"ripe/-x 192.0.2.0/24": "irrtest has no -x", "ripe/-M 192.0.2.0/24": "irrtest has no -M",

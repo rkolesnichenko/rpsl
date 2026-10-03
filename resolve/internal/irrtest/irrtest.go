@@ -12,7 +12,7 @@
 // RPKI-aware mode, "!s-*" changes nothing, only "!q" closes ("q" is a
 // RIPE-style query for the text "q"), and a command with no "!" is answered
 // as IRRd 4 answers a RIPE-style whois query sent on the IRRd port (see
-// ripeQuery). "!r", "!t", "!o", "!J" and the RIPE-style -l, -L, -M, -x, -t
+// ripeQuery). "!r", "!o", "!J" and the RIPE-style -l, -L, -M, -x, -t
 // and -g are not implemented. The Whois listener is not IRRd: it models the
 // RIPE Database's whois server.
 package irrtest
@@ -838,7 +838,15 @@ func (db *DB) irrdCommand(c net.Conn, full string, sel *[]string, persistent *bo
 		} else {
 			fmt.Fprint(c, "D\n")
 		}
-	case "t", "o", "r", "J":
+	case "t":
+		// IRRd's handle_irrd_timeout_update: 1 to 1000 seconds. irrtest
+		// keeps no idle timeout, so a valid one changes nothing.
+		if n, err := strconv.Atoi(param); err != nil || n < 1 || n > 1000 {
+			fmt.Fprintf(c, "F Invalid value for timeout: %s\n", param)
+		} else {
+			fmt.Fprint(c, "C\n")
+		}
+	case "o", "r", "J":
 		fmt.Fprintf(c, "F irrtest does not implement !%s\n", letter)
 	default:
 		if strings.EqualFold(full, "FNO-RPKI-FILTER") {
