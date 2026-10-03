@@ -616,6 +616,118 @@ func TestExpandableClassAgrees(t *testing.T) {
 	}
 }
 
+// TestCorpusKeepRouteText: with KeepRouteText a reduced route keeps its text
+// (from its first attribute line), a replacement replaces it, Delete removes
+// it, Merge carries it into a corpus that keeps text and drops it into one
+// that does not; without the flag no text is kept.
+func TestCorpusKeepRouteText(t *testing.T) {
+	text := "route: 192.0.2.0/24\norigin: AS1\ndescr: one\nsource: RIPE\n"
+	textOf := func(c *resolve.Corpus, p string, as types.ASN) (string, bool) {
+		for r := range c.Routes() {
+			if r.Prefix.String() == p && r.Origin == as {
+				return r.Text, true
+			}
+		}
+		return "", false
+	}
+
+	plain := &resolve.Corpus{}
+	plain.Put(decodeOne(t, text))
+	if got, ok := textOf(plain, "192.0.2.0/24", 1); !ok || got != "" {
+		t.Errorf("without KeepRouteText: %q, %v", got, ok)
+	}
+
+	c := &resolve.Corpus{KeepRouteText: true}
+	c.Put(decodeOne(t, "# a comment the stream attached\n"+text))
+	if got, _ := textOf(c, "192.0.2.0/24", 1); got != text {
+		t.Errorf("kept %q, want %q", got, text)
+	}
+	c.Put(decodeOne(t, strings.Replace(text, "one", "two", 1)))
+	if got, _ := textOf(c, "192.0.2.0/24", 1); !strings.Contains(got, "descr: two") {
+		t.Errorf("a replacement kept %q", got)
+	}
+	if !c.Delete("route", "192.0.2.0/24AS1", "RIPE") {
+		t.Fatal("Delete found nothing")
+	}
+	if _, ok := textOf(c, "192.0.2.0/24", 1); ok {
+		t.Error("a deleted route is still there")
+	}
+
+	src := &resolve.Corpus{KeepRouteText: true}
+	src.Put(decodeOne(t, text))
+	dst := &resolve.Corpus{KeepRouteText: true}
+	dst.Merge(src)
+	if got, _ := textOf(dst, "192.0.2.0/24", 1); got != text {
+		t.Errorf("Merge carried %q", got)
+	}
+	bare := &resolve.Corpus{}
+	bare.Merge(src)
+	if got, ok := textOf(bare, "192.0.2.0/24", 1); !ok || got != "" {
+		t.Errorf("Merge into a corpus without KeepRouteText: %q, %v", got, ok)
+	}
+}
+
+// TestCorpusRoutes: Routes yields every route and route6 the corpus holds,
+// reduced and whole (a member-of claimant), once each, with the claimant's
+// text whatever KeepRouteText says, and nothing for a route with no valid
+// prefix or origin.
+func TestCorpusRoutes(t *testing.T) {
+	c := &resolve.Corpus{}
+	for _, text := range []string{
+		"route: 192.0.2.0/24\norigin: AS1\nsource: RIPE\n",
+		"route6: 2001:db8::/32\norigin: AS1\nsource: RADB\n",
+		"route: 198.51.100.0/24\norigin: AS2\nmember-of: RS-X\nmnt-by: M\nsource: RIPE\n",
+		"route: 203.0.113.0/24\norigin: ASX\nmember-of: RS-X\nmnt-by: M\nsource: RIPE\n",
+		"as-set: AS-X\nmembers: AS1\nsource: RIPE\n",
+	} {
+		c.Put(decodeOne(t, text))
+	}
+	var got []string
+	for r := range c.Routes() {
+		got = append(got, fmt.Sprintf("%s %s %s %v", r.Prefix, r.Origin, r.Source, r.Text != ""))
+	}
+	sort.Strings(got)
+	want := []string{
+		"192.0.2.0/24 AS1 RIPE false",
+		"198.51.100.0/24 AS2 RIPE true",
+		"2001:db8::/32 AS1 RADB false",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("Routes:\n got %q\nwant %q", got, want)
+	}
+	for r := range c.Routes() {
+		if r.Origin == 2 && !strings.HasPrefix(r.Text, "route: 198.51.100.0/24\n") {
+			t.Errorf("a claimant's text: %q", r.Text)
+		}
+	}
+	// Breaking out of the loop early is allowed.
+	for range c.Routes() {
+		break
+	}
+}
+
+// TestCorpusWhole: Whole yields the sets and member-of claimants, in load
+// order, and nothing kept only as text or as a route tuple.
+func TestCorpusWhole(t *testing.T) {
+	c := &resolve.Corpus{KeepPolicy: true}
+	for _, text := range []string{
+		"as-set: AS-X\nmembers: AS1\nsource: RIPE\n",
+		"aut-num: AS1\nas-name: ONE\nmember-of: AS-X\nmnt-by: M\nsource: RIPE\n",
+		"aut-num: AS2\nas-name: TWO\nsource: RIPE\n",
+		"route: 192.0.2.0/24\norigin: AS1\nsource: RIPE\n",
+		"route-set: RS-X\nmembers: 10.0.0.0/8\nsource: RIPE\n",
+	} {
+		c.Put(decodeOne(t, text))
+	}
+	var got []string
+	for o := range c.Whole() {
+		got = append(got, o.Class())
+	}
+	if want := []string{"as-set", "aut-num", "route-set"}; !slices.Equal(got, want) {
+		t.Errorf("Whole: %q, want %q", got, want)
+	}
+}
+
 func TestDumpLoaderKeepsPolicy(t *testing.T) {
 	l := &resolve.DumpLoader{Sources: []string{"RIPE", "RADB"}, KeepPolicy: true}
 	if err := l.Read(strings.NewReader(strings.Join(policyTexts, "\n"))); err != nil {

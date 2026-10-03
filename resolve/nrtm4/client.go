@@ -82,6 +82,10 @@ type Client struct {
 	// resolve.ErrNoPolicy.
 	KeepPolicy bool
 
+	// KeepRouteText keeps each route's text (resolve.Corpus.KeepRouteText),
+	// so CopyTo into a corpus that keeps text carries it.
+	KeepRouteText bool
+
 	mu       sync.Mutex // serializes Sync
 	st       state
 	view     atomic.Pointer[view]
@@ -349,7 +353,7 @@ func (c *Client) loadSnapshot(ctx context.Context, n *notification) (*resolve.Co
 	if err := c.fileHeader(seq, "snapshot", n, n.Snapshot.Version); err != nil {
 		return nil, 0, 0, err
 	}
-	corpus := &resolve.Corpus{KeepPolicy: c.KeepPolicy}
+	corpus := &resolve.Corpus{KeepPolicy: c.KeepPolicy, KeepRouteText: c.KeepRouteText}
 	added, discarded := 0, 0
 	type report struct {
 		o  *ast.Object
