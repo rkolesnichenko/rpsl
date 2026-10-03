@@ -1,0 +1,33 @@
+# Project name rpsl-irrdoracle (run.sh passes -p). IRRD_CONFIG picks
+# irrd.yaml or irrd-rpki.yaml; IRRD_PORT the host port (default 18043).
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: irrd
+      POSTGRES_PASSWORD: irrd
+      POSTGRES_DB: irrd
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U irrd -d irrd"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+  irrd:
+    build: .
+    image: rpsl-irrdoracle:4.5.3
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    volumes:
+      - ./${IRRD_CONFIG:-irrd.yaml}:/etc/irrd/irrd.yaml:ro
+      - ./:/data:ro
+    ports:
+      - "127.0.0.1:${IRRD_PORT:-18043}:43"
+    command: ["irrd", "--foreground", "--config", "/etc/irrd/irrd.yaml"]

@@ -1,0 +1,157 @@
+mntner:         MNT-A
+descr:          allowed maintainer
+admin-c:        JD1-RIPE
+upd-to:         a@example.net
+auth:           MD5-PW # Filtered
+mnt-by:         MNT-A
+source:         RIPE
+
+mntner:         MNT-B
+descr:          not allowed maintainer
+admin-c:        JD1-RIPE
+upd-to:         b@example.net
+auth:           MD5-PW # Filtered
+mnt-by:         MNT-B
+source:         RIPE
+
+person:         John Doe
+address:        Somewhere
+phone:          +31 20 000 0000
+nic-hdl:        JD1-RIPE
+mnt-by:         MNT-A
+source:         RIPE
+
+aut-num:        AS65001
+as-name:        FIRST
+member-of:      AS-REF
+import:         from AS65002 accept AS-BAR
+export:         to AS65002 announce AS65001
+mp-import:      afi ipv6.unicast from AS65002 accept ANY
+admin-c:        JD1-RIPE
+tech-c:         JD1-RIPE
+mnt-by:         MNT-A
+source:         RIPE
+
+aut-num:        AS65002
+as-name:        SECOND
+member-of:      AS-REF
+admin-c:        JD1-RIPE
+tech-c:         JD1-RIPE
+mnt-by:         MNT-B
+source:         RIPE
+
+as-set:         AS-FOO
+descr:          the main as-set
+members:        AS65001, AS65002, AS-BAR
+members:        RS-INNER, AS-ANY, AS-MISSING
+admin-c:        JD1-RIPE
+tech-c:         JD1-RIPE
+mnt-by:         MNT-A
+source:         RIPE
+
+as-set:         AS-BAR
+members:        AS65003, AS-FOO
+admin-c:        JD1-RIPE
+tech-c:         JD1-RIPE
+mnt-by:         MNT-A
+source:         RIPE
+
+as-set:         AS-REF
+members:        AS65010
+mbrs-by-ref:    MNT-A
+admin-c:        JD1-RIPE
+tech-c:         JD1-RIPE
+mnt-by:         MNT-A
+source:         RIPE
+
+as-set:         AS-EMPTY
+admin-c:        JD1-RIPE
+tech-c:         JD1-RIPE
+mnt-by:         MNT-A
+source:         RIPE
+
+route-set:      RS-FOO
+members:        192.0.2.0/24, 198.51.100.0/24^+, 203.0.113.1
+members:        RS-INNER^25, AS65001, AS-BAR, AS65002^24
+mp-members:     2001:db8::/32, 2001:db8:ff::/48^-
+admin-c:        JD1-RIPE
+tech-c:         JD1-RIPE
+mnt-by:         MNT-A
+source:         RIPE
+
+route-set:      RS-INNER
+members:        192.0.2.128/25, 198.18.0.0/15^16-24
+mbrs-by-ref:    MNT-A
+admin-c:        JD1-RIPE
+tech-c:         JD1-RIPE
+mnt-by:         MNT-A
+source:         RIPE
+
+route:          192.0.2.0/24
+descr:          first
+origin:         AS65001
+mnt-by:         MNT-A
+source:         RIPE
+
+route:          192.0.2.0/25
+origin:         AS65001
+mnt-by:         MNT-A
+source:         RIPE
+
+route:          198.51.100.0/24
+origin:         AS65002
+mnt-by:         MNT-B
+source:         RIPE
+
+route:          203.0.113.0/24
+origin:         AS65003
+member-of:      RS-INNER
+mnt-by:         MNT-A
+source:         RIPE
+
+route:          203.0.113.128/25
+origin:         AS65003
+member-of:      RS-INNER
+mnt-by:         MNT-B
+source:         RIPE
+
+route6:         2001:db8::/32
+origin:         AS65001
+mnt-by:         MNT-A
+source:         RIPE
+
+route6:         2001:db8:1::/48
+origin:         AS65002
+mnt-by:         MNT-B
+source:         RIPE
+
+filter-set:     FLTR-FOO
+filter:         AS65001 OR {192.0.2.0/24^+}
+mp-filter:      {2001:db8::/32^+}
+admin-c:        JD1-RIPE
+tech-c:         JD1-RIPE
+mnt-by:         MNT-A
+source:         RIPE
+
+peering-set:    PRNG-FOO
+peering:        AS65002 at 192.0.2.1
+mp-peering:     AS65002 at 2001:db8::1
+admin-c:        JD1-RIPE
+tech-c:         JD1-RIPE
+mnt-by:         MNT-A
+source:         RIPE
+
+rtr-set:        RTRS-FOO
+members:        rtr1.example.net, 192.0.2.1
+admin-c:        JD1-RIPE
+tech-c:         JD1-RIPE
+mnt-by:         MNT-A
+source:         RIPE
+
+inet-rtr:       rtr1.example.net
+local-as:       AS65001
+ifaddr:         192.0.2.1 masklen 30
+admin-c:        JD1-RIPE
+tech-c:         JD1-RIPE
+mnt-by:         MNT-A
+source:         RIPE

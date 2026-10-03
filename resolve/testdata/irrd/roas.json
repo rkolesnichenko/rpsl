@@ -1,0 +1,7 @@
+{"roas": [
+  {"asn": "AS65001", "prefix": "192.0.2.0/24", "maxLength": 24, "ta": "TEST-TA"},
+  {"asn": "AS65002", "prefix": "198.51.100.0/24", "maxLength": 24, "ta": "TEST-TA"},
+  {"asn": "AS65001", "prefix": "2001:db8::/32", "maxLength": 32, "ta": "TEST-TA"},
+  {"asn": "AS0", "prefix": "100.64.0.0/24", "maxLength": 24, "ta": "TEST-TA"},
+  {"asn": "AS65555", "prefix": "203.0.113.0/24", "maxLength": 24, "ta": "TEST-TA"}
+]}

@@ -1,0 +1,633 @@
+=== session/v exact
+>>> "!v\n"
+<<< "A22\nIRRd -- version 4.5.3\nC\n"
+=== session/pipeline words
+>>> "!!\n!v\n!gAS65001\n!6AS65001\n!iAS-FOO\n!q\n"
+<<< "A22\nIRRd -- version 4.5.3\nC\nA26\n192.0.2.0/24 192.0.2.0/25\nC\nA14\n2001:db8::/32\nC\nA50\nAS-ANY AS-BAR AS-MISSING AS65001 AS65002 RS-INNER\nC\n"
+=== session/not-persistent exact
+>>> "!v\n!gAS65001\n"
+<<< "A22\nIRRd -- version 4.5.3\nC\n"
+=== session/s-ripe exact
+>>> "!sRIPE\n"
+<<< "C\n"
+=== session/s-ripe-lower exact
+>>> "!sripe\n"
+<<< "C\n"
+=== session/s-lc exact
+>>> "!s-lc\n"
+<<< "A10\nRIPE,RADB\nC\n"
+=== session/s-star exact
+>>> "!s-*\n"
+<<< "C\n"
+=== session/s-nosuch exact
+>>> "!sNOSUCH\n"
+<<< "F One or more selected sources are unavailable.\n"
+=== session/s-ripe-nosuch exact
+>>> "!sRIPE,NOSUCH\n"
+<<< "F One or more selected sources are unavailable.\n"
+=== session/s-empty exact
+>>> "!s\n"
+<<< "F Missing parameter for s query\n"
+=== session/s-session exact
+>>> "!!\n!sRIPE\n!s-lc\n!iAS-FOO\n!q\n"
+<<< "C\nA5\nRIPE\nC\nA50\nAS-ANY AS-BAR AS-MISSING AS65001 AS65002 RS-INNER\nC\n"
+=== session/s-radb exact
+>>> "!!\n!sRADB\n!s-lc\n!iAS-FOO\n!iAS-FOO,1\n!aAS-FOO\n!q\n"
+<<< "C\nA5\nRADB\nC\nA8\nAS65099\nC\nA8\nAS65099\nC\nD\n"
+=== session/s-star-keeps exact
+>>> "!!\n!sRIPE\n!s-*\n!s-lc\n!q\n"
+<<< "C\nC\nA5\nRIPE\nC\n"
+=== session/s-refused-keeps exact
+>>> "!!\n!sRIPE\n!sNOSUCH\n!s-lc\n!q\n"
+<<< "C\nF One or more selected sources are unavailable.\nA5\nRIPE\nC\n"
+=== session/s-order exact
+>>> "!!\n!sradb,ripe\n!s-lc\n!iAS-FOO\n!q\n"
+<<< "C\nA10\nRADB,RIPE\nC\nA8\nAS65099\nC\n"
+=== session/j-all exact
+>>> "!j-*\n"
+<<< "A18\nRIPE:N:-\nRADB:N:-\nC\n"
+=== session/j-ripe exact
+>>> "!jRIPE\n"
+<<< "A9\nRIPE:N:-\nC\n"
+=== session/j-nosuch exact
+>>> "!jNOSUCH\n"
+<<< "A26\nNOSUCH:X:Database unknown\nC\n"
+=== session/j-mixed exact
+>>> "!jRIPE,NOSUCH\n"
+<<< "A35\nRIPE:N:-\nNOSUCH:X:Database unknown\nC\n"
+=== session/j-lower exact
+>>> "!jripe\n"
+<<< "A9\nRIPE:N:-\nC\n"
+=== session/j-empty exact
+>>> "!j\n"
+<<< "F Missing parameter for j query\n"
+=== session/j-rpki exact
+>>> "!jRPKI\n"
+<<< "A24\nRPKI:X:Database unknown\nC\n"
+=== session/n-space exact
+>>> "!n test\n"
+<<< "C\n"
+=== session/n exact
+>>> "!ntest\n"
+<<< "C\n"
+=== session/n-empty exact
+>>> "!n\n"
+<<< "F Missing parameter for n query\n"
+=== session/t exact
+>>> "!t600\n"
+<<< "C\n"
+=== session/t-zero exact
+>>> "!t0\n"
+<<< "F Invalid value for timeout: 0\n"
+=== session/t-big exact
+>>> "!t1001\n"
+<<< "F Invalid value for timeout: 1001\n"
+=== session/t-word exact
+>>> "!tfoo\n"
+<<< "F Invalid value for timeout: foo\n"
+=== session/t-empty exact
+>>> "!t\n"
+<<< "F Missing parameter for t query\n"
+=== session/unknown exact
+>>> "!x\n"
+<<< "F Unrecognised command: x\n"
+=== session/unknown-upper exact
+>>> "!X\n"
+<<< "F Unrecognised command: X\n"
+=== session/bang exact
+>>> "!\n"
+<<< "F Missing IRRD command\n"
+=== session/q exact
+>>> "!q\n"
+<<< ""
+=== session/q-upper exact
+>>> "!Q\n"
+<<< ""
+=== session/q-bare exact
+>>> "q\n"
+<<< "%  No entries found for the selected source(s).\n\n\n"
+=== session/blank-first exact
+>>> "\n!v\n"
+<<< "A22\nIRRd -- version 4.5.3\nC\n"
+=== session/crlf exact
+>>> "\r\n!v\r\n"
+<<< "A22\nIRRd -- version 4.5.3\nC\n"
+=== session/spaces-first exact
+>>> "   \n!v\n"
+<<< "A22\nIRRd -- version 4.5.3\nC\n"
+=== session/blank-in-session exact
+>>> "!!\n\n\n!v\n!q\n"
+<<< "A22\nIRRd -- version 4.5.3\nC\n"
+=== session/nul exact
+>>> "!iAS-FOO\x00\n"
+<<< "F Queries may not contain null bytes\n"
+=== i/AS-FOO exact
+>>> "!iAS-FOO\n"
+<<< "A50\nAS-ANY AS-BAR AS-MISSING AS65001 AS65002 RS-INNER\nC\n"
+=== i1/AS-FOO exact
+>>> "!iAS-FOO,1\n"
+<<< "A24\nAS65001 AS65002 AS65003\nC\n"
+=== i/as-foo exact
+>>> "!ias-foo\n"
+<<< "A50\nAS-ANY AS-BAR AS-MISSING AS65001 AS65002 RS-INNER\nC\n"
+=== i1/as-foo exact
+>>> "!ias-foo,1\n"
+<<< "A24\nAS65001 AS65002 AS65003\nC\n"
+=== i/AS-BAR exact
+>>> "!iAS-BAR\n"
+<<< "A15\nAS-FOO AS65003\nC\n"
+=== i1/AS-BAR exact
+>>> "!iAS-BAR,1\n"
+<<< "A24\nAS65001 AS65002 AS65003\nC\n"
+=== i/RS-FOO exact
+>>> "!iRS-FOO\n"
+<<< "A117\n192.0.2.0/24 198.51.100.0/24^+ 2001:db8::/32 2001:db8:ff::/48^- 203.0.113.1/32 AS-BAR AS65001 AS65002^24 RS-INNER^25\nC\n"
+=== i1/RS-FOO exact
+>>> "!iRS-FOO,1\n"
+<<< "A191\n192.0.2.0/24 192.0.2.0/25 192.0.2.128/25 198.18.0.0/15^16-24 198.51.100.0/24 198.51.100.0/24^+ 2001:db8:1::/48 2001:db8::/32 2001:db8:ff::/48^- 203.0.113.0/24 203.0.113.1/32 203.0.113.128/25\nC\n"
+=== i/RS-INNER exact
+>>> "!iRS-INNER\n"
+<<< "A50\n192.0.2.128/25 198.18.0.0/15^16-24 203.0.113.0/24\nC\n"
+=== i1/RS-INNER exact
+>>> "!iRS-INNER,1\n"
+<<< "A50\n192.0.2.128/25 198.18.0.0/15^16-24 203.0.113.0/24\nC\n"
+=== i/AS-REF exact
+>>> "!iAS-REF\n"
+<<< "A16\nAS65001 AS65010\nC\n"
+=== i1/AS-REF exact
+>>> "!iAS-REF,1\n"
+<<< "A16\nAS65001 AS65010\nC\n"
+=== i/AS-EMPTY exact
+>>> "!iAS-EMPTY\n"
+<<< "D\n"
+=== i1/AS-EMPTY exact
+>>> "!iAS-EMPTY,1\n"
+<<< "D\n"
+=== i/AS-MISSING exact
+>>> "!iAS-MISSING\n"
+<<< "D\n"
+=== i1/AS-MISSING exact
+>>> "!iAS-MISSING,1\n"
+<<< "D\n"
+=== i/AS-ANY exact
+>>> "!iAS-ANY\n"
+<<< "D\n"
+=== i1/AS-ANY exact
+>>> "!iAS-ANY,1\n"
+<<< "D\n"
+=== i/RS-ANY exact
+>>> "!iRS-ANY\n"
+<<< "D\n"
+=== i1/RS-ANY exact
+>>> "!iRS-ANY,1\n"
+<<< "D\n"
+=== i/AS-RADBONLY exact
+>>> "!iAS-RADBONLY\n"
+<<< "A15\nAS-FOO AS65005\nC\n"
+=== i1/AS-RADBONLY exact
+>>> "!iAS-RADBONLY,1\n"
+<<< "A32\nAS65001 AS65002 AS65003 AS65005\nC\n"
+=== i/FLTR-FOO exact
+>>> "!iFLTR-FOO\n"
+<<< "D\n"
+=== i1/FLTR-FOO exact
+>>> "!iFLTR-FOO,1\n"
+<<< "D\n"
+=== i/RTRS-FOO exact
+>>> "!iRTRS-FOO\n"
+<<< "D\n"
+=== i1/RTRS-FOO exact
+>>> "!iRTRS-FOO,1\n"
+<<< "D\n"
+=== i/PRNG-FOO exact
+>>> "!iPRNG-FOO\n"
+<<< "D\n"
+=== i1/PRNG-FOO exact
+>>> "!iPRNG-FOO,1\n"
+<<< "D\n"
+=== i/AS65001 exact
+>>> "!iAS65001\n"
+<<< "D\n"
+=== i1/AS65001 exact
+>>> "!iAS65001,1\n"
+<<< "D\n"
+=== i/AS-NORM exact
+>>> "!iAS-NORM\n"
+<<< "A48\nAS65001 AS65002 AS65003 AS65004 AS65005 AS65006\nC\n"
+=== i1/AS-NORM exact
+>>> "!iAS-NORM,1\n"
+<<< "A48\nAS65001 AS65002 AS65003 AS65004 AS65005 AS65006\nC\n"
+=== i/RS-NOLEN exact
+>>> "!iRS-NOLEN\n"
+<<< "A36\n206.197.238.0/32 206.197.238.0/32^+\nC\n"
+=== i1/RS-NOLEN exact
+>>> "!iRS-NOLEN,1\n"
+<<< "A36\n206.197.238.0/32 206.197.238.0/32^+\nC\n"
+=== i/empty exact
+>>> "!i\n"
+<<< "F Missing parameter for i query\n"
+=== i1/depth-2 exact
+>>> "!iAS-FOO,2\n"
+<<< "D\n"
+=== i1/space exact
+>>> "!iAS-FOO, 1\n"
+<<< "D\n"
+=== a/aAS-FOO words
+>>> "!aAS-FOO\n"
+<<< "A104\n192.0.2.0/24 203.0.113.0/24 2001:db8::/32 203.0.113.128/25 192.0.2.0/25 2001:db8:1::/48 198.51.100.0/24\nC\n"
+=== a/a4AS-FOO words
+>>> "!a4AS-FOO\n"
+<<< "A74\n192.0.2.0/24 203.0.113.0/24 203.0.113.128/25 192.0.2.0/25 198.51.100.0/24\nC\n"
+=== a/a6AS-FOO words
+>>> "!a6AS-FOO\n"
+<<< "A30\n2001:db8:1::/48 2001:db8::/32\nC\n"
+=== a/aAS-BAR words
+>>> "!aAS-BAR\n"
+<<< "A104\n192.0.2.0/24 203.0.113.0/24 2001:db8::/32 203.0.113.128/25 192.0.2.0/25 2001:db8:1::/48 198.51.100.0/24\nC\n"
+=== a/aRS-FOO words
+>>> "!aRS-FOO\n"
+<<< "D\n"
+=== a/a4RS-FOO words
+>>> "!a4RS-FOO\n"
+<<< "D\n"
+=== a/aAS-MISSING words
+>>> "!aAS-MISSING\n"
+<<< "D\n"
+=== a/aAS-EMPTY words
+>>> "!aAS-EMPTY\n"
+<<< "D\n"
+=== a/aAS-RADBONLY words
+>>> "!aAS-RADBONLY\n"
+<<< "A134\n192.0.2.0/24 203.0.113.0/24 100.64.0.0/24 2001:db8::/32 203.0.113.128/25 192.0.2.0/25 2001:db8:1::/48 2001:db8:5::/48 198.51.100.0/24\nC\n"
+=== a/aAS-ANY words
+>>> "!aAS-ANY\n"
+<<< "D\n"
+=== a/a words
+>>> "!a\n"
+<<< "F Missing required set name for A query\n"
+=== a/a4 words
+>>> "!a4\n"
+<<< "F Missing required set name for A query\n"
+=== a/a6 words
+>>> "!a6\n"
+<<< "F Missing required set name for A query\n"
+=== a/aas-foo words
+>>> "!aas-foo\n"
+<<< "A104\n192.0.2.0/24 203.0.113.0/24 2001:db8::/32 203.0.113.128/25 2001:db8:1::/48 198.51.100.0/24 192.0.2.0/25\nC\n"
+=== a/aAS-REF words
+>>> "!aAS-REF\n"
+<<< "A40\n2001:db8::/32 192.0.2.0/24 192.0.2.0/25\nC\n"
+=== g/gAS65001 words
+>>> "!gAS65001\n"
+<<< "A26\n192.0.2.0/24 192.0.2.0/25\nC\n"
+=== g/gAS65002 words
+>>> "!gAS65002\n"
+<<< "A16\n198.51.100.0/24\nC\n"
+=== g/gAS65003 words
+>>> "!gAS65003\n"
+<<< "A32\n203.0.113.128/25 203.0.113.0/24\nC\n"
+=== g/gAS65005 words
+>>> "!gAS65005\n"
+<<< "A14\n100.64.0.0/24\nC\n"
+=== g/gAS65099 words
+>>> "!gAS65099\n"
+<<< "D\n"
+=== g/gas65001 words
+>>> "!gas65001\n"
+<<< "A26\n192.0.2.0/24 192.0.2.0/25\nC\n"
+=== g/g65001 words
+>>> "!g65001\n"
+<<< "F Invalid AS number 65001: must start with \"AS\"\n"
+=== g/gAS1.10 words
+>>> "!gAS1.10\n"
+<<< "F Invalid AS number AS1.10: number part is not numeric\n"
+=== g/gFOO words
+>>> "!gFOO\n"
+<<< "F Invalid AS number FOO: must start with \"AS\"\n"
+=== g/gAS words
+>>> "!gAS\n"
+<<< "F Invalid AS number AS: number part is not numeric\n"
+=== g/g words
+>>> "!g\n"
+<<< "F Missing parameter for g query\n"
+=== g/6AS65001 words
+>>> "!6AS65001\n"
+<<< "A14\n2001:db8::/32\nC\n"
+=== g/6AS65002 words
+>>> "!6AS65002\n"
+<<< "A16\n2001:db8:1::/48\nC\n"
+=== g/6AS65003 words
+>>> "!6AS65003\n"
+<<< "D\n"
+=== g/6AS65099 words
+>>> "!6AS65099\n"
+<<< "D\n"
+=== g/6FOO words
+>>> "!6FOO\n"
+<<< "F Invalid AS number FOO: must start with \"AS\"\n"
+=== g/gAS4294967296 words
+>>> "!gAS4294967296\n"
+<<< "F Invalid AS number AS4294967296: valid range is 0-4294967295\n"
+=== g/gAS65007 words
+>>> "!gAS65007\n"
+<<< "A14\n64.6.160.0/19\nC\n"
+=== r/192.0.2.0/24 objects
+>>> "!r192.0.2.0/24\n"
+<<< "A312\nroute:          192.0.2.0/24\ndescr:          first\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\n\nroute:          192.0.2.0/24\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         radb\n\nroute:          192.0.2.0/24\norigin:         AS65009\nmnt-by:         MNT-A\nsource:         RADB\nC\n"
+=== r/192.0.2.0/24,o words
+>>> "!r192.0.2.0/24,o\n"
+<<< "A24\nAS65001 AS65001 AS65009\nC\n"
+=== r/192.0.2.0/24,l objects
+>>> "!r192.0.2.0/24,l\n"
+<<< "D\n"
+=== r/192.0.2.0/24,L objects
+>>> "!r192.0.2.0/24,L\n"
+<<< "A312\nroute:          192.0.2.0/24\ndescr:          first\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\n\nroute:          192.0.2.0/24\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         radb\n\nroute:          192.0.2.0/24\norigin:         AS65009\nmnt-by:         MNT-A\nsource:         RADB\nC\n"
+=== r/192.0.2.0/24,M objects
+>>> "!r192.0.2.0/24,M\n"
+<<< "A96\nroute:          192.0.2.0/25\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\nC\n"
+=== r/192.0.2.0/25 objects
+>>> "!r192.0.2.0/25\n"
+<<< "A96\nroute:          192.0.2.0/25\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\nC\n"
+=== r/192.0.2.0/25,o words
+>>> "!r192.0.2.0/25,o\n"
+<<< "A8\nAS65001\nC\n"
+=== r/192.0.2.0/25,l objects
+>>> "!r192.0.2.0/25,l\n"
+<<< "A312\nroute:          192.0.2.0/24\ndescr:          first\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\n\nroute:          192.0.2.0/24\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         radb\n\nroute:          192.0.2.0/24\norigin:         AS65009\nmnt-by:         MNT-A\nsource:         RADB\nC\n"
+=== r/192.0.2.0/25,L objects
+>>> "!r192.0.2.0/25,L\n"
+<<< "A409\nroute:          192.0.2.0/24\ndescr:          first\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\n\nroute:          192.0.2.0/24\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         radb\n\nroute:          192.0.2.0/25\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\n\nroute:          192.0.2.0/24\norigin:         AS65009\nmnt-by:         MNT-A\nsource:         RADB\nC\n"
+=== r/192.0.2.64/26 objects
+>>> "!r192.0.2.64/26\n"
+<<< "D\n"
+=== r/192.0.2.64/26,o words
+>>> "!r192.0.2.64/26,o\n"
+<<< "D\n"
+=== r/192.0.2.64/26,l objects
+>>> "!r192.0.2.64/26,l\n"
+<<< "A96\nroute:          192.0.2.0/25\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\nC\n"
+=== r/192.0.2.64/26,L objects
+>>> "!r192.0.2.64/26,L\n"
+<<< "A409\nroute:          192.0.2.0/24\ndescr:          first\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\n\nroute:          192.0.2.0/24\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         radb\n\nroute:          192.0.2.0/25\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\n\nroute:          192.0.2.0/24\norigin:         AS65009\nmnt-by:         MNT-A\nsource:         RADB\nC\n"
+=== r/10.0.0.0/8 objects
+>>> "!r10.0.0.0/8\n"
+<<< "D\n"
+=== r/10.0.0.0/8,o words
+>>> "!r10.0.0.0/8,o\n"
+<<< "D\n"
+=== r/10.0.0.0/8,M objects
+>>> "!r10.0.0.0/8,M\n"
+<<< "D\n"
+=== r/10.0.0.0/8,L objects
+>>> "!r10.0.0.0/8,L\n"
+<<< "D\n"
+=== r/foo objects
+>>> "!rfoo\n"
+<<< "F Invalid input for route search: foo\n"
+=== r/192.0.2.0/33 objects
+>>> "!r192.0.2.0/33\n"
+<<< "F Invalid input for route search: 192.0.2.0/33\n"
+=== r/192.0.2.1/24 objects
+>>> "!r192.0.2.1/24\n"
+<<< "F Invalid input for route search: 192.0.2.1/24\n"
+=== r/192.0.2.0/24,x objects
+>>> "!r192.0.2.0/24,x\n"
+<<< "F Invalid route search option: x\n"
+=== r/192.0.2.1 objects
+>>> "!r192.0.2.1\n"
+<<< "D\n"
+=== r/2001:db8::/32 objects
+>>> "!r2001:db8::/32\n"
+<<< "A195\nroute6:         2001:db8::/32\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\n\nroute6:         2001:db8::/32\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RADB\nC\n"
+=== r/2001:db8::/32,o words
+>>> "!r2001:db8::/32,o\n"
+<<< "A16\nAS65001 AS65001\nC\n"
+=== r/2001:db8::/32,M objects
+>>> "!r2001:db8::/32,M\n"
+<<< "A199\nroute6:         2001:db8:1::/48\norigin:         AS65002\nmnt-by:         MNT-B\nsource:         RIPE\n\nroute6:         2001:db8:5::/48\norigin:         AS65005\nmnt-by:         MNT-A\nsource:         RADB\nC\n"
+=== r/2001:DB8::/32,o words
+>>> "!r2001:DB8::/32,o\n"
+<<< "A16\nAS65001 AS65001\nC\n"
+=== r/0.0.0.0/0,M objects
+>>> "!r0.0.0.0/0,M\n"
+<<< "A1055\nroute:          64.6.160.0/19\norigin:         AS65007\nmnt-by:         MNT-A\nsource:         RADB\n\nroute:          100.64.0.0/24\norigin:         AS65005\nmnt-by:         MNT-A\nsource:         RADB\n\nroute:          192.0.2.0/24\ndescr:          first\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\n\nroute:          192.0.2.0/24\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         radb\n\nroute:          192.0.2.0/25\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\n\nroute:          192.0.2.0/24\norigin:         AS65009\nmnt-by:         MNT-A\nsource:         RADB\n\nroute:          198.51.100.0/24\norigin:         AS65002\nmnt-by:         MNT-A\nsource:         RADB\n\nroute:          198.51.100.0/24\norigin:         AS65002\nmnt-by:         MNT-B\nsource:         RIPE\n\nroute:          203.0.113.0/24\norigin:         AS65003\nmember-of:      RS-INNER\nmnt-by:         MNT-A\nsource:         RIPE\n\nroute:          203.0.113.128/25\norigin:         AS65003\nmember-of:      RS-INNER\nmnt-by:         MNT-B\nsource:         RIPE\nC\n"
+=== r/198.51.100.0/24,o words
+>>> "!r198.51.100.0/24,o\n"
+<<< "A16\nAS65002 AS65002\nC\n"
+=== r/64.6.160.0/19 objects
+>>> "!r64.6.160.0/19\n"
+<<< "A97\nroute:          64.6.160.0/19\norigin:         AS65007\nmnt-by:         MNT-A\nsource:         RADB\nC\n"
+=== m/aut-num,AS65001 objects
+>>> "!maut-num,AS65001\n"
+<<< "A306\naut-num:        AS65001\nas-name:        FIRST\nmember-of:      AS-REF\nimport:         from AS65002 accept AS-BAR\nexport:         to AS65002 announce AS65001\nmp-import:      afi ipv6.unicast from AS65002 accept ANY\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\nC\n"
+=== m/aut-num,as65001 objects
+>>> "!maut-num,as65001\n"
+<<< "A306\naut-num:        AS65001\nas-name:        FIRST\nmember-of:      AS-REF\nimport:         from AS65002 accept AS-BAR\nexport:         to AS65002 announce AS65001\nmp-import:      afi ipv6.unicast from AS65002 accept ANY\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\nC\n"
+=== m/AUT-NUM,AS65001 objects
+>>> "!mAUT-NUM,AS65001\n"
+<<< "D\n"
+=== m/as-set,AS-FOO objects
+>>> "!mas-set,AS-FOO\n"
+<<< "A230\nas-set:         AS-FOO\ndescr:          the main as-set\nmembers:        AS65001,AS65002,AS-BAR\nmembers:        RS-INNER,AS-ANY,AS-MISSING\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\nC\n"
+=== m/as-set,as-foo objects
+>>> "!mas-set,as-foo\n"
+<<< "A230\nas-set:         AS-FOO\ndescr:          the main as-set\nmembers:        AS65001,AS65002,AS-BAR\nmembers:        RS-INNER,AS-ANY,AS-MISSING\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\nC\n"
+=== m/route-set,RS-FOO objects
+>>> "!mroute-set,RS-FOO\n"
+<<< "A281\nroute-set:      RS-FOO\nmembers:        192.0.2.0/24,198.51.100.0/24^+,203.0.113.1/32\nmembers:        RS-INNER^25,AS65001,AS-BAR,AS65002^24\nmp-members:     2001:db8::/32,2001:db8:ff::/48^-\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\nC\n"
+=== m/route,192.0.2.0/24AS65001 objects
+>>> "!mroute,192.0.2.0/24AS65001\n"
+<<< "A118\nroute:          192.0.2.0/24\ndescr:          first\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\nC\n"
+=== m/route,192.0.2.0/24 AS65001 objects
+>>> "!mroute,192.0.2.0/24 AS65001\n"
+<<< "A118\nroute:          192.0.2.0/24\ndescr:          first\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\nC\n"
+=== m/route,192.0.2.0/24-AS65001 objects
+>>> "!mroute,192.0.2.0/24-AS65001\n"
+<<< "A118\nroute:          192.0.2.0/24\ndescr:          first\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\nC\n"
+=== m/route,192.0.2.0/24as65001 objects
+>>> "!mroute,192.0.2.0/24as65001\n"
+<<< "A118\nroute:          192.0.2.0/24\ndescr:          first\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\nC\n"
+=== m/route,192.0.2.0/24 objects
+>>> "!mroute,192.0.2.0/24\n"
+<<< "D\n"
+=== m/route6,2001:db8::/32AS65001 objects
+>>> "!mroute6,2001:db8::/32AS65001\n"
+<<< "A97\nroute6:         2001:db8::/32\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\nC\n"
+=== m/route6,2001:DB8::/32AS65001 objects
+>>> "!mroute6,2001:DB8::/32AS65001\n"
+<<< "A97\nroute6:         2001:db8::/32\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\nC\n"
+=== m/route6,2001:0db8::/32AS65001 objects
+>>> "!mroute6,2001:0db8::/32AS65001\n"
+<<< "D\n"
+=== m/mntner,MNT-A objects
+>>> "!mmntner,MNT-A\n"
+<<< "A214\nmntner:         MNT-A\ndescr:          allowed maintainer\nadmin-c:        JD1-RIPE\nupd-to:         a@example.net\nauth:           MD5-PW DummyValue  # Filtered for security\nmnt-by:         MNT-A\nsource:         RIPE\nC\n"
+=== m/person,JD1-RIPE objects
+>>> "!mperson,JD1-RIPE\n"
+<<< "A151\nperson:         John Doe\naddress:        Somewhere\nphone:          +31 20 000 0000\nnic-hdl:        JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\nC\n"
+=== m/filter-set,FLTR-FOO objects
+>>> "!mfilter-set,FLTR-FOO\n"
+<<< "A196\nfilter-set:     FLTR-FOO\nfilter:         AS65001 OR {192.0.2.0/24^+}\nmp-filter:      {2001:db8::/32^+}\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\nC\n"
+=== m/peering-set,PRNG-FOO objects
+>>> "!mpeering-set,PRNG-FOO\n"
+<<< "A194\npeering-set:    PRNG-FOO\npeering:        AS65002 at 192.0.2.1\nmp-peering:     AS65002 at 2001:db8::1\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\nC\n"
+=== m/rtr-set,RTRS-FOO objects
+>>> "!mrtr-set,RTRS-FOO\n"
+<<< "A161\nrtr-set:        RTRS-FOO\nmembers:        rtr1.example.net,192.0.2.1\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\nC\n"
+=== m/inet-rtr,rtr1.example.net objects
+>>> "!minet-rtr,rtr1.example.net\n"
+<<< "A187\ninet-rtr:       rtr1.example.net\nlocal-as:       AS65001\nifaddr:         192.0.2.1 masklen 30\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\nC\n"
+=== m/inet-rtr,RTR1.EXAMPLE.NET objects
+>>> "!minet-rtr,RTR1.EXAMPLE.NET\n"
+<<< "A187\ninet-rtr:       rtr1.example.net\nlocal-as:       AS65001\nifaddr:         192.0.2.1 masklen 30\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\nC\n"
+=== m/foo,BAR objects
+>>> "!mfoo,BAR\n"
+<<< "D\n"
+=== m/aut-num,AS65999 objects
+>>> "!maut-num,AS65999\n"
+<<< "D\n"
+=== m/an,AS65001 objects
+>>> "!man,AS65001\n"
+<<< "D\n"
+=== m/rt,192.0.2.0/24-AS65001 objects
+>>> "!mrt,192.0.2.0/24-AS65001\n"
+<<< "D\n"
+=== m/mntner objects
+>>> "!mmntner\n"
+<<< "F Invalid argument for object lookup: mntner\n"
+=== m/ objects
+>>> "!m\n"
+<<< "F Missing parameter for m query\n"
+=== m/as-set, objects
+>>> "!mas-set,\n"
+<<< "D\n"
+=== m/as-set,AS-NORM objects
+>>> "!mas-set,AS-NORM\n"
+<<< "A268\nas-set:         AS-NORM\ndescr:          continuation probe\nmembers:        AS65001 # comment\n                AS65002\n+               AS65003,\n\t               AS65004\nmembers:        AS65005,AS65006\nremarks:        tab\tinside\nmnt-by:         MNT-A\nsource:         RADB\nC\n"
+=== m/route-set,RS-NOLEN objects
+>>> "!mroute-set,RS-NOLEN\n"
+<<< "A120\nroute-set:      RS-NOLEN\nmembers:        206.197.238.0/32,206.197.238.0/32^+\nmnt-by:         MNT-A\nsource:         RADB\nC\n"
+=== m/route,64.6.160.0/19AS65007 objects
+>>> "!mroute,64.6.160.0/19AS65007\n"
+<<< "A97\nroute:          64.6.160.0/19\norigin:         AS65007\nmnt-by:         MNT-A\nsource:         RADB\nC\n"
+=== m/route,064.006.160.000/19AS65007 objects
+>>> "!mroute,064.006.160.000/19AS65007\n"
+<<< "D\n"
+=== ripe/-s RIPE -T as-set AS-FOO objects
+>>> "-s RIPE -T as-set AS-FOO\n"
+<<< "as-set:         AS-FOO\ndescr:          the main as-set\nmembers:        AS65001,AS65002,AS-BAR\nmembers:        RS-INNER,AS-ANY,AS-MISSING\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\n\n"
+=== ripe/-T as-set AS-FOO objects
+>>> "-T as-set AS-FOO\n"
+<<< "as-set:         AS-FOO\ndescr:          the main as-set\nmembers:        AS65001,AS65002,AS-BAR\nmembers:        RS-INNER,AS-ANY,AS-MISSING\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\nas-set:         AS-FOO\ndescr:          same name, other registry\nmembers:        AS65099\nmnt-by:         MNT-A\nsource:         RADB\n\n\n"
+=== ripe/-s RADB -T as-set AS-FOO objects
+>>> "-s RADB -T as-set AS-FOO\n"
+<<< "as-set:         AS-FOO\ndescr:          same name, other registry\nmembers:        AS65099\nmnt-by:         MNT-A\nsource:         RADB\n\n\n"
+=== ripe/-i origin AS65001 objects
+>>> "-i origin AS65001\n"
+<<< "route:          192.0.2.0/24\ndescr:          first\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\n\nroute:          192.0.2.0/24\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         radb\n\nroute:          192.0.2.0/25\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\n\nroute6:         2001:db8::/32\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\n\nroute6:         2001:db8::/32\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RADB\n\n\n"
+=== ripe/-i member-of AS-FOO objects
+>>> "-i member-of AS-FOO\n"
+<<< "%  No entries found for the selected source(s).\n\n\n"
+=== ripe/-i member-of AS-REF objects
+>>> "-i member-of AS-REF\n"
+<<< "aut-num:        AS65001\nas-name:        FIRST\nmember-of:      AS-REF\nimport:         from AS65002 accept AS-BAR\nexport:         to AS65002 announce AS65001\nmp-import:      afi ipv6.unicast from AS65002 accept ANY\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\naut-num:        AS65002\nas-name:        SECOND\nmember-of:      AS-REF\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-B\nsource:         RIPE\n\naut-num:        AS65003\nas-name:        THIRD\nmember-of:      AS-REF\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RADB\n\n\n"
+=== ripe/-K -i origin AS65001 objects
+>>> "-K -i origin AS65001\n"
+<<< "route: 192.0.2.0/24\norigin: AS65001\n\nroute: 192.0.2.0/25\norigin: AS65001\n\nroute6: 2001:db8::/32\norigin: AS65001\n\n\n"
+=== ripe/-K -T as-set AS-FOO objects
+>>> "-K -T as-set AS-FOO\n"
+<<< "as-set: AS-FOO\nmembers: AS65001\nmembers: AS65002\nmembers: AS-BAR\nmembers: RS-INNER\nmembers: AS-ANY\nmembers: AS-MISSING\n\nas-set: AS-FOO\nmembers: AS65099\n\n\n"
+=== ripe/-K -T route-set RS-FOO objects
+>>> "-K -T route-set RS-FOO\n"
+<<< "route-set: RS-FOO\nmembers: 192.0.2.0/24\nmembers: 198.51.100.0/24^+\nmembers: 203.0.113.1/32\nmembers: RS-INNER^25\nmembers: AS65001\nmembers: AS-BAR\nmembers: AS65002^24\nmp-members: 2001:db8::/32\nmp-members: 2001:db8:ff::/48^-\n\n\n"
+=== ripe/-r -T aut-num AS65001 objects
+>>> "-r -T aut-num AS65001\n"
+<<< "aut-num:        AS65001\nas-name:        FIRST\nmember-of:      AS-REF\nimport:         from AS65002 accept AS-BAR\nexport:         to AS65002 announce AS65001\nmp-import:      afi ipv6.unicast from AS65002 accept ANY\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\n\n"
+=== ripe/AS65001 objects
+>>> "AS65001\n"
+<<< "aut-num:        AS65001\nas-name:        FIRST\nmember-of:      AS-REF\nimport:         from AS65002 accept AS-BAR\nexport:         to AS65002 announce AS65001\nmp-import:      afi ipv6.unicast from AS65002 accept ANY\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\n\n"
+=== ripe/as65001 objects
+>>> "as65001\n"
+<<< "aut-num:        AS65001\nas-name:        FIRST\nmember-of:      AS-REF\nimport:         from AS65002 accept AS-BAR\nexport:         to AS65002 announce AS65001\nmp-import:      afi ipv6.unicast from AS65002 accept ANY\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\n\n"
+=== ripe/AS-NOSUCH objects
+>>> "AS-NOSUCH\n"
+<<< "%  No entries found for the selected source(s).\n\n\n"
+=== ripe/-s NOSUCH AS65001 objects
+>>> "-s NOSUCH AS65001\n"
+<<< "%% ERROR: One or more selected sources are unavailable.\n\n\n"
+=== ripe/-i foo bar words
+>>> "-i foo bar\n"
+<<< "%% ERROR: Inverse attribute search not supported for foo,only supported for attributes: role, mnt-by, person, origin, members, zone-c, mp-members, mbrs-by-ref, member-of, admin-c, tech-c\n\n\n"
+=== ripe/-i origin objects
+>>> "-i origin\n"
+<<< "%% ERROR: Missing argument for flag/search: i\n\n\n"
+=== ripe/-T route 192.0.2.0/24 objects
+>>> "-T route 192.0.2.0/24\n"
+<<< "route:          192.0.2.0/24\ndescr:          first\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\n\nroute:          192.0.2.0/24\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         radb\n\nroute:          192.0.2.0/24\norigin:         AS65009\nmnt-by:         MNT-A\nsource:         RADB\n\n\n"
+=== ripe/192.0.2.0/24 objects
+>>> "192.0.2.0/24\n"
+<<< "route:          192.0.2.0/24\ndescr:          first\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\n\nroute:          192.0.2.0/24\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         radb\n\nroute:          192.0.2.0/24\norigin:         AS65009\nmnt-by:         MNT-A\nsource:         RADB\n\n\n"
+=== ripe/-x 192.0.2.0/24 objects
+>>> "-x 192.0.2.0/24\n"
+<<< "route:          192.0.2.0/24\ndescr:          first\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\n\nroute:          192.0.2.0/24\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         radb\n\nroute:          192.0.2.0/24\norigin:         AS65009\nmnt-by:         MNT-A\nsource:         RADB\n\n\n"
+=== ripe/-M 192.0.2.0/24 objects
+>>> "-M 192.0.2.0/24\n"
+<<< "route:          192.0.2.0/25\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\n\n\n"
+=== ripe/-T route6 2001:db8::/32 objects
+>>> "-T route6 2001:db8::/32\n"
+<<< "route6:         2001:db8::/32\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\n\nroute6:         2001:db8::/32\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RADB\n\n\n"
+=== ripe/MNT-A objects
+>>> "MNT-A\n"
+<<< "mntner:         MNT-A\ndescr:          allowed maintainer\nadmin-c:        JD1-RIPE\nupd-to:         a@example.net\nauth:           MD5-PW DummyValue  # Filtered for security\nmnt-by:         MNT-A\nsource:         RIPE\n\nmntner:         MNT-A\ndescr:          same-named maintainer in RADB\nadmin-c:        JD1-RIPE\nupd-to:         a@example.net\nauth:           MD5-PW DummyValue  # Filtered for security\nmnt-by:         MNT-A\nsource:         RADB\n\n\n"
+=== ripe/-i mnt-by MNT-B objects
+>>> "-i mnt-by MNT-B\n"
+<<< "route:          198.51.100.0/24\norigin:         AS65002\nmnt-by:         MNT-B\nsource:         RIPE\n\nroute:          203.0.113.128/25\norigin:         AS65003\nmember-of:      RS-INNER\nmnt-by:         MNT-B\nsource:         RIPE\n\nroute6:         2001:db8:1::/48\norigin:         AS65002\nmnt-by:         MNT-B\nsource:         RIPE\n\naut-num:        AS65002\nas-name:        SECOND\nmember-of:      AS-REF\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-B\nsource:         RIPE\n\nmntner:         MNT-B\ndescr:          not allowed maintainer\nadmin-c:        JD1-RIPE\nupd-to:         b@example.net\nauth:           MD5-PW DummyValue  # Filtered for security\nmnt-by:         MNT-B\nsource:         RIPE\n\n\n"
+=== ripe/-T mntner MNT-A objects
+>>> "-T mntner MNT-A\n"
+<<< "mntner:         MNT-A\ndescr:          allowed maintainer\nadmin-c:        JD1-RIPE\nupd-to:         a@example.net\nauth:           MD5-PW DummyValue  # Filtered for security\nmnt-by:         MNT-A\nsource:         RIPE\n\nmntner:         MNT-A\ndescr:          same-named maintainer in RADB\nadmin-c:        JD1-RIPE\nupd-to:         a@example.net\nauth:           MD5-PW DummyValue  # Filtered for security\nmnt-by:         MNT-A\nsource:         RADB\n\n\n"
+=== ripe/-B AS65001 objects
+>>> "-B AS65001\n"
+<<< "%% ERROR: Unrecognised flag/search: B\n\n\n"
+=== ripe/-G AS65001 objects
+>>> "-G AS65001\n"
+<<< "%% ERROR: Unrecognised flag/search: G\n\n\n"
+=== ripe/-s ripe AS-FOO objects
+>>> "-s ripe AS-FOO\n"
+<<< "as-set:         AS-FOO\ndescr:          the main as-set\nmembers:        AS65001,AS65002,AS-BAR\nmembers:        RS-INNER,AS-ANY,AS-MISSING\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\n\n"
+=== ripe/-T foo AS65001 objects
+>>> "-T foo AS65001\n"
+<<< "%  No entries found for the selected source(s).\n\n\n"
+=== ripe/-Z AS65001 objects
+>>> "-Z AS65001\n"
+<<< "%% ERROR: Unrecognised flag/search: Z\n\n\n"
+=== ripe/AS65001 AS65002 objects
+>>> "AS65001 AS65002\n"
+<<< "aut-num:        AS65002\nas-name:        SECOND\nmember-of:      AS-REF\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-B\nsource:         RIPE\n\n\n"
+=== ripe/-i origin as65001 objects
+>>> "-i origin as65001\n"
+<<< "route:          192.0.2.0/24\ndescr:          first\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\n\nroute:          192.0.2.0/24\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         radb\n\nroute:          192.0.2.0/25\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\n\nroute6:         2001:db8::/32\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\n\nroute6:         2001:db8::/32\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RADB\n\n\n"
+=== ripe/-i member-of as-ref objects
+>>> "-i member-of as-ref\n"
+<<< "aut-num:        AS65001\nas-name:        FIRST\nmember-of:      AS-REF\nimport:         from AS65002 accept AS-BAR\nexport:         to AS65002 announce AS65001\nmp-import:      afi ipv6.unicast from AS65002 accept ANY\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\naut-num:        AS65002\nas-name:        SECOND\nmember-of:      AS-REF\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-B\nsource:         RIPE\n\naut-num:        AS65003\nas-name:        THIRD\nmember-of:      AS-REF\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RADB\n\n\n"
+=== ripe/rtr1.example.net objects
+>>> "rtr1.example.net\n"
+<<< "inet-rtr:       rtr1.example.net\nlocal-as:       AS65001\nifaddr:         192.0.2.1 masklen 30\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\n\n"
+=== ripe/JD1-RIPE objects
+>>> "JD1-RIPE\n"
+<<< "person:         John Doe\naddress:        Somewhere\nphone:          +31 20 000 0000\nnic-hdl:        JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\n\n"
+=== ripe/-K AS-NORM objects
+>>> "-K AS-NORM\n"
+<<< "as-set: AS-NORM\nmembers: AS65001\nmembers: AS65002\nmembers: AS65003\nmembers: AS65004\nmembers: AS65005\nmembers: AS65006\n\n\n"
+=== ripe/-s RADB AS-NORM objects
+>>> "-s RADB AS-NORM\n"
+<<< "as-set:         AS-NORM\ndescr:          continuation probe\nmembers:        AS65001 # comment\n                AS65002\n+               AS65003,\n\t               AS65004\nmembers:        AS65005,AS65006\nremarks:        tab\tinside\nmnt-by:         MNT-A\nsource:         RADB\n\n\n"
+=== ripe/in-session objects
+>>> "!!\n-T as-set AS-FOO\n!v\n-i origin AS65003\nAS-NOSUCH\n!q\n"
+<<< "as-set:         AS-FOO\ndescr:          the main as-set\nmembers:        AS65001,AS65002,AS-BAR\nmembers:        RS-INNER,AS-ANY,AS-MISSING\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\nas-set:         AS-FOO\ndescr:          same name, other registry\nmembers:        AS65099\nmnt-by:         MNT-A\nsource:         RADB\n\n\nA22\nIRRd -- version 4.5.3\nC\nroute:          203.0.113.0/24\norigin:         AS65003\nmember-of:      RS-INNER\nmnt-by:         MNT-A\nsource:         RIPE\n\nroute:          203.0.113.128/25\norigin:         AS65003\nmember-of:      RS-INNER\nmnt-by:         MNT-B\nsource:         RIPE\n\n\n%  No entries found for the selected source(s).\n\n\n"
+=== ripe/k-and-query objects
+>>> "-k -T as-set AS-FOO\n-T aut-num AS65003\n!q\n"
+<<< "as-set:         AS-FOO\ndescr:          the main as-set\nmembers:        AS65001,AS65002,AS-BAR\nmembers:        RS-INNER,AS-ANY,AS-MISSING\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\nas-set:         AS-FOO\ndescr:          same name, other registry\nmembers:        AS65099\nmnt-by:         MNT-A\nsource:         RADB\n\n\naut-num:        AS65003\nas-name:        THIRD\nmember-of:      AS-REF\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RADB\n\n\n"
+=== ripe/s-flag-sticks objects
+>>> "!!\n!sRADB\n-T as-set AS-FOO\n-s RIPE -T as-set AS-FOO\n!s-lc\n!q\n"
+<<< "C\nas-set:         AS-FOO\ndescr:          same name, other registry\nmembers:        AS65099\nmnt-by:         MNT-A\nsource:         RADB\n\n\nas-set:         AS-FOO\ndescr:          the main as-set\nmembers:        AS65001,AS65002,AS-BAR\nmembers:        RS-INNER,AS-ANY,AS-MISSING\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\n\nA5\nRIPE\nC\n"
