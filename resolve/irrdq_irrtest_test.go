@@ -15,42 +15,12 @@ import (
 	"github.com/rkolesnichenko/rpsl"
 	"github.com/rkolesnichenko/rpsl/ast"
 	"github.com/rkolesnichenko/rpsl/object"
-	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/irrdoracle"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/irrtest"
+	"github.com/rkolesnichenko/rpsl/resolve/internal/rpsldtest"
 	"github.com/rkolesnichenko/rpsl/resolve/irrdq"
 	"github.com/rkolesnichenko/rpsl/types"
 )
-
-// irrdqSnapshot builds what rpsld would serve for texts: one registry per
-// source, in the order given, each from a Corpus of its own objects.
-func irrdqSnapshot(t testing.TB, texts []string, opts irrdq.SnapshotOptions, sources ...string) *irrdq.Snapshot {
-	t.Helper()
-	corpora := map[string]*resolve.Corpus{}
-	for _, s := range sources {
-		corpora[s] = &resolve.Corpus{KeepPolicy: true, KeepRouteText: true}
-	}
-	for _, text := range texts {
-		o, _ := rpsl.ParseObject(text)
-		obj, _ := object.Decode(o)
-		if c := corpora[sourceOf(o)]; c != nil {
-			c.Put(obj)
-		}
-	}
-	var regs []*irrdq.Registry
-	for _, s := range sources {
-		r, err := irrdq.NewRegistry(s, 0, corpora[s])
-		if err != nil {
-			t.Fatal(err)
-		}
-		regs = append(regs, r)
-	}
-	snap, err := irrdq.NewSnapshot(regs, opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return snap
-}
 
 // sourceOf is an object's source:, upper-case ("" without one).
 func sourceOf(o *ast.Object) string {
@@ -165,7 +135,9 @@ func firstDiffering(got, want string, cmds []string) string {
 
 // TestIRRdqMatchesIrrtest: on random IRRs, irrdq answers !i, !i…,1, !a,
 // !a4, !a6, !g and !6 as irrtest (held to IRRd's recordings, Task 3) does,
-// for every set and AS the IRR names, under both source orders.
+// for every set and AS the IRR names, under both source orders; and
+// irrdserver, serving the same snapshot on a socket, answers each pipelined
+// burst byte for byte as the session does.
 func TestIRRdqMatchesIrrtest(t *testing.T) {
 	const seeds = 60
 	total := 0
@@ -174,7 +146,8 @@ func TestIRRdqMatchesIrrtest(t *testing.T) {
 		m := randomModel(r, false)
 		texts := lastOfEach(m.texts(r))
 		addr := irrtest.New(texts...).WithSources("RIPE", "RADB").IRRd(t)
-		snap := irrdqSnapshot(t, texts, irrdq.SnapshotOptions{}, "RIPE", "RADB")
+		snap := rpsldtest.Snapshot(t, texts, irrdq.SnapshotOptions{}, "RIPE", "RADB")
+		served := rpsldtest.Serve(t, snap)
 		var sets []string
 		asns := map[types.ASN]bool{}
 		for _, text := range texts {
@@ -213,6 +186,10 @@ func TestIRRdqMatchesIrrtest(t *testing.T) {
 			got, want := askIRRdq(t, snap, send), askTCP(t, addr, send)
 			if err := irrdoracle.Compare(irrdoracle.Words, got, want); err != nil {
 				t.Fatalf("seed %d, %s: %s: %v", seed, sel, firstDiffering(got, want, cmds), err)
+			}
+			// Served on a socket by irrdserver, byte for byte the same.
+			if tcp := askTCP(t, served, send); tcp != got {
+				t.Fatalf("seed %d, %s: irrdserver answered otherwise than the session: %s", seed, sel, firstDiffering(tcp, got, cmds))
 			}
 			total += len(cmds)
 		}

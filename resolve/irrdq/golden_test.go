@@ -132,6 +132,11 @@ func fixtureText(t *testing.T, file, class, key string) string {
 // package's tests).
 var testPins = []string{"TestInvalidMembersServed", "TestRouteSearchOptions", "TestNotServed", "TestRFCMode", "TestRFCModeDiffers", "TestRFCModeScoped", "TestRFCModeLimits"}
 
+// serverPins are the rows of divergences.md's "Server behaviour" section:
+// how irrdserver treats a connection, each named by the test of
+// resolve/irrdserver that pins it.
+var serverPins = []string{"TestLimitDefaults", "TestIdleTimeout", "TestMaxConns", "TestMaxLine", "TestMaxReply", "TestQueryTime"}
+
 // pending are covered cases that also need a later task's commands; they
 // are logged and skipped until that task removes them.
 var pending = map[string]string{}
@@ -372,15 +377,20 @@ func TestDivergencesDocumented(t *testing.T) {
 			t.Errorf("divergence %s is not in divergences.md", name)
 		}
 	}
-	tests := testFuncs(t)
 	pinnedByTest := map[string]bool{}
-	for _, name := range testPins {
-		pinnedByTest[name] = true
-		if !documented[name] {
-			t.Errorf("divergence pinned by %s is not in divergences.md", name)
-		}
-		if !tests[name] {
-			t.Errorf("testPins names %s, which is no test of this package", name)
+	for _, pins := range []struct {
+		list, dir string
+		names     []string
+	}{{"testPins", ".", testPins}, {"serverPins", filepath.Join("..", "irrdserver"), serverPins}} {
+		tests := testFuncs(t, pins.dir)
+		for _, name := range pins.names {
+			pinnedByTest[name] = true
+			if !documented[name] {
+				t.Errorf("divergence pinned by %s is not in divergences.md", name)
+			}
+			if !tests[name] {
+				t.Errorf("%s names %s, which is no test in %s", pins.list, name, pins.dir)
+			}
 		}
 	}
 	for name := range documented {
@@ -394,10 +404,10 @@ func TestDivergencesDocumented(t *testing.T) {
 // testFunc is a test function's declaration.
 var testFunc = regexp.MustCompile(`(?m)^func (Test\w+)\(t \*testing\.T\)`)
 
-// testFuncs are the names of this package's test functions.
-func testFuncs(t *testing.T) map[string]bool {
+// testFuncs are the names of the test functions of the package in dir.
+func testFuncs(t *testing.T, dir string) map[string]bool {
 	t.Helper()
-	files, err := filepath.Glob("*_test.go")
+	files, err := filepath.Glob(filepath.Join(dir, "*_test.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
