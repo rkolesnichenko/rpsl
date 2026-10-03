@@ -13,7 +13,7 @@
 # again — and it retries a `go mod tidy` the checksum database is not
 # ready for. Last, from an empty module cache: every module's @latest is the
 # version, a consumer of each gets only what it requires and its tests pass
-# from the published zip, and rpslq, rpslconf and rpslcheck install; then their
+# from the published zip, and rpslq, rpslconf, rpslcheck and rpsld install; then their
 # binaries, built from the published module for each platform, and
 # the GitHub release, from the changelog section, with the binaries attached.
 #
@@ -52,7 +52,7 @@ POLL=${RELEASE_POLL:-30}
 WAIT=${RELEASE_WAIT:-2400}
 cd "$(dirname "$0")/.."
 export GOWORK=off
-PLATFORMS="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64" # rpslq's, rpslconf's and rpslcheck's binaries
+PLATFORMS="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64" # the four tools' binaries
 
 step() { printf '\n== %s\n' "$*"; }
 refuse() {
@@ -280,21 +280,25 @@ GOBIN=$tmp/bin go install "$M/resolve/cmd/rpslcheck@$V" || fail "go install rpsl
 got=$("$tmp/bin/rpslcheck" -v)
 [ "$got" = "rpslcheck $V" ] || fail "rpslcheck -v says \"$got\", not \"rpslcheck $V\""
 echo "$got installs"
+GOBIN=$tmp/bin go install "$M/resolve/cmd/rpsld@$V" || fail "go install rpsld@$V"
+got=$("$tmp/bin/rpsld" -v)
+[ "$got" = "rpsld $V" ] || fail "rpsld -v says \"$got\", not \"rpsld $V\""
+echo "$got installs"
 
-step "7. rpslq, rpslconf and rpslcheck binaries, built from the published module"
+step "7. rpslq, rpslconf, rpslcheck and rpsld binaries, built from the published module"
 # The archives outlive the script: in RELEASE_DIST, made absolute, or beside
 # the other temporary files of this user — not in $tmp, which the EXIT trap
 # removes, as it would with --no-gh-release before anyone uploaded them.
 dist=${RELEASE_DIST:-${TMPDIR:-/tmp}/rpsl-release-$V}
 mkdir -p "$dist" "$tmp/build"
 dist=$(cd "$dist" && pwd)
-rm -f "$dist"/rpslq_"${V}"_* "$dist"/rpslconf_"${V}"_* "$dist"/rpslcheck_"${V}"_* "$dist/SHA256SUMS"
+rm -f "$dist"/rpslq_"${V}"_* "$dist"/rpslconf_"${V}"_* "$dist"/rpslcheck_"${V}"_* "$dist"/rpsld_"${V}"_* "$dist/SHA256SUMS"
 (
 	cd "$tmp/build"
 	go mod init example.com/rpslq-build >/dev/null 2>&1
 	go get "$M/resolve@$V" >/dev/null 2>&1 || fail "go get $M/resolve@$V"
 	license=$(go list -m -f '{{.Dir}}' "$M/resolve")/LICENSE
-	for tool in rpslq rpslconf rpslcheck; do
+	for tool in rpslq rpslconf rpslcheck rpsld; do
 		for p in $PLATFORMS; do
 			os=${p%/*} arch=${p#*/}
 			exe=$tool
@@ -327,6 +331,15 @@ engine. See
 https://github.com/rkolesnichenko/rpsl/blob/main/docs/rpslcheck.md
 README
 				;;
+			rpsld)
+				cat >"$stage/README.txt" <<README
+rpsld $V ($os/$arch): an IRRd-compatible mirror. It keeps registries in
+memory — from dumps, NRTMv4 mirrors and RPKI VRPs — and answers IRRd's query
+protocol and RIPE-style whois as IRRd 4.5.3 does, for bgpq4, IRRToolSet and
+rpslq. See
+https://github.com/rkolesnichenko/rpsl/blob/main/docs/rpsld.md
+README
+				;;
 			esac
 			name=${tool}_${V}_${os}_$arch
 			if [ "$os" = windows ]; then
@@ -339,14 +352,14 @@ README
 	done
 )
 if command -v sha256sum >/dev/null; then sum="sha256sum"; else sum="shasum -a 256"; fi
-(cd "$dist" && $sum rpslq_"${V}"_* rpslconf_"${V}"_* rpslcheck_"${V}"_* >SHA256SUMS)
+(cd "$dist" && $sum rpslq_"${V}"_* rpslconf_"${V}"_* rpslcheck_"${V}"_* rpsld_"${V}"_* >SHA256SUMS)
 
 # Check what is about to be published: the checksums, each archive's contents,
 # the platform and module version each binary was built for, and the native
 # binary's own word.
 (cd "$dist" && $sum -c --quiet SHA256SUMS) || fail "SHA256SUMS does not verify"
 native=$(go env GOOS)/$(go env GOARCH)
-for tool in rpslq rpslconf rpslcheck; do
+for tool in rpslq rpslconf rpslcheck rpsld; do
 	for p in $PLATFORMS; do
 		os=${p%/*} arch=${p#*/}
 		exe=$tool a=$dist/${tool}_${V}_${os}_$arch.tar.gz
@@ -368,7 +381,7 @@ echo "archives and SHA256SUMS in $dist"
 
 if [ -n "$GH_RELEASE" ]; then
 	step "8. the GitHub release, with the binaries"
-	assets=$(ls "$dist"/rpslq_"${V}"_* "$dist"/rpslconf_"${V}"_* "$dist"/rpslcheck_"${V}"_* "$dist/SHA256SUMS")
+	assets=$(ls "$dist"/rpslq_"${V}"_* "$dist"/rpslconf_"${V}"_* "$dist"/rpslcheck_"${V}"_* "$dist"/rpsld_"${V}"_* "$dist/SHA256SUMS")
 	if gh release view "$V" >/dev/null 2>&1; then
 		echo "the GitHub release $V exists: attaching the binaries"
 		gh release upload "$V" $assets --clobber

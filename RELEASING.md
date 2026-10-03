@@ -58,9 +58,9 @@ scripts/release.sh vX.Y.Z
 It refuses to start unless the tree is clean, on `main` and pushed, the
 changelog dated and linked, and CI green on HEAD; then it runs the steps below
 in order, waits for the Go proxy after each push, verifies every module from an
-empty module cache, builds rpslq's, rpslconf's and rpslcheck's binaries from
+empty module cache, builds the four tools' binaries (rpslq, rpslconf, rpslcheck, rpsld) from
 the published module (Linux and macOS on amd64 and arm64, Windows on amd64,
-with `SHA256SUMS` over all three tools' archives), and creates the GitHub
+with `SHA256SUMS` over all four tools' archives), and creates the GitHub
 release from the changelog section with them attached
 (`--no-gh-release` leaves that to you; on a release that exists it attaches
 the binaries, so `scripts/release.sh vX.Y.Z` on a released version adds them). If anything fails, fix it and run the
