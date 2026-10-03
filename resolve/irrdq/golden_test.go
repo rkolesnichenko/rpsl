@@ -43,6 +43,11 @@ var diverges = map[string]string{
 		framed("AS-ANY AS-BAR AS-MISSING AS65001 AS65002 RS-INNER"),
 }
 
+// testPins are divergences no golden case can show, each named in its
+// divergences.md row by the unit test that pins it (a function of this
+// package's tests).
+var testPins = []string{"TestInvalidMembersServed"}
+
 // pending are covered cases that also need a later task's commands; they
 // are logged and skipped until that task removes them.
 var pending = map[string]string{
@@ -200,9 +205,43 @@ func TestDivergencesDocumented(t *testing.T) {
 			t.Errorf("divergence %s is not in divergences.md", name)
 		}
 	}
+	tests := testFuncs(t)
+	pinnedByTest := map[string]bool{}
+	for _, name := range testPins {
+		pinnedByTest[name] = true
+		if !documented[name] {
+			t.Errorf("divergence pinned by %s is not in divergences.md", name)
+		}
+		if !tests[name] {
+			t.Errorf("testPins names %s, which is no test of this package", name)
+		}
+	}
 	for name := range documented {
-		if _, ok := diverges[name]; !ok {
+		if _, ok := diverges[name]; !ok && !pinnedByTest[name] {
 			t.Errorf("divergences.md names %s, which no test pins", name)
 		}
 	}
+}
+
+// testFunc is a test function's declaration.
+var testFunc = regexp.MustCompile(`(?m)^func (Test\w+)\(t \*testing\.T\)`)
+
+// testFuncs are the names of this package's test functions.
+func testFuncs(t *testing.T) map[string]bool {
+	t.Helper()
+	files, err := filepath.Glob("*_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]bool{}
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range testFunc.FindAllStringSubmatch(string(b), -1) {
+			out[m[1]] = true
+		}
+	}
+	return out
 }

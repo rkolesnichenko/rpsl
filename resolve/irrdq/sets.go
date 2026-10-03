@@ -2,11 +2,13 @@ package irrdq
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"slices"
 	"strings"
 
 	"github.com/rkolesnichenko/rpsl/object"
+	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
@@ -63,11 +65,12 @@ func isPrefixOrAddr(s string) bool {
 // as-sets, then among route-sets (only as-sets when asOnly), in each of regs
 // in order — and its class; found is false when no such set is held. Only
 // as-sets and route-sets are looked up, and a set whose class is not its
-// name's (route-set: AS-EVIL) is no set of that name.
-func (snap *Snapshot) setMembers(ctx context.Context, regs []*Registry, name string, asOnly bool) (members []string, class types.SetClass, found bool) {
-	n, err := types.ParseSetName(name)
-	if err != nil {
-		return nil, types.ClassUnknown, false
+// name's (route-set: AS-EVIL) is no set of that name. err is a Source's
+// error other than resolve.ErrNotFound, or ctx's.
+func (snap *Snapshot) setMembers(ctx context.Context, regs []*Registry, name string, asOnly bool) (members []string, class types.SetClass, found bool, err error) {
+	n, perr := types.ParseSetName(name)
+	if perr != nil {
+		return nil, types.ClassUnknown, false, nil
 	}
 	classes := []types.SetClass{types.ClassAsSet, types.ClassRouteSet}
 	if asOnly {
@@ -78,21 +81,31 @@ func (snap *Snapshot) setMembers(ctx context.Context, regs []*Registry, name str
 			continue
 		}
 		for _, r := range regs {
+			if err := ctx.Err(); err != nil {
+				return nil, types.ClassUnknown, false, err
+			}
 			set, err := r.src.GetSet(ctx, types.Ref(n))
-			if err != nil || set.Class() != want.String() {
+			if errors.Is(err, resolve.ErrNotFound) {
 				continue
 			}
-			return snap.membersOf(ctx, r, set), want, true
+			if err != nil {
+				return nil, types.ClassUnknown, false, err
+			}
+			if set.Class() != want.String() {
+				continue
+			}
+			ms, err := snap.membersOf(ctx, r, set)
+			return ms, want, err == nil, err
 		}
 	}
-	return nil, types.ClassUnknown, false
+	return nil, types.ClassUnknown, false, nil
 }
 
 // membersOf is a set's members:/mp-members: items, normalized, and the
 // primary keys of the objects mbrs-by-ref admits (ClaimAllowed: the set's
 // own source, its maintainers): aut-nums for an as-set, routes and route6s
 // (their prefixes) for a route-set.
-func (snap *Snapshot) membersOf(ctx context.Context, r *Registry, set object.NamedSet) []string {
+func (snap *Snapshot) membersOf(ctx context.Context, r *Registry, set object.NamedSet) ([]string, error) {
 	var out []string
 	if raw := set.Raw(); raw != nil {
 		for _, attr := range []string{"members", "mp-members"} {
@@ -105,8 +118,11 @@ func (snap *Snapshot) membersOf(ctx context.Context, r *Registry, set object.Nam
 			}
 		}
 	}
-	claims, _ := snap.claimants(ctx, r, set)
-	return append(out, claims...)
+	claims, err := snap.claimants(ctx, r, set)
+	if err != nil {
+		return nil, err
+	}
+	return append(out, claims...), nil
 }
 
 // claimants are the keys of set's honoured member-of claimants in r (Task 7
@@ -141,24 +157,25 @@ func (snap *Snapshot) claimants(ctx context.Context, r *Registry, set object.Nam
 // level with every name seen skipped: a member that is a prefix or address
 // (operator cut) is a result when the root is a route-set; an AS number is
 // a result when the root is an as-set, and when it is a route-set the
-// prefixes that AS originates in regs are; anything else is a name for the
-// next level, looked up among as-sets alone under an as-set root. root
-// fixes the root class (types.ClassAsSet for "!a"); ClassUnknown takes the
-// first set found's. The answer is sorted, distinct, without name itself
-// (as sent: IRRd's removal is case-sensitive, though a result, a prefix or
-// an AS number, is never a set's name).
-func (snap *Snapshot) recursive(ctx context.Context, regs []*Registry, name string, root types.SetClass) []string {
+// prefixes that AS originates in regs are (looked up once per AS); anything
+// else is a name for the next level, looked up among as-sets alone under an
+// as-set root. root fixes the root class (types.ClassAsSet for "!a");
+// ClassUnknown takes the first set found's. The answer is sorted, distinct,
+// without name itself (as sent: IRRd's removal is case-sensitive, though a
+// result, a prefix or an AS number, is never a set's name).
+func (snap *Snapshot) recursive(ctx context.Context, regs []*Registry, name string, root types.SetClass) ([]string, error) {
 	top := strings.ToUpper(name)
 	results := map[string]bool{}
 	seen := map[string]bool{top: true}
+	routed := map[types.ASN]bool{} // ASes whose routes are in results
 	level := []string{top}
 	for len(level) > 0 {
 		var sub []string
 		for _, n := range level {
-			if ctx.Err() != nil {
-				return nil
+			ms, class, found, err := snap.setMembers(ctx, regs, n, root == types.ClassAsSet)
+			if err != nil {
+				return nil, err
 			}
-			ms, class, found := snap.setMembers(ctx, regs, n, root == types.ClassAsSet)
 			if !found {
 				continue
 			}
@@ -175,7 +192,15 @@ func (snap *Snapshot) recursive(ctx context.Context, regs []*Registry, name stri
 				results[m] = true
 			case isASN(m) && root == types.ClassRouteSet:
 				as, _ := parseAS(m)
-				for _, p := range snap.originated(ctx, regs, as, types.AFIAny) {
+				if routed[as] {
+					continue
+				}
+				routed[as] = true
+				ps, err := snap.originated(ctx, regs, as, types.AFIAny)
+				if err != nil {
+					return nil, err
+				}
+				for _, p := range ps {
 					results[p.String()] = true
 				}
 			case isASN(m):
@@ -187,7 +212,7 @@ func (snap *Snapshot) recursive(ctx context.Context, regs []*Registry, name stri
 		}
 		level = next
 	}
-	return distinctSorted(mapKeys(results), name)
+	return distinctSorted(mapKeys(results), name), nil
 }
 
 func mapKeys(m map[string]bool) []string {
@@ -210,19 +235,29 @@ func distinctSorted(ms []string, drop string) []string {
 	return slices.Compact(out)
 }
 
+// internalError is IRRd's answer when a query fails for a reason of the
+// server's own (a Source's error): the cause is logged there, never sent.
+var internalError = Fail("An internal error occurred while processing this query.")
+
 // cmdMembers answers "!i<set>" (the set's members, without the set's name
 // as sent) and "!i<set>,1" (IRRd's recursive resolution); "D" when either
 // is empty.
 func cmdMembers(ctx context.Context, s *Session, snap *Snapshot, arg string) Reply {
 	regs := snap.selected(s.sources(snap))
 	var out []string
+	var err error
 	if name, ok := strings.CutSuffix(arg, ",1"); ok {
-		out = snap.recursiveOrRFC(ctx, regs, name)
+		out, err = snap.recursiveOrRFC(ctx, regs, name)
 	} else {
-		ms, _, _ := snap.setMembers(ctx, regs, arg, false)
-		// IRRd removes the parameter as sent, case and all: "!iAS-SELF"
+		var ms []string
+		ms, _, _, err = snap.setMembers(ctx, regs, arg, false)
+		// IRRd removes the parameter as sent, case and all
+		// (members_for_set, irrd/server/query_resolver.py): "!iAS-SELF"
 		// drops a member AS-SELF, "!ias-self" keeps it.
 		out = distinctSorted(ms, arg)
+	}
+	if err != nil {
+		return internalError
 	}
 	if len(out) == 0 {
 		return notFound
@@ -231,7 +266,7 @@ func cmdMembers(ctx context.Context, s *Session, snap *Snapshot, arg string) Rep
 }
 
 // recursiveOrRFC is IRRd's recursion, or the engine's in RFC mode (Task 7).
-func (snap *Snapshot) recursiveOrRFC(ctx context.Context, regs []*Registry, name string) []string {
+func (snap *Snapshot) recursiveOrRFC(ctx context.Context, regs []*Registry, name string) ([]string, error) {
 	return snap.recursive(ctx, regs, name, types.ClassUnknown)
 }
 
@@ -247,21 +282,33 @@ func cmdASetPrefixes(ctx context.Context, s *Session, snap *Snapshot, arg string
 	if arg == "" {
 		return Fail("Missing required set name for A query")
 	}
-	return prefixes(snap.asSetPrefixes(ctx, snap.selected(s.sources(snap)), arg, afi))
+	ps, err := snap.asSetPrefixes(ctx, snap.selected(s.sources(snap)), arg, afi)
+	if err != nil {
+		return internalError
+	}
+	return prefixes(ps)
 }
 
 // asSetPrefixes is "!a": the as-set resolved with an as-set root, then the
 // distinct prefixes of afi its ASes originate in regs, sorted (prefixCmp).
 // Task 7 adds RFC mode.
-func (snap *Snapshot) asSetPrefixes(ctx context.Context, regs []*Registry, name string, afi types.AFI) []netip.Prefix {
+func (snap *Snapshot) asSetPrefixes(ctx context.Context, regs []*Registry, name string, afi types.AFI) ([]netip.Prefix, error) {
+	members, err := snap.recursive(ctx, regs, name, types.ClassAsSet)
+	if err != nil {
+		return nil, err
+	}
 	seen := map[netip.Prefix]bool{}
 	var out []netip.Prefix
-	for _, m := range snap.recursive(ctx, regs, name, types.ClassAsSet) {
+	for _, m := range members {
 		as, msg := parseAS(m)
 		if msg != "" {
 			continue
 		}
-		for _, p := range snap.originated(ctx, regs, as, afi) {
+		ps, err := snap.originated(ctx, regs, as, afi)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range ps {
 			if !seen[p] {
 				seen[p] = true
 				out = append(out, p)
@@ -269,5 +316,5 @@ func (snap *Snapshot) asSetPrefixes(ctx context.Context, regs []*Registry, name 
 		}
 	}
 	slices.SortFunc(out, prefixCmp)
-	return out
+	return out, nil
 }

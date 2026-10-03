@@ -72,16 +72,19 @@ func (s *Session) sources(snap *Snapshot) []string {
 	return snap.dflt
 }
 
-// Do answers one command line (its "\n" already cut; a trailing "\r" is
-// dropped). A blank line is no command and reads no snapshot. Without "!!"
-// the connection closes after the first command; "!q" closes it.
+// Do answers one command line (its "\n" already cut). The line is stripped
+// first, as IRRd strips it (irrd/server/whois/server.py: Python's
+// str.strip(), so a "\r", tabs and spaces at either end go, and so do the
+// separators U+001C-U+001F); a blank line is no command and reads no
+// snapshot. Without "!!" the connection closes after the first command;
+// "!q" closes it.
 //
 // The error is non-nil only when ctx ended. The reply is then not to be
 // sent, since it may be cut short, but its Close still says whether the
 // connection closes.
 func (s *Session) Do(ctx context.Context, line string) (Reply, error) {
-	line = strings.TrimRight(line, "\r")
-	if strings.TrimSpace(line) == "" {
+	line = strings.TrimFunc(line, pySpace)
+	if line == "" {
 		return nothing, nil
 	}
 	snap := s.snapshot()
