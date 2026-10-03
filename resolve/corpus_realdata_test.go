@@ -140,8 +140,11 @@ func TestRealDataKeepPolicy(t *testing.T) {
 		if !ok {
 			continue
 		}
+		// Compared as ObjectText gives them: the corpus keeps an aut-num's
+		// text without the dump's header and the blank lines the stream
+		// attached around it, and a member-of claimant whole, as streamed.
 		got, err := src.AutNum(context.Background(), want.AS, "RIPE")
-		if err != nil || got.Raw().String() != want.Raw().String() {
+		if err != nil || resolve.ObjectText(got.Raw()) != resolve.ObjectText(want.Raw()) {
 			t.Fatalf("%s: on-demand decode differs (%v)", want.AS, err)
 		}
 		n++
