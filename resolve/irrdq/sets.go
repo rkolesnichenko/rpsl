@@ -135,17 +135,20 @@ func (snap *Snapshot) claimants(ctx context.Context, r *Registry, set object.Nam
 	var out []string
 	isAS := set.Class() == types.ClassAsSet.String()
 	for _, o := range objs {
+		if !snap.claimVisible(r, o) {
+			continue
+		}
 		switch t := o.(type) {
 		case object.AutNum:
 			if isAS {
 				out = append(out, t.AS.String())
 			}
 		case object.Route:
-			if !isAS && t.Prefix.IsValid() && snap.routeVisible(r, t.Prefix, t.Origin) {
+			if !isAS && t.Prefix.IsValid() {
 				out = append(out, t.Prefix.Masked().String())
 			}
 		case object.Route6:
-			if !isAS && t.Prefix.IsValid() && snap.routeVisible(r, t.Prefix, t.Origin) {
+			if !isAS && t.Prefix.IsValid() {
 				out = append(out, t.Prefix.Masked().String())
 			}
 		}

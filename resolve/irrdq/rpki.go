@@ -3,6 +3,7 @@ package irrdq
 import (
 	"net/netip"
 
+	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/resolve/rpki"
 	"github.com/rkolesnichenko/rpsl/types"
 )
@@ -20,6 +21,19 @@ func (snap *Snapshot) visible(r *Registry, rt route) bool {
 func (snap *Snapshot) routeVisible(r *Registry, p netip.Prefix, origin types.ASN) bool {
 	v := snap.opts.VRPs
 	return v == nil || r.name == rpki.PseudoSource || v.Validate(p.Masked(), origin) != rpki.Invalid
+}
+
+// claimVisible reports whether a member-of claimant of r is served: a route
+// or route6 only when routeVisible, any other object always. IRRd mode
+// (claimants) and RFC mode (multiSource) both filter with it.
+func (snap *Snapshot) claimVisible(r *Registry, o object.Object) bool {
+	switch t := o.(type) {
+	case object.Route:
+		return snap.routeVisible(r, t.Prefix, t.Origin)
+	case object.Route6:
+		return snap.routeVisible(r, t.Prefix, t.Origin)
+	}
+	return true
 }
 
 // routeText is a route's text as served: in RPKI-aware mode, with IRRd's

@@ -15,9 +15,10 @@ import (
 // multiSource is a resolve.Source over a snapshot's selected registries in
 // precedence order: an unscoped set is the first held, routes are the union,
 // a set's claimants come from its own registry, and a scoped reference is
-// looked up in its registry whether selected or not. In RPKI-aware mode it
-// leaves out the routes and route claimants IRRd hides (visible), registry
-// by registry, so the pseudo registry's routes stay as they do in IRRd mode.
+// looked up in its registry whether selected or not. Routes come from
+// snap.originated and claimants pass claimVisible, as in IRRd mode, so in
+// RPKI-aware mode it leaves out what IRRd hides, registry by registry, and
+// the pseudo registry's routes stay.
 // It reads only immutable data and is safe for concurrent use.
 type multiSource struct {
 	snap *Snapshot
@@ -48,25 +49,7 @@ func (m multiSource) GetSet(ctx context.Context, ref types.SetRef) (object.Named
 }
 
 func (m multiSource) OriginatedRoutes(ctx context.Context, as types.ASN, afi types.AFI) ([]netip.Prefix, error) {
-	seen := map[netip.Prefix]bool{}
-	var out []netip.Prefix
-	for _, r := range m.regs {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		ps, err := r.src.OriginatedRoutes(ctx, as, afi)
-		if err != nil {
-			return nil, err
-		}
-		for _, p := range ps {
-			p = p.Masked()
-			if !seen[p] && m.snap.routeVisible(r, p, as) {
-				seen[p] = true
-				out = append(out, p)
-			}
-		}
-	}
-	return out, nil
+	return m.snap.originated(ctx, m.regs, as, afi)
 }
 
 func (m multiSource) MembersByRef(ctx context.Context, set object.NamedSet) ([]object.Object, error) {
@@ -83,17 +66,9 @@ func (m multiSource) MembersByRef(ctx context.Context, set object.NamedSet) ([]o
 	}
 	out := make([]object.Object, 0, len(objs))
 	for _, o := range objs {
-		switch t := o.(type) {
-		case object.Route:
-			if !m.snap.routeVisible(r, t.Prefix, t.Origin) {
-				continue
-			}
-		case object.Route6:
-			if !m.snap.routeVisible(r, t.Prefix, t.Origin) {
-				continue
-			}
+		if m.snap.claimVisible(r, o) {
+			out = append(out, o)
 		}
-		out = append(out, o)
 	}
 	return out, nil
 }

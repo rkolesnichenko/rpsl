@@ -130,7 +130,7 @@ func fixtureText(t *testing.T, file, class, key string) string {
 // testPins are divergences no golden case can show, each named in its
 // divergences.md row by the unit test that pins it (a function of this
 // package's tests).
-var testPins = []string{"TestInvalidMembersServed", "TestRouteSearchOptions", "TestNotServed", "TestRFCMode"}
+var testPins = []string{"TestInvalidMembersServed", "TestRouteSearchOptions", "TestNotServed", "TestRFCMode", "TestRFCModeDiffers", "TestRFCModeScoped", "TestRFCModeLimits"}
 
 // pending are covered cases that also need a later task's commands; they
 // are logged and skipped until that task removes them.

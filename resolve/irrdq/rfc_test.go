@@ -372,37 +372,171 @@ func TestRFCModeScoped(t *testing.T) {
 	}
 }
 
+// limitTexts are sets that exceed each of the engine's limits at 1 without
+// reaching AS-ANY: AS-L1 nests AS-L2 nests AS-L3, RS-L1 nests RS-L2.
+var limitTexts = []string{
+	"as-set: AS-L1\nmembers: AS-L2, AS1\nsource: RIPE\n",
+	"as-set: AS-L2\nmembers: AS-L3, AS2\nsource: RIPE\n",
+	"as-set: AS-L3\nmembers: AS3\nsource: RIPE\n",
+	"route-set: RS-L1\nmembers: RS-L2, 10.0.0.0/8\nsource: RIPE\n",
+	"route-set: RS-L2\nmembers: 192.0.2.0/24, AS1\nsource: RIPE\n",
+	"route: 10.1.0.0/16\norigin: AS1\nsource: RIPE\n",
+	"route: 10.2.0.0/16\norigin: AS2\nsource: RIPE\n",
+	"route6: 2001:db8:3::/48\norigin: AS3\nsource: RIPE\n",
+}
+
 // TestRFCModeLimits: an expansion over a limit is refused with the
-// engine's error, never answered in part.
+// engine's error, never answered in part — each limit at least once.
 func TestRFCModeLimits(t *testing.T) {
-	objs := fixtureObjects(t)
-	for _, lim := range []resolve.Expander{{MaxPrefixes: 1}, {MaxVisited: 1}, {MaxDepth: 1}} {
-		snap := fixture(t, SnapshotOptions{RFC: true, Expander: lim})
-		e := lim
-		e.Src = resolve.NewMemSource(objs, "RIPE", "RADB")
-		for _, c := range []struct {
-			send, name string
-			members    bool
-		}{{"!iAS-REF,1", "AS-REF", true}, {"!iRS-INNER,1", "RS-INNER", true}, {"!aAS-REF", "AS-REF", false}} {
-			var err error
-			if c.members {
-				_, err = engineMembers(t, &e, c.name)
+	reg := mustRegistry(t, "RIPE", limitTexts...)
+	var objs []object.Object
+	for _, text := range limitTexts {
+		o, _ := rpsl.ParseObject(text)
+		obj, _ := rpsl.Decode(o)
+		objs = append(objs, obj)
+	}
+	for _, c := range []struct {
+		lim  resolve.Expander
+		want map[string]string // command -> exact answer
+	}{
+		{resolve.Expander{MaxDepth: 1}, map[string]string{
+			"!iAS-L1,1": "F resolve: expansion of AS-L1 exceeds MaxDepth (1): reached 2\n",
+			"!aAS-L1":   "F resolve: expansion of AS-L1 exceeds MaxDepth (1): reached 2\n",
+		}},
+		{resolve.Expander{MaxVisited: 1}, map[string]string{
+			"!iAS-L1,1": "F resolve: expansion of AS-L1 exceeds MaxVisited (1): reached 2\n",
+			"!iRS-L1,1": "F resolve: expansion of RS-L1 exceeds MaxVisited (1): reached 2\n",
+			"!aAS-L2":   "F resolve: expansion of AS-L2 exceeds MaxVisited (1): reached 2\n",
+		}},
+		{resolve.Expander{MaxPrefixes: 1}, map[string]string{
+			"!iRS-L2,1": "F resolve: expansion of RS-L2 exceeds MaxPrefixes (1): reached 2\n",
+			"!aAS-L2":   "F resolve: expansion of AS-L2 exceeds MaxPrefixes (1): reached 2\n",
+		}},
+	} {
+		snap, err := NewSnapshot([]*Registry{reg}, SnapshotOptions{RFC: true, Expander: c.lim})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for send, want := range c.want {
+			if got := ask(t, snap, send); got != want {
+				t.Errorf("%+v %s: %q, want %q", c.lim, send, got, want)
+			}
+			// The same refusal the engine gives, word for word.
+			e := c.lim
+			e.Src = resolve.NewMemSource(objs, "RIPE")
+			name := strings.TrimPrefix(strings.TrimSuffix(strings.TrimPrefix(send, "!i"), ",1"), "!a")
+			if strings.HasPrefix(send, "!a") {
+				_, err = enginePrefixes(t, &e, name, types.AFIAny)
 			} else {
-				_, err = enginePrefixes(t, &e, c.name, types.AFIAny)
+				_, err = engineMembers(t, &e, name)
 			}
 			var big *resolve.SetTooLargeError
-			if !errors.As(err, &big) {
-				continue // under this limit
+			if !errors.As(err, &big) || "F "+big.Error()+"\n" != want {
+				t.Errorf("%+v %s: the engine's error is %v", c.lim, send, err)
 			}
-			if got, want := ask(t, snap, c.send), "F "+big.Error()+"\n"; got != want {
-				t.Errorf("%+v %s: %q, want %q", lim, c.send, got, want)
+		}
+		// Under no limit, the same sets expand.
+		plain, err := NewSnapshot([]*Registry{reg}, SnapshotOptions{RFC: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for send := range c.want {
+			if got := ask(t, plain, send); !strings.HasPrefix(got, "A") {
+				t.Errorf("%s without limits: %q", send, got)
 			}
 		}
 	}
-	// One limit the fixture certainly exceeds.
-	snap := fixture(t, SnapshotOptions{RFC: true, Expander: resolve.Expander{MaxPrefixes: 1}})
-	if got := ask(t, snap, "!aAS-REF"); !strings.HasPrefix(got, "F resolve: expansion of AS-REF exceeds") {
-		t.Errorf("!aAS-REF with MaxPrefixes 1: %q", got)
+}
+
+// TestRFCModeDiffers pins where RFC mode's "!i…,1" and "!a" differ from IRRd
+// mode's on purpose (resolve/testdata/rpsld/divergences.md, RFC mode): a
+// range operator on a member applied rather than the member dropped, a
+// route-set in an as-set not followed, a set reaching AS-ANY refused rather
+// than expanded without it.
+func TestRFCModeDiffers(t *testing.T) {
+	reg := mustRegistry(t, "RIPE",
+		// Operators on members: a set, an AS number, a prefix.
+		"route-set: RS-OP\nmembers: RS-IN^25, AS1^24, 198.51.100.0/24^+\nsource: RIPE\n",
+		"route-set: RS-IN\nmembers: 192.0.2.0/24\nsource: RIPE\n",
+		"route: 10.0.0.0/8\norigin: AS1\nsource: RIPE\n",
+		// A route-set listed in an as-set, reached from a route-set root.
+		"route-set: RS-TOP\nmembers: AS-X\nsource: RIPE\n",
+		"as-set: AS-X\nmembers: AS2, RS-Y\nsource: RIPE\n",
+		"route-set: RS-Y\nmembers: AS3, 203.0.113.0/24\nsource: RIPE\n",
+		"route: 10.2.0.0/16\norigin: AS2\nsource: RIPE\n",
+		"route: 10.3.0.0/16\norigin: AS3\nsource: RIPE\n",
+		// AS-ANY as a member.
+		"as-set: AS-Z\nmembers: AS2, AS-ANY\nsource: RIPE\n",
+	)
+	irrd, err := NewSnapshot([]*Registry{reg}, SnapshotOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rfc, err := NewSnapshot([]*Registry{reg}, SnapshotOptions{RFC: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ send, irrd, rfc string }{
+		{"!iRS-OP,1", framed("198.51.100.0/24^+"), framed("10.0.0.0/8^24 192.0.2.0/24^25 198.51.100.0/24^+")},
+		{"!iRS-TOP,1", framed("10.2.0.0/16 10.3.0.0/16 203.0.113.0/24"), framed("10.2.0.0/16")},
+		{"!iAS-X,1", framed("AS2"), framed("AS2")}, // an as-set root never follows it, in either mode
+		{"!iAS-Z,1", framed("AS2"), anyRefusal},
+		{"!aAS-Z", framed("10.2.0.0/16"), anyRefusal},
+	} {
+		if got := ask(t, irrd, c.send); got != c.irrd {
+			t.Errorf("IRRd mode %s: %q, want %q", c.send, got, c.irrd)
+		}
+		if got := ask(t, rfc, c.send); got != c.rfc {
+			t.Errorf("RFC mode %s: %q, want %q", c.send, got, c.rfc)
+		}
+	}
+}
+
+// TestRPKIStateLines holds the rpki-ov-state: line to IRRd's recorded text
+// byte for byte (two spaces after the colon, the not_found comment), which
+// the goldens' objects comparison normalizes away.
+func TestRPKIStateLines(t *testing.T) {
+	snap := fixtureRPKI(t)
+	goldens := map[string]string{}
+	for _, g := range irrdoracle.Load(t, "rpki") {
+		goldens[g.Name] = g.Got
+	}
+	for _, c := range []struct{ name, send, line string }{
+		{"rpki/!mroute,192.0.2.0/24AS65001", "!mroute,192.0.2.0/24AS65001", "rpki-ov-state:  valid\n"},
+		{"rpki/!mroute,64.6.160.0/19AS65007", "!mroute,64.6.160.0/19AS65007",
+			"rpki-ov-state:  not_found # No ROAs found, or RPKI validation not enabled for source\n"},
+	} {
+		golden, ok := goldens[c.name]
+		if !ok {
+			t.Fatalf("no golden %s", c.name)
+		}
+		if !strings.HasSuffix(golden, c.line+"C\n") {
+			t.Fatalf("golden %s does not end in %q: %q", c.name, c.line, golden)
+		}
+		got := ask(t, snap, c.send)
+		if !strings.HasSuffix(got, c.line+"C\n") {
+			t.Errorf("%s: %q does not end in %q", c.send, got, c.line)
+		}
+		if strings.Count(got, "rpki-ov-state:") != 1 {
+			t.Errorf("%s: %q holds not exactly one rpki-ov-state: line", c.send, got)
+		}
+	}
+	// The first route's text is IRRd's to the byte, line included.
+	if got, want := ask(t, snap, "!mroute,192.0.2.0/24AS65001"), goldens["rpki/!mroute,192.0.2.0/24AS65001"]; got != want {
+		t.Errorf("!mroute,192.0.2.0/24AS65001: %q, want IRRd's %q", got, want)
+	}
+	// A pseudo route carries none.
+	s := NewSession(func() *Snapshot { return snap })
+	s.Do(context.Background(), "!!")
+	s.Do(context.Background(), "!sRPKI")
+	r, err := s.Do(context.Background(), "!r192.0.2.0/24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	r.WriteTo(&b)
+	if !strings.HasPrefix(b.String(), "A") || strings.Contains(b.String(), "rpki-ov-state:") {
+		t.Errorf("a pseudo route: %q", b.String())
 	}
 }
 
