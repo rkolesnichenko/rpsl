@@ -247,9 +247,12 @@ type goldenDivergence struct {
 }
 
 var goldenDivergences = []goldenDivergence{
-	{"import-v4", "cisco", "10.0.0.3", "D2", rmRoute("0.0.0.0/0", []types.ASN{3})},
-	{"import-v4", "junos", "10.0.0.3", "D2", rmRoute("0.0.0.0/0", []types.ASN{3})},
-	{"import-v4", "ciscoxr", "10.0.0.3", "D2", rmRoute("0.0.0.0/0", []types.ASN{3})},
+	// RS-BAR's AS-BAZ^24-26 holds AS12's 10.12.0.0/16 under ^24-26; IRRd
+	// drops the member from "!iRS-BAR,1" (golden case i1/RS-FOO), so rtconfig
+	// has nothing for it.
+	{"import-v4", "cisco", "10.0.0.3", "D2", rmRoute("10.12.1.0/24", []types.ASN{3})},
+	{"import-v4", "junos", "10.0.0.3", "D2", rmRoute("10.12.1.0/24", []types.ASN{3})},
+	{"import-v4", "ciscoxr", "10.0.0.3", "D2", rmRoute("10.12.1.0/24", []types.ASN{3})},
 	{"import-v4", "ciscoxr", "10.0.0.5", "D11", rmRoute("10.55.0.0/16", []types.ASN{5})},
 	{"export-v4", "ciscoxr", "10.0.0.3", "D14", rmRoute("10.1.0.0/16", []types.ASN{3})},
 }
@@ -751,11 +754,17 @@ func TestPevalDivergences(t *testing.T) {
 			t.Errorf("rpslconf says NOT ANY")
 		}
 	})
+	// IRRd 4.5.3 drops RS-BAR's AS-BAZ^24-26 from "!iRS-BAR,1" (it looks the
+	// member up as a set name and finds none: golden case i1/RS-FOO in
+	// testdata/irrd/golden/plain.txt), and irrtest answers as IRRd does, so
+	// peval gets nothing for it: none of AS-BAZ's routes (AS12's 10.12.0.0/16
+	// among them) and no 0.0.0.0/0, which it substitutes only for a member a
+	// server answers unresolved.
 	t.Run("D2", func(t *testing.T) {
-		if out, err := theirs("RS-BAR", 10*time.Second); err != nil || !strings.Contains(out, "0.0.0.0/0") {
+		if out, err := theirs("RS-BAR", 10*time.Second); err != nil || strings.Contains(out, "10.12.") || strings.Contains(out, "0.0.0.0/0") {
 			t.Errorf("D2 is gone: peval says %q, %v", out, err)
 		}
-		if out := ours(t, "afi ipv4.unicast RS-BAR"); strings.Contains(out, "0.0.0.0/0") {
+		if out := ours(t, "afi ipv4.unicast RS-BAR"); !strings.Contains(out, "10.12.0.0/16^24-26") {
 			t.Errorf("rpslconf says %q", out)
 		}
 	})

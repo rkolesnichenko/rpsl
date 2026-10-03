@@ -14,7 +14,7 @@ unnoticed; D18 does not show on every run, so no test can pin it.
 | # | Input | rtconfig/peval does | Correct |
 | --- | --- | --- | --- |
 | D1 | `AS-FOO AND NOT AS10`, `NOT AS10` | `NOT ANY` | AS-FOO's routes less AS10's |
-| D2 | route-set member `AS-BAZ^24-26` | `permit 0.0.0.0/0` (hijack-relevant) | AS-BAZ's routes, ^24-26 |
+| D2 | route-set member `AS-BAZ^24-26` | nothing for it: IRRd 4.5.3 drops the member from `!i…,1`; from a server that answers it unresolved, `permit 0.0.0.0/0` (hijack-relevant) | AS-BAZ's routes, ^24-26 |
 | D3 | IPv6 `^+` ranges, v6 filter-sets | enumerates without end | ranges |
 | D4 | IPv6-only mp-import | an IPv4 route-map entry with no match: permits all IPv4 | no IPv4 entry |
 | D5 | `import-via:` | silently ignored | evaluated (design §6); printers refuse (design §7) |
@@ -39,7 +39,7 @@ Each test fails when its divergence goes away, on either side.
 | # | Pinned by |
 | --- | --- |
 | D1 | `TestPevalDivergences/D1`; `pevalSafe` keeps it out of `TestPevalMatchesIRRToolSet` |
-| D2 | `TestRtconfigGoldens` (import-v4, 10.0.0.3, all three vendors); `TestPevalDivergences/D2` |
+| D2 | `TestRtconfigGoldens` (import-v4, 10.0.0.3, all three vendors: 10.12.1.0/24); `TestPevalDivergences/D2` (no AS-BAZ route, no `0.0.0.0/0`) |
 | D3 | `TestPevalDivergences/D3` |
 | D4 | `TestRtconfigDivergences/D4`; `TestImportIPv6SessionIgnoresLegacyImport` (resolve/peval) |
 | D5 | `TestRtconfigDivergences/D5` |
@@ -141,6 +141,17 @@ route-set *name* is safe to compare against peval here. `pevalSafe` therefore
 excludes the `"set"` `mFilter` kind entirely, reusing D2 rather than adding a
 new number: it is the same `0.0.0.0/0`-substitution bug, just reached through
 a wider range of inputs than the one case the design doc's table shows.
+
+**What a real IRRd answers changed D2's shape (v0.24.0).** The substitution
+needs a server that answers `!i…,1` with the members it could not resolve,
+as `irrtest` used to. IRRd 4.5.3 does not: it drops a missing set, a set of
+the wrong class, junk, and a member with a range operator (it looks
+`AS-BAZ^24-26` up as a set name and finds none), as recorded in
+`resolve/testdata/irrd/golden/plain.txt` (cases `i1/AS-FOO`, `i1/RS-FOO`).
+`irrtest` now answers as IRRd does (`TestMatchesIRRd`), so peval and rtconfig
+get nothing for such a member rather than `0.0.0.0/0`, and D2 is pinned as
+that loss: the goldens lose `0.0.0.0/0` and lack AS-BAZ's `10.12.1.0/24`,
+which rpslconf accepts. `pevalSafe` still leaves set names out.
 
 **The Linux build echoes its input, and gets D17 wrong.** A peval built with
 GNU readline (`scripts/build-irrtoolset.sh`, which CI uses) writes the line it

@@ -41,7 +41,6 @@ router bgp 1
 exit
 !
 no access-list 153
-access-list 153 permit ip 0.0.0.0   0.0.0.0   0.0.0.0   0.0.0.0
 access-list 153 permit ip 10.10.0.0   0.0.0.0   255.255.0.0   0.0.0.0
 access-list 153 permit ip 10.10.1.0   0.0.0.0   255.255.255.0   0.0.0.0
 access-list 153 permit ip 10.13.0.0   0.0.0.0   255.255.0.0   0.0.0.0

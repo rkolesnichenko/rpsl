@@ -36,15 +36,21 @@ var db = func() *DB {
 }
 
 // IRRToolSet reads "!v" for a version (and crashes on an answer without
-// one), resets its sources with "!s-*" and ends with "q".
+// one), resets its sources with "!s-*" and ends with "q". IRRd 4.5.3 accepts
+// "!s-*" without changing anything, and reads "q" as a RIPE-style query for
+// the text "q" (golden cases session/s-star-keeps and session/q-bare): only
+// "!q" closes the connection.
 func TestIRRToolSetHandshake(t *testing.T) {
 	addr := db().IRRd(t)
-	got := talk(t, addr, "!!", "!v", "!s-*", "!sRIPE", "q")
+	got := talk(t, addr, "!!", "!v", "!s-*", "!sRIPE", "q", "!q")
 	if !strings.Contains(got, "version") {
 		t.Errorf("!v answered %q, which names no version", got)
 	}
 	if strings.Count(got, "C\n") < 3 || strings.Contains(got, "F ") {
 		t.Errorf("!!, !v, !s-*, !sRIPE, q: answered %q", got)
+	}
+	if !strings.HasSuffix(got, "C\n%  No entries found for the selected source(s).\n\n\n") {
+		t.Errorf("q answered %q, want IRRd's \"No entries\" text", got)
 	}
 }
 
@@ -53,12 +59,12 @@ func TestIRRToolSetHandshake(t *testing.T) {
 // "-K -r -i origin ASn" for an AS's routes.
 func TestRIPEStyleQueryOnIRRdPort(t *testing.T) {
 	addr := db().IRRd(t)
-	got := talk(t, addr, "!!", "!sRIPE", "-K -r -i origin AS1", "q")
+	got := talk(t, addr, "!!", "!sRIPE", "-K -r -i origin AS1", "!q")
 	want := "route: 10.1.0.0/16\norigin: AS1\n\nroute6: 2001:db8:1::/48\norigin: AS1\n\n\n"
 	if !strings.Contains(got, want) || strings.Contains(got, "descr") || strings.Contains(got, "10.2.0.0") {
 		t.Errorf("-K -r -i origin AS1 with !sRIPE answered %q, want it to contain %q", got, want)
 	}
-	got = talk(t, addr, "!!", "-K -r -i origin AS9", "q")
+	got = talk(t, addr, "!!", "-K -r -i origin AS9", "!q")
 	if !strings.Contains(got, "No entries found") || !strings.HasSuffix(got, "\n\n\n") {
 		t.Errorf("-K -r -i origin AS9 answered %q", got)
 	}
@@ -73,7 +79,7 @@ func TestLegacyClasses(t *testing.T) {
 		"route: 10.1.0.0/16\norigin: AS1\nsource: RIPE\n",
 	}
 	modern := New(objs...).IRRd(t)
-	if got := talk(t, modern, "!!", "!man,AS1", "q"); !strings.HasPrefix(got, "D\n") {
+	if got := talk(t, modern, "!!", "!man,AS1", "!q"); !strings.HasPrefix(got, "D\n") {
 		t.Errorf("without WithLegacyClasses, !man,AS1 answered %q; IRRd 4 answers D", got)
 	}
 	legacy := New(objs...).WithLegacyClasses().IRRd(t)
@@ -83,7 +89,7 @@ func TestLegacyClasses(t *testing.T) {
 		"!mrt,10.1.0.0/16-AS1": "route: 10.1.0.0/16",
 		"!maut-num,AS1":        "aut-num: AS1",
 	} {
-		if got := talk(t, legacy, "!!", cmd, "q"); !strings.Contains(got, want) {
+		if got := talk(t, legacy, "!!", cmd, "!q"); !strings.Contains(got, want) {
 			t.Errorf("with WithLegacyClasses, %s answered %q", cmd, got)
 		}
 	}
