@@ -228,8 +228,10 @@ func (c *Corpus) putWhole(k wholeKey, o object.Object) {
 // The text ends with the object's last attribute or continuation line: the
 // stream also attaches to the last object of a dump the blank, comment and
 // malformed lines after it (a dump's closing comment, ARIN's "EOF"), which
-// are no more the object's than the ones before it. A comment line between
-// two attribute lines stays.
+// are no more the object's than the ones before it, so trailing blank,
+// comment and malformed lines are dropped. Any line between the first and
+// the last attribute line stays — a comment, or a blank line in an object
+// parsed on its own (rpsl.ParseObject keeps the attributes after it).
 //
 // It is exported for servers that answer with an object as its registry
 // published it (resolve/irrdq): the same text a Corpus keeps.
@@ -247,8 +249,7 @@ func ObjectText(raw *ast.Object) string {
 			if lexer.StartsAttribute(line) {
 				start, end = off, off+eol
 			}
-		case lexer.IsBlankLine(line):
-			return text[start:end] // a blank line ends the object
+		case lexer.IsBlankLine(line): // kept only if an attribute line follows
 		case lexer.StartsAttribute(line) || line[0] == ' ' || line[0] == '\t' || line[0] == '+':
 			end = off + eol
 		}

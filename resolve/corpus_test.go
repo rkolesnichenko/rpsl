@@ -770,3 +770,25 @@ func TestObjectText(t *testing.T) {
 		}
 	}
 }
+
+// TestObjectTextKeepsAttributesAfterABlankLine: an object parsed on its own
+// (rpsl.ParseObject, as the NRTMv4 client builds them) keeps attributes after
+// an internal blank line, and ObjectText keeps them too — a Corpus that kept
+// less would serve an aut-num without the imports its peer index read.
+func TestObjectTextKeepsAttributesAfterABlankLine(t *testing.T) {
+	text := "aut-num: AS1\nas-name: A\n\nimport: from AS2 accept ANY\nsource: RIPE\n"
+	o, _ := rpsl.ParseObject(text + "# trailing\nEOF\n\n")
+	if got := resolve.ObjectText(o); got != text {
+		t.Errorf("ObjectText: %q, want %q", got, text)
+	}
+	obj, _ := rpsl.Decode(o)
+	c := &resolve.Corpus{IndexPeers: true}
+	c.Put(obj)
+	an, err := c.Source().AutNum(context.Background(), 1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(an.Imports) != 1 {
+		t.Errorf("served %d imports, want 1", len(an.Imports))
+	}
+}
