@@ -194,6 +194,16 @@ func isDigits(s string) bool {
 }
 
 // Compare reports how got differs from want under k, or nil.
+//
+// Under Words and Objects only order is relaxed: the words of a frame (or of
+// a % message), or the objects of an answer, may come in any order. Everything
+// else about each reply is compared exactly: its shape (an A-frame, a bare
+// C/D/E/F status line, RIPE-style text), a frame's status line after its
+// payload (which also holds its A<n> header to its payload: a wrong length
+// moves bytes into or out of that line), the whitespace between words, and
+// the blank lines before, between and after objects, the terminator included.
+// An Objects frame's A<n> may differ from want's, since object text is
+// compared through Normalize, not byte for byte.
 func Compare(k Kind, got, want string) error {
 	if k == Exact {
 		if got != want {
@@ -206,11 +216,10 @@ func Compare(k Kind, got, want string) error {
 		return fmt.Errorf("%d replies, want %d:\n got %q\nwant %q", len(g), len(w), got, want)
 	}
 	for i := range g {
-		var a, b []string
-		if k == Words {
-			a, b = words(g[i]), words(w[i])
-		} else {
-			a, b = objects(g[i]), objects(w[i])
+		ge, a := reply(k, g[i])
+		we, b := reply(k, w[i])
+		if ge != we {
+			return fmt.Errorf("reply %d's form differs (%s, want %s):\n got %q\nwant %q", i, ge, we, g[i], w[i])
 		}
 		slices.Sort(a)
 		slices.Sort(b)
@@ -221,49 +230,122 @@ func Compare(k Kind, got, want string) error {
 	return nil
 }
 
-// words is a frame's payload as words; a RIPE-style % message as its words,
-// commas separating them too (IRRd lists some, such as the attributes -i can
-// search, in hash order); any other reply (C, D, E, F) as one word.
-func words(r string) []string {
-	if p, ok := payload(r); ok {
-		return strings.Fields(p)
+// reply splits one reply into its form, compared exactly, and its content,
+// compared as a multiset.
+func reply(k Kind, r string) (form string, content []string) {
+	if hdr, p, trailer, ok := frameParts(r); ok {
+		if k == Objects {
+			// The header is not compared: IRRd re-renders object text.
+			form, content = objectsOf(p)
+			return "frame " + form + " status " + strconv.Quote(trailer), content
+		}
+		form, content = tokens(p, unicode.IsSpace)
+		return "frame " + strconv.Quote(hdr) + " " + form + " status " + strconv.Quote(trailer), content
 	}
-	if strings.HasPrefix(r, "%") {
-		return strings.FieldsFunc(r, func(c rune) bool { return c == ',' || unicode.IsSpace(c) })
+	switch {
+	case r == "C\n" || r == "D\n" || r == "E\n" || r == "F\n" || strings.HasPrefix(r, "F "):
+		return "status " + strconv.Quote(r), nil
+	case headerLine(r), !strings.HasSuffix(r, "\n"):
+		// A frame cut short, or text with no line end: compared whole.
+		return "raw " + strconv.Quote(r), nil
+	case strings.HasPrefix(r, "%"):
+		if k == Words {
+			// IRRd lists some things (the attributes -i can search) in hash
+			// order, comma-separated.
+			form, content = tokens(r, func(c rune) bool { return c == ',' || unicode.IsSpace(c) })
+			return "message " + form, content
+		}
+		return "message " + strconv.Quote(r), nil
+	case k == Objects:
+		form, content = objectsOf(r)
+		return "text " + form, content
 	}
-	return []string{r}
+	return "raw " + strconv.Quote(r), nil
 }
 
-// payload is an A-frame's payload.
-func payload(r string) (string, bool) {
+// frameParts cuts an A-frame reply into its header line, its payload and
+// what follows the payload (its status line).
+func frameParts(r string) (hdr, payload, trailer string, ok bool) {
 	nl := strings.IndexByte(r, '\n')
-	if nl < 0 || r[0] != 'A' || !isDigits(r[1:nl]) {
-		return "", false
+	if nl < 2 || r[0] != 'A' || !isDigits(r[1:nl]) {
+		return "", "", "", false
 	}
 	n, err := strconv.Atoi(r[1:nl])
 	if err != nil || n > len(r)-nl-1 {
-		return "", false
+		return "", "", "", false
 	}
-	return r[nl+1 : nl+1+n], true
+	return r[:nl+1], r[nl+1 : nl+1+n], r[nl+1+n:], true
 }
 
-// objects is a reply's objects, each Normalized; a reply holding none (C, D,
-// F, a % line) is itself.
-func objects(r string) []string {
-	text, ok := payload(r)
-	if !ok {
-		if r == "C\n" || r == "D\n" || r == "E\n" || r == "F\n" || strings.HasPrefix(r, "F ") || strings.HasPrefix(r, "%") {
-			return []string{r} // a status line or a % message: compared whole
+// headerLine reports whether r's first line is an A<n> header.
+func headerLine(r string) bool {
+	line, _, _ := strings.Cut(r, "\n")
+	return len(line) > 1 && line[0] == 'A' && isDigits(line[1:])
+}
+
+// tokens cuts s into the tokens between separator runs. Its form is the
+// separators: the leading and trailing runs in place, the inner runs sorted
+// (tokens may be reordered, and the separators between them with them).
+func tokens(s string, sep func(rune) bool) (form string, toks []string) {
+	var seps []string
+	start, inTok := 0, false
+	runStart := 0
+	for i, c := range s {
+		if sep(c) {
+			if inTok {
+				toks = append(toks, s[start:i])
+				inTok = false
+				runStart = i
+			}
+			continue
 		}
-		text = strings.TrimSuffix(r, "\n\n")
-	}
-	var out []string
-	for _, o := range strings.Split(strings.Trim(text, "\n"), "\n\n") {
-		if o != "" {
-			out = append(out, Normalize(o+"\n"))
+		if !inTok {
+			seps = append(seps, s[runStart:i])
+			start, inTok = i, true
 		}
 	}
-	return out
+	if inTok {
+		toks = append(toks, s[start:])
+		seps = append(seps, "")
+	} else {
+		seps = append(seps, s[runStart:])
+	}
+	// seps[0] leads, the last one trails; with no token, s is all one run.
+	if len(toks) == 0 {
+		return "seps " + strconv.Quote(s), nil
+	}
+	lead, trail, inner := seps[0], seps[len(seps)-1], slices.Clone(seps[1:len(seps)-1])
+	slices.Sort(inner)
+	return fmt.Sprintf("lead %q trail %q inner %q", lead, trail, inner), toks
+}
+
+// objectsOf cuts text into objects, at runs of two or more newlines, each
+// object Normalized. Its form is the newline runs: the leading and trailing
+// ones in place, those between objects sorted.
+func objectsOf(text string) (form string, objs []string) {
+	lead := len(text) - len(strings.TrimLeft(text, "\n"))
+	if lead == len(text) {
+		return fmt.Sprintf("newlines %d", lead), nil
+	}
+	trail := len(text) - len(strings.TrimRight(text, "\n"))
+	mid := text[lead : len(text)-trail]
+	var seps []int
+	for {
+		i := strings.Index(mid, "\n\n")
+		if i < 0 {
+			objs = append(objs, Normalize(mid+"\n"))
+			break
+		}
+		objs = append(objs, Normalize(mid[:i+1]))
+		j := i
+		for j < len(mid) && mid[j] == '\n' {
+			j++
+		}
+		seps = append(seps, j-i)
+		mid = mid[j:]
+	}
+	slices.Sort(seps)
+	return fmt.Sprintf("lead %d trail %d between %v", lead, trail, seps), objs
 }
 
 // Normalize returns an object's canonical form for comparison: one line per

@@ -53,6 +53,10 @@ func TestSplit(t *testing.T) {
 }
 
 func TestCompare(t *testing.T) {
+	const (
+		obj1 = "route:          192.0.2.0/24\norigin:         AS1\nsource:         RIPE\n"
+		obj2 = "route:          10.0.0.0/8\norigin:         AS1\nsource:         RIPE\n"
+	)
 	for _, tc := range []struct {
 		k         Kind
 		got, want string
@@ -78,6 +82,30 @@ func TestCompare(t *testing.T) {
 			frame("as-set: AS-X\nmembers: AS1\nsource: RIPE\n"),
 			frame("as-set: AS-X\nmembers: AS2\nsource: RIPE\n"),
 			false},
+
+		// Only order may differ: each reply's envelope is compared exactly.
+		{Words, "A5\nRIPE\nD\n", frame("RIPE\n"), false},   // another frame status
+		{Words, "A5\nRIPE\n", frame("RIPE\n"), false},      // the C line missing
+		{Words, "A5\nRIPE\nXYZ\n", frame("RIPE\n"), false}, // garbage after the payload
+		{Words, "A4\nRIPE\nC\n", frame("RIPE\n"), false},   // a header shorter than its payload
+		{Words, frame("a  b\n"), frame("b a\n"), false},    // other whitespace between words
+		{Words, frame("a b\n"), frame("b a \n"), false},    // other trailing whitespace
+		{Words, frame("a b\n"), "a b\n\n\n", false},        // a frame for RIPE text
+		{Words, "C\n", "D\n", false},
+		{Words, "%% ERROR: x, y\n", "%% ERROR: x, y\n\n\n", false}, // a % message missing its terminator
+		{Words, "%% ERROR: x, y", "%% ERROR: x, y\n\n\n", false},
+		{Words, "%% ERROR: y, x\n\n\n", "%% ERROR: x, y\n\n\n", true},
+		{Objects, frame(obj1), obj1 + "\n\n", false},                                       // a frame for RIPE text
+		{Objects, "A" + strconv.Itoa(len(obj1)) + "\n" + obj1 + "D\n", frame(obj1), false}, // D, not C
+		{Objects, obj1, obj1 + "\n\n", false},                                              // RIPE text without its blank lines
+		{Objects, obj1 + "\n", obj1 + "\n\n", false},
+		{Objects, obj1 + "\n\n\n" + obj2 + "\n\n", obj1 + "\n" + obj2 + "\n\n", false}, // two blank lines between objects
+		{Objects, frame(obj1 + "\n"), frame(obj1), false},                              // a blank line ending the payload
+		{Objects, frame("\n" + obj1), frame(obj1), false},
+		{Objects, "C\n", "D\n", false},
+		{Objects, "%  No entries found.\n\n\n", "%  No entries found.\n\n", false},
+		{Objects, obj2 + "\n" + obj1 + "\n\n", obj1 + "\n" + obj2 + "\n\n", true},
+		{Objects, frame(obj2 + "\n" + obj1), frame(obj1 + "\n" + obj2), true},
 	} {
 		err := Compare(tc.k, tc.got, tc.want)
 		if (err == nil) != tc.ok {
@@ -122,6 +150,9 @@ func TestGoldensLoad(t *testing.T) {
 				t.Errorf("%s: golden %q is no case (re-record with RPSL_IRRD_DOCKER=1)", config, g.Name)
 			}
 			delete(names, g.Name)
+			if err := Compare(g.Kind, g.Got, g.Got); err != nil {
+				t.Errorf("%s: golden %q differs from itself: %v", config, g.Name, err)
+			}
 			// A golden recorded for another send, or under another kind, is
 			// stale: it would be compared wrongly.
 			if c, ok := cases[g.Name]; ok && (c.Send != g.Send || c.Kind != g.Kind) {
