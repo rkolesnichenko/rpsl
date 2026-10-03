@@ -6,16 +6,18 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/rkolesnichenko/rpsl"
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/irrdoracle"
 )
 
 // covered are the golden-case name prefixes irrdq answers so far; every
 // case under one must agree with IRRd, or be in diverges.
-var covered = []string{"session/", "i/", "i1/", "a/", "g/"}
+var covered = []string{"session/", "i/", "i1/", "a/", "g/", "m/", "r/", "ripe/"}
 
 // framed is IRRd's frame of payload: "A<len>", the payload and its newline
 // (counted in len), then "C". Pinned answers are built with it, so a length
@@ -41,18 +43,77 @@ var diverges = map[string]string{
 	// A Words case (IRRd's "!g" order varies), pinned for its "!v".
 	"session/pipeline": version + framed("192.0.2.0/24 192.0.2.0/25") + framed("2001:db8::/32") +
 		framed("AS-ANY AS-BAR AS-MISSING AS65001 AS65002 RS-INNER"),
+	// An Objects case, pinned for its "!v" (R6); its objects are served as
+	// loaded.
+	"ripe/in-session": asFooRIPE + "\n" + asFooRADB + "\n\n" + version +
+		route203 + "\n" + route203x128 + "\n\n" + "%  No entries found for the selected source(s).\n\n\n",
+
+	// What the mirror does not keep is refused, never "not found"
+	// (Refinement 11).
+	"session/q-bare":       "%% ERROR: This mirror keeps only the routing classes; it cannot answer a lookup of q\n\n\n",
+	"m/mntner,MNT-A":       "F Class mntner is not kept by this mirror\n",
+	"m/person,JD1-RIPE":    "F Class person is not kept by this mirror\n",
+	"ripe/MNT-A":           "%% ERROR: This mirror keeps only the routing classes; it cannot answer a lookup of MNT-A\n\n\n",
+	"ripe/JD1-RIPE":        "%% ERROR: This mirror keeps only the routing classes; it cannot answer a lookup of JD1-RIPE\n\n\n",
+	"ripe/-T mntner MNT-A": "%% ERROR: Class mntner is not kept by this mirror\n\n\n",
+	"ripe/-i mnt-by MNT-B": "%% ERROR: Inverse search on mnt-by is not served by this mirror: it keeps the routing classes only\n\n\n",
+	"ripe/-i foo bar":      "%% ERROR: Inverse attribute search not supported for foo, only supported for attributes: origin, member-of, mbrs-by-ref, members, mp-members\n\n\n",
+}
+
+// Fixture objects as loaded, for pinned answers.
+const (
+	asFooRIPE = "as-set:         AS-FOO\ndescr:          the main as-set\nmembers:        AS65001, AS65002, AS-BAR\n" +
+		"members:        RS-INNER, AS-ANY, AS-MISSING\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\n" +
+		"mnt-by:         MNT-A\nsource:         RIPE\n"
+	asFooRADB = "as-set:         AS-FOO\ndescr:          same name, other registry\nmembers:        AS65099\n" +
+		"mnt-by:         MNT-A\nsource:         RADB\n"
+	route203 = "route:          203.0.113.0/24\norigin:         AS65003\nmember-of:      RS-INNER\n" +
+		"mnt-by:         MNT-A\nsource:         RIPE\n"
+	route203x128 = "route:          203.0.113.128/25\norigin:         AS65003\nmember-of:      RS-INNER\n" +
+		"mnt-by:         MNT-B\nsource:         RIPE\n"
+)
+
+// divergesObj are divergences whose rpsld answer is one fixture object, as
+// loaded, in an A-frame (IRRd answers D): IRRToolSet's legacy class names
+// (Refinement 12).
+var divergesObj = map[string]struct{ file, class, key string }{
+	"m/an,AS65001":              {"ripe.db", "aut-num", "AS65001"},
+	"m/rt,192.0.2.0/24-AS65001": {"ripe.db", "route", "192.0.2.0/24AS65001"},
+}
+
+// fixtureText is the text of the fixture object of class and key (a route's
+// key its prefix and origin run together) in file, ending in one newline.
+func fixtureText(t *testing.T, file, class, key string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(irrdoracle.Fixture(t), file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range strings.Split(string(b), "\n\n") {
+		o, _ := rpsl.ParseObject(text)
+		if o == nil || o.Class() != class {
+			continue
+		}
+		k := strings.TrimSpace(o.Key())
+		if a, ok := o.GetFirst("origin"); ok && (class == "route" || class == "route6") {
+			k += strings.TrimSpace(a.Value)
+		}
+		if strings.EqualFold(k, key) {
+			return strings.Trim(text, "\n") + "\n"
+		}
+	}
+	t.Fatalf("no %s %s in %s", class, key, file)
+	return ""
 }
 
 // testPins are divergences no golden case can show, each named in its
 // divergences.md row by the unit test that pins it (a function of this
 // package's tests).
-var testPins = []string{"TestInvalidMembersServed"}
+var testPins = []string{"TestInvalidMembersServed", "TestRouteSearchOptions", "TestNotServed"}
 
 // pending are covered cases that also need a later task's commands; they
 // are logged and skipped until that task removes them.
-var pending = map[string]string{
-	"session/q-bare": "q is a RIPE-style query: Task 6",
-}
+var pending = map[string]string{}
 
 // fixture builds the snapshot the goldens were recorded on: RIPE from
 // ripe.db, RADB from radb.db, serial 0 (IRRd's "-"), default RIPE, RADB.
@@ -134,6 +195,17 @@ func TestGoldens(t *testing.T) {
 		}
 		n++
 		got := replay(t, snap, g.Send)
+		if d, ok := divergesObj[g.Name]; ok {
+			text := fixtureText(t, d.file, d.class, d.key)
+			want := "A" + strconv.Itoa(len(text)) + "\n" + text + "C\n"
+			if irrdoracle.Compare(g.Kind, want, g.Got) == nil {
+				t.Errorf("%s: the pinned divergence %q agrees with IRRd; remove it from divergesObj and divergences.md", g.Name, want)
+			}
+			if got != want {
+				t.Errorf("%s, a pinned divergence:\n got %q\nwant %q", g.Name, got, want)
+			}
+			continue
+		}
 		pin, pinned := diverges[g.Name]
 		if pinned && irrdoracle.Compare(g.Kind, pin, g.Got) == nil {
 			t.Errorf("%s: the pinned divergence %q agrees with IRRd; remove it from diverges and divergences.md", g.Name, pin)
@@ -167,6 +239,14 @@ func TestGoldens(t *testing.T) {
 	for name := range diverges {
 		if !seen[name] {
 			t.Errorf("diverges names %s, which is no golden case", name)
+		}
+	}
+	for name := range divergesObj {
+		if !seen[name] {
+			t.Errorf("divergesObj names %s, which is no golden case", name)
+		}
+		if _, ok := diverges[name]; ok {
+			t.Errorf("%s is pinned in both diverges and divergesObj", name)
 		}
 	}
 	for name := range pending {
@@ -205,6 +285,11 @@ func TestDivergencesDocumented(t *testing.T) {
 			t.Errorf("divergence %s is not in divergences.md", name)
 		}
 	}
+	for name := range divergesObj {
+		if !documented[name] {
+			t.Errorf("divergence %s is not in divergences.md", name)
+		}
+	}
 	tests := testFuncs(t)
 	pinnedByTest := map[string]bool{}
 	for _, name := range testPins {
@@ -217,7 +302,8 @@ func TestDivergencesDocumented(t *testing.T) {
 		}
 	}
 	for name := range documented {
-		if _, ok := diverges[name]; !ok && !pinnedByTest[name] {
+		_, obj := divergesObj[name]
+		if _, ok := diverges[name]; !ok && !obj && !pinnedByTest[name] {
 			t.Errorf("divergences.md names %s, which no test pins", name)
 		}
 	}

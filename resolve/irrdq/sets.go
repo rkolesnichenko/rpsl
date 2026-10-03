@@ -237,7 +237,7 @@ func distinctSorted(ms []string, drop string) []string {
 
 // internalError is IRRd's answer when a query fails for a reason of the
 // server's own (a Source's error): the cause is logged there, never sent.
-var internalError = Fail("An internal error occurred while processing this query.")
+var internalError = Fail(internalErrorText)
 
 // cmdMembers answers "!i<set>" (the set's members, without the set's name
 // as sent) and "!i<set>,1" (IRRd's recursive resolution); "D" when either

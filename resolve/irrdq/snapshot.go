@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
 
+	"github.com/rkolesnichenko/rpsl/ast"
+	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/rpki"
 	"github.com/rkolesnichenko/rpsl/types"
@@ -19,13 +22,19 @@ type Registry struct {
 	routes   []route                // every route and route6, sorted (routeCmp)
 	byPrefix map[netip.Prefix][]int // exact prefix -> indexes into routes
 	text     bool                   // route text kept (Corpus.KeepRouteText)
+
+	// The inverse indexes RIPE-style "-i" reads, over the objects the
+	// corpus keeps whole (Corpus.Whole), each list in load order.
+	claims   map[string][]object.Object // upper-case set name in member-of -> objects
+	byMember map[string][]object.Object // "members " or "mp-members " + normalized item -> sets
+	byMbrRef map[string][]object.Object // upper-case mbrs-by-ref maintainer -> sets
 }
 
 // route is one route or route6 object of a registry.
 type route struct {
-	prefix netip.Prefix
+	prefix netip.Prefix // its network: host bits, which the decoder warns of, cleared
 	origin types.ASN
-	text   string // "" unless kept
+	text   string // "" unless kept; otherwise ending in a newline
 }
 
 // NewRegistry builds a registry named name (an IRR source name, canonical
@@ -53,18 +62,74 @@ func NewRegistry(name string, serial uint64, c *resolve.Corpus) (*Registry, erro
 	r := &Registry{name: n, serial: serial, src: c.SourceOf(n), text: c.KeepRouteText, byPrefix: map[netip.Prefix][]int{}}
 	for cr := range c.Routes() {
 		if cr.Source == n {
-			r.routes = append(r.routes, route{cr.Prefix, cr.Origin, cr.Text})
+			text := cr.Text
+			if text != "" && !strings.HasSuffix(text, "\n") {
+				text += "\n" // the last object of a dump with no final newline
+			}
+			r.routes = append(r.routes, route{cr.Prefix.Masked(), cr.Origin, text})
 		}
 	}
 	slices.SortFunc(r.routes, routeCmp)
 	for i, rt := range r.routes {
 		r.byPrefix[rt.prefix] = append(r.byPrefix[rt.prefix], i)
 	}
+	r.index(c)
 	return r, nil
 }
 
+// index builds the inverse indexes from the objects c keeps whole whose
+// source is the registry's.
+func (r *Registry) index(c *resolve.Corpus) {
+	r.claims, r.byMember, r.byMbrRef = map[string][]object.Object{}, map[string][]object.Object{}, map[string][]object.Object{}
+	add := func(m map[string][]object.Object, k string, o object.Object) {
+		if k != "" {
+			m[k] = append(m[k], o)
+		}
+	}
+	for o := range c.Whole() {
+		raw := o.Raw()
+		if raw == nil || sourceOfRaw(raw) != r.name {
+			continue
+		}
+		for _, a := range raw.GetAll("member-of") {
+			for _, it := range a.List() {
+				add(r.claims, strings.ToUpper(it.Value), o)
+			}
+		}
+		if _, isSet := o.(object.NamedSet); !isSet {
+			continue
+		}
+		for _, attr := range []string{"members", "mp-members"} {
+			for _, a := range raw.GetAll(attr) {
+				for _, it := range a.List() {
+					if it.Value != "" {
+						add(r.byMember, attr+" "+normMember(it.Value), o)
+					}
+				}
+			}
+		}
+		for _, a := range raw.GetAll("mbrs-by-ref") {
+			for _, it := range a.List() {
+				add(r.byMbrRef, strings.ToUpper(it.Value), o)
+			}
+		}
+	}
+}
+
+// sourceOfRaw is an object's source:, upper-case. Attribute.Value has its
+// comment stripped already.
+func sourceOfRaw(raw *ast.Object) string {
+	a, ok := raw.GetFirst("source")
+	if !ok {
+		return ""
+	}
+	return strings.ToUpper(strings.TrimSpace(a.Value))
+}
+
 // routeCmp orders routes IPv4 first, then by address, length and origin. A
-// registry holds one route per prefix and origin, so the order is total.
+// registry holds one route per prefix and origin, except where two spellings
+// of one network ("192.0.2.1/24", "192.0.2.0/24") are two objects; their text
+// breaks the tie, so the order is total and answers deterministic.
 func routeCmp(a, b route) int {
 	if c := prefixCmp(a.prefix, b.prefix); c != 0 {
 		return c
@@ -75,7 +140,7 @@ func routeCmp(a, b route) int {
 	case a.origin > b.origin:
 		return 1
 	}
-	return 0
+	return strings.Compare(a.text, b.text)
 }
 
 // prefixCmp orders prefixes IPv4 first, then by address, then length.

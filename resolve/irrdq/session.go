@@ -207,8 +207,3 @@ func serials(snap *Snapshot, arg string) Reply {
 	}
 	return frame(strings.Join(append(known, unknown...), "\n"))
 }
-
-// ripe answers a RIPE-style query (Task 6).
-func (s *Session) ripe(ctx context.Context, snap *Snapshot, line string) Reply {
-	return Reply{text: "%% ERROR: Unrecognised flag/search: " + line + "\n\n\n"}
-}
