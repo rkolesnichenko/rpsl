@@ -143,7 +143,7 @@ func (c *Corpus) Put(o object.Object) bool {
 			if an, ok := o.(object.AutNum); ok && c.IndexPeers {
 				named = peeringASNs(an)
 			}
-			c.putText(k, textFrom(raw), named)
+			c.putText(k, ObjectText(raw), named)
 		} else {
 			c.putWhole(k, o) // built by hand: no text to keep
 		}
@@ -171,7 +171,7 @@ func (c *Corpus) keepText(rk routeKey, o object.Object) {
 	if c.routeText == nil {
 		c.routeText = map[routeKey]string{}
 	}
-	c.routeText[rk] = strings.Clone(textFrom(raw))
+	c.routeText[rk] = strings.Clone(ObjectText(raw))
 }
 
 // rawRouteKey is the identity of a route whose prefix or origin did not
@@ -209,7 +209,7 @@ func (c *Corpus) putWhole(k wholeKey, o object.Object) {
 	c.whole[k] = held{obj: o, key: k, seq: c.seq}
 }
 
-// textFrom returns raw's serialized text starting at its first attribute
+// ObjectText returns raw's serialized text starting at its first attribute
 // line, dropping the blank, comment and malformed lines the stream attached
 // before the object (ast.Object owns them so the *stream's* own round-trip
 // stays byte-exact; see rpsl.ParseWith). A Corpus entry kept as text is later
@@ -224,21 +224,41 @@ func (c *Corpus) putWhole(k wholeKey, o object.Object) {
 // verbatim ("# aut-num: AS1" followed by the real "aut-num: AS1"), which a
 // strings.Index on the attribute's raw bytes would match inside the comment
 // itself, understating how much trivia to drop.
-func textFrom(raw *ast.Object) string {
+//
+// The text ends with the object's last attribute or continuation line: the
+// stream also attaches to the last object of a dump the blank, comment and
+// malformed lines after it (a dump's closing comment, ARIN's "EOF"), which
+// are no more the object's than the ones before it. A comment line between
+// two attribute lines stays.
+//
+// It is exported for servers that answer with an object as its registry
+// published it (resolve/irrdq): the same text a Corpus keeps.
+func ObjectText(raw *ast.Object) string {
 	text := raw.String()
-	rest, off := text, 0
-	for len(rest) > 0 {
+	start, end := -1, 0
+	for rest, off := text, 0; len(rest) > 0; {
 		line, eol := rest, len(rest)
 		if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
 			line, eol = rest[:nl], nl+1
 		}
-		if lexer.StartsAttribute(strings.TrimSuffix(line, "\r")) {
-			return text[off:]
+		line = strings.TrimSuffix(line, "\r")
+		switch {
+		case start < 0:
+			if lexer.StartsAttribute(line) {
+				start, end = off, off+eol
+			}
+		case lexer.IsBlankLine(line):
+			return text[start:end] // a blank line ends the object
+		case lexer.StartsAttribute(line) || line[0] == ' ' || line[0] == '\t' || line[0] == '+':
+			end = off + eol
 		}
 		off += eol
 		rest = rest[eol:]
 	}
-	return text
+	if start < 0 {
+		return text
+	}
+	return text[start:end]
 }
 
 // putText is putWhole for an object kept as its text.
@@ -442,7 +462,7 @@ func (c *Corpus) Routes() iter.Seq[CorpusRoute] {
 			}
 			var text string
 			if raw := h.obj.Raw(); raw != nil {
-				text = textFrom(raw)
+				text = ObjectText(raw)
 			}
 			if !yield(CorpusRoute{p, origin, h.key.source, text}) {
 				return

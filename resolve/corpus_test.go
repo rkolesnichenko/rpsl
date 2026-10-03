@@ -745,3 +745,28 @@ func TestDumpLoaderKeepsPolicy(t *testing.T) {
 		}
 	}
 }
+
+// TestObjectText: an object's text runs from its first attribute line to its
+// last attribute or continuation line, without the blank, comment and
+// malformed lines a dump stream attached before it or, to its last object,
+// after it; a comment line between its attributes stays.
+func TestObjectText(t *testing.T) {
+	dump := "# head\n\nroute: 192.0.2.0/24\n# inside\norigin: AS1\nremarks: a\n+\n b\nsource: RIPE\n\n# tail\nEOF\n\n"
+	var got []string
+	for o := range rpsl.Parse(strings.NewReader(dump)) {
+		got = append(got, resolve.ObjectText(o))
+	}
+	want := []string{"route: 192.0.2.0/24\n# inside\norigin: AS1\nremarks: a\n+\n b\nsource: RIPE\n"}
+	if !slices.Equal(got, want) {
+		t.Errorf("ObjectText:\n got %q\nwant %q", got, want)
+	}
+	l := &resolve.DumpLoader{KeepRouteText: true}
+	if err := l.Read(strings.NewReader(dump)); err != nil {
+		t.Fatal(err)
+	}
+	for r := range l.Corpus().Routes() {
+		if r.Text != want[0] {
+			t.Errorf("kept route text %q, want %q", r.Text, want[0])
+		}
+	}
+}

@@ -138,7 +138,7 @@ func TestKeptTextSpanStartsAtOne(t *testing.T) {
 }
 
 // Fix round 2: a leading comment that quotes the object's first line verbatim
-// must not fool a content search into under-trimming. textFrom's original
+// must not fool a content search into under-trimming. ObjectText's original
 // strings.Index(text, attrs[0].Raw) matched inside "# aut-num: AS1" itself
 // (the same bytes as the real "aut-num: AS1" line that follows), leaving the
 // comment's own class line in the stored text and shifting every span by one.
