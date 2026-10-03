@@ -194,7 +194,14 @@ func TestIRRdqMatchesIrrtest(t *testing.T) {
 		}
 		sort.Strings(sets)
 		var cmds []string
-		for _, s := range append(sets, "AS-NOSUCH", "RS-NOSUCH") {
+		// Each set as written (the model writes names lower-case) and
+		// upper-case, as bgpq4 sends them: IRRd removes a set's own name
+		// from "!i" only as sent.
+		var names []string
+		for _, s := range sets {
+			names = append(names, s, strings.ToUpper(s))
+		}
+		for _, s := range append(names, "AS-NOSUCH", "RS-NOSUCH") {
 			cmds = append(cmds, "!i"+s, "!i"+s+",1", "!a"+s, "!a4"+s, "!a6"+s)
 		}
 		for as := range asns {

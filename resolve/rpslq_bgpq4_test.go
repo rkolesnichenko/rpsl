@@ -300,6 +300,9 @@ func TestRpslqSourcePrefixMatchesBgpq4(t *testing.T) {
 			if set.class != types.ClassAsSet {
 				continue // bgpq4 then expands route-sets shallowly: "source-route-set"
 			}
+			if listsItself(set) {
+				continue // IRRd's "!i" drops the self-reference bgpq4 would follow: "source-cycle"
+			}
 			top := set.source + "::" + set.name
 			for _, sources := range []string{"RIPE,RADB", "RADB", "RIPE"} {
 				for _, flags := range [][]string{{"-4"}, {"-6"}, {"-t", "-j"}} {
@@ -315,6 +318,16 @@ func TestRpslqSourcePrefixMatchesBgpq4(t *testing.T) {
 	if compared < 100 {
 		t.Errorf("only %d lists compared", compared)
 	}
+}
+
+// listsItself reports whether s names itself among its members.
+func listsItself(s *mSet) bool {
+	for _, mm := range s.members {
+		if mm.kind == "set" && mm.set == s.name && mm.op == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // Where rpslq and bgpq4 knowingly differ over SOURCE:: (divergences.md),
@@ -340,10 +353,10 @@ func TestRpslqSourceDivergences(t *testing.T) {
 		// nested references come from its own object, resolve/scoped_test.go's
 		// TestScopedFilterSetDoesNotCascade), so the unscoped self-reference is
 		// a node of its own, resolved like any other unscoped set — RADB's
-		// AS-TOP, by -S. bgpq4 reaches the same answer because it has not
-		// marked the top as seen either; no longer a divergence, but pinned so
-		// a regression on either side still fails here.
-		{"source-cycle", []string{"-tj", "RIPE::AS-TOP"}, `{"NN": [ 65001,65002 ]}`, `{"NN": [ 65001,65002 ]}`},
+		// AS-TOP, by -S. IRRd's "!i" removes the parameter from its answer
+		// (members_for_set, irrd/server/query_resolver.py), so bgpq4, asking
+		// "!sRIPE" then "!iAS-TOP", never sees the self-reference.
+		{"source-cycle", []string{"-tj", "RIPE::AS-TOP"}, `{"NN": [ 65001,65002 ]}`, `{"NN": [ 65001 ]}`},
 		// With -L (or EXCEPT), bgpq4 ignores SOURCE:: for the top itself and
 		// looks it up in the default sources alone (RADB's AS-TOP). rpslq still
 		// honors SOURCE:: for the top, and — the scope not cascading — also

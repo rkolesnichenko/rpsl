@@ -770,10 +770,22 @@ func (db *DB) irrdCommand(c net.Conn, full string, sel *[]string, persistent *bo
 	case "i":
 		var members []string
 		var ok bool
+		name := param
 		if base, recursive := strings.CutSuffix(param, ",1"); recursive {
+			name = base
 			members, ok = db.Recursive(cur, base)
 		} else {
 			members, ok = db.Members(cur, param)
+		}
+		// IRRd's members_for_set (irrd/server/query_resolver.py) ends with
+		// "if parameter in members: members.remove(parameter)": the set's
+		// own name goes, but only as sent — "!iAS-SELF" drops a member
+		// AS-SELF, "!ias-self" keeps it.
+		for i, m := range members {
+			if m == name {
+				members = append(members[:i:i], members[i+1:]...)
+				break
+			}
 		}
 		if !ok || len(members) == 0 {
 			fmt.Fprint(c, "D\n") // IRRd answers an empty set like a missing one
