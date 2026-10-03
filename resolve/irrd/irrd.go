@@ -654,8 +654,9 @@ func parsePrefixes(cmd string, payload []byte) ([]netip.Prefix, error) {
 // mbrs-by-ref handling, no MaxDepth — and the engine cannot re-check it, so
 // it is not part of resolve.Source; use it where the server's answer is what
 // is wanted. A name that is not an as-set is an error wrapping
-// resolve.ErrSetClass, a missing as-set resolve.ErrNotFound, and a server
-// without "!a" (before IRRd 4) ErrQueryRefused.
+// resolve.ErrSetClass, a missing as-set resolve.ErrNotFound, an as-set whose
+// members originate nothing an empty answer, and a server without "!a"
+// (before IRRd 4) ErrQueryRefused.
 func (s *Source) ASSetPrefixes(ctx context.Context, name types.SetName, afi types.AFI) ([]netip.Prefix, error) {
 	if name.Class() != types.ClassAsSet {
 		return nil, fmt.Errorf("irrd: ASSetPrefixes %s: %w", name, resolve.ErrSetClass)
@@ -669,10 +670,19 @@ func (s *Source) ASSetPrefixes(ctx context.Context, name types.SetName, afi type
 	}
 	cmd += name.String()
 	payload, err := s.do(ctx, cmd)
-	if err != nil {
-		if errors.Is(err, errNotFound) {
-			return nil, resolve.ErrNotFound
+	if errors.Is(err, errNotFound) {
+		// IRRd 4.5.3 answers D both for a missing as-set and for one whose
+		// members originate nothing (resolve/testdata/irrd/golden/plain.txt,
+		// a/aAS-EMPTY); "!m" tells the two apart, as GetSet does for "!i".
+		switch _, merr := s.do(ctx, "!mas-set,"+name.String()); {
+		case merr == nil:
+			return nil, nil
+		case !errors.Is(merr, errNotFound):
+			return nil, merr
 		}
+		return nil, resolve.ErrNotFound
+	}
+	if err != nil {
 		return nil, err
 	}
 	return parsePrefixes(cmd, payload)
