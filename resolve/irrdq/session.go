@@ -47,6 +47,14 @@ var (
 // Fail is IRRd's error answer, "F <msg>".
 func Fail(msg string) Reply { return Reply{text: "F " + msg + "\n"} }
 
+// Refused is IRRd's error answer msg in place of r, closing the connection
+// when r would have: what a server sends when it cannot send r itself.
+func (r Reply) Refused(msg string) Reply {
+	f := Fail(msg)
+	f.close = r.close
+	return f
+}
+
 // A Session is one client connection's state: its selected registries, its
 // persistent mode, its timeout. It is not safe for concurrent use: a
 // connection's commands are answered one at a time, in order.

@@ -180,3 +180,26 @@ func TestReplyFraming(t *testing.T) {
 		t.Errorf("framed: %q", framed("x"))
 	}
 }
+
+// TestRefused: a refusal is IRRd's F line in place of the reply, closing
+// the connection exactly when the reply would have.
+func TestRefused(t *testing.T) {
+	snap := fixture(t, SnapshotOptions{})
+	s := NewSession(func() *Snapshot { return snap })
+	r, _ := s.Do(context.Background(), "!iAS-FOO")
+	f := r.Refused("Answer larger than 1 bytes")
+	var b strings.Builder
+	f.WriteTo(&b)
+	if got := b.String(); got != "F Answer larger than 1 bytes\n" || f.Len() != len(got) {
+		t.Errorf("refused: %q (Len %d)", got, f.Len())
+	}
+	if !r.Close() || !f.Close() {
+		t.Error("a refusal of a one-shot reply did not close the connection")
+	}
+	s = NewSession(func() *Snapshot { return snap })
+	s.Do(context.Background(), "!!")
+	r, _ = s.Do(context.Background(), "!iAS-FOO")
+	if f := r.Refused("x"); f.Close() {
+		t.Error("a refusal in a persistent session closed the connection")
+	}
+}
