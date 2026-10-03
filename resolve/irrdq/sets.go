@@ -125,8 +125,8 @@ func (snap *Snapshot) membersOf(ctx context.Context, r *Registry, set object.Nam
 	return append(out, claims...), nil
 }
 
-// claimants are the keys of set's honoured member-of claimants in r (Task 7
-// filters RPKI-invalid routes out of them).
+// claimants are the keys of set's honoured member-of claimants in r, without
+// the routes RPKI-aware mode hides (visible).
 func (snap *Snapshot) claimants(ctx context.Context, r *Registry, set object.NamedSet) ([]string, error) {
 	objs, err := r.src.MembersByRef(ctx, set)
 	if err != nil {
@@ -141,11 +141,11 @@ func (snap *Snapshot) claimants(ctx context.Context, r *Registry, set object.Nam
 				out = append(out, t.AS.String())
 			}
 		case object.Route:
-			if !isAS && t.Prefix.IsValid() {
+			if !isAS && t.Prefix.IsValid() && snap.routeVisible(r, t.Prefix, t.Origin) {
 				out = append(out, t.Prefix.Masked().String())
 			}
 		case object.Route6:
-			if !isAS && t.Prefix.IsValid() {
+			if !isAS && t.Prefix.IsValid() && snap.routeVisible(r, t.Prefix, t.Origin) {
 				out = append(out, t.Prefix.Masked().String())
 			}
 		}
@@ -247,7 +247,11 @@ func cmdMembers(ctx context.Context, s *Session, snap *Snapshot, arg string) Rep
 	var out []string
 	var err error
 	if name, ok := strings.CutSuffix(arg, ",1"); ok {
-		out, err = snap.recursiveOrRFC(ctx, regs, name)
+		var refused string
+		out, refused, err = snap.recursiveOrRFC(ctx, regs, name)
+		if refused != "" {
+			return Fail(refused)
+		}
 	} else {
 		var ms []string
 		ms, _, _, err = snap.setMembers(ctx, regs, arg, false)
@@ -265,9 +269,15 @@ func cmdMembers(ctx context.Context, s *Session, snap *Snapshot, arg string) Rep
 	return frame(strings.Join(out, " "))
 }
 
-// recursiveOrRFC is IRRd's recursion, or the engine's in RFC mode (Task 7).
-func (snap *Snapshot) recursiveOrRFC(ctx context.Context, regs []*Registry, name string) ([]string, error) {
-	return snap.recursive(ctx, regs, name, types.ClassUnknown)
+// recursiveOrRFC is IRRd's recursion, or in RFC mode the engine's
+// expansion (rfcMembers), whose refusal is refused.
+func (snap *Snapshot) recursiveOrRFC(ctx context.Context, regs []*Registry, name string) (members []string, refused string, err error) {
+	if snap.opts.RFC {
+		members, refused = snap.rfcMembers(ctx, regs, name)
+		return members, refused, nil
+	}
+	members, err = snap.recursive(ctx, regs, name, types.ClassUnknown)
+	return members, "", err
 }
 
 // cmdASetPrefixes answers "!a<as-set>", "!a4<as-set>" and "!a6<as-set>".
@@ -282,7 +292,15 @@ func cmdASetPrefixes(ctx context.Context, s *Session, snap *Snapshot, arg string
 	if arg == "" {
 		return Fail("Missing required set name for A query")
 	}
-	ps, err := snap.asSetPrefixes(ctx, snap.selected(s.sources(snap)), arg, afi)
+	regs := snap.selected(s.sources(snap))
+	if snap.opts.RFC {
+		ps, refused := snap.rfcPrefixes(ctx, regs, arg, afi)
+		if refused != "" {
+			return Fail(refused)
+		}
+		return prefixes(ps)
+	}
+	ps, err := snap.asSetPrefixes(ctx, regs, arg, afi)
 	if err != nil {
 		return internalError
 	}
@@ -291,7 +309,7 @@ func cmdASetPrefixes(ctx context.Context, s *Session, snap *Snapshot, arg string
 
 // asSetPrefixes is "!a": the as-set resolved with an as-set root, then the
 // distinct prefixes of afi its ASes originate in regs, sorted (prefixCmp).
-// Task 7 adds RFC mode.
+// RFC mode answers by rfcPrefixes instead.
 func (snap *Snapshot) asSetPrefixes(ctx context.Context, regs []*Registry, name string, afi types.AFI) ([]netip.Prefix, error) {
 	members, err := snap.recursive(ctx, regs, name, types.ClassAsSet)
 	if err != nil {

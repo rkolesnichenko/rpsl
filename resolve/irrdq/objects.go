@@ -11,6 +11,7 @@ import (
 	"github.com/rkolesnichenko/rpsl/ast"
 	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/resolve"
+	"github.com/rkolesnichenko/rpsl/resolve/rpki"
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
@@ -54,12 +55,6 @@ func objectText(raw *ast.Object) string {
 	}
 	return text
 }
-
-// visible reports whether a route is served (Task 7: not RPKI-invalid).
-func (snap *Snapshot) visible(r *Registry, rt route) bool { return true }
-
-// routeText is a route's text as served (Task 7: with rpki-ov-state:).
-func (snap *Snapshot) routeText(r *Registry, rt route) string { return rt.text }
 
 // An entry is one object of an answer: a route or route6 of a registry (obj
 // nil), or another object the registry holds.
@@ -286,12 +281,18 @@ func (snap *Snapshot) lookup(ctx context.Context, regs []*Registry, class, key s
 }
 
 // routesByKey is the served routes of prefix p and origin as in regs, in
-// regs' order (only the first when firstOnly).
+// regs' order (only the first when firstOnly). The pseudo registry's routes
+// are never among them: IRRd keys each by its prefix, origin and maximum
+// length ("192.0.2.0/24AS65001/ML24"), so a prefix and an origin name none
+// (golden rpki/pseudo).
 func (snap *Snapshot) routesByKey(ctx context.Context, regs []*Registry, p netip.Prefix, as types.ASN, firstOnly bool) ([]entry, error) {
 	var out []entry
 	for _, r := range regs {
 		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		if r.name == rpki.PseudoSource {
+			continue
 		}
 		for _, i := range r.byPrefix[p] {
 			if e := (entry{reg: r, rt: r.routes[i]}); e.rt.origin == as && snap.served(e) {

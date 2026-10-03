@@ -173,11 +173,17 @@ type SnapshotOptions struct {
 	// precedence order — IRRd's sources_default. nil: every registry, in
 	// order.
 	Default []string
-	// VRPs puts the snapshot in IRRd 4's RPKI-aware mode.
+	// VRPs puts the snapshot in IRRd 4's RPKI-aware mode: every route and
+	// route6 of a registry other than rpki.PseudoSource that VRPs.Validate
+	// finds Invalid is hidden, and a served one gains IRRd's rpki-ov-state:
+	// line. A *rpki.VRPs is immutable, so every snapshot built from these
+	// options (With included) shares it.
 	VRPs *rpki.VRPs
 	// RFC answers "!i…,1" and "!a" by resolve.Expander.
 	RFC bool
-	// Expander holds the limits for RFC mode; its Src is set per query.
+	// Expander holds the limits (and Exclude) for RFC mode; its Src, AFI and
+	// Concurrency are set per query (Concurrency to 0: the registries are in
+	// memory). NewSnapshot copies its Exclude lists.
 	Expander resolve.Expander
 	// Version follows "IRRd -- version 4.5.3" in the "!v" answer, in
 	// parentheses after "rpsld"; "" leaves just "rpsld".
@@ -220,6 +226,10 @@ func NewSnapshot(regs []*Registry, opts SnapshotOptions) (*Snapshot, error) {
 		}
 	}
 	s.opts.Default = slices.Clone(s.dflt)
+	// The caller's Exclude lists are not the snapshot's: it is immutable.
+	s.opts.Expander.Src = nil
+	s.opts.Expander.Exclude.Sets = slices.Clone(opts.Expander.Exclude.Sets)
+	s.opts.Expander.Exclude.ASNs = slices.Clone(opts.Expander.Exclude.ASNs)
 	return s, nil
 }
 
@@ -254,4 +264,11 @@ func (s *Snapshot) selected(names []string) []*Registry {
 		}
 	}
 	return regs
+}
+
+// WithSerial returns r's data under serial; r is unchanged.
+func (r *Registry) WithSerial(serial uint64) *Registry {
+	c := *r
+	c.serial = serial
+	return &c
 }

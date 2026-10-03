@@ -131,8 +131,8 @@ func prefixes(ps []netip.Prefix) Reply {
 }
 
 // originated is the distinct prefixes as originates in regs, of afi
-// (AFIUnspecified or AFIAny: both), sorted (prefixCmp); err is a Source's
-// error or ctx's. Task 7 drops RPKI-invalid ones.
+// (AFIUnspecified or AFIAny: both), sorted (prefixCmp), without the routes
+// RPKI-aware mode hides (visible); err is a Source's error or ctx's.
 func (snap *Snapshot) originated(ctx context.Context, regs []*Registry, as types.ASN, afi types.AFI) ([]netip.Prefix, error) {
 	if afi == types.AFIUnspecified {
 		afi = types.AFIAny
@@ -149,7 +149,7 @@ func (snap *Snapshot) originated(ctx context.Context, regs []*Registry, as types
 		}
 		for _, p := range ps {
 			p = p.Masked()
-			if !seen[p] {
+			if !seen[p] && snap.routeVisible(r, p, as) {
 				seen[p] = true
 				out = append(out, p)
 			}

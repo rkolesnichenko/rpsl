@@ -13,6 +13,7 @@ import (
 	"github.com/rkolesnichenko/rpsl"
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/irrdoracle"
+	"github.com/rkolesnichenko/rpsl/resolve/rpki"
 )
 
 // covered are the golden-case name prefixes irrdq answers so far; every
@@ -70,6 +71,8 @@ var diverges = map[string]string{
 	"ripe/rtr1.example.net": refusedLookup("rtr1.example.net"),
 	"ripe/-K AS-NORM":       refusedLookup("AS-NORM"),
 	"ripe/-s RADB AS-NORM":  refusedLookup("AS-NORM"),
+	// The same in the RPKI pseudo registry (rpki goldens).
+	"rpki/-s RPKI 192.0.2.0/24": refusedLookup("192.0.2.0/24"),
 }
 
 // refusedLookup is rpsld's answer to a plain lookup of key without -T.
@@ -127,7 +130,7 @@ func fixtureText(t *testing.T, file, class, key string) string {
 // testPins are divergences no golden case can show, each named in its
 // divergences.md row by the unit test that pins it (a function of this
 // package's tests).
-var testPins = []string{"TestInvalidMembersServed", "TestRouteSearchOptions", "TestNotServed"}
+var testPins = []string{"TestInvalidMembersServed", "TestRouteSearchOptions", "TestNotServed", "TestRFCMode"}
 
 // pending are covered cases that also need a later task's commands; they
 // are logged and skipped until that task removes them.
@@ -212,48 +215,15 @@ func TestGoldens(t *testing.T) {
 			continue
 		}
 		n++
-		got := replay(t, snap, g.Send)
-		if d, ok := divergesObj[g.Name]; ok {
-			text := fixtureText(t, d.file, d.class, d.key)
-			want := "A" + strconv.Itoa(len(text)) + "\n" + text + "C\n"
-			if irrdoracle.Compare(g.Kind, want, g.Got) == nil {
-				t.Errorf("%s: the pinned divergence %q agrees with IRRd; remove it from divergesObj and divergences.md", g.Name, want)
-			}
-			if got != want {
-				t.Errorf("%s, a pinned divergence:\n got %q\nwant %q", g.Name, got, want)
-			}
-			continue
-		}
-		pin, pinned := diverges[g.Name]
-		if pinned && irrdoracle.Compare(g.Kind, pin, g.Got) == nil {
-			t.Errorf("%s: the pinned divergence %q agrees with IRRd; remove it from diverges and divergences.md", g.Name, pin)
-		}
-		// A pending case is replayed too, so one that starts to pass is
-		// flagged rather than skipped for ever.
-		var err error
-		if pinned {
-			if got != pin {
-				err = fmt.Errorf("a pinned divergence:\n got %q\nwant %q", got, pin)
-			}
-		} else {
-			err = irrdoracle.Compare(g.Kind, got, g.Got)
-		}
-		if why, ok := pending[g.Name]; ok {
-			if err == nil {
-				t.Errorf("%s is pending (%s) but now agrees with IRRd (or its pin); remove it from pending", g.Name, why)
-			} else {
-				t.Logf("%s: pending: %s", g.Name, why)
-			}
-			continue
-		}
-		if err != nil {
-			t.Errorf("%s (%q): %v", g.Name, g.Send, err)
-		}
+		checkGolden(t, snap, g)
 	}
 	if n == 0 {
 		t.Fatal("no golden case is covered")
 	}
 	// A pin or a pending entry naming no golden case would never run.
+	for _, g := range irrdoracle.Load(t, "rpki") {
+		seen[g.Name] = true
+	}
 	for name := range diverges {
 		if !seen[name] {
 			t.Errorf("diverges names %s, which is no golden case", name)
@@ -271,6 +241,100 @@ func TestGoldens(t *testing.T) {
 		if !seen[name] {
 			t.Errorf("pending names %s, which is no golden case", name)
 		}
+	}
+}
+
+// checkGolden replays g on snap and holds the answer to IRRd's, or to its
+// pinned divergence; a pin that agrees with IRRd, or a pending case that
+// passes, fails too.
+func checkGolden(t *testing.T, snap *Snapshot, g irrdoracle.Golden) {
+	t.Helper()
+	got := replay(t, snap, g.Send)
+	if d, ok := divergesObj[g.Name]; ok {
+		text := fixtureText(t, d.file, d.class, d.key)
+		want := "A" + strconv.Itoa(len(text)) + "\n" + text + "C\n"
+		if irrdoracle.Compare(g.Kind, want, g.Got) == nil {
+			t.Errorf("%s: the pinned divergence %q agrees with IRRd; remove it from divergesObj and divergences.md", g.Name, want)
+		}
+		if got != want {
+			t.Errorf("%s, a pinned divergence:\n got %q\nwant %q", g.Name, got, want)
+		}
+		return
+	}
+	pin, pinned := diverges[g.Name]
+	if pinned && irrdoracle.Compare(g.Kind, pin, g.Got) == nil {
+		t.Errorf("%s: the pinned divergence %q agrees with IRRd; remove it from diverges and divergences.md", g.Name, pin)
+	}
+	// A pending case is replayed too, so one that starts to pass is
+	// flagged rather than skipped for ever.
+	var err error
+	if pinned {
+		if got != pin {
+			err = fmt.Errorf("a pinned divergence:\n got %q\nwant %q", got, pin)
+		}
+	} else {
+		err = irrdoracle.Compare(g.Kind, got, g.Got)
+	}
+	if why, ok := pending[g.Name]; ok {
+		if err == nil {
+			t.Errorf("%s is pending (%s) but now agrees with IRRd (or its pin); remove it from pending", g.Name, why)
+		} else {
+			t.Logf("%s: pending: %s", g.Name, why)
+		}
+		return
+	}
+	if err != nil {
+		t.Errorf("%s (%q): %v", g.Name, g.Send, err)
+	}
+}
+
+// fixtureRPKI is the snapshot the rpki goldens were recorded on: RIPE with
+// serial 7 (IRRd imported it with RIPE.CURRENTSERIAL), RADB, and the RPKI
+// pseudo registry from roas.json; default RIPE, RADB.
+func fixtureRPKI(t *testing.T) *Snapshot {
+	t.Helper()
+	dir := irrdoracle.Fixture(t)
+	f, err := os.Open(filepath.Join(dir, "roas.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	vrps, err := rpki.ReadJSON(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pseudo strings.Builder
+	if err := vrps.WriteRPSL(&pseudo); err != nil {
+		t.Fatal(err)
+	}
+	l := &resolve.DumpLoader{KeepPolicy: true, KeepRouteText: true}
+	if err := l.Read(strings.NewReader(pseudo.String())); err != nil {
+		t.Fatal(err)
+	}
+	rpkiReg, err := NewRegistry(rpki.PseudoSource, 0, l.Corpus())
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := fixture(t, SnapshotOptions{})
+	regs := base.Registries()
+	s, err := NewSnapshot([]*Registry{regs[0].WithSerial(7), regs[1], rpkiReg}, SnapshotOptions{Default: []string{"RIPE", "RADB"}, VRPs: vrps, Version: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// TestGoldensRPKI holds the RPKI-aware snapshot to IRRd's rpki goldens,
+// every one of them.
+func TestGoldensRPKI(t *testing.T) {
+	snap := fixtureRPKI(t)
+	n := 0
+	for _, g := range irrdoracle.Load(t, "rpki") {
+		n++
+		checkGolden(t, snap, g)
+	}
+	if n == 0 {
+		t.Fatal("no rpki golden case")
 	}
 }
 

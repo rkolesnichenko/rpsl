@@ -5,6 +5,10 @@
 // operator is dropped from a recursive expansion, an as-set follows a
 // route-set listed in it from a route-set root, AS-ANY is a missing set).
 // SnapshotOptions.RFC answers "!i…,1" and "!a" by resolve.Expander instead.
+// SnapshotOptions.VRPs is IRRd 4's RPKI-aware mode: a route RFC 6811 finds
+// invalid is hidden from every answer (a route-set's listed prefixes stay),
+// a served route carries IRRd's rpki-ov-state: line, and the registry named
+// RPKI holds IRRd's pseudo route objects, never hidden.
 //
 // It is pure, like resolve: no sockets, no goroutines; resolve/irrdserver
 // puts a Session on a connection. A Snapshot is immutable: a Session reads
