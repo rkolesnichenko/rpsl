@@ -23,9 +23,18 @@ func init() {
 // registry that does not keep it.
 const textNotKept = "Route text is not kept by this mirror (rpsld -keep-route-text)"
 
-// kept are the classes a registry holds.
-var kept = map[string]bool{"as-set": true, "route-set": true, "rtr-set": true, "filter-set": true,
-	"peering-set": true, "aut-num": true, "inet-rtr": true, "route": true, "route6": true}
+// keptClasses are the classes a registry holds, in the order a refusal
+// names them; kept is the same set.
+var (
+	keptClasses = []string{"as-set", "route-set", "rtr-set", "filter-set", "peering-set", "aut-num", "inet-rtr", "route", "route6"}
+	kept        = func() map[string]bool {
+		m := map[string]bool{}
+		for _, c := range keptClasses {
+			m[c] = true
+		}
+		return m
+	}()
+)
 
 // knownClass reports whether class is an RPSL class either profile lists,
 // matched case-sensitively, as IRRd matches a class.
@@ -334,10 +343,16 @@ func (snap *Snapshot) search(ctx context.Context, regs []*Registry, p netip.Pref
 	switch mode {
 	case 0:
 		for _, r := range regs {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			exact(r, p)
 		}
 	case 'L':
 		for _, r := range regs {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			var idx []int
 			for bits := 0; bits <= p.Bits(); bits++ {
 				q, _ := p.Addr().Prefix(bits)
@@ -355,6 +370,9 @@ func (snap *Snapshot) search(ctx context.Context, regs []*Registry, p netip.Pref
 	case 'l':
 		best := -1
 		for _, r := range regs {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			for bits := p.Bits() - 1; bits > best; bits-- {
 				q, _ := p.Addr().Prefix(bits)
 				if slices.ContainsFunc(r.byPrefix[q], func(i int) bool { return snap.visible(r, r.routes[i]) }) {
@@ -371,6 +389,9 @@ func (snap *Snapshot) search(ctx context.Context, regs []*Registry, p netip.Pref
 		}
 	case 'M':
 		for _, r := range regs {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			// Routes are sorted by family, address and length, so p's more
 			// specifics follow the first route not before p, up to the first
 			// address outside p.

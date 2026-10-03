@@ -99,6 +99,14 @@ func (s *Session) do(ctx context.Context, snap *Snapshot, line string) Reply {
 	if strings.IndexByte(line, 0) >= 0 {
 		return Fail("Queries may not contain null bytes")
 	}
+	// "-V <agent> !<command>" is the IRRd command, the user agent dropped
+	// (IRRd's handle_query, irrd issue #985): split at single spaces, as
+	// IRRd splits it.
+	if rest, found := strings.CutPrefix(line, "-V "); found {
+		if _, cmd, two := strings.Cut(rest, " "); two && strings.HasPrefix(cmd, "!") {
+			line = cmd
+		}
+	}
 	if line[0] != '!' {
 		return s.ripe(ctx, snap, line)
 	}
@@ -120,7 +128,7 @@ func (s *Session) do(ctx context.Context, snap *Snapshot, line string) Reply {
 		switch cmd {
 		case 'a':
 			return Fail("Missing required set name for A query")
-		case 'i', 'g', '6', 's', 'j', 'n', 't', 'm', 'r':
+		case 'i', 'g', '6', 's', 'j', 'n', 't', 'm', 'r', 'o':
 			return Fail("Missing parameter for " + string(cmd) + " query")
 		}
 	}
@@ -167,16 +175,29 @@ func (s *Session) selectSources(snap *Snapshot, arg string) Reply {
 	case "-*":
 		return ok
 	}
-	var next []string
-	for _, n := range strings.Split(arg, ",") {
-		name, err := types.ParseSourceName(n)
-		if err != nil || snap.byName[name] == nil {
-			return Fail("One or more selected sources are unavailable.")
-		}
-		next = append(next, name)
+	next, found := snap.selection(arg)
+	if !found {
+		return Fail(unavailable)
 	}
 	s.sel = next
 	return ok
+}
+
+// unavailable is IRRd's refusal of a selection naming a source it lacks.
+const unavailable = "One or more selected sources are unavailable."
+
+// selection reads a list of registry names ("!s", RIPE-style "-s"): split at
+// commas only, as IRRd splits it, each name canonical upper-case; ok is
+// false unless every name is a registry of snap.
+func (snap *Snapshot) selection(list string) (names []string, ok bool) {
+	for _, n := range strings.Split(list, ",") {
+		name, err := types.ParseSourceName(n)
+		if err != nil || snap.byName[name] == nil {
+			return nil, false
+		}
+		names = append(names, name)
+	}
+	return names, true
 }
 
 // serials answers "!j": NAME:N:0-<serial> per registry ("-" for serial 0),

@@ -14,6 +14,7 @@ import (
 func init() {
 	commands['e'] = notServed("e")
 	commands['J'] = notServed("J")
+	commands['o'] = func(context.Context, *Session, *Snapshot, string) Reply { return Fail(mntByNotServed) }
 	commands['f'] = filterSwitch('f')
 	commands['F'] = filterSwitch('F')
 }
@@ -62,6 +63,15 @@ var inverseServed = []string{"origin", "member-of", "mbrs-by-ref", "members", "m
 // name objects of classes the mirror does not keep, so no answer would be
 // whole.
 var inverseNotServed = map[string]bool{"mnt-by": true, "admin-c": true, "tech-c": true, "zone-c": true, "person": true, "role": true}
+
+// inverseRefused is the refusal of an inverse search on attr, one of
+// inverseNotServed.
+func inverseRefused(attr string) string {
+	return "Inverse search on " + attr + " is not served by this mirror: it keeps the routing classes only"
+}
+
+// mntByNotServed answers "!o<mntner>", IRRd's inverse search on mnt-by.
+var mntByNotServed = inverseRefused("mnt-by")
 
 // ripeQuery is the search a RIPE-style query line asks, with the flags in
 // effect when it was read.
@@ -124,13 +134,9 @@ read:
 			if !ok {
 				return missing
 			}
-			var sel []string
-			for _, n := range strings.Split(v, ",") {
-				name, err := types.ParseSourceName(n)
-				if err != nil || snap.byName[name] == nil {
-					return ripeError("One or more selected sources are unavailable.")
-				}
-				sel = append(sel, name)
+			sel, ok := snap.selection(v)
+			if !ok {
+				return ripeError(unavailable)
 			}
 			s.sel = sel // for good, as IRRd's -s (golden ripe/s-flag-sticks)
 		case "T":
@@ -173,7 +179,7 @@ read:
 func (snap *Snapshot) answerRIPE(ctx context.Context, q ripeQuery) Reply {
 	if q.kind == 'i' && !slices.Contains(inverseServed, q.attr) {
 		if inverseNotServed[q.attr] {
-			return ripeError("Inverse search on " + q.attr + " is not served by this mirror: it keeps the routing classes only")
+			return ripeError(inverseRefused(q.attr))
 		}
 		return ripeError("Inverse attribute search not supported for " + q.attr +
 			", only supported for attributes: " + strings.Join(inverseServed, ", "))
@@ -192,7 +198,10 @@ func (snap *Snapshot) answerRIPE(ctx context.Context, q ripeQuery) Reply {
 	)
 	switch q.kind {
 	case 't':
-		es, refused, err = snap.textSearch(ctx, regs, q.key, want, len(q.classes) > 0)
+		if len(q.classes) == 0 {
+			return ripeError(lookupRefused(q.key))
+		}
+		es, err = snap.textSearch(ctx, regs, q.key, want)
 	case 'i':
 		es, err = snap.inverse(ctx, regs, q.attr, q.key, want)
 	default:
@@ -235,66 +244,74 @@ func wanted(es []entry, want func(string) bool) []entry {
 	return out
 }
 
-// textSearch answers a plain key, as IRRd's text_search: an AS number, its
+// lookupRefused is the refusal of a plain lookup without -T.
+func lookupRefused(key string) string {
+	return "This mirror keeps only the routing classes, so it cannot answer a lookup of " + key +
+		" whole; ask with -T and any of " + strings.Join(keptClasses, ", ")
+}
+
+// textSearch answers a plain key under a -T that names only classes the
+// mirror keeps (want), as IRRd's text_search does: an AS number, its
 // aut-num; a prefix or an address, the routes of it and of every less
 // specific prefix; otherwise the objects whose primary key is the key — a
 // set, a route ("192.0.2.0/24AS1") or an inet-rtr — from every selected
-// registry (no precedence). IRRd's last case also matches persons and roles
-// by part of their name and objects of every class the mirror lacks, so a
-// key that names no set and no route or inet-rtr held is refused, unless -T
-// asked for classes the mirror keeps (restricted), which makes the answer
-// certain.
-func (snap *Snapshot) textSearch(ctx context.Context, regs []*Registry, key string, want func(string) bool, restricted bool) ([]entry, string, error) {
+// registry (no precedence).
+//
+// Without -T IRRd's text_search also answers with classes the mirror lacks —
+// an AS number with the as-blocks covering it, an address with inetnums and
+// inet6nums, any other key with persons and roles whose name holds it — so
+// such a lookup is refused (lookupRefused): every answer would be partial,
+// and "No entries" possibly false.
+func (snap *Snapshot) textSearch(ctx context.Context, regs []*Registry, key string, want func(string) bool) ([]entry, error) {
 	if as, msg := parseAS(key); msg == "" {
 		if !want("aut-num") {
-			return nil, "", nil
+			return nil, nil
 		}
 		var out []entry
 		for _, r := range regs {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			an, err := r.src.AutNum(ctx, as, "")
 			if errors.Is(err, resolve.ErrNotFound) {
 				continue
 			}
 			if err != nil {
-				return nil, "", err
+				return nil, err
 			}
 			if an.Raw() != nil {
 				out = append(out, entry{reg: r, obj: an.Raw()})
 			}
 		}
-		return out, "", ctx.Err()
+		return out, nil
 	}
 	if p, ok := parseSearchPrefix(key); ok {
 		es, err := snap.search(ctx, regs, p, 'L')
-		return wanted(es, want), "", err
+		return wanted(es, want), err
 	}
 	pk := strings.ToUpper(key)
 	if n, err := types.ParseSetName(pk); err == nil && n.String() == pk {
 		if !want(n.Class().String()) {
-			return nil, "", nil
+			return nil, nil
 		}
-		es, err := snap.lookup(ctx, regs, n.Class().String(), pk, false)
-		return es, "", err
+		return snap.lookup(ctx, regs, n.Class().String(), pk, false)
 	}
 	var out []entry
 	if p, as, ok := parseRouteKey(pk); ok {
 		es, err := snap.routesByKey(ctx, regs, p, as, false)
 		if err != nil {
-			return nil, "", err
+			return nil, err
 		}
 		out = append(out, wanted(es, want)...)
 	}
 	if want("inet-rtr") {
 		es, err := snap.lookup(ctx, regs, "inet-rtr", pk, false)
 		if err != nil {
-			return nil, "", err
+			return nil, err
 		}
 		out = append(out, es...)
 	}
-	if len(out) == 0 && !restricted {
-		return nil, "This mirror keeps only the routing classes; it cannot answer a lookup of " + key, nil
-	}
-	return out, "", nil
+	return out, nil
 }
 
 // inverse answers "-i attr value" for an attribute the mirror serves, as
@@ -311,6 +328,9 @@ func (snap *Snapshot) inverse(ctx context.Context, regs []*Registry, attr, value
 			return nil, nil
 		}
 		for _, r := range regs {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			ps, err := r.src.OriginatedRoutes(ctx, as, types.AFIAny)
 			if err != nil {
 				return nil, err
@@ -332,6 +352,9 @@ func (snap *Snapshot) inverse(ctx context.Context, regs []*Registry, attr, value
 		}
 	case "member-of", "members", "mp-members", "mbrs-by-ref":
 		for _, r := range regs {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			var objs []object.Object
 			switch attr {
 			case "member-of":

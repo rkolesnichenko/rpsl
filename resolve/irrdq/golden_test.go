@@ -46,18 +46,36 @@ var diverges = map[string]string{
 	// An Objects case, pinned for its "!v" (R6); its objects are served as
 	// loaded.
 	"ripe/in-session": asFooRIPE + "\n" + asFooRADB + "\n\n" + version +
-		route203 + "\n" + route203x128 + "\n\n" + "%  No entries found for the selected source(s).\n\n\n",
+		route203 + "\n" + route203x128 + "\n\n" + refusedLookup("AS-NOSUCH"),
 
 	// What the mirror does not keep is refused, never "not found"
 	// (Refinement 11).
-	"session/q-bare":       "%% ERROR: This mirror keeps only the routing classes; it cannot answer a lookup of q\n\n\n",
 	"m/mntner,MNT-A":       "F Class mntner is not kept by this mirror\n",
 	"m/person,JD1-RIPE":    "F Class person is not kept by this mirror\n",
-	"ripe/MNT-A":           "%% ERROR: This mirror keeps only the routing classes; it cannot answer a lookup of MNT-A\n\n\n",
-	"ripe/JD1-RIPE":        "%% ERROR: This mirror keeps only the routing classes; it cannot answer a lookup of JD1-RIPE\n\n\n",
 	"ripe/-T mntner MNT-A": "%% ERROR: Class mntner is not kept by this mirror\n\n\n",
 	"ripe/-i mnt-by MNT-B": "%% ERROR: Inverse search on mnt-by is not served by this mirror: it keeps the routing classes only\n\n\n",
 	"ripe/-i foo bar":      "%% ERROR: Inverse attribute search not supported for foo, only supported for attributes: origin, member-of, mbrs-by-ref, members, mp-members\n\n\n",
+
+	// A plain lookup without -T is refused: IRRd's text search also answers
+	// with classes the mirror does not keep (as-block, inetnum, person, …).
+	"session/q-bare":        refusedLookup("q"),
+	"ripe/MNT-A":            refusedLookup("MNT-A"),
+	"ripe/JD1-RIPE":         refusedLookup("JD1-RIPE"),
+	"ripe/AS65001":          refusedLookup("AS65001"),
+	"ripe/as65001":          refusedLookup("as65001"),
+	"ripe/AS-NOSUCH":        refusedLookup("AS-NOSUCH"),
+	"ripe/192.0.2.0/24":     refusedLookup("192.0.2.0/24"),
+	"ripe/-s ripe AS-FOO":   refusedLookup("AS-FOO"),
+	"ripe/AS65001 AS65002":  refusedLookup("AS65002"),
+	"ripe/rtr1.example.net": refusedLookup("rtr1.example.net"),
+	"ripe/-K AS-NORM":       refusedLookup("AS-NORM"),
+	"ripe/-s RADB AS-NORM":  refusedLookup("AS-NORM"),
+}
+
+// refusedLookup is rpsld's answer to a plain lookup of key without -T.
+func refusedLookup(key string) string {
+	return "%% ERROR: This mirror keeps only the routing classes, so it cannot answer a lookup of " + key +
+		" whole; ask with -T and any of as-set, route-set, rtr-set, filter-set, peering-set, aut-num, inet-rtr, route, route6\n\n\n"
 }
 
 // Fixture objects as loaded, for pinned answers.

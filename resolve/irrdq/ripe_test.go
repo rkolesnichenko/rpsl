@@ -33,7 +33,7 @@ func TestRIPEInverse(t *testing.T) {
 
 func TestRIPEKeepsConnectionWithK(t *testing.T) {
 	snap := fixture(t, SnapshotOptions{})
-	got := replay(t, snap, "-k AS-NOSUCH\nAS-NOSUCH\n")
+	got := replay(t, snap, "-k -T as-set AS-NOSUCH\n-T as-set AS-NOSUCH\n")
 	want := noEntriesText + noEntriesText
 	if got != want {
 		t.Errorf("-k: %q", got)
@@ -46,37 +46,46 @@ func TestRIPEKeepsConnectionWithK(t *testing.T) {
 func TestRIPEQueryOrder(t *testing.T) {
 	snap := fixture(t, SnapshotOptions{})
 	for cmd, wantPrefix := range map[string]string{
-		"-T route AS-NOSUCH AS65001":        "aut-num:        AS65001\n", // -T spent on AS-NOSUCH
-		"AS-FOO -K":                         "as-set:         AS-FOO\n",  // -K after the search
-		"-K AS-FOO":                         "as-set: AS-FOO\nmembers: AS65001\n",
-		"-i origin AS65003 -T aut-num":      "route:          203.0.113.0/24\n",
-		"-x 192.0.2.0/25 AS65001":           "route:          192.0.2.0/25\n",
-		"-F -V client-1.0 -r AS65001":       "aut-num:        AS65001\n", // IRRd accepts -F and -V
-		"-T route,route6 -i origin AS65001": "route:",
+		"-T aut-num AS-NOSUCH -T as-set AS65001 AS-FOO": "",                         // each -T for one search: refused below
+		"-T as-set AS-FOO -K":                           "as-set:         AS-FOO\n", // -K after the search
+		"-K -T as-set AS-FOO":                           "as-set: AS-FOO\nmembers: AS65001\n",
+		"-i origin AS65003 -T aut-num":                  "route:          203.0.113.0/24\n",
+		"-x 192.0.2.0/25 AS65001":                       "route:          192.0.2.0/25\n",
+		"-F -V client-1.0 -r -T aut-num AS65001":        "aut-num:        AS65001\n", // IRRd accepts -F and -V
+		"-T route,route6 -i origin AS65001":             "route:",
+		"-T as-set AS65001 -T as-set AS-FOO":            "as-set:         AS-FOO\n",
 	} {
 		if got := ask(t, snap, cmd); !strings.HasPrefix(got, wantPrefix) || !strings.HasSuffix(got, "\n\n\n") {
 			t.Errorf("%s: %q", cmd, got)
 		}
 	}
 	for cmd, want := range map[string]string{
-		"-rK AS65001":      "%% ERROR: Unrecognised flag/search: rK\n\n\n", // no combined flags
-		"- AS65001":        "%% ERROR: Unrecognised flag/search: \n\n\n",
-		"-V":               "%% ERROR: Missing argument for flag/search: V\n\n\n",
-		"-T":               "%% ERROR: Missing argument for flag/search: T\n\n\n",
-		"-s":               "%% ERROR: Missing argument for flag/search: s\n\n\n",
-		"-x":               "%% ERROR: Missing argument for flag/search: x\n\n\n",
-		"-i":               "%% ERROR: Missing argument for flag/search: i\n\n\n",
-		"-M foo":           "%% ERROR: Invalid input for route search: foo\n\n\n",
-		"-x 192.0.2.1/24":  "%% ERROR: Invalid input for route search: 192.0.2.1/24\n\n\n",
-		"-k":               noEntriesText,
-		"-T aut-num MNT-A": noEntriesText, // only kept classes asked for: certain
-		"-T inet-rtr rtr9": noEntriesText,
-		"-T foo,mntner X":  "%% ERROR: Class mntner is not kept by this mirror\n\n\n",
-		"-s RADB,NOSUCH X": "%% ERROR: One or more selected sources are unavailable.\n\n\n",
-		"-l 192.0.2.0/24":  noEntriesText,
-		"AS-NOSUCH":        noEntriesText,
-		"AS65999":          noEntriesText,
-		"RIPE::AS-FOO":     "%% ERROR: This mirror keeps only the routing classes; it cannot answer a lookup of RIPE::AS-FOO\n\n\n",
+		"-rK AS65001":         "%% ERROR: Unrecognised flag/search: rK\n\n\n", // no combined flags
+		"- AS65001":           "%% ERROR: Unrecognised flag/search: \n\n\n",
+		"-V":                  "%% ERROR: Missing argument for flag/search: V\n\n\n",
+		"-T":                  "%% ERROR: Missing argument for flag/search: T\n\n\n",
+		"-s":                  "%% ERROR: Missing argument for flag/search: s\n\n\n",
+		"-x":                  "%% ERROR: Missing argument for flag/search: x\n\n\n",
+		"-i":                  "%% ERROR: Missing argument for flag/search: i\n\n\n",
+		"-M foo":              "%% ERROR: Invalid input for route search: foo\n\n\n",
+		"-x 192.0.2.1/24":     "%% ERROR: Invalid input for route search: 192.0.2.1/24\n\n\n",
+		"-k":                  noEntriesText,
+		"-T aut-num MNT-A":    noEntriesText, // only kept classes asked for: certain
+		"-T inet-rtr rtr9":    noEntriesText,
+		"-T foo X":            noEntriesText, // no class foo, in IRRd either
+		"-T foo,mntner X":     "%% ERROR: Class mntner is not kept by this mirror\n\n\n",
+		"-s RADB,NOSUCH X":    "%% ERROR: One or more selected sources are unavailable.\n\n\n",
+		"-l 192.0.2.0/24":     noEntriesText,
+		"-T as-set AS-NOSUCH": noEntriesText,
+		"-T aut-num AS65999":  noEntriesText,
+		// Without -T, IRRd's text search also answers with classes the
+		// mirror does not keep: refused.
+		"AS65999":                    refusedLookup("AS65999"),    // an as-block may cover it
+		"10.0.0.0/8":                 refusedLookup("10.0.0.0/8"), // an inetnum may be it
+		"AS-FOO -K":                  refusedLookup("AS-FOO"),
+		"-T route AS-NOSUCH AS65001": refusedLookup("AS65001"), // -T spent on AS-NOSUCH
+		"-T aut-num AS-NOSUCH -T as-set AS65001 AS-FOO": refusedLookup("AS-FOO"),
+		"RIPE::AS-FOO": refusedLookup("RIPE::AS-FOO"),
 	} {
 		if got := ask(t, snap, cmd); got != want {
 			t.Errorf("%s: %q, want %q", cmd, got, want)
@@ -88,11 +97,11 @@ func TestRIPEQueryOrder(t *testing.T) {
 // prefix and every less specific one.
 func TestRIPEPlainPrefixLessSpecific(t *testing.T) {
 	snap := fixture(t, SnapshotOptions{})
-	got := ask(t, snap, "192.0.2.0/25")
+	got := ask(t, snap, "-T route 192.0.2.0/25")
 	if n := strings.Count(got, "\nsource:"); n != 4 || !strings.HasPrefix(got, "route:          192.0.2.0/24\n") {
 		t.Errorf("192.0.2.0/25: %d objects: %q", n, got)
 	}
-	got = ask(t, snap, "192.0.2.1")
+	got = ask(t, snap, "-T route,route6 192.0.2.1")
 	if n := strings.Count(got, "\nsource:"); n != 4 {
 		t.Errorf("192.0.2.1: %d objects: %q", n, got)
 	}
@@ -111,16 +120,15 @@ func TestRIPEPlainEveryRegistry(t *testing.T) {
 			"route: 192.0.2.0/24\norigin: AS1\nsource: RADB\n"},
 	}, "RIPE", "RADB")
 	for _, key := range []string{"AS1", "r.example", "192.0.2.0/24AS1", "192.0.2.0/24as1"} {
-		got := ask(t, snap, key)
+		got := ask(t, snap, "-T aut-num,inet-rtr,route "+key)
 		if !strings.Contains(got, "source: RIPE\n\n") || !strings.HasSuffix(got, "source: RADB\n\n\n") {
 			t.Errorf("%s: %q", key, got)
 		}
 	}
-	if got := ask(t, snap, "-K r.example"); got != "inet-rtr: R.EXAMPLE\n\n\n" {
+	if got := ask(t, snap, "-K -T inet-rtr r.example"); got != "inet-rtr: R.EXAMPLE\n\n\n" {
 		t.Errorf("-K r.example: %q", got)
 	}
-	// A route key not held could be another class's key: refused.
-	if got := ask(t, snap, "192.0.2.0/24AS2"); !strings.HasPrefix(got, "%% ERROR: This mirror keeps only") {
+	if got := ask(t, snap, "-T route 192.0.2.0/24AS2"); got != noEntriesText {
 		t.Errorf("192.0.2.0/24AS2: %q", got)
 	}
 }

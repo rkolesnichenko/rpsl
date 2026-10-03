@@ -3,6 +3,7 @@ package irrdq
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -40,7 +41,7 @@ func TestRouteTextNotKept(t *testing.T) {
 		"!r192.0.2.0/24":          "F Route text is not kept by this mirror (rpsld -keep-route-text)\n",
 		"!r192.0.2.0/24,o":        "A4\nAS1\nC\n",
 		"-i origin AS1":           "%% ERROR: Route text is not kept by this mirror (rpsld -keep-route-text)\n\n\n",
-		"192.0.2.0/24":            "%% ERROR: Route text is not kept by this mirror (rpsld -keep-route-text)\n\n\n",
+		"-T route 192.0.2.0/24":   "%% ERROR: Route text is not kept by this mirror (rpsld -keep-route-text)\n\n\n",
 		"-x 192.0.2.0/24":         "%% ERROR: Route text is not kept by this mirror (rpsld -keep-route-text)\n\n\n",
 		"!gAS1":                   "A13\n192.0.2.0/24\nC\n",
 		// -K needs no text: a route's key is its prefix and origin.
@@ -154,6 +155,8 @@ func TestNotServed(t *testing.T) {
 		"!fno-scope-filter":            "F Command !fno-scope-filter is not served by this mirror\n",
 		"!fno-route-preference-filter": "F Command !fno-route-preference-filter is not served by this mirror\n",
 		"!fsomething":                  "F Unrecognised command: f\n",
+		"!oMNT-A":                      "F Inverse search on mnt-by is not served by this mirror: it keeps the routing classes only\n",
+		"!o":                           "F Missing parameter for o query\n",
 		"-a AS65001":                   "%% ERROR: Flag -a is not served by this mirror\n\n\n",
 		"-t aut-num":                   "%% ERROR: Flag -t is not served by this mirror\n\n\n",
 		"-q sources":                   "%% ERROR: Flag -q is not served by this mirror\n\n\n",
@@ -165,15 +168,64 @@ func TestNotServed(t *testing.T) {
 	}
 }
 
-// A context that has ended is reported, whatever the command.
-func TestObjectsHonourContext(t *testing.T) {
-	snap := fixture(t, SnapshotOptions{})
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	for _, cmd := range []string{"!r0.0.0.0/0,M", "!maut-num,AS65001", "-i origin AS65001", "AS-FOO"} {
+// TestObjectsContext: a context that ends partway through an answer stops
+// it — an "M" scan of many routes (checked every checkEvery routes) and the
+// loops over many registries — and Do returns its error. countingCtx ends
+// after n checks; with the checks removed only Do's own final check would
+// run, n would never be passed, and Do would return no error.
+func TestObjectsContext(t *testing.T) {
+	var routes []string
+	for i := 0; i < 20*checkEvery; i++ {
+		routes = append(routes, fmt.Sprintf("route: 10.%d.%d.0/24\norigin: AS1\nsource: WIDE\n", i/256%256, i%256))
+	}
+	regs := map[string][]string{"WIDE": routes}
+	order := []string{"WIDE"}
+	for i := 0; i < 20; i++ {
+		name := fmt.Sprintf("R%d", i)
+		regs[name] = []string{"as-set: AS-X\nmembers: AS2\nmbrs-by-ref: ANY\nsource: " + name + "\n"}
+		order = append(order, name)
+	}
+	many := snapshotOf(t, regs, order...)
+	wide := snapshotOf(t, map[string][]string{"WIDE": routes}, "WIDE") // the M scan's own checks
+	for _, c := range []struct {
+		snap *Snapshot
+		line string
+	}{
+		{wide, "!r0.0.0.0/0,M"}, {wide, "-M 0.0.0.0/0"},
+		{many, "!r0.0.0.0/0,M"}, {many, "-M 0.0.0.0/0"}, {many, "!maut-num,AS9"}, {many, "-T aut-num AS9"},
+		{many, "-i origin AS9"}, {many, "-i members AS2"}, {many, "-T route 192.0.2.0/24"}, {many, "!r192.0.2.0/24,l"},
+	} {
+		snap, line := c.snap, c.line
+		ctx := &countingCtx{Context: context.Background(), n: 5}
 		s := NewSession(func() *Snapshot { return snap })
-		if _, err := s.Do(ctx, cmd); !errors.Is(err, context.Canceled) {
-			t.Errorf("%s: %v", cmd, err)
+		s.Do(context.Background(), "!!")
+		if _, err := s.Do(ctx, line); !errors.Is(err, context.Canceled) {
+			t.Errorf("%s cancelled partway: %v (%d checks)", line, err, ctx.calls)
 		}
+		if ctx.calls > 10 {
+			t.Errorf("%s went on for %d checks of an ended context", line, ctx.calls)
+		}
+	}
+}
+
+// "-V <agent> !<command>" runs the IRRd command (IRRd's handle_query, irrd
+// issue #985); "-V <agent>" before anything else is a RIPE-style flag.
+func TestUserAgentPrefix(t *testing.T) {
+	snap := fixture(t, SnapshotOptions{})
+	for cmd, want := range map[string]string{
+		"-V bgpq4/1.0 !gAS65003":  framed("203.0.113.0/24 203.0.113.128/25"),
+		"-V  !v":                  version, // an empty agent, split at single spaces
+		"-V x !maut-num,AS65999":  "D\n",
+		"-V x -T aut-num AS65999": noEntriesText,
+		"-V x AS65999":            refusedLookup("AS65999"),
+		"-V !v":                   noEntriesText, // "!v" is the agent; nothing else is asked
+	} {
+		if got := ask(t, snap, cmd); got != want {
+			t.Errorf("%s: %q, want %q", cmd, got, want)
+		}
+	}
+	got := replay(t, snap, "-V a !!\n!v\n")
+	if got != version {
+		t.Errorf("-V a !!: %q", got)
 	}
 }
