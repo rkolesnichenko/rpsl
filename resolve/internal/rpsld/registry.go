@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -85,8 +86,11 @@ func keyPath(stateDir, name string) string { return filepath.Join(stateDir, name
 func newMirror(spec SourceSpec, keepText bool, stateDir string, hc *http.Client) (*nrtm4.Client, string, error) {
 	keyFile := spec.KeyFile
 	if stateDir != "" {
-		if _, err := os.Stat(keyPath(stateDir, spec.Name)); err == nil {
+		switch _, err := os.Stat(keyPath(stateDir, spec.Name)); {
+		case err == nil:
 			keyFile = keyPath(stateDir, spec.Name)
+		case !errors.Is(err, fs.ErrNotExist): // a saved key there may be unreadable, never ignored
+			return nil, "", err
 		}
 	}
 	key, err := os.ReadFile(keyFile)
@@ -113,6 +117,9 @@ func saveKey(stateDir, name, key string) error {
 		return err
 	}
 	_, err = f.WriteString(key)
+	if err == nil {
+		err = f.Sync() // on disk before the rename makes it the key
+	}
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
@@ -124,8 +131,13 @@ func saveKey(stateDir, name, key string) error {
 	}
 	if err != nil {
 		os.Remove(f.Name())
+		return err
 	}
-	return err
+	if d, err := os.Open(stateDir); err == nil { // the rename on disk too, where the system allows
+		d.Sync()
+		d.Close()
+	}
+	return nil
 }
 
 // loadVRPs reads VRPs from a file or an https:// URL, then applies SLURM.

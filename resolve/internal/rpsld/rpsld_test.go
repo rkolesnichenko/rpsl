@@ -47,7 +47,7 @@ func start(t *testing.T, hc *http.Client, args ...string) (addr string, reload c
 	ctx, cancel := context.WithCancel(context.Background())
 	reload, code, log := make(chan struct{}), make(chan int, 1), &lockedBuffer{}
 	go func() {
-		code <- run(ctx, append(args, "-listen", "127.0.0.1:0"), io.Discard, log, reload, env{http: hc})
+		code <- run(ctx, append(args, "-listen", "127.0.0.1:0"), io.Discard, log, reload, testEnv(hc))
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -122,6 +122,27 @@ func writeFile(t *testing.T, name, text string) {
 	}
 }
 
+// replaceFile gives the watched file name new content in one step: written
+// beside it, given the modification time mtime (zero: when written), then
+// renamed over it, so that no check of the file sees a part of the change.
+func replaceFile(t *testing.T, name, text string, mtime time.Time) {
+	t.Helper()
+	tmp := name + ".new"
+	writeFile(t, tmp, text)
+	if !mtime.IsZero() {
+		if err := os.Chtimes(tmp, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Rename(tmp, name); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// testEnv is the run's environment in a test: hc for its HTTP, and a
+// millisecond for NRTMv4's one-minute floor.
+func testEnv(hc *http.Client) env { return env{http: hc, minInterval: time.Millisecond} }
+
 func TestBadCommandLines(t *testing.T) {
 	for _, args := range [][]string{
 		{},
@@ -132,6 +153,7 @@ func TestBadCommandLines(t *testing.T) {
 		{"-source", "RIPE=dump:x", "-slurm", "s.json"},       // -slurm without -rpki
 		{"-source", "RIPE=dump:x", "-grace", "-1s"},
 		{"-source", "RIPE=dump:x", "-nrtm-interval", "0"},
+		{"-source", "RIPE=dump:x", "-nrtm-interval", "59s"}, // NRTMv4 polls at most once a minute
 		{"-source", "RIPE=dump:x", "extra"},
 	} {
 		var stderr bytes.Buffer
@@ -152,7 +174,12 @@ func TestVersion(t *testing.T) {
 func TestUsageNamesExitStatuses(t *testing.T) {
 	var stderr bytes.Buffer
 	Run(context.Background(), []string{"-help"}, io.Discard, &stderr, nil)
-	for _, want := range []string{"-source", "0 ", "2 ", "3 "} {
+	for _, want := range []string{
+		"usage: rpsld -source NAME=SPEC",
+		"\n  0  stopped as asked (SIGTERM or SIGINT), or -v\n",
+		"\n  2  a command line rpsld cannot use\n",
+		"\n  3  could not complete: an input failed to load at startup, or serving failed\n",
+	} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Errorf("usage lacks %q:\n%s", want, stderr.String())
 		}
@@ -176,7 +203,7 @@ func TestStartupLoadFails(t *testing.T) {
 		{"-source", "TEST=nrtm4:" + s.URL() + ",key=" + notKey},
 	} {
 		var stderr bytes.Buffer
-		c := run(context.Background(), append(args, "-listen", "127.0.0.1:0"), io.Discard, &stderr, nil, env{http: s.HTTPClient()})
+		c := run(context.Background(), append(args, "-listen", "127.0.0.1:0"), io.Discard, &stderr, nil, testEnv(s.HTTPClient()))
 		if c != 3 || !strings.Contains(stderr.String(), "load failed") || strings.Contains(stderr.String(), "msg=listening") {
 			t.Errorf("%q: exit %d, want 3 before listening; log %s", args, c, stderr.String())
 		}
@@ -192,7 +219,7 @@ func TestStartupStaleNotificationFails(t *testing.T) {
 	writeFile(t, key, s.PublicKey())
 	var stderr bytes.Buffer
 	c := run(context.Background(), []string{"-source", "TEST=nrtm4:" + s.URL() + ",key=" + key, "-listen", "127.0.0.1:0"},
-		io.Discard, &stderr, nil, env{http: s.HTTPClient()})
+		io.Discard, &stderr, nil, testEnv(s.HTTPClient()))
 	if c != 3 || !strings.Contains(stderr.String(), "MaxAge") {
 		t.Errorf("exit %d, want 3; log %s", c, stderr.String())
 	}
@@ -319,7 +346,7 @@ func TestServesAndReloadsDumps(t *testing.T) {
 	if got := query(t, addr, "!!\n!iAS-X\n!iAS-Y\n!sRADB\n!j-*\n!q\n"); got != "A4\nAS1\nC\nD\nF One or more selected sources are unavailable.\nA11\nRIPE:N:0-1\nC\n" {
 		t.Errorf("served %q", got) // AS-Y's source is RADB: not RIPE's registry, and no registry of its own
 	}
-	writeFile(t, dump, "as-set: AS-X\nmembers: AS1, AS2\nsource: RIPE\n")
+	replaceFile(t, dump, "as-set: AS-X\nmembers: AS1, AS2\nsource: RIPE\n", time.Time{})
 	reload <- struct{}{}
 	eventually(t, addr, "!!\n!iAS-X\n!j-*\n!q\n", "A8\nAS1 AS2\nC\nA11\nRIPE:N:0-2\nC\n")
 	// A reload that fails keeps the data and the serial.
@@ -330,7 +357,7 @@ func TestServesAndReloadsDumps(t *testing.T) {
 		t.Errorf("after a failed reload: %q", got)
 	}
 	// And the next one that succeeds moves the serial on by one.
-	writeFile(t, dump, "as-set: AS-X\nmembers: AS3\nsource: RIPE\n")
+	replaceFile(t, dump, "as-set: AS-X\nmembers: AS3\nsource: RIPE\n", time.Time{})
 	reload <- struct{}{}
 	eventually(t, addr, "!!\n!iAS-X\n!j-*\n!q\n", "A4\nAS3\nC\nA11\nRIPE:N:0-3\nC\n")
 }
@@ -346,8 +373,8 @@ func TestReloadReachesEveryDump(t *testing.T) {
 	if got := query(t, addr, "!!\n!iAS-X\n!iAS-Y\n!j-*\n!q\n"); got != "A4\nAS1\nC\nA4\nAS9\nC\nA22\nRIPE:N:0-1\nRADB:N:0-1\nC\n" {
 		t.Errorf("served %q", got)
 	}
-	writeFile(t, ripe, "as-set: AS-X\nmembers: AS2\nsource: RIPE\n")
-	writeFile(t, radb, "as-set: AS-Y\nmembers: AS8\nsource: RADB\n")
+	replaceFile(t, ripe, "as-set: AS-X\nmembers: AS2\nsource: RIPE\n", time.Time{})
+	replaceFile(t, radb, "as-set: AS-Y\nmembers: AS8\nsource: RADB\n", time.Time{})
 	reload <- struct{}{}
 	eventually(t, addr, "!!\n!iAS-X\n!iAS-Y\n!j-*\n!q\n", "A4\nAS2\nC\nA4\nAS8\nC\nA22\nRIPE:N:0-2\nRADB:N:0-2\nC\n")
 }
@@ -360,13 +387,18 @@ func TestReloadsChangedDump(t *testing.T) {
 	writeFile(t, ripe, "as-set: AS-X\nmembers: AS1\nsource: RIPE\n")
 	writeFile(t, radb, "as-set: AS-Y\nmembers: AS9\nsource: RADB\n")
 	addr, _, log := start(t, nil, "-source", "RIPE=dump:"+ripe, "-source", "RADB=dump:"+radb, "-check-dumps", "20ms")
-	writeFile(t, ripe, "as-set: AS-X\nmembers: AS2\nsource: RIPE\n")
-	later := time.Now().Add(time.Hour) // whatever the file system's timestamp resolution
-	if err := os.Chtimes(ripe, later, later); err != nil {
-		t.Fatal(err)
-	}
+	// Content and modification time change in one step (an hour on, whatever
+	// the file system's timestamp resolution), so one check sees both: a
+	// second reload would make the serial 3.
+	replaceFile(t, ripe, "as-set: AS-X\nmembers: AS2\nsource: RIPE\n", time.Now().Add(time.Hour))
 	eventually(t, addr, "!!\n!iAS-X\n!j-*\n!q\n", "A4\nAS2\nC\nA22\nRIPE:N:0-2\nRADB:N:0-1\nC\n")
-	if strings.Contains(log.String(), "registry=RADB serial=2") {
+	// Five more checks find nothing new: one change is one reload (an
+	// absence, so a fixed wait rather than a condition).
+	time.Sleep(100 * time.Millisecond)
+	if n := strings.Count(log.String(), "msg=reloaded registry=RIPE"); n != 1 {
+		t.Errorf("RIPE re-read %d times for one change:\n%s", n, log.String())
+	}
+	if strings.Contains(log.String(), "msg=reloaded registry=RADB") {
 		t.Errorf("RADB re-read though its file did not change:\n%s", log.String())
 	}
 }
@@ -395,14 +427,14 @@ func TestMirrorsNRTMv4(t *testing.T) {
 	// fetch it whole in between; then the server signs as before, and the
 	// mirror refuses delta 4 on its hash, over and over.
 	s.SignWith(nrtmtest.NewKey(t))
-	logged(t, log, `msg="sync failed" registry=TEST serial=3 err=".*notification file`, 1)
+	logged(t, log, `msg="sync failed" registry=TEST serial=3 failures=[0-9]+ err=".*notification file`, 1)
 	s.Publish(nrtmtest.Change{Class: "as-set", PK: "AS-X", Text: "as-set: AS-X\nmembers: AS9\nsource: TEST\n"})
 	s.Corrupt(4, []byte("not the delta the hash is of"))
 	s.SignWith(key)
 	// Three Syncs failing on a delta make the fourth reload the snapshot
 	// (version 2) and reapply delta 3: refusing delta 4 again five times
 	// covers that path too.
-	logged(t, log, `msg="sync failed" registry=TEST serial=3 err=".*delta 4: .*SHA-256`, 5)
+	logged(t, log, `msg="sync failed" registry=TEST serial=3 failures=[0-9]+ err=".*delta 4: .*SHA-256`, 5)
 	logged(t, log, `msg=synced registry=TEST from=3 to=3 snapshot=true deltas=1 `, 1)
 	if got := query(t, addr, "!!\n!iAS-X\n!jTEST\n!q\n"); got != "A8\nAS1 AS2\nC\nA11\nTEST:N:0-3\nC\n" {
 		t.Errorf("after refused deltas: %q", got)
@@ -432,7 +464,7 @@ func TestMirrorStartsFromSavedKey(t *testing.T) {
 		code := make(chan int, 1)
 		go func() {
 			code <- run(ctx, []string{"-source", "TEST=nrtm4:" + s.URL() + ",key=" + oldKey, "-listen", "127.0.0.1:0",
-				"-nrtm-interval", "20ms", "-state-dir", state}, io.Discard, &log, nil, env{http: s.HTTPClient()})
+				"-nrtm-interval", "20ms", "-state-dir", state}, io.Discard, &log, nil, testEnv(s.HTTPClient()))
 		}()
 		logged(t, &log, `msg=listening`, 1)
 		// The mirror has read the announcement once a second poll began
@@ -475,82 +507,88 @@ func TestMirrorStartsFromSavedKey(t *testing.T) {
 // history touched.
 func TestMirrorRandomHistory(t *testing.T) {
 	for seed := uint64(0); seed < 8; seed++ {
-		r := rand.New(rand.NewPCG(seed, 33))
-		s := nrtmtest.New(t, "TEST")
-		s.SetTime(time.Now().UTC())
-		s.Publish(nrtmtest.Change{Class: "as-set", PK: "AS-S0", Text: "as-set: AS-S0\nmembers: AS1\nsource: TEST\n"})
-		s.Snapshot()
-		key := filepath.Join(t.TempDir(), "key.pem")
-		writeFile(t, key, s.PublicKey())
-		addr, _, _ := start(t, s.HTTPClient(), "-source", "TEST=nrtm4:"+s.URL()+",key="+key, "-nrtm-interval", "30ms", "-keep-route-text")
-		live := map[int]bool{0: true} // the as-sets the server holds now
-		for step := 0; step < 14; step++ {
-			switch k := r.IntN(12); {
-			case k < 6:
-				n := r.IntN(4)
-				var ms []string
-				for i := 0; i < 1+r.IntN(3); i++ {
-					if r.IntN(3) == 0 {
-						ms = append(ms, fmt.Sprintf("AS-S%d", r.IntN(4)))
-					} else {
-						ms = append(ms, fmt.Sprintf("AS%d", 1+r.IntN(5)))
-					}
-				}
-				s.Publish(nrtmtest.Change{Class: "as-set", PK: fmt.Sprintf("AS-S%d", n),
-					Text: fmt.Sprintf("as-set: AS-S%d\nmembers: %s\nsource: TEST\n", n, strings.Join(ms, ", "))})
-				live[n] = true
-			case k < 8:
-				as := 1 + r.IntN(5)
-				p := fmt.Sprintf("192.0.%d.0/24", r.IntN(8))
-				s.Publish(nrtmtest.Change{Class: "route", PK: fmt.Sprintf("%sAS%d", p, as),
-					Text: fmt.Sprintf("route: %s\norigin: AS%d\nsource: TEST\n", p, as)})
-			case k < 9:
-				s.Snapshot()
-			case k < 10:
-				s.Expire(s.Version() - 1) // never past the snapshot: the mirror reloads it when it must
-			case k < 11:
-				s.NewSession()
-			default:
-				for n := 0; n < 4; n++ { // the lowest-numbered set the server holds: a seed replays alike
-					if live[n] {
-						s.Publish(nrtmtest.Change{Delete: true, Class: "as-set", PK: fmt.Sprintf("AS-S%d", n)})
-						delete(live, n)
-						break
-					}
-				}
-			}
-			var texts []string
-			for _, text := range s.Objects() {
-				texts = append(texts, text)
-			}
-			oracle := irrtest.New(texts...).WithSources("TEST").IRRd(t)
-			var cmds []string
-			for i := 0; i < 4; i++ {
-				cmds = append(cmds, fmt.Sprintf("!iAS-S%d", i), fmt.Sprintf("!iAS-S%d,1", i), fmt.Sprintf("!aAS-S%d", i))
-			}
-			for as := 1; as <= 5; as++ {
-				cmds = append(cmds, fmt.Sprintf("!gAS%d", as))
-			}
-			send := "!!\n" + strings.Join(cmds, "\n") + "\n!q\n"
-			want := query(t, oracle, send)
-			// Wait until rpsld holds the server's version and answers as
-			// the oracle does: a new session restarts the versions, so the
-			// version alone does not say the mirror has caught up.
-			serial := fmt.Sprintf("TEST:N:0-%d\n", s.Version())
-			var err error
-			for i := 0; i < 400; i++ {
-				if strings.Contains(query(t, addr, "!jTEST\n"), serial) {
-					if err = irrdoracle.Compare(irrdoracle.Words, query(t, addr, send), want); err == nil {
-						break
-					}
+		t.Run(fmt.Sprint(seed), func(t *testing.T) { mirrorRandomHistory(t, seed) })
+	}
+}
+
+// mirrorRandomHistory is one seed of TestMirrorRandomHistory; its run
+// stops when the seed's test ends.
+func mirrorRandomHistory(t *testing.T, seed uint64) {
+	r := rand.New(rand.NewPCG(seed, 33))
+	s := nrtmtest.New(t, "TEST")
+	s.SetTime(time.Now().UTC())
+	s.Publish(nrtmtest.Change{Class: "as-set", PK: "AS-S0", Text: "as-set: AS-S0\nmembers: AS1\nsource: TEST\n"})
+	s.Snapshot()
+	key := filepath.Join(t.TempDir(), "key.pem")
+	writeFile(t, key, s.PublicKey())
+	addr, _, _ := start(t, s.HTTPClient(), "-source", "TEST=nrtm4:"+s.URL()+",key="+key, "-nrtm-interval", "30ms", "-keep-route-text")
+	live := map[int]bool{0: true} // the as-sets the server holds now
+	for step := 0; step < 14; step++ {
+		switch k := r.IntN(12); {
+		case k < 6:
+			n := r.IntN(4)
+			var ms []string
+			for i := 0; i < 1+r.IntN(3); i++ {
+				if r.IntN(3) == 0 {
+					ms = append(ms, fmt.Sprintf("AS-S%d", r.IntN(4)))
 				} else {
-					err = fmt.Errorf("serial is not %q", serial)
+					ms = append(ms, fmt.Sprintf("AS%d", 1+r.IntN(5)))
 				}
-				time.Sleep(10 * time.Millisecond)
 			}
-			if err != nil {
-				t.Fatalf("seed %d step %d (version %d): %v", seed, step, s.Version(), err)
+			s.Publish(nrtmtest.Change{Class: "as-set", PK: fmt.Sprintf("AS-S%d", n),
+				Text: fmt.Sprintf("as-set: AS-S%d\nmembers: %s\nsource: TEST\n", n, strings.Join(ms, ", "))})
+			live[n] = true
+		case k < 8:
+			as := 1 + r.IntN(5)
+			p := fmt.Sprintf("192.0.%d.0/24", r.IntN(8))
+			s.Publish(nrtmtest.Change{Class: "route", PK: fmt.Sprintf("%sAS%d", p, as),
+				Text: fmt.Sprintf("route: %s\norigin: AS%d\nsource: TEST\n", p, as)})
+		case k < 9:
+			s.Snapshot()
+		case k < 10:
+			s.Expire(s.Version() - 1) // never past the snapshot: the mirror reloads it when it must
+		case k < 11:
+			s.NewSession()
+		default:
+			for n := 0; n < 4; n++ { // the lowest-numbered set the server holds: a seed replays alike
+				if live[n] {
+					s.Publish(nrtmtest.Change{Delete: true, Class: "as-set", PK: fmt.Sprintf("AS-S%d", n)})
+					delete(live, n)
+					break
+				}
 			}
+		}
+		var texts []string
+		for _, text := range s.Objects() {
+			texts = append(texts, text)
+		}
+		oracle := irrtest.New(texts...).WithSources("TEST").IRRd(t)
+		var cmds []string
+		for i := 0; i < 4; i++ {
+			cmds = append(cmds, fmt.Sprintf("!iAS-S%d", i), fmt.Sprintf("!iAS-S%d,1", i), fmt.Sprintf("!aAS-S%d", i))
+		}
+		for as := 1; as <= 5; as++ {
+			cmds = append(cmds, fmt.Sprintf("!gAS%d", as))
+		}
+		send := "!!\n" + strings.Join(cmds, "\n") + "\n!q\n"
+		want := query(t, oracle, send)
+		// Wait until rpsld holds the server's version and answers as
+		// the oracle does: a new session restarts the versions, so the
+		// version alone does not say the mirror has caught up.
+		serial := fmt.Sprintf("TEST:N:0-%d\n", s.Version())
+		var err error
+		for i := 0; i < 400; i++ {
+			if strings.Contains(query(t, addr, "!jTEST\n"), serial) {
+				if err = irrdoracle.Compare(irrdoracle.Words, query(t, addr, send), want); err == nil {
+					break
+				}
+			} else {
+				err = fmt.Errorf("serial is not %q", serial)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if err != nil {
+			t.Fatalf("seed %d step %d (version %d): %v", seed, step, s.Version(), err)
 		}
 	}
 }
@@ -565,12 +603,14 @@ func TestRPKIRefresh(t *testing.T) {
 	if got := query(t, addr, "!!\n!gAS1\n!j-*\n!q\n"); got != "A13\n192.0.2.0/24\nC\nA22\nRIPE:N:0-1\nRPKI:N:0-1\nC\n" {
 		t.Errorf("before: %q", got)
 	}
-	writeFile(t, vrps, `{"roas": [{"asn": "AS2", "prefix": "192.0.2.0/24", "maxLength": 24, "ta": "t"}]}`)
+	replaceFile(t, vrps, `{"roas": [{"asn": "AS2", "prefix": "192.0.2.0/24", "maxLength": 24, "ta": "t"}]}`, time.Time{})
 	eventually(t, addr, "!gAS1\n", "D\n") // now RPKI-invalid: hidden
 	eventually(t, addr, "!!\n!sRPKI\n!gAS2\n!q\n", "C\nA13\n192.0.2.0/24\nC\n")
 	// A refresh that fails keeps the VRPs and the RPKI registry.
-	writeFile(t, vrps, `{"roas": [`)
-	logged(t, log, `msg="VRP refresh failed: keeping the previous VRPs"`, 1)
+	failure := `msg="VRP refresh failed: keeping the previous VRPs"`
+	failed := len(regexp.MustCompile(failure).FindAllString(log.String(), -1))
+	replaceFile(t, vrps, `{"roas": [`, time.Time{})
+	logged(t, log, failure, failed+1)
 	if got := query(t, addr, "!!\n!gAS1\n!sRPKI\n!gAS2\n!q\n"); got != "D\nC\nA13\n192.0.2.0/24\nC\n" {
 		t.Errorf("after a failed refresh: %q", got)
 	}
@@ -591,5 +631,81 @@ func TestRPKIDefault(t *testing.T) {
 	addr, _, _ = start(t, nil, "-source", "RIPE=dump:"+dump, "-rpki", vrps, "-rpki-default=false")
 	if got := query(t, addr, "!!\n!s-lc\n!gAS2\n!q\n"); got != "A5\nRIPE\nC\nD\n" {
 		t.Errorf("-rpki-default=false: %q", got)
+	}
+}
+
+func TestSyncWait(t *testing.T) {
+	for _, tc := range []struct {
+		failures        int
+		interval, floor time.Duration
+		want            time.Duration
+	}{
+		{0, time.Hour, time.Minute, time.Hour}, // after a success: the interval
+		{1, time.Hour, time.Minute, time.Minute},
+		{2, time.Hour, time.Minute, 2 * time.Minute},
+		{3, time.Hour, time.Minute, 4 * time.Minute},
+		{7, time.Hour, time.Minute, time.Hour}, // 64 minutes, capped by the interval
+		{100, time.Hour, time.Minute, time.Hour},
+		{1, time.Minute, time.Minute, time.Minute},
+		{5, 90 * time.Second, time.Minute, 90 * time.Second},
+	} {
+		if got := syncWait(tc.failures, tc.interval, tc.floor); got != tc.want {
+			t.Errorf("syncWait(%d, %s, %s) = %s, want %s", tc.failures, tc.interval, tc.floor, got, tc.want)
+		}
+	}
+}
+
+// TestMirrorBacksOffAfterFailures: after a failed sync the mirror tries
+// again after the floor, doubling the wait with each further failure, as
+// nrtm4.Client.Run does — not after the whole interval each time.
+func TestMirrorBacksOffAfterFailures(t *testing.T) {
+	s := nrtmtest.New(t, "TEST")
+	s.SetTime(time.Now().UTC())
+	s.Publish(nrtmtest.Change{Class: "as-set", PK: "AS-X", Text: "as-set: AS-X\nmembers: AS1\nsource: TEST\n"})
+	s.Snapshot()
+	key := filepath.Join(t.TempDir(), "key.pem")
+	writeFile(t, key, s.PublicKey())
+	_, _, log := start(t, s.HTTPClient(), "-source", "TEST=nrtm4:"+s.URL()+",key="+key, "-nrtm-interval", "2s")
+	s.SignWith(nrtmtest.NewKey(t)) // every sync fails from now on
+	// The first sync is 2 s after the start; eight failures then take about
+	// 2 s + 1+2+…+64 ms with the backoff, but 16 s at the full interval.
+	begin := time.Now()
+	logged(t, log, `msg="sync failed" registry=TEST serial=2 failures=8 `, 1)
+	if took := time.Since(begin); took > 5*time.Second {
+		t.Errorf("eight failed syncs took %s", took)
+	}
+}
+
+// TestStartupKeyErrors: a key that does not verify is named in the error,
+// and a saved key in -state-dir that cannot be read is an error, never a
+// silent fall back to the -source key.
+func TestStartupKeyErrors(t *testing.T) {
+	s := nrtmtest.New(t, "TEST")
+	s.SetTime(time.Now().UTC())
+	dir := t.TempDir()
+	other := filepath.Join(dir, "other.pem")
+	writeFile(t, other, nrtmtest.PEM(t, nrtmtest.NewKey(t)))
+	var stderr bytes.Buffer
+	c := run(context.Background(), []string{"-source", "TEST=nrtm4:" + s.URL() + ",key=" + other, "-listen", "127.0.0.1:0"},
+		io.Discard, &stderr, nil, testEnv(s.HTTPClient()))
+	if c != 3 || !strings.Contains(stderr.String(), "signing key from "+other) {
+		t.Errorf("exit %d, want 3 naming %s; log %s", c, other, stderr.String())
+	}
+
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a directory of mode 000")
+	}
+	good := filepath.Join(dir, "good.pem")
+	writeFile(t, good, s.PublicKey())
+	state := filepath.Join(dir, "state")
+	if err := os.Mkdir(state, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(state, 0o700) })
+	stderr.Reset()
+	c = run(context.Background(), []string{"-source", "TEST=nrtm4:" + s.URL() + ",key=" + good, "-listen", "127.0.0.1:0", "-state-dir", state},
+		io.Discard, &stderr, nil, testEnv(s.HTTPClient()))
+	if c != 3 || !strings.Contains(stderr.String(), filepath.Join(state, "TEST.pem")) {
+		t.Errorf("exit %d, want 3 naming the saved key; log %s", c, stderr.String())
 	}
 }

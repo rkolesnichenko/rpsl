@@ -39,7 +39,14 @@ type env struct {
 	http *http.Client
 	// listen opens the query port; nil is net.Listen.
 	listen func(network, addr string) (net.Listener, error)
+	// minInterval is the least -nrtm-interval, and the first wait after a
+	// failed sync; zero is NRTMv4's minute (§5.2). Tests lower it.
+	minInterval time.Duration
 }
+
+// nrtmFloor is NRTMv4's least time between polls (§5.2), as nrtm4.Client.Run
+// keeps it.
+const nrtmFloor = time.Minute
 
 type sourceFlags []SourceSpec
 
@@ -159,6 +166,10 @@ Exit status:
 		fs.Usage()
 		return exitUsage
 	}
+	floor := e.minInterval
+	if floor <= 0 {
+		floor = nrtmFloor
+	}
 	switch {
 	case len(sources) == 0:
 		return usage("at least one -source")
@@ -168,6 +179,8 @@ Exit status:
 		return usage("every limit positive")
 	case *rpkiRefresh <= 0 || *checkDumps <= 0 || *nrtmInterval <= 0:
 		return usage("every interval positive")
+	case *nrtmInterval < floor:
+		return usage(fmt.Sprintf("-nrtm-interval at least %s: NRTMv4 polls at most once a minute (§5.2)", floor))
 	case *grace < 0:
 		return usage("-grace not negative")
 	case *slurm != "" && *rpkiSrc == "":
@@ -221,9 +234,8 @@ Exit status:
 			if err != nil {
 				return failed(s.Name, err)
 			}
-			u, err := c.Sync(ctx)
-			if err != nil {
-				return failed(s.Name, err)
+			if _, err := c.Sync(ctx); err != nil { // MaxAge refuses a stale file here
+				return failed(s.Name, fmt.Errorf("%w (signing key from %s)", err, keyFile))
 			}
 			r, err := mirrorRegistry(c, s.Name, *keepText)
 			if err != nil {
@@ -237,9 +249,6 @@ Exit status:
 			}
 			log.Info("loaded", "registry", s.Name, "serial", r.Serial(), "session", c.Status().SessionID,
 				"objects", c.Status().Objects, "key", keyFile, "took", time.Since(begin).Round(time.Millisecond))
-			if u.Stale {
-				log.Warn("stale notification file", "registry", s.Name)
-			}
 			st.regs = append(st.regs, r)
 		}
 		st.opts.Default = append(st.opts.Default, s.Name)
@@ -294,7 +303,7 @@ Exit status:
 		} else {
 			go func() {
 				defer wg.Done()
-				st.follow(ctx, s, mirrors[s.Name], *keepText, *stateDir, *nrtmInterval)
+				st.follow(ctx, s, mirrors[s.Name], *keepText, *stateDir, *nrtmInterval, floor)
 			}()
 		}
 	}
@@ -409,52 +418,80 @@ func (st *state) watchDump(ctx context.Context, s SourceSpec, keepText bool, las
 }
 
 // follow syncs the mirror every interval and publishes each new version.
-// A Sync publishes in the client what it reached even when a later file
-// fails, a version at a time, so the registry is rebuilt whenever the
-// version moved; when it did not, the registry stays as it was.
-func (st *state) follow(ctx context.Context, s SourceSpec, c *nrtm4.Client, keepText bool, stateDir string, every time.Duration) {
-	savedKey := c.Status().CurrentKey
-	tick := time.NewTicker(every)
-	defer tick.Stop()
+// After a failed sync it waits as nrtm4.Client.Run does (syncWait). A Sync
+// publishes in the client what it reached even when a later file fails,
+// a version at a time, so the registry is rebuilt whenever the client holds
+// another (session, version) than the one last published — also after a
+// rebuild that failed, which the next sync retries; otherwise the registry
+// stays as it was.
+func (st *state) follow(ctx context.Context, s SourceSpec, c *nrtm4.Client, keepText bool, stateDir string, every, floor time.Duration) {
+	pub := c.Status() // what the startup snapshot holds
+	savedKey := pub.CurrentKey
+	failures := 0
+	timer := time.NewTimer(every)
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-tick.C:
+		case <-timer.C:
 		}
 		begin := time.Now()
 		u, err := c.Sync(ctx)
 		if ctx.Err() != nil {
 			return
 		}
+		now := c.Status()
 		if err != nil {
-			st.log.Error("sync failed", "registry", s.Name, "serial", c.Status().Version, "err", err)
+			failures++
+			st.log.Error("sync failed", "registry", s.Name, "serial", now.Version, "failures", failures, "err", err)
+		} else {
+			failures = 0
 		}
+		timer.Reset(syncWait(failures, every, floor))
 		if u.Stale {
 			st.log.Warn("stale notification file", "registry", s.Name)
 		}
-		if k := c.Status().CurrentKey; stateDir != "" && k != savedKey {
-			if err := saveKey(stateDir, s.Name, k); err != nil {
+		if stateDir != "" && now.CurrentKey != savedKey {
+			if err := saveKey(stateDir, s.Name, now.CurrentKey); err != nil {
 				st.log.Warn("could not save the signing key", "registry", s.Name, "err", err)
 			} else {
-				savedKey = k
+				savedKey = now.CurrentKey
 				st.log.Info("saved the signing key", "registry", s.Name)
 			}
 		}
-		if u.To == u.From && !u.Snapshot {
+		if u.Snapshot || u.Deltas > 0 {
+			st.log.Info("synced", "registry", s.Name, "from", u.From, "to", u.To, "snapshot", u.Snapshot,
+				"deltas", u.Deltas, "took", time.Since(begin).Round(time.Millisecond))
+		}
+		if now.SessionID == pub.SessionID && now.Version == pub.Version {
 			continue
 		}
 		r, err := mirrorRegistry(c, s.Name, keepText)
 		if err != nil {
-			st.log.Error("rebuild failed", "registry", s.Name, "err", err)
+			st.log.Error("rebuild failed: keeping the previous version", "registry", s.Name, "err", err)
 			continue
 		}
-		st.log.Info("synced", "registry", s.Name, "from", u.From, "to", u.To, "snapshot", u.Snapshot,
-			"deltas", u.Deltas, "took", time.Since(begin).Round(time.Millisecond))
 		if err := st.publish(r, nil); err != nil {
 			st.log.Error("snapshot failed: keeping the previous version", "registry", s.Name, "err", err)
+			continue
 		}
+		pub = now
 	}
+}
+
+// syncWait is how long follow waits after failures failed syncs in a row,
+// as nrtm4.Client.Run waits: the interval after a success; after a failure
+// the floor, doubled with each further one, never above the interval.
+func syncWait(failures int, interval, floor time.Duration) time.Duration {
+	if failures == 0 {
+		return interval
+	}
+	w := floor
+	for i := 1; i < failures && w < interval; i++ {
+		w *= 2
+	}
+	return min(w, interval)
 }
 
 // refreshVRPs re-reads the VRPs every interval and publishes them with a
