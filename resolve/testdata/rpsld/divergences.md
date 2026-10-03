@@ -9,6 +9,7 @@ with `rpsld`'s own answer, so a change on either side fails a test.
 | Case | IRRd 4.5.3 | rpsld | Why |
 | --- | --- | --- | --- |
 | `session/v`, `session/not-persistent`, `session/blank-first`, `session/crlf`, `session/spaces-first`, `session/blank-in-session` | `IRRd -- version 4.5.3` | `IRRd -- version 4.5.3 (rpsld <version>)` | Clients detect IRRd 4 by the prefix (bgpq4 decides on `!a` by it) and IRRToolSet needs the word "version"; the parenthesis says what answers. |
+| `session/pipeline` | `IRRd -- version 4.5.3` (its `!v`) | `IRRd -- version 4.5.3 (rpsld <version>)` | It holds a `!v`, answered as above. Its `!g` answer, which IRRd gives in hash order and `rpsld` sorts, is compared as a multiset and is no divergence. |
 
 Object text is served as the registry published it, not re-rendered as
 IRRd renders it (attribute names lower-cased, values padded to column 16,

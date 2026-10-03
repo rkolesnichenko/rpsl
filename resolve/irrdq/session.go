@@ -39,8 +39,9 @@ func frame(payload string) Reply {
 }
 
 var (
-	ok      = Reply{text: "C\n"}
-	nothing = Reply{}
+	ok       = Reply{text: "C\n"}
+	notFound = Reply{text: "D\n"} // IRRd's answer when nothing matches
+	nothing  = Reply{}
 )
 
 // Fail is IRRd's error answer, "F <msg>".

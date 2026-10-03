@@ -15,7 +15,7 @@ import (
 
 // covered are the golden-case name prefixes irrdq answers so far; every
 // case under one must agree with IRRd, or be in diverges.
-var covered = []string{"session/"}
+var covered = []string{"session/", "i/", "i1/", "a/", "g/"}
 
 // framed is IRRd's frame of payload: "A<len>", the payload and its newline
 // (counted in len), then "C". Pinned answers are built with it, so a length
@@ -38,16 +38,15 @@ var diverges = map[string]string{
 	"session/crlf":             version,
 	"session/spaces-first":     version,
 	"session/blank-in-session": version,
+	// A Words case (IRRd's "!g" order varies), pinned for its "!v".
+	"session/pipeline": version + framed("192.0.2.0/24 192.0.2.0/25") + framed("2001:db8::/32") +
+		framed("AS-ANY AS-BAR AS-MISSING AS65001 AS65002 RS-INNER"),
 }
 
 // pending are covered cases that also need a later task's commands; they
 // are logged and skipped until that task removes them.
 var pending = map[string]string{
-	"session/pipeline":  "!g, !6, !i: Task 5",
-	"session/s-session": "!i/!a: Task 5",
-	"session/s-radb":    "!i/!a: Task 5",
-	"session/s-order":   "!i/!a: Task 5",
-	"session/q-bare":    "q is a RIPE-style query: Task 6",
+	"session/q-bare": "q is a RIPE-style query: Task 6",
 }
 
 // fixture builds the snapshot the goldens were recorded on: RIPE from
