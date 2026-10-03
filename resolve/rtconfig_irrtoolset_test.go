@@ -761,8 +761,16 @@ func TestPevalDivergences(t *testing.T) {
 	// among them) and no 0.0.0.0/0, which it substitutes only for a member a
 	// server answers unresolved.
 	t.Run("D2", func(t *testing.T) {
-		if out, err := theirs("RS-BAR", 10*time.Second); err != nil || strings.Contains(out, "10.12.") || strings.Contains(out, "0.0.0.0/0") {
+		out, err := theirs("RS-BAR", 10*time.Second)
+		if err != nil || strings.Contains(out, "10.12.") || strings.Contains(out, "0.0.0.0/0") {
 			t.Errorf("D2 is gone: peval says %q, %v", out, err)
+		}
+		// The rest of RS-BAR stays: AS10's routes, RS-NESTED's prefix, the
+		// claimant AS13's route, so the pin cannot pass on an empty answer.
+		for _, p := range []string{"10.10.0.0/16", "10.10.1.0/24", "10.22.0.0/16", "10.13.0.0/16"} {
+			if !strings.Contains(out, p+",") && !strings.Contains(out, p+"}") {
+				t.Errorf("peval's RS-BAR lacks %s: %q, %v", p, out, err)
+			}
 		}
 		if out := ours(t, "afi ipv4.unicast RS-BAR"); !strings.Contains(out, "10.12.0.0/16^24-26") {
 			t.Errorf("rpslconf says %q", out)
