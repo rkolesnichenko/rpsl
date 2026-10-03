@@ -210,9 +210,11 @@ var errLineTooLong = errors.New("line too long")
 // cut off by the end of the input is no command (unless already too long).
 func readLine(br *bufio.Reader, max int) (string, error) {
 	var line []byte
+	scanned := 0 // the buffered bytes already known to hold no newline
 	for {
 		buf, _ := br.Peek(br.Buffered())
-		if i := bytes.IndexByte(buf, '\n'); i >= 0 {
+		if i := bytes.IndexByte(buf[scanned:], '\n'); i >= 0 {
+			i += scanned
 			if len(line)+i > max {
 				return "", errLineTooLong
 			}
@@ -223,10 +225,11 @@ func readLine(br *bufio.Reader, max int) (string, error) {
 		if len(line)+len(buf) > max {
 			return "", errLineTooLong
 		}
+		scanned = len(buf)
 		if len(buf) == br.Size() {
 			line = append(line, buf...)
 			br.Discard(len(buf))
-			buf = nil
+			buf, scanned = nil, 0
 		}
 		// Wait for at least one more byte.
 		if _, err := br.Peek(len(buf) + 1); err != nil {
@@ -289,22 +292,31 @@ func (s *Server) handle(c *conn) {
 	br := bufio.NewReaderSize(c.nc, 64<<10)
 	w := &deadlineWriter{nc: c.nc}
 	bw := bufio.NewWriterSize(w, writePiece)
+	// end writes out every answer still buffered — each whole, since a
+	// reply is buffered complete or not at all — and closes the connection
+	// gently. Every exit but a failed write, or Shutdown giving up, ends so:
+	// the client may still be reading.
+	end := func() {
+		w.timeout = idle()
+		if bw.Flush() == nil {
+			s.linger(c, br)
+		}
+	}
 	for {
 		if !c.arm(time.Now().Add(idle())) {
-			return // Shutdown: no further command
+			end() // Shutdown: no further command
+			return
 		}
 		line, err := readLine(br, s.lim.MaxLine)
 		if errors.Is(err, errLineTooLong) {
 			s.log(slog.LevelInfo, "refused: line too long", "remote", remote, "max", s.lim.MaxLine)
-			w.timeout = idle()
 			fmt.Fprintf(bw, "F Line too long: over %d bytes\n", s.lim.MaxLine)
-			if bw.Flush() == nil {
-				s.linger(c, br)
-			}
+			end()
 			return
 		}
 		if err != nil {
-			return // the client went away, a deadline passed, or Shutdown
+			end() // the client finished sending, a deadline passed, or Shutdown
+			return
 		}
 		began := time.Now()
 		deadline := began.Add(s.lim.QueryTime)
@@ -317,6 +329,12 @@ func (s *Server) handle(c *conn) {
 			err = context.DeadlineExceeded
 		}
 		switch {
+		case s.base.Err() != nil:
+			// Shutdown gave up waiting and is closing every connection: the
+			// command is abandoned, unanswered. It did not overrun
+			// QueryTime, and nothing more can be written anyway.
+			s.log(slog.LevelInfo, "command abandoned at shutdown", "remote", remote, "line", line)
+			return
 		case err != nil:
 			r = r.Refused("Query took longer than " + s.lim.QueryTime.String())
 		case int64(r.Len()) > s.lim.MaxReply:
@@ -335,7 +353,7 @@ func (s *Server) handle(c *conn) {
 			}
 		}
 		if r.Close() {
-			s.linger(c, br)
+			end()
 			return
 		}
 	}
@@ -347,22 +365,24 @@ const lingerTime = time.Second
 
 // linger closes c's write side and discards what the client still sends,
 // until it closes too or lingerTime passes, so that closing with input
-// unread does not reset the connection and lose the answer just written.
+// unread does not reset the connection and lose the answers just written.
+// It lingers during Shutdown too (that is when answers are most at risk),
+// so a client that keeps sending delays Shutdown by up to lingerTime.
 func (s *Server) linger(c *conn, br *bufio.Reader) {
 	tc, ok := c.nc.(interface{ CloseWrite() error })
 	if !ok || tc.CloseWrite() != nil {
 		return
 	}
-	if !c.arm(time.Now().Add(min(lingerTime, s.lim.IdleTimeout))) {
-		return
-	}
+	c.nc.SetReadDeadline(time.Now().Add(min(lingerTime, s.lim.IdleTimeout)))
 	io.Copy(io.Discard, br)
 }
 
 // Shutdown stops accepting, lets each connection finish the command it is
-// answering (and writing), and closes them all. At ctx's end it cancels the
-// commands still running, closes what is left, waits for it and returns
-// ctx's error.
+// answering, writes out every answer completed so far, whole, and closes
+// the connections; no further command is started. At ctx's end it gives
+// up: it cancels the commands still running, which are abandoned
+// unanswered, closes what is left as it stands (an answer being written
+// then may be cut short), waits for it and returns ctx's error.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.init()
 	s.mu.Lock()

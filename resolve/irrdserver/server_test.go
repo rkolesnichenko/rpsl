@@ -2,13 +2,16 @@ package irrdserver_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -334,8 +337,11 @@ func TestIdleTimeout(t *testing.T) {
 	}
 }
 
-// A client that pipelines without reading cannot hold the server: the
-// write deadline closes it, and Shutdown leaves no goroutine behind.
+// A client that pipelines without ever reading cannot hold the server: the
+// write deadline closes the connection. The client never stops sending, so
+// the server always has a command to read and its read deadline cannot be
+// what ends it; without the write deadline the two would block each other
+// until the test gave up. Shutdown then leaves no goroutine behind.
 func TestStuckClient(t *testing.T) {
 	before := runtime.NumGoroutine()
 	s, addr, done := start(t, fixed(t), irrdserver.Limits{IdleTimeout: 300 * time.Millisecond})
@@ -343,17 +349,28 @@ func TestStuckClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrote := make(chan struct{})
+	ended := make(chan error, 1)
 	go func() {
-		defer close(wrote)
-		io.WriteString(c, "!!\n")
-		for i := 0; i < 100000; i++ {
-			if _, err := io.WriteString(c, "!iAS-X\n"); err != nil {
+		burst := strings.Repeat("!iAS-X\n", 4096)
+		if _, err := io.WriteString(c, "!!\n"); err != nil {
+			ended <- err
+			return
+		}
+		for {
+			if _, err := io.WriteString(c, burst); err != nil {
+				ended <- err // the server closed the connection
 				return
 			}
 		}
 	}()
-	time.Sleep(time.Second)
+	select {
+	case err := <-ended:
+		t.Logf("the server closed a client that does not read: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Error("a client that does not read held its connection for 10 s")
+		c.Close()
+		<-ended
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := s.Shutdown(ctx); err != nil {
@@ -363,8 +380,141 @@ func TestStuckClient(t *testing.T) {
 		t.Errorf("Serve returned %v", err)
 	}
 	c.Close()
-	<-wrote
 	noLeak(t, before)
+}
+
+// frames splits out into IRRd frames, failing on anything that is not a
+// sequence of whole ones.
+func frames(t *testing.T, out string) []string {
+	t.Helper()
+	var fs []string
+	for out != "" {
+		nl := strings.IndexByte(out, '\n')
+		n, err := strconv.Atoi(strings.TrimPrefix(out[:max(nl, 0)], "A"))
+		if nl < 0 || out[0] != 'A' || err != nil || len(out) < nl+1+n+2 || out[nl+1+n:nl+1+n+2] != "C\n" {
+			t.Fatalf("not a whole frame after %d frames: %.40q", len(fs), out)
+		}
+		fs = append(fs, out[:nl+1+n+2])
+		out = out[nl+1+n+2:]
+	}
+	return fs
+}
+
+// Shutdown in the middle of a pipelined burst: every command answered
+// before the connection stops — the one evaluating when Shutdown began
+// included — reaches the client whole, and nothing after it is started, so
+// the client reads only whole frames. Deterministic: the n-th command blocks
+// in its snapshot read until Shutdown has stopped every connection (Serve
+// returns only after that, since it needs the lock Shutdown holds while
+// stopping them).
+func TestShutdownPipelined(t *testing.T) {
+	snap := rpsldtest.Snapshot(t, texts, irrdq.SnapshotOptions{}, "RIPE")
+	// The second case answers 5,999 commands, 77,987 bytes: more than the
+	// 64 KiB write buffer, so a reply is split across two writes.
+	for _, c := range []struct{ commands, block int }{{3, 2}, {8000, 5999}} {
+		g := newGate(snap, int32(c.block)+1) // call 1 is "!!"
+		s, addr, done := start(t, g.get, irrdserver.Limits{})
+		type result struct {
+			out string
+			err error
+		}
+		res := make(chan result, 1)
+		go func() {
+			out, err := talk(addr, "!!\n"+strings.Repeat("!iAS-X\n", c.commands)+"!q\n")
+			res <- result{out, err}
+		}()
+		select {
+		case <-g.entered:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%d: the command never read its snapshot", c.commands)
+		}
+		shut := make(chan error, 1)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			shut <- s.Shutdown(ctx)
+		}()
+		if err := <-done; !errors.Is(err, irrdserver.ErrServerClosed) {
+			t.Fatalf("%d: Serve returned %v", c.commands, err)
+		}
+		close(g.release)
+		if err := <-shut; err != nil {
+			t.Errorf("%d: Shutdown: %v", c.commands, err)
+		}
+		r := <-res
+		if r.err != nil {
+			t.Fatalf("%d: %v", c.commands, r.err)
+		}
+		fs := frames(t, r.out)
+		if len(fs) != c.block {
+			t.Errorf("%d commands, Shutdown during command %d: %d answers, want %d", c.commands, c.block, len(fs), c.block)
+		}
+		for i, f := range fs {
+			if f != asX {
+				t.Fatalf("answer %d: %q", i, f)
+			}
+		}
+	}
+}
+
+// When Shutdown's context ends with a command still running, the command is
+// abandoned and the connection closed: it is not answered as if it had
+// overrun QueryTime.
+func TestShutdownAbandons(t *testing.T) {
+	snap := rpsldtest.Snapshot(t, texts, irrdq.SnapshotOptions{}, "RIPE")
+	g := newGate(snap, 2)
+	var logs syncBuffer
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &irrdserver.Server{Snapshot: g.get, Log: slog.New(slog.NewTextHandler(&logs, nil)), LogQueries: true}
+	done := make(chan error, 1)
+	go func() { done <- s.Serve(ln) }()
+	res := make(chan string, 1)
+	go func() {
+		out, _ := talk(ln.Addr().String(), "!!\n!iAS-X\n!q\n")
+		res <- out
+	}()
+	select {
+	case <-g.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the command never read its snapshot")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	shut := make(chan error, 1)
+	go func() { shut <- s.Shutdown(ctx) }()
+	<-irrdserver.GaveUp(s) // Shutdown's context ended and it cancelled the commands
+	close(g.release)
+	if err := <-shut; !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Shutdown: %v", err)
+	}
+	<-done
+	if out := <-res; out != "" {
+		t.Errorf("an abandoned command was answered: %q", out)
+	}
+	if l := logs.String(); !strings.Contains(l, "abandoned") || strings.Contains(l, "took longer") {
+		t.Errorf("log:\n%s", l)
+	}
+}
+
+// syncBuffer is a bytes.Buffer safe for a logger and the test together.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
 }
 
 // A client that sends its commands and closes its write side gets every
@@ -427,6 +577,7 @@ func TestShutdownDuringCommands(t *testing.T) {
 			wg.Add(1)
 			go func() { // a client sending commands one by one, reading each answer
 				defer wg.Done()
+				defer c.Close() // as soon as the server ends the connection
 				br := bufio.NewReader(c)
 				if _, err := io.WriteString(c, "!!\n"); err != nil {
 					return
