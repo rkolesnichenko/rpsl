@@ -25,6 +25,7 @@ import (
 	"math"
 	"net"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -417,7 +418,8 @@ func (s *Source) refusedBy(sub *Source, err error) bool {
 // remembered until Close. For an as-set or route-set it asks for the one-level
 // membership via "!i" and synthesizes a typed set object (with
 // SrcMembers set, it also fetches the object, "!m", for its src-members: and
-// source:). IRRd answers "!i" alike for a missing set and for one with no
+// source:; a scoped lookup fetches it too, to restore a reference to the
+// set's own name that "!i" drops — see selfReference). IRRd answers "!i" alike for a missing set and for one with no
 // members, so on that answer GetSet asks for the object itself: a set that
 // exists is returned empty, and a missing one maps to resolve.ErrNotFound. A
 // set of any other class is fetched with "!m" and decoded.
@@ -445,6 +447,7 @@ func (s *Source) getSet(ctx context.Context, name types.SetName, source string) 
 	if c := name.Class(); c != types.ClassAsSet && c != types.ClassRouteSet {
 		return s.fetchSet(ctx, name)
 	}
+	scoped := source != ""
 	whole := "!m" + name.Class().String() + "," + name.String()
 	payload, err := s.do(ctx, "!i"+name.String())
 	var obj []byte
@@ -459,34 +462,63 @@ func (s *Source) getSet(ctx context.Context, name types.SetName, source string) 
 		}
 		return nil, err
 	}
-	var src []object.SetMember
-	if s.SrcMembers {
-		if !haveObj {
-			if obj, err = s.do(ctx, whole); err != nil && !errors.Is(err, errNotFound) {
-				return nil, err
+	// The object itself is read for its src-members: and source: (with
+	// SrcMembers), and on a scoped lookup for a reference to its own name
+	// (selfReference).
+	var full object.Set
+	if (s.SrcMembers || scoped) && !haveObj {
+		if obj, err = s.do(ctx, whole); err != nil && !errors.Is(err, errNotFound) {
+			return nil, err
+		}
+	}
+	if len(obj) > 0 {
+		raw, _ := rpsl.ParseObject(string(obj))
+		if o, _ := object.Decode(raw); o != nil {
+			if f, ok := o.(object.Set); ok && f.SetName() == name {
+				full = f
 			}
 		}
-		if len(obj) > 0 {
-			raw, _ := rpsl.ParseObject(string(obj))
-			if o, _ := object.Decode(raw); o != nil {
-				if full, ok := o.(object.Set); ok && full.SetName() == name {
-					src = full.SetSrcMembers()
-					if source == "" {
-						source = strings.TrimSpace(full.SetSource())
-						if canon, err := types.ParseSourceName(source); err == nil {
-							source = canon // as a scoped lookup's registry is
-						}
-					}
-				}
+	}
+	var src []object.SetMember
+	if s.SrcMembers && full != nil {
+		src = full.SetSrcMembers()
+		if source == "" {
+			source = strings.TrimSpace(full.SetSource())
+			if canon, err := types.ParseSourceName(source); err == nil {
+				source = canon // as a scoped lookup's registry is
 			}
 		}
 	}
 	members := parseMembers(string(payload), name.Class())
+	if scoped && full != nil {
+		members = selfReference(members, full, name)
+	}
 	common := object.Common{Source: source}
 	if name.Class() == types.ClassAsSet {
 		return object.AsSet{Common: common, Name: name, Members: members, SrcMembers: src}, nil
 	}
 	return object.RouteSet{Common: common, Name: name, Members: members, SrcMembers: src}, nil
+}
+
+// selfReference restores a set's reference to its own name, which IRRd's
+// "!i" drops: members_for_set (irrd/server/query_resolver.py) ends with "if
+// parameter in members: members.remove(parameter)". Looked up by
+// precedence, that reference is the set itself, a cycle that adds nothing;
+// but a scoped set (RADB::AS-S1) listing AS-S1 names whichever registry's
+// AS-S1 precedence picks, possibly another one's, so on a scoped lookup it
+// is put back from the object, when the object lists it (an unscoped set
+// member, no operator) and "!i" did not return it.
+func selfReference(members []object.SetMember, full object.Set, name types.SetName) []object.SetMember {
+	isSelf := func(m object.SetMember) bool {
+		return m.Kind == object.MemberSet && m.Set == name && m.Source == "" && m.Op.IsZero()
+	}
+	if slices.ContainsFunc(members, isSelf) {
+		return members
+	}
+	if i := slices.IndexFunc(full.SetMembers(), isSelf); i >= 0 {
+		return append(members, full.SetMembers()[i])
+	}
+	return members
 }
 
 // fetchSet fetches a set whole ("!m") and decodes it, refusing an answer that
