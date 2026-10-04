@@ -12,7 +12,7 @@ func TestRIPEInverse(t *testing.T) {
 	for cmd, wantPrefix := range map[string]string{
 		"-i members AS-BAR":              "as-set:",    // AS-FOO lists AS-BAR
 		"-i mbrs-by-ref MNT-A":           "as-set:",    // AS-REF; RS-INNER too
-		"-i mp-members 2001:db8::/32":    "route-set:", // RS-FOO
+		"-i members 192.0.2.0/24":        "route-set:", // RS-FOO
 		"-i members as65001":             "as-set:",    // AS-FOO, then RS-FOO
 		"-T route-set -i members AS-BAR": "route-set:",
 	} {
@@ -20,7 +20,10 @@ func TestRIPEInverse(t *testing.T) {
 			t.Errorf("%s: %q", cmd, got)
 		}
 	}
-	for _, cmd := range []string{"-i members AS-NOSUCH", "-i origin AS065001", "-i mbrs-by-ref MNT-B", "-T aut-num -i members AS-BAR"} {
+	// IRRd upper-cases the value, and stores an IPv6 prefix lower-case: RS-FOO's
+	// 2001:db8::/32 is never found (recorded, ripe/-i mp-members 2001:db8::/32).
+	for _, cmd := range []string{"-i members AS-NOSUCH", "-i origin AS065001", "-i mbrs-by-ref MNT-B", "-T aut-num -i members AS-BAR",
+		"-i mp-members 2001:db8::/32"} {
 		if got := ask(t, snap, cmd); got != noEntriesText {
 			t.Errorf("%s: %q", cmd, got)
 		}

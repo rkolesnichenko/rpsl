@@ -129,6 +129,16 @@ func TestNormalize(t *testing.T) {
 	if Normalize("route: 064.006.160.000/19\norigin: AS1\n") != Normalize("route:          64.6.160.0/19\norigin:         AS1\n") {
 		t.Error("a zero-padded route key and IRRd's rewrite differ")
 	}
+	// An AS number among a set's members is upper-cased; a set name keeps
+	// its case (recorded: RS-LOWER, AS-LOWER).
+	for _, class := range []string{"as-set: AS-X", "route-set: RS-X"} {
+		if Normalize(class+"\nmembers: as-bar, as65003\n") != Normalize(class+"\nmembers: as-bar,AS65003\n") {
+			t.Errorf("%s: a lower-case AS number and IRRd's rewrite differ", class)
+		}
+		if Normalize(class+"\nmembers: as-bar\n") == Normalize(class+"\nmembers: AS-BAR\n") {
+			t.Errorf("%s: a set name's case is lost", class)
+		}
+	}
 }
 
 func TestGoldensLoad(t *testing.T) {

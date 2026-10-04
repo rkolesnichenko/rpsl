@@ -616,6 +616,11 @@ func TestHalfClosed(t *testing.T) {
 		{"!!\n!iAS-X\n!n x\n!gAS1\n", asX + "C\n" + "A13\n192.0.2.0/24\nC\n"},
 		{"!iAS-X\n!gAS1\n", asX},
 		{"!!\n" + strings.Repeat("!iAS-X\n", 500), strings.Repeat(asX, 500)},
+		// A last line without its newline is answered, as IRRd answers it
+		// (golden eof/*).
+		{"!iAS-X", asX},
+		{"!!\n!iAS-X\n!gAS1", asX + "A13\n192.0.2.0/24\nC\n"},
+		{"!!\n!iAS-X\n   ", asX},
 	} {
 		conn, err := net.Dial("tcp", addr)
 		if err != nil {
@@ -640,6 +645,23 @@ func TestHalfClosed(t *testing.T) {
 		t.Errorf("Shutdown: %v", err)
 	}
 	noLeak(t, before)
+}
+
+// A line without its newline from a client that keeps its sending side open
+// is no command: the client may still be sending it. The idle timeout ends
+// the connection unanswered.
+func TestPartialLineIdle(t *testing.T) {
+	_, addr, _ := start(t, fixed(t), irrdserver.Limits{IdleTimeout: 200 * time.Millisecond})
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	io.WriteString(conn, "!iAS-X")
+	got, err := readAll(conn, 5*time.Second)
+	if err != nil || got != "" {
+		t.Errorf("%q, %v; want the connection closed unanswered", got, err)
+	}
 }
 
 // Shutdown with connections busy sending commands ends at once, never

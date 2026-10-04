@@ -251,7 +251,7 @@ Flags are whole words: `-rK` is no flag.
 | --- | --- |
 | `-s <list>` | select registries, for the rest of the connection |
 | `-T <classes>` | restrict the next search to these classes |
-| `-i <attr> <value>` | inverse search on `origin`, `member-of`, `mbrs-by-ref`, `members` or `mp-members` |
+| `-i <attr> <value>` | inverse search on `origin`, `member-of`, `mbrs-by-ref`, `members` or `mp-members`; as in IRRd, the value is upper-cased and matched as given against each member as stored, so a route-set member spelled in lower case, or an IPv6 prefix with a letter in it, is not found, and an rtr-set's address is found as written, not as a host prefix |
 | `-x`, `-l`, `-L`, `-M <prefix>` | route search: exact, one level less specific, all less specific, more specific |
 | `-K` | primary keys and members only |
 | `-k` | keep the connection open |
@@ -411,7 +411,7 @@ Two oracles:
 
 - **IRRd itself.** `resolve/testdata/irrd` holds a fixed fixture (two
   registries, RIPE and RADB, with a set for each of IRRd's corner cases, and
-  ROAs) and IRRd 4.5.3's recorded answers to 247 exchanges on it, in plain
+  ROAs) and IRRd 4.5.3's recorded answers to 274 exchanges on it, in plain
   and RPKI-aware mode (`golden/plain.txt`, `golden/rpki.txt`). They were
   recorded from IRRd in Docker, and are re-recorded with
   `RPSL_IRRD_DOCKER=1 go test -run TestRecord ./internal/irrdoracle` (from

@@ -184,3 +184,41 @@ func TestInvalidMembersServed(t *testing.T) {
 		}
 	}
 }
+
+// A route-set's set names are kept as written, so one route-set can name
+// the same set in many spellings; "!i…,1" still expands it once. 64
+// spellings cost about what one does, not 64 expansions.
+func TestRecursiveSpellingsExpandOnce(t *testing.T) {
+	var big []string
+	for i := range 500 {
+		big = append(big, fmt.Sprintf("10.%d.%d.0/24", i/256, i%256))
+	}
+	var spellings []string
+	for mask := range 64 {
+		b := []byte("rs-big")
+		for i, j := 0, 0; i < len(b); i++ {
+			if b[i] == '-' {
+				continue
+			}
+			if mask&(1<<j) != 0 {
+				b[i] -= 'a' - 'A'
+			}
+			j++
+		}
+		spellings = append(spellings, string(b))
+	}
+	snap := setsSnapshot(t,
+		"route-set: RS-BIG\nmembers: "+strings.Join(big, ", ")+"\nsource: RIPE\n",
+		"route-set: RS-ONE\nmembers: RS-BIG\nsource: RIPE\n",
+		"route-set: RS-MANY\nmembers: "+strings.Join(spellings, ", ")+"\nsource: RIPE\n",
+	)
+	if one, many := ask(t, snap, "!iRS-ONE,1"), ask(t, snap, "!iRS-MANY,1"); one != many {
+		t.Fatalf("one spelling %.60q, 64 spellings %.60q", one, many)
+	}
+	allocs := func(line string) float64 {
+		return testing.AllocsPerRun(5, func() { ask(t, snap, line) })
+	}
+	if one, many := allocs("!iRS-ONE,1"), allocs("!iRS-MANY,1"); many > 2*one {
+		t.Errorf("64 spellings took %.0f allocations, one %.0f: the set was expanded per spelling", many, one)
+	}
+}

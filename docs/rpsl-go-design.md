@@ -1104,7 +1104,7 @@ goroutines; `resolve/irrdserver` puts a `Session` on each connection.
 
 **Held to a recording of IRRd.** Only a real IRRd settles exact text, so
 IRRd 4.5.3 ran in Docker on a fixed fixture (`resolve/testdata/irrd`: two
-registries, a set for each corner case, ROAs) and its answers to 247
+registries, a set for each corner case, ROAs) and its answers to 274
 exchanges, in plain and RPKI-aware mode, are checked in
 (`resolve/internal/irrdoracle`, re-recorded with `RPSL_IRRD_DOCKER=1`;
 never edited by hand). The fixture is fixed because IRRd's loader refuses a

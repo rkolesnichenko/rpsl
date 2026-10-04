@@ -164,7 +164,9 @@ func ask(t *testing.T, addr, send string) string {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	c.Write([]byte(send))
+	if err := irrdoracle.Send(c, send); err != nil {
+		t.Fatal(err)
+	}
 	var out []byte
 	buf := make([]byte, 64<<10)
 	for {

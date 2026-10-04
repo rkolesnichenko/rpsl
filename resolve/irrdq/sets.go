@@ -17,12 +17,13 @@ func init() {
 	commands['a'] = cmdASetPrefixes
 }
 
-// normMember is one members:/mp-members: item as IRRd's parser stores it:
-// an AS number upper-case and asplain, a prefix as netip prints it (zero-
-// padded and abbreviated IPv4 read as IRRd reads them), a bare address as
-// its host prefix, anything else upper-case; a range operator is kept as
-// written after any of them.
-func normMember(item string) string {
+// normMember is one members:/mp-members: item of a set of class as IRRd's
+// parser stores it: an AS number upper-case and asplain, a prefix as netip
+// prints it (zero-padded and abbreviated IPv4 read as IRRd reads them), a
+// bare address as its host prefix, a set name in a route-set as written
+// (IRRd keeps its case, as recorded: RS-LOWER's "rs-inner, as-Bar"), anything
+// else upper-case; a range operator is kept as written after any of them.
+func normMember(class types.SetClass, item string) string {
 	base, op, hasOp := strings.Cut(strings.TrimSpace(item), "^")
 	if as, msg := parseAS(base); msg == "" {
 		base = as.String()
@@ -34,6 +35,8 @@ func normMember(item string) string {
 		}
 	} else if a, err := types.ParseAddr(base); err == nil {
 		base = netip.PrefixFrom(a, a.BitLen()).String()
+	} else if _, err := types.ParseSetName(base); err == nil && class == types.ClassRouteSet {
+		// kept as written
 	} else {
 		base = strings.ToUpper(base)
 	}
@@ -41,6 +44,18 @@ func normMember(item string) string {
 		return base + "^" + op
 	}
 	return base
+}
+
+// storedMember is one members:/mp-members: item of a set of class as IRRd
+// stores it, the form "-K" shows and "-i members" matches: an rtr-set's, whose
+// members are router names and addresses, upper-cased as written (recorded:
+// "192.0.2.1" is found, "192.0.2.1/32" is not); an as-set's or route-set's
+// normalized (normMember).
+func storedMember(class types.SetClass, item string) string {
+	if class == types.ClassRtrSet {
+		return strings.ToUpper(strings.TrimSpace(item))
+	}
+	return normMember(class, item)
 }
 
 // isASN reports whether s is an AS number as IRRd's parse_as_number reads
@@ -112,7 +127,7 @@ func (snap *Snapshot) membersOf(ctx context.Context, r *Registry, set object.Nam
 			for _, a := range raw.GetAll(attr) {
 				for _, it := range a.List() {
 					if it.Value != "" {
-						out = append(out, normMember(it.Value))
+						out = append(out, normMember(set.SetName().Class(), it.Value))
 					}
 				}
 			}
@@ -208,8 +223,11 @@ func (snap *Snapshot) recursive(ctx context.Context, regs []*Registry, name stri
 				}
 			case isASN(m):
 				results[m] = true
-			case !seen[m]:
-				seen[m] = true
+			case !seen[strings.ToUpper(m)]:
+				// A route-set's set names are kept as written, and a set is
+				// looked up case-insensitively: "rs-x" and "RS-X" are one
+				// set, expanded once.
+				seen[strings.ToUpper(m)] = true
 				next = append(next, m)
 			}
 		}

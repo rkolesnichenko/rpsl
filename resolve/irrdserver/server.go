@@ -308,8 +308,10 @@ var errLineTooLong = errors.New("line too long")
 
 // readLine reads one line without its "\n", at most max bytes long. A line
 // is too long as soon as more than max of its bytes have arrived, newline or
-// not, so a client waiting with a part of one is refused at once. A line
-// cut off by the end of the input is no command (unless already too long).
+// not, so a client waiting with a part of one is refused at once. A last
+// line cut off by the end of the input — the client closed its sending side
+// after it, as `printf '!gAS1' | nc -N` does — is a line, as IRRd reads it
+// (golden eof/*); one cut off by an error or a deadline is not.
 func readLine(br *bufio.Reader, max int) (string, error) {
 	var line []byte
 	scanned := 0 // the buffered bytes already known to hold no newline
@@ -335,7 +337,16 @@ func readLine(br *bufio.Reader, max int) (string, error) {
 		}
 		// Wait for at least one more byte.
 		if _, err := br.Peek(len(buf) + 1); err != nil {
-			return "", err
+			rest, _ := br.Peek(br.Buffered())
+			if !errors.Is(err, io.EOF) || len(line)+len(rest) == 0 {
+				return "", err
+			}
+			if len(line)+len(rest) > max {
+				return "", errLineTooLong
+			}
+			line = append(line, rest...)
+			br.Discard(len(rest))
+			return string(line), nil
 		}
 	}
 }

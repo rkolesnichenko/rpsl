@@ -33,10 +33,10 @@
 <<< "A14\n64.6.160.0/19\nC\n"
 === rpki/!aAS-FOO words
 >>> "!aAS-FOO\n"
-<<< "A43\n2001:db8::/32 198.51.100.0/24 192.0.2.0/24\nC\n"
+<<< "A43\n192.0.2.0/24 2001:db8::/32 198.51.100.0/24\nC\n"
 === rpki/!aAS-REF words
 >>> "!aAS-REF\n"
-<<< "A27\n2001:db8::/32 192.0.2.0/24\nC\n"
+<<< "A27\n192.0.2.0/24 2001:db8::/32\nC\n"
 === rpki/!r192.0.2.0/24,o words
 >>> "!r192.0.2.0/24,o\n"
 <<< "A16\nAS65001 AS65001\nC\n"
@@ -72,7 +72,7 @@
 <<< "D\n"
 === rpki/!r192.0.2.0/24 objects
 >>> "!r192.0.2.0/24\n"
-<<< "A259\nroute:          192.0.2.0/24\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         radb\nrpki-ov-state:  valid\n\nroute:          192.0.2.0/24\ndescr:          first\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\nrpki-ov-state:  valid\nC\n"
+<<< "A259\nroute:          192.0.2.0/24\ndescr:          first\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\nrpki-ov-state:  valid\n\nroute:          192.0.2.0/24\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         radb\nrpki-ov-state:  valid\nC\n"
 === rpki/!r192.0.2.0/24,M objects
 >>> "!r192.0.2.0/24,M\n"
 <<< "D\n"
@@ -87,7 +87,7 @@
 <<< "%  No entries found for the selected source(s).\n\n\n"
 === rpki/-i origin AS65001 objects
 >>> "-i origin AS65001\n"
-<<< "route:          192.0.2.0/24\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         radb\nrpki-ov-state:  valid\n\nroute:          192.0.2.0/24\ndescr:          first\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\nrpki-ov-state:  valid\n\nroute6:         2001:db8::/32\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\nrpki-ov-state:  valid\n\nroute6:         2001:db8::/32\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RADB\nrpki-ov-state:  valid\n\n\n"
+<<< "route:          192.0.2.0/24\ndescr:          first\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\nrpki-ov-state:  valid\n\nroute:          192.0.2.0/24\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         radb\nrpki-ov-state:  valid\n\nroute6:         2001:db8::/32\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\nrpki-ov-state:  valid\n\nroute6:         2001:db8::/32\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RADB\nrpki-ov-state:  valid\n\n\n"
 === rpki/-K -i origin AS65001 objects
 >>> "-K -i origin AS65001\n"
 <<< "route: 192.0.2.0/24\norigin: AS65001\n\nroute6: 2001:db8::/32\norigin: AS65001\n\n\n"

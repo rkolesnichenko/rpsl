@@ -10,7 +10,8 @@ import (
 )
 
 // TestReadLine: lines crossing the read buffer, arriving a byte at a time,
-// held to max exactly, newline or not.
+// held to max exactly, newline or not; a last line without its newline is
+// still a line.
 func TestReadLine(t *testing.T) {
 	for _, c := range []struct {
 		in   string
@@ -21,7 +22,9 @@ func TestReadLine(t *testing.T) {
 		{"a\nbb\n", 2, []string{"a", "bb"}, io.EOF},
 		{"a\nbbb\n", 2, []string{"a"}, errLineTooLong},
 		{"bbb", 2, nil, errLineTooLong},
-		{"bb", 2, nil, io.EOF},
+		{"bb", 2, []string{"bb"}, io.EOF}, // a last line without its newline
+		{"a\nbb", 2, []string{"a", "bb"}, io.EOF},
+		{strings.Repeat("x", 40) + "\n" + strings.Repeat("y", 40), 40, []string{strings.Repeat("x", 40), strings.Repeat("y", 40)}, io.EOF},
 		{strings.Repeat("x", 40) + "\ny\n", 40, []string{strings.Repeat("x", 40), "y"}, io.EOF},
 		{strings.Repeat("x", 41) + "\n", 40, nil, errLineTooLong},
 		{strings.Repeat("x", 41), 40, nil, errLineTooLong},

@@ -391,7 +391,7 @@ SPEC  dump:FILE[,FILE…]          dump files (gzip or plain), re-read when they
   (`resolve/testdata/irrd`: RIPE and RADB, a set for each corner case, ROAs),
   recorded once: IRRd 4.5.3 in Docker (PostgreSQL and Redis, objects loaded
   with `irrd_load_database`), pinned by version in the Dockerfile and named
-  in the test, answers 247 exchanges in plain and RPKI-aware mode, checked
+  in the test, answers 274 exchanges in plain and RPKI-aware mode, checked
   in as `golden/plain.txt` and `golden/rpki.txt`. `RPSL_IRRD_DOCKER=1 go test
   -run TestRecord ./internal/irrdoracle` re-records them (a case is asked
   until two answers agree, since IRRd now and then answers a fresh
