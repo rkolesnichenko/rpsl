@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -44,10 +45,16 @@ var listening = regexp.MustCompile(`msg=listening addr=(\S+)`)
 // says it is listening, the reload channel, and the log.
 func start(t *testing.T, hc *http.Client, args ...string) (addr string, reload chan struct{}, log *lockedBuffer) {
 	t.Helper()
+	return startEnv(t, testEnv(hc), args...)
+}
+
+// startEnv is start in the environment e.
+func startEnv(t *testing.T, e env, args ...string) (addr string, reload chan struct{}, log *lockedBuffer) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	reload, code, log := make(chan struct{}), make(chan int, 1), &lockedBuffer{}
 	go func() {
-		code <- run(ctx, append(args, "-listen", "127.0.0.1:0"), io.Discard, log, reload, testEnv(hc))
+		code <- run(ctx, append(args, "-listen", "127.0.0.1:0"), io.Discard, log, reload, e)
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -379,6 +386,40 @@ func TestReloadReachesEveryDump(t *testing.T) {
 	eventually(t, addr, "!!\n!iAS-X\n!iAS-Y\n!j-*\n!q\n", "A4\nAS2\nC\nA4\nAS8\nC\nA22\nRIPE:N:0-2\nRADB:N:0-2\nC\n")
 }
 
+// TestFailedReloadWaitsForAChange: a changed dump that cannot be read is
+// tried once, not at every check; the next change, or a reload, tries again.
+func TestFailedReloadWaitsForAChange(t *testing.T) {
+	dir := t.TempDir()
+	ripe := filepath.Join(dir, "ripe.db")
+	writeFile(t, ripe, "as-set: AS-X\nmembers: AS1\nsource: RIPE\n")
+	addr, reload, log := start(t, nil, "-source", "RIPE=dump:"+ripe, "-check-dumps", "20ms")
+	// A directory in the file's place: its modification time reads, its
+	// content does not.
+	if err := os.Remove(ripe); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(ripe, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	later := time.Now().Add(time.Hour)
+	if err := os.Chtimes(ripe, later, later); err != nil {
+		t.Fatal(err)
+	}
+	failed := `msg="reload failed: keeping the previous data" registry=RIPE`
+	logged(t, log, failed, 1)
+	time.Sleep(200 * time.Millisecond) // ten checks: an absence, so a fixed wait
+	if n := len(regexp.MustCompile(failed).FindAllString(log.String(), -1)); n != 1 {
+		t.Errorf("an unchanged unreadable dump tried %d times:\n%s", n, log.String())
+	}
+	reload <- struct{}{} // a reload tries again
+	logged(t, log, failed, 2)
+	if err := os.Remove(ripe); err != nil {
+		t.Fatal(err)
+	}
+	replaceFile(t, ripe, "as-set: AS-X\nmembers: AS2\nsource: RIPE\n", later.Add(time.Hour))
+	eventually(t, addr, "!!\n!iAS-X\n!j-*\n!q\n", "A4\nAS2\nC\nA11\nRIPE:N:0-2\nC\n")
+}
+
 // TestReloadsChangedDump: a dump file whose modification time changed is
 // re-read without a signal; one that did not change is not.
 func TestReloadsChangedDump(t *testing.T) {
@@ -636,28 +677,32 @@ func TestRPKIDefault(t *testing.T) {
 
 func TestSyncWait(t *testing.T) {
 	for _, tc := range []struct {
-		failures        int
-		interval, floor time.Duration
-		want            time.Duration
+		failures          int
+		interval, ceiling time.Duration
+		want              time.Duration
 	}{
-		{0, time.Hour, time.Minute, time.Hour}, // after a success: the interval
-		{1, time.Hour, time.Minute, time.Minute},
-		{2, time.Hour, time.Minute, 2 * time.Minute},
-		{3, time.Hour, time.Minute, 4 * time.Minute},
-		{7, time.Hour, time.Minute, time.Hour}, // 64 minutes, capped by the interval
-		{100, time.Hour, time.Minute, time.Hour},
-		{1, time.Minute, time.Minute, time.Minute},
-		{5, 90 * time.Second, time.Minute, 90 * time.Second},
+		{0, time.Minute, time.Hour, time.Minute}, // after a success: the interval
+		{1, time.Minute, time.Hour, 2 * time.Minute},
+		{2, time.Minute, time.Hour, 4 * time.Minute},
+		{3, time.Minute, time.Hour, 8 * time.Minute},
+		{5, time.Minute, time.Hour, 32 * time.Minute},
+		{6, time.Minute, time.Hour, time.Hour}, // 64 minutes, capped by the ceiling
+		{100, time.Minute, time.Hour, time.Hour},
+		{1, 90 * time.Second, time.Hour, 3 * time.Minute},
+		{0, 2 * time.Hour, time.Hour, 2 * time.Hour}, // never sooner than the interval
+		{3, 2 * time.Hour, time.Hour, 2 * time.Hour},
+		{1, time.Hour, time.Hour, time.Hour},
 	} {
-		if got := syncWait(tc.failures, tc.interval, tc.floor); got != tc.want {
-			t.Errorf("syncWait(%d, %s, %s) = %s, want %s", tc.failures, tc.interval, tc.floor, got, tc.want)
+		if got := syncWait(tc.failures, tc.interval, tc.ceiling); got != tc.want {
+			t.Errorf("syncWait(%d, %s, %s) = %s, want %s", tc.failures, tc.interval, tc.ceiling, got, tc.want)
 		}
 	}
 }
 
-// TestMirrorBacksOffAfterFailures: after a failed sync the mirror tries
-// again after the floor, doubling the wait with each further failure, as
-// nrtm4.Client.Run does — not after the whole interval each time.
+// TestMirrorBacksOffAfterFailures: after failed syncs the mirror waits
+// twice as long after each, up to the ceiling — not the interval each time,
+// which would have it retry (and nrtm4.Client reload the whole snapshot)
+// every few intervals for as long as a delta is refused.
 func TestMirrorBacksOffAfterFailures(t *testing.T) {
 	s := nrtmtest.New(t, "TEST")
 	s.SetTime(time.Now().UTC())
@@ -665,14 +710,66 @@ func TestMirrorBacksOffAfterFailures(t *testing.T) {
 	s.Snapshot()
 	key := filepath.Join(t.TempDir(), "key.pem")
 	writeFile(t, key, s.PublicKey())
-	_, _, log := start(t, s.HTTPClient(), "-source", "TEST=nrtm4:"+s.URL()+",key="+key, "-nrtm-interval", "2s")
+	e := testEnv(s.HTTPClient())
+	e.maxBackoff = 800 * time.Millisecond
+	_, _, log := startEnv(t, e, "-source", "TEST=nrtm4:"+s.URL()+",key="+key, "-nrtm-interval", "100ms")
 	s.SignWith(nrtmtest.NewKey(t)) // every sync fails from now on
-	// The first sync is 2 s after the start; eight failures then take about
-	// 2 s + 1+2+…+64 ms with the backoff, but 16 s at the full interval.
-	begin := time.Now()
-	logged(t, log, `msg="sync failed" registry=TEST serial=2 failures=8 `, 1)
-	if took := time.Since(begin); took > 5*time.Second {
-		t.Errorf("eight failed syncs took %s", took)
+	// The first failure comes 100 ms after the start; then the waits are
+	// 200, 400, 800, 800 … ms: about 7 failures in 4 s, where polling at the
+	// interval would have made about 40.
+	logged(t, log, `msg="sync failed" registry=TEST serial=2 failures=1 `, 1)
+	time.Sleep(4 * time.Second)
+	n := len(regexp.MustCompile(`msg="sync failed"`).FindAllString(log.String(), -1))
+	t.Logf("%d failed syncs in about 4 s", n)
+	if n < 3 || n > 12 {
+		t.Errorf("%d failed syncs in about 4 s; want about 7", n)
+	}
+}
+
+// TestVRPDownloadCapped: a VRP download over the limit is refused, never
+// read in part; one of exactly the limit is read.
+func TestVRPDownloadCapped(t *testing.T) {
+	body := `{"roas":[{"prefix":"192.0.2.0/24","maxLength":24,"asn":"AS1","ta":"x"}]}`
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, body)
+	}))
+	defer srv.Close()
+	v, err := loadVRPsLimit(context.Background(), srv.URL, "", srv.Client(), int64(len(body)))
+	if err != nil || v.Len() != 1 {
+		t.Fatalf("a download of exactly the limit: %v, %v", v, err)
+	}
+	_, err = loadVRPsLimit(context.Background(), srv.URL, "", srv.Client(), int64(len(body))-1)
+	if want := fmt.Sprintf("over %d bytes: refused", len(body)-1); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("a download over the limit: %v, want %q", err, want)
+	}
+}
+
+// TestKeySaveRetried: a signing key that could not be saved at startup is
+// saved after a later sync, once -state-dir can be written.
+func TestKeySaveRetried(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes a directory of mode 500")
+	}
+	s := nrtmtest.New(t, "TEST")
+	s.SetTime(time.Now().UTC())
+	s.Publish(nrtmtest.Change{Class: "as-set", PK: "AS-X", Text: "as-set: AS-X\nmembers: AS1\nsource: TEST\n"})
+	s.Snapshot()
+	dir := t.TempDir()
+	key := filepath.Join(dir, "key.pem")
+	writeFile(t, key, s.PublicKey())
+	state := filepath.Join(dir, "state")
+	if err := os.Mkdir(state, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(state, 0o700) })
+	_, _, log := start(t, s.HTTPClient(), "-source", "TEST=nrtm4:"+s.URL()+",key="+key, "-state-dir", state, "-nrtm-interval", "20ms")
+	logged(t, log, `msg="could not save the signing key; trying again after the next sync" registry=TEST`, 1)
+	if err := os.Chmod(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	logged(t, log, `msg="saved the signing key" registry=TEST`, 1)
+	if b, err := os.ReadFile(filepath.Join(state, "TEST.pem")); err != nil || strings.TrimSpace(string(b)) != strings.TrimSpace(s.PublicKey()) {
+		t.Errorf("saved key %q, %v", b, err)
 	}
 }
 

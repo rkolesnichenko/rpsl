@@ -140,8 +140,40 @@ func saveKey(stateDir, name, key string) error {
 	return nil
 }
 
-// loadVRPs reads VRPs from a file or an https:// URL, then applies SLURM.
+// maxVRPBody is the most of a VRP export loadVRPs downloads: a larger one
+// is refused. NTT's export of every RIR's VRPs was 105,656,326 bytes on
+// 2026-09-27.
+const maxVRPBody = 512 << 20
+
+// loadVRPs reads VRPs from a file or an https:// URL (at most maxVRPBody
+// bytes of it), then applies SLURM.
 func loadVRPs(ctx context.Context, src, slurm string, hc *http.Client) (*rpki.VRPs, error) {
+	return loadVRPsLimit(ctx, src, slurm, hc, maxVRPBody)
+}
+
+// errTooLarge is a download over its limit.
+var errTooLarge = errors.New("larger than the limit")
+
+// limitedReader reads r until more than n bytes would have come from it,
+// then fails with errTooLarge: a download is refused, never cut short.
+type limitedReader struct {
+	r io.Reader
+	n int64 // bytes still allowed
+}
+
+func (l *limitedReader) Read(p []byte) (int, error) {
+	if int64(len(p)) > l.n+1 {
+		p = p[:l.n+1]
+	}
+	n, err := l.r.Read(p)
+	if l.n -= int64(n); l.n < 0 {
+		return 0, errTooLarge
+	}
+	return n, err
+}
+
+// loadVRPsLimit is loadVRPs with a download of at most limit bytes.
+func loadVRPsLimit(ctx context.Context, src, slurm string, hc *http.Client, limit int64) (*rpki.VRPs, error) {
 	var v *rpki.VRPs
 	read := func(r io.Reader) (err error) { v, err = rpki.ReadJSON(r); return }
 	if strings.HasPrefix(src, "https://") {
@@ -157,7 +189,10 @@ func loadVRPs(ctx context.Context, src, slurm string, hc *http.Client) (*rpki.VR
 		if resp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("%s: %s", src, resp.Status)
 		}
-		if err := read(resp.Body); err != nil {
+		if err := read(&limitedReader{resp.Body, limit}); err != nil {
+			if errors.Is(err, errTooLarge) {
+				return nil, fmt.Errorf("%s: over %d bytes: refused", src, limit)
+			}
 			return nil, fmt.Errorf("%s: %w", src, err)
 		}
 	} else if err := backend.ReadInput(src, read); err != nil {

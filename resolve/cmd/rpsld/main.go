@@ -7,7 +7,8 @@
 //	rpsld -source RIPE=nrtm4:https://nrtm.db.ripe.net/nrtmv4/RIPE/update-notification-file.jose,key=ripe.pem \
 //	      -source RADB=dump:radb.db.gz -rpki https://…/vrps.json -keep-route-text
 //
-// SIGHUP re-reads every dump registry; SIGTERM and SIGINT stop it. Run
+// SIGHUP re-reads every dump registry; SIGTERM and SIGINT stop it, giving
+// open connections -grace to finish, and a second one ends it at once. Run
 // rpsld -help for its options and exit statuses; docs/rpsld.md has the rest.
 package main
 
@@ -22,6 +23,12 @@ import (
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// After the first signal the default behaviour returns: a second one
+	// ends rpsld at once, without waiting out -grace.
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 	// One pending reload stands for every SIGHUP that arrives before rpsld

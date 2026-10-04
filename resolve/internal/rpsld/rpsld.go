@@ -39,14 +39,23 @@ type env struct {
 	http *http.Client
 	// listen opens the query port; nil is net.Listen.
 	listen func(network, addr string) (net.Listener, error)
-	// minInterval is the least -nrtm-interval, and the first wait after a
-	// failed sync; zero is NRTMv4's minute (§5.2). Tests lower it.
+	// minInterval is the least -nrtm-interval; zero is NRTMv4's minute
+	// (§5.2). Tests lower it.
 	minInterval time.Duration
+	// maxBackoff is the longest wait after failed syncs in a row; zero is
+	// syncCeiling. Tests lower it.
+	maxBackoff time.Duration
 }
 
 // nrtmFloor is NRTMv4's least time between polls (§5.2), as nrtm4.Client.Run
 // keeps it.
 const nrtmFloor = time.Minute
+
+// syncCeiling is the longest a mirror waits after failed syncs in a row:
+// with nrtm4.Client loading the whole snapshot again after three failed
+// deltas, a shorter ceiling would fetch RIPE's 400 MB every few minutes for
+// as long as a delta is refused.
+const syncCeiling = time.Hour
 
 type sourceFlags []SourceSpec
 
@@ -136,7 +145,7 @@ Exit status:
 	var sources sourceFlags
 	fs.Var(&sources, "source", "a registry: NAME=dump:FILE[,FILE…] or NAME=nrtm4:URL,key=PEMFILE (repeatable; the order is precedence)")
 	rpkiSrc := fs.String("rpki", "", "VRPs (rpki-client/Routinator JSON): a `file` or an https:// URL; serves the registry RPKI and hides RPKI-invalid routes")
-	rpkiRefresh := fs.Duration("rpki-refresh", 10*time.Minute, "how often -rpki is re-read")
+	rpkiRefresh := fs.Duration("rpki-refresh", time.Hour, "how often -rpki is re-read (IRRd's roa_import_timer default; a download over 512 MB is refused)")
 	slurm := fs.String("slurm", "", "an RFC 8416 SLURM `file` applied to -rpki")
 	rpkiDefault := fs.Bool("rpki-default", true, "select the RPKI registry by default, last, as RADB does")
 	listen := fs.String("listen", ":43", "the `address` of the IRRd and whois query port")
@@ -169,6 +178,10 @@ Exit status:
 	floor := e.minInterval
 	if floor <= 0 {
 		floor = nrtmFloor
+	}
+	ceiling := e.maxBackoff
+	if ceiling <= 0 {
+		ceiling = syncCeiling
 	}
 	switch {
 	case len(sources) == 0:
@@ -217,6 +230,7 @@ Exit status:
 	}
 	st := &state{log: log}
 	mirrors := map[string]*nrtm4.Client{}
+	savedKeys := map[string]string{} // the key in -state-dir for each mirror, once saved
 	dumpTimes := map[string][]time.Time{}
 	for _, s := range sources {
 		begin := time.Now()
@@ -244,7 +258,9 @@ Exit status:
 			mirrors[s.Name] = c
 			if *stateDir != "" {
 				if err := saveKey(*stateDir, s.Name, c.Status().CurrentKey); err != nil {
-					log.Warn("could not save the signing key", "registry", s.Name, "err", err)
+					log.Warn("could not save the signing key; trying again after the next sync", "registry", s.Name, "err", err)
+				} else {
+					savedKeys[s.Name] = c.Status().CurrentKey
 				}
 			}
 			log.Info("loaded", "registry", s.Name, "serial", r.Serial(), "session", c.Status().SessionID,
@@ -303,7 +319,7 @@ Exit status:
 		} else {
 			go func() {
 				defer wg.Done()
-				st.follow(ctx, s, mirrors[s.Name], *keepText, *stateDir, *nrtmInterval, floor)
+				st.follow(ctx, s, mirrors[s.Name], *keepText, *stateDir, savedKeys[s.Name], *nrtmInterval, ceiling)
 			}()
 		}
 	}
@@ -369,7 +385,8 @@ func fanOut(ctx context.Context, reload <-chan struct{}, to []chan struct{}, log
 }
 
 // watchDump re-reads s when its files' modification times change, or on
-// reload. last is the times its first load began with.
+// reload. last is the times its first load began with. A read that fails is
+// not tried again until the times change once more, or a reload asks.
 func (st *state) watchDump(ctx context.Context, s SourceSpec, keepText bool, last []time.Time, every time.Duration, reload <-chan struct{}) {
 	serial := uint64(1)
 	tick := time.NewTicker(every)
@@ -405,6 +422,9 @@ func (st *state) watchDump(ctx context.Context, s SourceSpec, keepText bool, las
 		}
 		if err != nil {
 			st.log.Error("reload failed: keeping the previous data", "registry", s.Name, "serial", serial, "err", err)
+			if now != nil {
+				last = now // tried: the next try is at the next change, or a reload
+			}
 			continue
 		}
 		st.log.Info("reloaded", "registry", s.Name, "serial", serial+1, "objects", ds.objects,
@@ -418,15 +438,16 @@ func (st *state) watchDump(ctx context.Context, s SourceSpec, keepText bool, las
 }
 
 // follow syncs the mirror every interval and publishes each new version.
-// After a failed sync it waits as nrtm4.Client.Run does (syncWait). A Sync
+// After failed syncs it backs off (syncWait), up to ceiling. A Sync
 // publishes in the client what it reached even when a later file fails,
 // a version at a time, so the registry is rebuilt whenever the client holds
 // another (session, version) than the one last published — also after a
 // rebuild that failed, which the next sync retries; otherwise the registry
-// stays as it was.
-func (st *state) follow(ctx context.Context, s SourceSpec, c *nrtm4.Client, keepText bool, stateDir string, every, floor time.Duration) {
+// stays as it was. savedKey is the key -state-dir holds ("" when none was
+// saved); after each sync the current key is saved if it is another, so a
+// save that failed is tried again.
+func (st *state) follow(ctx context.Context, s SourceSpec, c *nrtm4.Client, keepText bool, stateDir, savedKey string, every, ceiling time.Duration) {
 	pub := c.Status() // what the startup snapshot holds
-	savedKey := pub.CurrentKey
 	failures := 0
 	timer := time.NewTimer(every)
 	defer timer.Stop()
@@ -448,7 +469,7 @@ func (st *state) follow(ctx context.Context, s SourceSpec, c *nrtm4.Client, keep
 		} else {
 			failures = 0
 		}
-		timer.Reset(syncWait(failures, every, floor))
+		timer.Reset(syncWait(failures, every, ceiling))
 		if u.Stale {
 			st.log.Warn("stale notification file", "registry", s.Name)
 		}
@@ -480,18 +501,18 @@ func (st *state) follow(ctx context.Context, s SourceSpec, c *nrtm4.Client, keep
 	}
 }
 
-// syncWait is how long follow waits after failures failed syncs in a row,
-// as nrtm4.Client.Run waits: the interval after a success; after a failure
-// the floor, doubled with each further one, never above the interval.
-func syncWait(failures int, interval, floor time.Duration) time.Duration {
-	if failures == 0 {
-		return interval
-	}
-	w := floor
-	for i := 1; i < failures && w < interval; i++ {
+// syncWait is how long follow waits after failures failed syncs in a row:
+// the interval after a success, and after each failure in a row twice the
+// wait before it — 2, 4, 8 … times the interval — up to ceiling (but never
+// less than the interval: a failure never makes the mirror poll sooner).
+// A success starts again from the interval.
+func syncWait(failures int, interval, ceiling time.Duration) time.Duration {
+	limit := max(ceiling, interval)
+	w := interval
+	for i := 0; i < failures && w < limit; i++ {
 		w *= 2
 	}
-	return min(w, interval)
+	return min(w, limit)
 }
 
 // refreshVRPs re-reads the VRPs every interval and publishes them with a
