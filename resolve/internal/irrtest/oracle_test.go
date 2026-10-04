@@ -2,10 +2,12 @@ package irrtest
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,7 +19,7 @@ import (
 
 // skipped are the recorded cases irrtest does not answer as IRRd, each with
 // why; every other case must agree. Commands irrtest does not implement at
-// all (!r, -x, -M, text searches) are its scope, not its bugs.
+// all (!r, -x, -M) are its scope, not its bugs.
 var skipped = map[string]string{
 	"session/j-all":  "irrtest's serial is its object count (NAME:N:0-n); IRRd's plain load has none",
 	"session/j-ripe": "as session/j-all", "session/j-mixed": "as session/j-all", "session/j-lower": "as session/j-all",
@@ -42,8 +44,17 @@ func TestMatchesIRRd(t *testing.T) {
 		}
 		addr := db.IRRd(t)
 		for _, g := range irrdoracle.Load(t, config) {
-			if strings.HasPrefix(g.Name, "r/") || strings.HasPrefix(g.Name, "rpki/!r") || g.Name == "rpki/pseudo" {
+			if strings.HasPrefix(g.Name, "r/") || strings.HasPrefix(g.Name, "rpki/!r") {
 				continue // !r: not implemented by irrtest
+			}
+			if g.Name == "rpki/pseudo" {
+				// Its !r lines are irrtest's scope; every other reply in it
+				// is compared (the pseudo registry's !s, !g, and an !mroute
+				// by prefix and origin, which names no pseudo route).
+				var err error
+				if g.Send, g.Got, err = withoutCommands(g.Send, g.Got, "!r"); err != nil {
+					t.Fatalf("%s: %v", g.Name, err)
+				}
 			}
 			if why, ok := skipped[g.Name]; ok {
 				t.Logf("%s: skipped: %s", g.Name, why)
@@ -55,6 +66,51 @@ func TestMatchesIRRd(t *testing.T) {
 			}
 		}
 	}
+}
+
+// withoutCommands is a recorded exchange — send, a persistent session's
+// commands, and got, IRRd's replies to them — without the commands that
+// begin with prefix and their replies. "!!" and "!q" have no reply; every
+// other command has one: an A frame, or a C, D or F line.
+func withoutCommands(send, got, prefix string) (string, string, error) {
+	var replies []string
+	for rest := got; rest != ""; {
+		n := strings.IndexByte(rest, '\n') + 1
+		if n == 0 {
+			return "", "", fmt.Errorf("a reply without its newline: %q", rest)
+		}
+		if rest[0] == 'A' {
+			size, err := strconv.Atoi(rest[1 : n-1])
+			if err != nil || n+size+2 > len(rest) || rest[n+size:n+size+2] != "C\n" {
+				return "", "", fmt.Errorf("a broken frame: %q", rest)
+			}
+			n += size + 2
+		}
+		replies, rest = append(replies, rest[:n]), rest[n:]
+	}
+	var keptSend, keptGot strings.Builder
+	i := 0
+	for _, cmd := range strings.SplitAfter(send, "\n") {
+		if cmd == "" {
+			continue
+		}
+		if line := strings.TrimSuffix(cmd, "\n"); line == "!!" || line == "!q" {
+			keptSend.WriteString(cmd)
+			continue
+		}
+		if i >= len(replies) {
+			return "", "", fmt.Errorf("more commands than the %d replies", len(replies))
+		}
+		if !strings.HasPrefix(cmd, prefix) {
+			keptSend.WriteString(cmd)
+			keptGot.WriteString(replies[i])
+		}
+		i++
+	}
+	if i != len(replies) {
+		return "", "", fmt.Errorf("%d commands for %d replies", i, len(replies))
+	}
+	return keptSend.String(), keptGot.String(), nil
 }
 
 // fixtureTexts reads ripe.db and radb.db, one text per object, RIPE first.

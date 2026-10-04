@@ -124,6 +124,13 @@ func (db *DB) add(o *ast.Object, text string, pseudo bool) {
 					pfx = p.String()
 				}
 				e.pk = strings.ToUpper(pfx) + as.String()
+				// IRRd's pseudo route object of a ROA is keyed by its
+				// maximum length too (RPSLObjectFromROA:
+				// "192.0.2.0/24AS65001/ML24"), so a prefix and an origin
+				// name none (golden rpki/pseudo).
+				if a, ok := o.GetFirst("max-length"); ok && pseudo {
+					e.pk += "/ML" + strings.TrimSpace(a.Value)
+				}
 			}
 		}
 	}
