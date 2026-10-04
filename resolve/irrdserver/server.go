@@ -3,8 +3,10 @@
 // Each connection is a Session; each command reads the current snapshot
 // once, so one answer comes from one snapshot.
 //
-// Every limit is answered as IRRd answers an error, with an F line and its
-// reason, never with a truncated answer.
+// A line over MaxLine, an answer over MaxReply and a command past QueryTime
+// are each answered as IRRd answers an error, with an F line and its
+// reason, never with a truncated answer; a connection past MaxConns, or
+// idle past its timeout, is closed.
 package irrdserver
 
 import (
