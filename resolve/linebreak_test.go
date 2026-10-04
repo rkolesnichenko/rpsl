@@ -10,7 +10,9 @@ import (
 )
 
 // A set whose members are on separate lines without commas expands to all of
-// them, as IRRd (and so bgpq4) reads it, and irrtest answers !i the same way.
+// them, as IRRd (and so bgpq4) reads it, and irrtest answers !i the same way
+// (sorted, as IRRd 4.5.3 answers: resolve/testdata/irrd/golden/plain.txt,
+// cases i/AS-NORM and i/AS-FOO).
 func TestLineSeparatedMembers(t *testing.T) {
 	ctx := context.Background()
 	asx := "as-set: AS-X\nmembers: AS1\n AS2\n AS-Y\nsource: TEST\n"
@@ -24,7 +26,7 @@ func TestLineSeparatedMembers(t *testing.T) {
 	if err != nil || len(rs.List()) != 2 {
 		t.Errorf("ExpandPrefixRanges(RS-X) = %v, %v; want two ranges", rs.List(), err)
 	}
-	if m, ok := irrtest.New(asx).Members([]string{"TEST"}, "AS-X"); !ok || !reflect.DeepEqual(m, []string{"AS1", "AS2", "AS-Y"}) {
-		t.Errorf("irrtest !iAS-X = %q, %v; want [AS1 AS2 AS-Y]", m, ok)
+	if m, ok := irrtest.New(asx).Members([]string{"TEST"}, "AS-X"); !ok || !reflect.DeepEqual(m, []string{"AS-Y", "AS1", "AS2"}) {
+		t.Errorf("irrtest !iAS-X = %q, %v; want [AS-Y AS1 AS2]", m, ok)
 	}
 }

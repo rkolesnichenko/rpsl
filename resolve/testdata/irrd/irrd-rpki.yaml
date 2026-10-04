@@ -1,0 +1,32 @@
+irrd:
+    database_url: 'postgresql://irrd:irrd@postgres:5432/irrd'
+    redis_url: 'redis://redis:6379/0'
+    piddir: /var/run/irrd
+    user: irrd
+    group: irrd
+    server:
+        http:
+            interface: '0.0.0.0'
+            port: 8000
+            url: 'http://127.0.0.1:18080/'
+        whois:
+            interface: '0.0.0.0'
+            port: 43
+    auth:
+        gnupg_keyring: /var/lib/irrd/gnupg
+    email:
+        from: 'irrd@example.net'
+        smtp: 'localhost'
+    rpki:
+        roa_source: 'file:///data/roas.json'
+        roa_import_timer: 3600
+    log:
+        level: INFO
+    sources_default:
+        - RIPE
+        - RADB
+    sources:
+        RIPE:
+            import_source: 'file:///data/ripe.db'
+            import_serial_source: 'file:///data/RIPE.CURRENTSERIAL'
+        RADB: {}

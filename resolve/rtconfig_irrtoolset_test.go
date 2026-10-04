@@ -26,7 +26,9 @@ import (
 	"github.com/rkolesnichenko/rpsl/resolve/internal/irrtest"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/routemodel"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/rpslconf"
+	"github.com/rkolesnichenko/rpsl/resolve/internal/rpsldtest"
 	"github.com/rkolesnichenko/rpsl/resolve/irrd"
+	"github.com/rkolesnichenko/rpsl/resolve/irrdq"
 	"github.com/rkolesnichenko/rpsl/resolve/peval"
 	"github.com/rkolesnichenko/rpsl/resolve/rtconfig"
 	"github.com/rkolesnichenko/rpsl/types"
@@ -247,9 +249,12 @@ type goldenDivergence struct {
 }
 
 var goldenDivergences = []goldenDivergence{
-	{"import-v4", "cisco", "10.0.0.3", "D2", rmRoute("0.0.0.0/0", []types.ASN{3})},
-	{"import-v4", "junos", "10.0.0.3", "D2", rmRoute("0.0.0.0/0", []types.ASN{3})},
-	{"import-v4", "ciscoxr", "10.0.0.3", "D2", rmRoute("0.0.0.0/0", []types.ASN{3})},
+	// RS-BAR's AS-BAZ^24-26 holds AS12's 10.12.0.0/16 under ^24-26; IRRd
+	// drops the member from "!iRS-BAR,1" (golden case i1/RS-FOO), so rtconfig
+	// has nothing for it.
+	{"import-v4", "cisco", "10.0.0.3", "D2", rmRoute("10.12.1.0/24", []types.ASN{3})},
+	{"import-v4", "junos", "10.0.0.3", "D2", rmRoute("10.12.1.0/24", []types.ASN{3})},
+	{"import-v4", "ciscoxr", "10.0.0.3", "D2", rmRoute("10.12.1.0/24", []types.ASN{3})},
 	{"import-v4", "ciscoxr", "10.0.0.5", "D11", rmRoute("10.55.0.0/16", []types.ASN{5})},
 	{"export-v4", "ciscoxr", "10.0.0.3", "D14", rmRoute("10.1.0.0/16", []types.ASN{3})},
 }
@@ -425,7 +430,13 @@ func TestRtconfigMatches(t *testing.T) {
 		g.v4only = true
 		export := r.IntN(2) == 0
 		pol := rtconfigPolicy(r, g, export)
-		addr := irrtest.New(append(m.texts(r), pol)...).WithSources("RIPE", "RADB").WithLegacyClasses().IRRd(t)
+		// One object per primary key for both servers, as for peval's
+		// differential (lastOfEach).
+		texts := lastOfEach(append(m.texts(r), pol))
+		addr := irrtest.New(texts...).WithSources("RIPE", "RADB").WithLegacyClasses().IRRd(t)
+		// rpsld over the same objects, which answers "!man" always: rtconfig
+		// must write against it what it writes against irrtest.
+		served := rpsldtest.Serve(t, rpsldtest.Snapshot(t, texts, irrdq.SnapshotOptions{}, "RIPE", "RADB"))
 		cmd := "import"
 		if export {
 			cmd = "export"
@@ -463,6 +474,17 @@ func TestRtconfigMatches(t *testing.T) {
 			theirs, err := runRtconfig(t, bin, addr, "RIPE,RADB", rtconfigArgs(v, true), tmpl)
 			if err != nil {
 				t.Fatalf("%s: rtconfig: %v\n%s", label, err, theirs)
+			}
+			fromRpsld, err := runRtconfig(t, bin, served, "RIPE,RADB", rtconfigArgs(v, true), tmpl)
+			if err != nil {
+				t.Fatalf("%s: rtconfig against rpsld: %v\n%s", label, err, fromRpsld)
+			}
+			switch {
+			case fromRpsld == theirs:
+			case v == "ciscoxr" && withoutCommSets(fromRpsld) == withoutCommSets(theirs):
+				t.Logf("%s: rtconfig against rpsld and irrtest differ in community-sets only (D18)", label)
+			default:
+				t.Fatalf("%s: rtconfig against rpsld differs from irrtest:\n%s\npolicy:\n%s", label, firstDiff(theirs, fromRpsld), pol)
 			}
 			ours, code, errOut := runRpslconf(addr, "RIPE,RADB", tmpl, "-config", v)
 			if code != 0 {
@@ -751,11 +773,25 @@ func TestPevalDivergences(t *testing.T) {
 			t.Errorf("rpslconf says NOT ANY")
 		}
 	})
+	// IRRd 4.5.3 drops RS-BAR's AS-BAZ^24-26 from "!iRS-BAR,1" (it looks the
+	// member up as a set name and finds none: golden case i1/RS-FOO in
+	// testdata/irrd/golden/plain.txt), and irrtest answers as IRRd does, so
+	// peval gets nothing for it: none of AS-BAZ's routes (AS12's 10.12.0.0/16
+	// among them) and no 0.0.0.0/0, which it substitutes only for a member a
+	// server answers unresolved.
 	t.Run("D2", func(t *testing.T) {
-		if out, err := theirs("RS-BAR", 10*time.Second); err != nil || !strings.Contains(out, "0.0.0.0/0") {
+		out, err := theirs("RS-BAR", 10*time.Second)
+		if err != nil || strings.Contains(out, "10.12.") || strings.Contains(out, "0.0.0.0/0") {
 			t.Errorf("D2 is gone: peval says %q, %v", out, err)
 		}
-		if out := ours(t, "afi ipv4.unicast RS-BAR"); strings.Contains(out, "0.0.0.0/0") {
+		// The rest of RS-BAR stays: AS10's routes, RS-NESTED's prefix, the
+		// claimant AS13's route, so the pin cannot pass on an empty answer.
+		for _, p := range []string{"10.10.0.0/16", "10.10.1.0/24", "10.22.0.0/16", "10.13.0.0/16"} {
+			if !strings.Contains(out, p+",") && !strings.Contains(out, p+"}") {
+				t.Errorf("peval's RS-BAR lacks %s: %q, %v", p, out, err)
+			}
+		}
+		if out := ours(t, "afi ipv4.unicast RS-BAR"); !strings.Contains(out, "10.12.0.0/16^24-26") {
 			t.Errorf("rpslconf says %q", out)
 		}
 	})

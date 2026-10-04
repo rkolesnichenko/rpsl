@@ -55,7 +55,6 @@ prefix-set pl153-deny
 end-set
 
 prefix-set pl153-permit
-  0.0.0.0/0,
   10.10.0.0/16,
   10.10.1.0/24,
   10.13.0.0/16,

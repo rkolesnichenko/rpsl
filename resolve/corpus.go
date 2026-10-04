@@ -1,6 +1,7 @@
 package resolve
 
 import (
+	"iter"
 	"net/netip"
 	"sort"
 	"strings"
@@ -44,10 +45,19 @@ type Corpus struct {
 	// loader's Corpus before any Read sets Corpus.IndexPeers itself.
 	IndexPeers bool
 
-	whole   map[wholeKey]held
-	routes  map[routeKey]struct{}
-	sources map[string]string // upper-case source name -> the one copy kept
-	seq     uint64
+	// KeepRouteText keeps each route and route6 that claims nothing as its
+	// text too, beside its prefix, origin and source, so that Routes yields
+	// it — what an IRRd-compatible server (resolve/irrdq) needs to answer
+	// "!m route", "!r" for route objects (not "!r …,o", which lists origins)
+	// and whois "-i origin". Set it before the first Put. Without it such a
+	// route's text is gone once Put returns.
+	KeepRouteText bool
+
+	whole     map[wholeKey]held
+	routes    map[routeKey]struct{}
+	routeText map[routeKey]string // KeepRouteText: a reduced route's text
+	sources   map[string]string   // upper-case source name -> the one copy kept
+	seq       uint64
 }
 
 // wholeKey identifies a whole object: its class, canonical primary key and
@@ -122,6 +132,7 @@ func (c *Corpus) Put(o object.Object) bool {
 	if route {
 		rk.source = src
 		delete(c.routes, rk)
+		delete(c.routeText, rk)
 	}
 	if claims && len(memberOf) > 0 {
 		c.putWhole(k, o)
@@ -133,7 +144,7 @@ func (c *Corpus) Put(o object.Object) bool {
 			if an, ok := o.(object.AutNum); ok && c.IndexPeers {
 				named = peeringASNs(an)
 			}
-			c.putText(k, textFrom(raw), named)
+			c.putText(k, ObjectText(raw), named)
 		} else {
 			c.putWhole(k, o) // built by hand: no text to keep
 		}
@@ -142,9 +153,26 @@ func (c *Corpus) Put(o object.Object) bool {
 	delete(c.whole, k)
 	if route {
 		c.routes[rk] = struct{}{}
+		if c.KeepRouteText {
+			c.keepText(rk, o)
+		}
 		return true
 	}
 	return false
+}
+
+// keepText holds o's text, from its first attribute line, for the reduced
+// route rk. An object built by hand has no text and keeps none.
+func (c *Corpus) keepText(rk routeKey, o object.Object) {
+	raw := o.Raw()
+	if raw == nil {
+		delete(c.routeText, rk)
+		return
+	}
+	if c.routeText == nil {
+		c.routeText = map[routeKey]string{}
+	}
+	c.routeText[rk] = strings.Clone(ObjectText(raw))
 }
 
 // rawRouteKey is the identity of a route whose prefix or origin did not
@@ -182,7 +210,7 @@ func (c *Corpus) putWhole(k wholeKey, o object.Object) {
 	c.whole[k] = held{obj: o, key: k, seq: c.seq}
 }
 
-// textFrom returns raw's serialized text starting at its first attribute
+// ObjectText returns raw's serialized text starting at its first attribute
 // line, dropping the blank, comment and malformed lines the stream attached
 // before the object (ast.Object owns them so the *stream's* own round-trip
 // stays byte-exact; see rpsl.ParseWith). A Corpus entry kept as text is later
@@ -197,21 +225,52 @@ func (c *Corpus) putWhole(k wholeKey, o object.Object) {
 // verbatim ("# aut-num: AS1" followed by the real "aut-num: AS1"), which a
 // strings.Index on the attribute's raw bytes would match inside the comment
 // itself, understating how much trivia to drop.
-func textFrom(raw *ast.Object) string {
+//
+// The text ends with the object's last attribute or continuation line: the
+// stream also attaches to the last object of a dump the blank, comment and
+// malformed lines after it (a dump's closing comment, ARIN's "EOF"), which
+// are no more the object's than the ones before it, so trailing blank,
+// comment and malformed lines are dropped. Lines are read as the lexer reads
+// them: one led by a space, a tab or '+' continues an attribute only right
+// after an attribute or continuation line, and after a blank, comment or
+// malformed line it is malformed. Any line between the first and the last
+// attribute line stays — a comment, or a blank line in an object parsed on
+// its own (rpsl.ParseObject keeps the attributes after it).
+//
+// It is exported for servers that answer with an object as its registry
+// published it (resolve/irrdq): the same text a Corpus keeps.
+func ObjectText(raw *ast.Object) string {
 	text := raw.String()
-	rest, off := text, 0
-	for len(rest) > 0 {
+	start, end := -1, 0
+	inAttr := false // the previous line was an attribute or continuation line
+	for rest, off := text, 0; len(rest) > 0; {
 		line, eol := rest, len(rest)
 		if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
 			line, eol = rest[:nl], nl+1
 		}
-		if lexer.StartsAttribute(strings.TrimSuffix(line, "\r")) {
-			return text[off:]
+		line = strings.TrimSuffix(line, "\r")
+		switch {
+		case lexer.IsBlankLine(line):
+			inAttr = false // kept only if an attribute line follows
+		case line[0] == ' ' || line[0] == '\t' || line[0] == '+':
+			if inAttr { // a continuation; otherwise malformed (the lexer's classify)
+				end = off + eol
+			}
+		case lexer.StartsAttribute(line):
+			if start < 0 {
+				start = off
+			}
+			end, inAttr = off+eol, true
+		default: // a comment or a malformed line
+			inAttr = false
 		}
 		off += eol
 		rest = rest[eol:]
 	}
-	return text
+	if start < 0 {
+		return text
+	}
+	return text[start:end]
 }
 
 // putText is putWhole for an object kept as its text.
@@ -260,6 +319,7 @@ func (c *Corpus) Delete(class, primaryKey, source string) bool {
 		rk := routeKey{p, a, src}
 		if _, found := c.routes[rk]; found {
 			delete(c.routes, rk)
+			delete(c.routeText, rk)
 			return true
 		}
 	}
@@ -347,9 +407,18 @@ func (c *Corpus) Merge(other *Corpus) {
 		}
 	}
 	for rk := range other.routes {
+		text := other.routeText[rk]
 		rk.source = c.intern(rk.source)
 		delete(c.whole, wholeKey{routeClass(rk.prefix), rk.pk(), rk.source})
 		c.routes[rk] = struct{}{}
+		if c.KeepRouteText && text != "" {
+			if c.routeText == nil {
+				c.routeText = map[routeKey]string{}
+			}
+			c.routeText[rk] = text
+		} else {
+			delete(c.routeText, rk)
+		}
 	}
 }
 
@@ -375,6 +444,58 @@ func (c *Corpus) ordered(keep func(source string) bool) []held {
 
 // Len returns the number of objects held, whole or reduced.
 func (c *Corpus) Len() int { return len(c.whole) + len(c.routes) }
+
+// CorpusRoute is one route or route6 a Corpus holds.
+type CorpusRoute struct {
+	Prefix netip.Prefix // as routeOf gives it
+	Origin types.ASN
+	Source string // upper-case
+	Text   string // from the first attribute line; "" when not kept (KeepRouteText)
+}
+
+// Routes yields every route and route6 the corpus holds with a valid prefix
+// and origin: each reduced one (with its text when KeepRouteText kept it)
+// and each kept whole as a member-of claimant (with its text always). The
+// order is unspecified.
+func (c *Corpus) Routes() iter.Seq[CorpusRoute] {
+	return func(yield func(CorpusRoute) bool) {
+		for rk := range c.routes {
+			if !yield(CorpusRoute{rk.prefix, rk.origin, rk.source, c.routeText[rk]}) {
+				return
+			}
+		}
+		for _, h := range c.whole {
+			if h.obj == nil || (h.key.class != "route" && h.key.class != "route6") {
+				continue
+			}
+			p, origin, ok := routeOf(h.obj)
+			if !ok {
+				continue
+			}
+			var text string
+			if raw := h.obj.Raw(); raw != nil {
+				text = ObjectText(raw)
+			}
+			if !yield(CorpusRoute{p, origin, h.key.source, text}) {
+				return
+			}
+		}
+	}
+}
+
+// Whole yields the objects the corpus keeps whole — every set, and every
+// object that claims membership of one (member-of:) — in load order.
+// Aut-nums and inet-rtrs kept only as text (KeepPolicy) and reduced routes
+// are not among them.
+func (c *Corpus) Whole() iter.Seq[object.Object] {
+	return func(yield func(object.Object) bool) {
+		for _, h := range c.ordered(nil) {
+			if h.obj != nil && !yield(h.obj) {
+				return
+			}
+		}
+	}
+}
 
 // Source builds a MemSource over the corpus: the one NewMemSource builds
 // over the same objects, with the same source precedence.

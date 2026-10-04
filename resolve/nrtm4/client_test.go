@@ -647,3 +647,29 @@ func TestClientKeepsPolicy(t *testing.T) {
 		t.Errorf("a mirror without KeepPolicy: AutNum = %v; want ErrNoPolicy", err)
 	}
 }
+
+// TestClientKeepsRouteText: a Client with KeepRouteText keeps each route's
+// text — from the snapshot and from a delta — so CopyTo into a corpus that
+// keeps text carries it.
+func TestClientKeepsRouteText(t *testing.T) {
+	s := nrtmtest.New(t, "TEST")
+	s.Publish(route("192.0.2.0/24", 1, ""))
+	s.Snapshot()
+	c := newClient(s, "TEST")
+	c.KeepRouteText = true
+	mustSync(t, c)
+	s.Publish(route("198.51.100.0/24", 2, "descr: by delta\n"))
+	mustSync(t, c)
+	dst := &resolve.Corpus{KeepRouteText: true}
+	c.CopyTo(dst)
+	texts := map[types.ASN]string{}
+	for r := range dst.Routes() {
+		texts[r.Origin] = r.Text
+	}
+	if !strings.HasPrefix(texts[1], "route:  192.0.2.0/24\n") {
+		t.Errorf("the snapshot's route: %q", texts[1])
+	}
+	if !strings.Contains(texts[2], "descr: by delta\n") {
+		t.Errorf("the delta's route: %q", texts[2])
+	}
+}

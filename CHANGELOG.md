@@ -9,6 +9,64 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Added
+
+- `Corpus.KeepRouteText`, `DumpLoader.KeepRouteText` and `nrtm4.Client.KeepRouteText`: keep each
+  route's and route6's text too, beside its prefix, origin and source, for a server that answers
+  route objects. `Corpus.Routes` yields every route (`CorpusRoute`: prefix, origin, source, and
+  text when kept), and `Corpus.Whole` the objects a corpus keeps whole.
+- `resolve.ObjectText`, exported: an object's text as its registry published it, without the
+  blank, comment and malformed lines a dump stream attaches around it.
+- `resolve/irrdq`: IRRd's query protocol and RIPE-style whois queries over registries held in
+  memory, answered as IRRd 4.5.3 answers them — including where IRRd and RFC 2622 differ — or,
+  with `SnapshotOptions.RFC`, `!i…,1` and `!a` by the engine's RFC 2622 expansion; with
+  `SnapshotOptions.VRPs`, IRRd 4's RPKI-aware mode. Pure, like `resolve`. A query for a class,
+  an inverse attribute or route text the registries do not keep is refused, never answered "not
+  found". `Registry` (`NewRegistry`, `Name`, `Serial`, `KeepsRouteText`, `WithSerial`),
+  `Snapshot` (`NewSnapshot`, `With`, `Registries`), `SnapshotOptions`, `Session` (`NewSession`,
+  `Do`, `Timeout`, `SetMaxReply`: a byte budget past which an answer stops being built and is
+  refused) and `Reply` (`WriteTo`, `Close`, `Len`, `Cause`, `Refused`, `Fail`).
+- `resolve/irrdserver`: `Server` serves `irrdq` on a listener — IRRd and RIPE-style queries on
+  one port, pipelined — with explicit `Limits` (connections 256, idle 30 s as IRRd's, line
+  1 MiB, answer 256 MiB, query 60 s): the line, answer and query-time limits are each an `F`
+  line, never a cut-short answer (an answer far over `MaxReply` is refused without being
+  built), and past `MaxConns` or the idle timeout the connection is closed; `Shutdown` writes
+  out every completed answer whole; `ErrServerClosed`.
+- `rpsld` (`resolve/cmd/rpsld`; logic in `resolve/internal/rpsld`): an IRRd-compatible mirror
+  of dumps, NRTMv4 mirrors and RPKI VRPs, kept current — dumps re-read when they change or on
+  SIGHUP, NRTMv4 polled every minute (backing off to an hour after failures), VRPs refreshed
+  hourly — each change published as a new
+  immutable snapshot, a failed one keeping the previous data and `!j` serial. bgpq4,
+  IRRToolSet, `rpslq`, `irrd.Source` and `whois.Source` run against it unchanged. Release
+  binaries beside `rpslq`'s, `rpslconf`'s and `rpslcheck`'s (20 archives). See `docs/rpsld.md`.
+- IRRd 4.5.3's answers to 247 exchanges on a fixed fixture, recorded in Docker
+  (`resolve/testdata/irrd`, `resolve/internal/irrdoracle`; re-recorded with
+  `RPSL_IRRD_DOCKER=1`), which `irrdq` and `irrtest` are both held to. Where `rpsld` knowingly
+  differs from IRRd is listed in `resolve/testdata/rpsld/divergences.md`, each difference pinned.
+- The expansion, RPKI, policy and consistency models, bgpq4, `rpslq` and IRRToolSet's
+  differentials run against `rpsld` as a further backend.
+- `FuzzSession` (`resolve/irrdq`) and `FuzzSourceSpec` (`resolve/internal/rpsld`): the fuzz
+  targets are now 43.
+
+### Changed
+
+- `irrtest` answers as IRRd 4.5.3 does, corrected against the recordings (test-only). With it,
+  `resolve/testdata/bgpq4/divergences.md`'s `operator-on-set-member` row now says IRRd drops
+  such a member from `!i…,1` rather than returning it unresolved, `source-cycle` is re-pinned
+  to what bgpq4 does against a faithful IRRd, and `resolve/testdata/rtconfig/divergences.md`'s
+  D2 is re-pinned as the loss of the operator member (IRRToolSet's `0.0.0.0/0` came from the
+  old `irrtest`).
+- `irrd.Source` reads a set's object (`!m`) on a scoped lookup, to restore a reference to the
+  set's own name that IRRd's `!i` drops: one more query per scoped lookup.
+
+### Fixed
+
+- `irrd.Source.ASSetPrefixes` answered `ErrNotFound` for an as-set whose members originate
+  nothing, since IRRd answers `D` for that as for a missing set; it now asks `!m` on a `D` and
+  returns an empty answer for an as-set that exists.
+- A `Corpus` that keeps aut-nums and inet-rtrs as text (`KeepPolicy`) kept, in the text of a
+  dump's last object, the blank and comment lines after it (a closing comment, ARIN's `EOF`).
+
 ## [0.23.0] - 2026-10-02
 
 ### Added

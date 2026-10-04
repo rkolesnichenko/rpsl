@@ -17,7 +17,9 @@ import (
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/irrtest"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/routemodel"
+	"github.com/rkolesnichenko/rpsl/resolve/internal/rpsldtest"
 	"github.com/rkolesnichenko/rpsl/resolve/irrd"
+	"github.com/rkolesnichenko/rpsl/resolve/irrdq"
 	"github.com/rkolesnichenko/rpsl/resolve/peval"
 	"github.com/rkolesnichenko/rpsl/resolve/whois"
 	"github.com/rkolesnichenko/rpsl/types"
@@ -930,7 +932,7 @@ func TestModelPolicy(t *testing.T) {
 // backends against an IRRd-like server. 100 seeds, so that each of the four
 // kinds randomPolicy draws gets about 25 policies, as import alone had before.
 func TestModelPolicyBackends(t *testing.T) {
-	kcs := map[string]kindCounts{"corpus": {}, "irrd": {}, "whois": {}}
+	kcs := map[string]kindCounts{"corpus": {}, "irrd": {}, "whois": {}, "rpsld": {}, "rpsld-whois": {}}
 	for seed := uint64(0); seed < 100; seed++ {
 		r := rand.New(rand.NewPCG(seed, 17))
 		texts, pg, pol := randomPolicy(t, r, seed)
@@ -945,8 +947,14 @@ func TestModelPolicyBackends(t *testing.T) {
 		ir.Close()
 		wh := &whois.Source{Addr: db.Whois(t), Sources: []string{"RIPE", "RADB"}, Timeout: 5 * time.Second}
 		checkPolicyModel(t, fmt.Sprintf("whois seed %d", seed), pg, pol, &peval.Evaluator{Src: wh}, r, kcs["whois"])
+		rs := rpsldtest.Serve(t, rpsldtest.Snapshot(t, texts, irrdq.SnapshotOptions{}, "RIPE", "RADB"))
+		rp := &irrd.Source{Addr: rs, Sources: []string{"RIPE", "RADB"}, Pipeline: 8, Timeout: 5 * time.Second}
+		checkPolicyModel(t, fmt.Sprintf("rpsld seed %d", seed), pg, pol, &peval.Evaluator{Src: rp}, r, kcs["rpsld"])
+		rp.Close()
+		rw := &whois.Source{Addr: rs, Sources: []string{"RIPE", "RADB"}, Timeout: 5 * time.Second}
+		checkPolicyModel(t, fmt.Sprintf("rpsld whois seed %d", seed), pg, pol, &peval.Evaluator{Src: rw}, r, kcs["rpsld-whois"])
 	}
-	for _, b := range []string{"corpus", "irrd", "whois"} {
+	for _, b := range []string{"corpus", "irrd", "whois", "rpsld", "rpsld-whois"} {
 		kcs[b].log(t, b)
 		for _, k := range policyKinds {
 			if c := kcs[b][k]; c == nil || c[1] < 10 {

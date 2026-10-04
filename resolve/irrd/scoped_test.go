@@ -3,6 +3,7 @@ package irrd_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -49,6 +50,47 @@ func TestScopedGetSet(t *testing.T) {
 		}
 		if _, err := src.GetSet(ctx, ref(t, "AS-X")); err != nil {
 			t.Errorf("pipeline %d: the unscoped connection broke after the scoped refusal: %v", pipeline, err)
+		}
+		src.Close()
+	}
+}
+
+// TestScopedSelfReference: IRRd's "!i" drops a set's own name from its
+// answer (members_for_set, irrd/server/query_resolver.py: "if parameter in
+// members: members.remove(parameter)"). Looked up by precedence that
+// reference is the set itself, a cycle, so an unscoped lookup leaves it out;
+// a scoped one (RADB::AS-TOP listing AS-TOP, which precedence may resolve to
+// another registry's copy) restores it from the object, spelled however the
+// object spells it.
+func TestScopedSelfReference(t *testing.T) {
+	db := irrtest.New(
+		"as-set: AS-TOP\nmembers: AS1, AS-TOP\nsource: RIPE\n",
+		"as-set: AS-TOP\nmembers: AS2, as-top\nsource: RADB\n",
+		"as-set: AS-SELF\nmembers: AS-SELF\nsource: RADB\n",
+	)
+	for _, pipeline := range []int{0, 4} {
+		src := &irrd.Source{Addr: db.IRRd(t), Sources: []string{"RIPE", "RADB"}, Pipeline: pipeline, Timeout: 5 * time.Second}
+		ctx := context.Background()
+		for _, c := range []struct{ ref, want string }{
+			{"RADB::AS-TOP", "[AS2 AS-TOP]"},
+			{"RADB::AS-SELF", "[AS-SELF]"}, // "!i" answers D: the object holds it
+			{"AS-TOP", "[AS1]"},            // RIPE's, by precedence: its self-reference is a no-op
+			{"RIPE::AS-TOP", "[AS1 AS-TOP]"},
+		} {
+			set, err := src.GetSet(ctx, ref(t, c.ref))
+			if err != nil {
+				t.Fatalf("pipeline %d: %s: %v", pipeline, c.ref, err)
+			}
+			var got []string
+			for _, m := range set.(object.AsSet).Members {
+				got = append(got, m.Ref().Name().String())
+				if m.Kind == object.MemberAS {
+					got[len(got)-1] = m.AS.String()
+				}
+			}
+			if g := fmt.Sprint(got); g != c.want {
+				t.Errorf("pipeline %d: %s members %s, want %s", pipeline, c.ref, g, c.want)
+			}
 		}
 		src.Close()
 	}

@@ -16,7 +16,9 @@ import (
 	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/irrtest"
+	"github.com/rkolesnichenko/rpsl/resolve/internal/rpsldtest"
 	"github.com/rkolesnichenko/rpsl/resolve/irrd"
+	"github.com/rkolesnichenko/rpsl/resolve/irrdq"
 	"github.com/rkolesnichenko/rpsl/resolve/whois"
 	"github.com/rkolesnichenko/rpsl/types"
 )
@@ -332,6 +334,14 @@ func srcMembers(r *rand.Rand, s *mSet, class types.SetClass, asNames, rsNames []
 // texts renders the model as RPSL objects in random order, spelling set names
 // in random case and splitting member lists across lines and attributes.
 func (m model) texts(r *rand.Rand) []string {
+	out, _ := m.textsOf(r)
+	return out
+}
+
+// textsOf is texts, also giving for each text the index of what it renders:
+// below len(m.sets) that set, otherwise m.objs[i-len(m.sets)]. It draws from
+// r exactly as texts does.
+func (m model) textsOf(r *rand.Rand) ([]string, []int) {
 	var out []string
 	list := func(b *strings.Builder, attr string, items []string) {
 		for len(items) > 0 {
@@ -376,8 +386,37 @@ func (m model) texts(r *rand.Rand) []string {
 		fmt.Fprintf(&b, "source: %s\n", o.source)
 		out = append(out, b.String())
 	}
-	r.Shuffle(len(out), func(i, j int) { out[i], out[j] = out[j], out[i] })
-	return out
+	idx := make([]int, len(out))
+	for i := range idx {
+		idx[i] = i
+	}
+	r.Shuffle(len(out), func(i, j int) {
+		out[i], out[j] = out[j], out[i]
+		idx[i], idx[j] = idx[j], idx[i]
+	})
+	return out, idx
+}
+
+// lastOfEach is the package's lastOfEach for a model and its texts (with
+// idx from textsOf): the texts keep the last object of each (class,
+// canonical primary key, source), and the model keeps only what those texts
+// render. The model can draw a route or aut-num twice in one source; irrtest
+// and NewMemSource keep every copy, but a registry holds one object per
+// primary key and rpsld (a resolve.Corpus) keeps the last it is given — so
+// an oracle over the model this returns describes what rpsld serves for the
+// texts it returns. Sets never repeat within a source.
+func (m model) lastOfEach(texts []string, idx []int) (model, []string) {
+	var out model
+	var kept []string
+	for _, i := range lastOfEachIndex(texts) {
+		kept = append(kept, texts[i])
+		if j := idx[i]; j < len(m.sets) {
+			out.sets = append(out.sets, m.sets[j])
+		} else {
+			out.objs = append(out.objs, m.objs[j-len(m.sets)])
+		}
+	}
+	return out, kept
 }
 
 // ---- the oracle ----
@@ -895,7 +934,7 @@ func TestModelBackends(t *testing.T) {
 	for seed := uint64(0); seed < 150; seed++ {
 		r := rand.New(rand.NewPCG(seed, 5))
 		m := randomModel(r, false)
-		texts := m.texts(r)
+		texts, idx := m.textsOf(r)
 		db := irrtest.New(texts...).WithSources("RIPE", "RADB")
 		o := newOracle(m)
 		ir := &irrd.Source{Addr: db.IRRd(t), Sources: []string{"RIPE", "RADB"}, KeepAlive: true, SrcMembers: true, Timeout: 5 * time.Second}
@@ -913,6 +952,15 @@ func TestModelBackends(t *testing.T) {
 		checkModel(t, fmt.Sprintf("cache seed %d", seed), o, texts, cache, false)
 		wh := &whois.Source{Addr: db.Whois(t), Sources: []string{"RIPE", "RADB"}, Timeout: 5 * time.Second}
 		checkModel(t, fmt.Sprintf("whois seed %d", seed), o, texts, wh, false)
+		// rpsld holds one object per primary key, as a registry does.
+		lm, lt := m.lastOfEach(texts, idx)
+		lo := newOracle(lm)
+		rs := rpsldtest.Serve(t, rpsldtest.Snapshot(t, lt, irrdq.SnapshotOptions{}, "RIPE", "RADB"))
+		rp := &irrd.Source{Addr: rs, Sources: []string{"RIPE", "RADB"}, Pipeline: 8, SrcMembers: true, Timeout: 5 * time.Second}
+		checkModel(t, fmt.Sprintf("rpsld seed %d", seed), lo, lt, rp, false)
+		rp.Close()
+		rw := &whois.Source{Addr: rs, Sources: []string{"RIPE", "RADB"}, Timeout: 5 * time.Second}
+		checkModel(t, fmt.Sprintf("rpsld whois seed %d", seed), lo, lt, rw, false)
 		if seed%5 == 0 {
 			ex := randomExclusion(r, m)
 			checkModel(t, fmt.Sprintf("irrd seed %d excluding %v", seed, ex), o.excluding(ex), texts,

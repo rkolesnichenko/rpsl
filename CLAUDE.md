@@ -41,18 +41,26 @@ resolve → object → policy → types → ast → lexer (never the reverse).
   with the local directories, so edits are seen across modules at once. Bump them only when releasing.
 - `Diagnostic`/`Severity` live in the `ast` module (so `object` can emit them); `rpsl` re-exports via aliases.
 - Net-using Source backends are isolated in `resolve/` sub-packages (irrd/whois/rdap/nrtm4) to keep core `resolve` socket-free.
+- `resolve/irrdq` (IRRd 4.5.3's query semantics over in-memory registry snapshots; pure, no
+  `net`, no goroutines) and `resolve/irrdserver` (serves it on one port, with limits; sockets)
+  sit beside the backends: they are the server `rpsld` runs.
 - `resolve/peval` (policy evaluation for one BGP session), `resolve/rtconfig` (router
   configuration from an evaluated policy: Cisco IOS/IOS-XE, Junos, Cisco IOS-XR, BIRD 2) and
   `resolve/consist` (neighbour policy consistency and one-aut-num lint, built on `peval`) sit
   beside `resolve`, pure like it — no `net` either. `types.PrefixSpace`, the exact prefix-set
   algebra `consist` compares with, is in the `types` leaf, not in `resolve`. `resolve/internal/backend`
-  (shared server/dump opening for rpslq, rpslconf and rpslcheck), `resolve/internal/routemodel`
+  (shared server/dump opening for rpslq, rpslconf and rpslcheck; rpsld reads dumps with it),
+  `resolve/internal/routemodel`
   (test-only AS-path-regexp-vs-path oracle), `resolve/internal/cfgsim` (test-only: reads router
   configuration and decides routes against it, the semantic oracle for `rtconfig`),
-  `resolve/internal/buildinfo` (the version `-v` prints, for rpslq, rpslconf and rpslcheck),
+  `resolve/internal/buildinfo` (the version `-v` prints, for rpslq, rpslconf, rpslcheck and rpsld),
   `resolve/internal/rpslconf` (the `rpslconf` command's logic, both modes; `resolve/cmd/rpslconf`
-  is the shim) and `resolve/internal/rpslcheck` (the `rpslcheck` command's logic;
-  `resolve/cmd/rpslcheck` is the shim) are internal packages alongside it.
+  is the shim), `resolve/internal/rpslcheck` (the `rpslcheck` command's logic;
+  `resolve/cmd/rpslcheck` is the shim), `resolve/internal/rpsld` (the `rpsld` command's logic;
+  `resolve/cmd/rpsld` is the shim), `resolve/internal/irrdoracle` (test-only: IRRd 4.5.3's
+  recorded answers, `resolve/testdata/irrd/golden`, and how to compare a server with them) and
+  `resolve/internal/rpsldtest` (test-only: a snapshot from RPSL texts, served on a localhost
+  port) are internal packages alongside it.
 - Tests use in-process fake servers over a localhost listener + a `Dial` hook (no real network);
   the bgpq4 differential runs bgpq4 against an in-process IRRd (`resolve/internal/irrtest`) when bgpq4
   is installed; the snapshot goldens are its checked-in output; a live diff is opt-in via env vars.
@@ -202,6 +210,30 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   - "Announces" means "permits announcing" (policy text, not a RIB).
   - `Corpus.IndexPeers` keeps AS numbers only, never decoded policies.
 
+- **The server (`resolve/irrdq`) answers as IRRd 4.5.3 does.**
+  - IRRd's semantics live in `irrdq`, never in the engine (`!i…,1` drops an operator member and
+    follows a route-set in an as-set only under a route-set root; `AS-ANY` is a missing set; `!i`
+    drops the set's own name as sent). RFC mode (`-rfc`) calls the `Expander` unchanged, with
+    the same RPKI visibility rule and `Concurrency` 0, and changes only `!i…,1` and `!a`.
+  - `irrtest` stays independent of `irrdq` (neither imports the other; `irrdoracle` imports
+    neither). Both are held to `resolve/testdata/irrd/golden`, recorded from IRRd in Docker
+    (`RPSL_IRRD_DOCKER=1 go test -run TestRecord ./resolve/internal/irrdoracle`); a golden is
+    never edited by hand, and where `irrtest` disagrees with a recording, IRRd decides.
+  - One answer, one snapshot: `Session.Do` reads the snapshot once per command; a registry is
+    rebuilt beside the live snapshot and published with one atomic store.
+  - A class, an inverse attribute or route text the mirror does not keep is refused, never "not
+    found"; a plain RIPE-style lookup without `-T` naming only kept classes is refused too
+    (IRRd's text search would add as-blocks, inetnums, persons, roles).
+  - Deliberate differences from IRRd are pinned in `irrdq`'s `diverges` (and `irrdserver`'s
+    tests for the limits) and listed in `resolve/testdata/rpsld/divergences.md`;
+    `TestDivergencesDocumented` checks both directions.
+  - A failed sync or reload keeps the registry's previous data and `!j` serial. The line,
+    answer and query-time limits are each an `F` line, never a cut-short answer; an answer that
+    grows with the data is built under the session's budget (`SetMaxReply`) and stops as soon as
+    it passes it, never built whole and then measured; past `MaxConns`
+    or the idle timeout the connection is closed. A slow reader can hold a connection one idle
+    timeout per 64 KiB written, bounded only by `MaxConns`.
+
 ## Scope guardrails
 
 - Do NOT evaluate AS-path regexps (`<...>`) against live BGP paths — parse them to an AST and stop.
@@ -218,7 +250,7 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   (all six modules incl. examples/bulk-ripe under -race, gofmt, invariants) with
   `scripts/check.sh`; `FUZZTIME=15s scripts/check.sh` also runs every fuzz target.
 - `go test -run 'TestRoundTrip|TestStreamRoundTrip' .` — the lossless guard (root module).
-- Fuzz (41 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
+- Fuzz (43 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
   FuzzFormat (ast); FuzzParseSetName, FuzzParseRangeOperator, FuzzParsePrefixRange,
   FuzzParseRouterID, FuzzParseSetRef, FuzzPrefixSpace (types); FuzzParseStream, FuzzDecode (root);
   FuzzParseSrcMember (object); FuzzParseImport,
@@ -229,7 +261,8 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   FuzzReadFrame, FuzzParseMembers, FuzzParseRegistries (resolve/irrd); FuzzScanResponse (resolve/whois);
   FuzzAggregate (resolve/internal/filtergen); FuzzReadJSON, FuzzApplySLURM (resolve/rpki);
   FuzzParseNotification, FuzzReadDelta (resolve/nrtm4); FuzzCorpusDelete, FuzzNormalizeFilter (resolve);
-  FuzzTranslateRegexp (resolve/rtconfig); FuzzParseTemplate (resolve/internal/rpslconf).
+  FuzzTranslateRegexp (resolve/rtconfig); FuzzParseTemplate (resolve/internal/rpslconf);
+  FuzzSession (resolve/irrdq); FuzzSourceSpec (resolve/internal/rpsld).
   Verify the count with `grep -o '"[^"]* Fuzz[A-Za-z]*"' scripts/check.sh | wc -l`.
 - Never slice a string at an offset found in a transformed copy of it (`strings.ToUpper` can
   lengthen UTF-8): v0.19.0 panicked on "ɐ" (2 bytes) → "Ɐ" (3). Match case-insensitively in place.
@@ -289,9 +322,29 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   `-check-timeout` is counted, not fatal. `TestGoldens` (resolve/internal/rpslcheck) holds its
   text and JSON output to `resolve/testdata/rpslcheck/*.golden`; `RPSL_RPSLCHECK_UPDATE=1`
   rewrites them (review the diff). See docs/rpslcheck.md.
+- `rpsld` (resolve/cmd/rpsld; logic in resolve/internal/rpsld, served by resolve/irrdserver) is an
+  IRRd-compatible mirror: `-source NAME=dump:FILE,…` or `NAME=nrtm4:URL,key=PEM` registries (the
+  order is precedence; a dump registry keeps only its own source's objects), `-rpki` VRPs (the
+  `RPKI` pseudo registry, last), all on one port for IRRd and RIPE-style queries. `-rfc` gives
+  RFC 2622 answers for `!i…,1`/`!a`; `-keep-route-text` keeps route text for `!m route`, `!r`
+  objects and `-i origin` (`whois.Source` needs it). NRTMv4 polls at least a minute apart
+  (`-nrtm-interval`), backing off by doubling to an hour after failures (each start or snapshot
+  reload of RIPE is ~400 MB); dumps are re-read on a changed mtime or SIGHUP; VRPs hourly. Exit status: 0 a clean
+  stop, 2 a bad command line, 3 an input failing at startup or serving failing. See docs/rpsld.md.
+  `RPSL_IRRD_DOCKER=1 go test -run TestRecord ./internal/irrdoracle` (from resolve/) re-records
+  IRRd's answers in Docker (review the diff). Opt-in:
+  `RPSL_REALDATA=$PWD/../.data go test -run TestRealDataServe ./internal/rpsld` (one registry per
+  process: `RPSL_REALDATA_REGISTRY=RIPE|RADB`, `RPSL_REALDATA_KEEPTEXT=0|1`);
+  `RPSL_REALDATA=… go test -timeout 30m -run TestRpsldMatchesRpslqRealData .` (bgpq4 against rpsld vs `rpslq
+  --dump` on RIPE's dumps; `RPSL_REALDATA_LARGEST`, `RPSL_REALDATA_SAMPLE`);
+  `RPSL_LIVE_NRTM=1 RPSL_REALDATA=… go test -run TestLiveMirror ./internal/rpsld` (a live RIPE
+  mirror vs whois.ripe.net, ~400 MB). Each holds a whole registry (measured peak RSS:
+  TestRealDataServe 2.7-4.8 GB, TestRpsldMatchesRpslqRealData 1851 MB, TestLiveMirror 1.4 GB):
+  on a developer machine run them one at a time, alone, with a memory cap (GOMEMLIMIT and a
+  watchdog), never beside check.sh or each other.
 - Releasing: `scripts/release.sh vX.Y.Z` does RELEASING.md's steps (tag order lexer/types → ast →
   root → resolve), waits for the proxy, verifies from an empty module cache, and resumes after a
-  failure; it also builds rpslq's, rpslconf's and rpslcheck's binaries (5 platforms each, from the
+  failure; it also builds the four tools' binaries — rpslq, rpslconf, rpslcheck, rpsld (5 platforms each, from the
   published module) and attaches them to the GitHub release. `docs/rpslq.md` is rpslq's page for
   bgpq4 users. Rehearse first with
   `scripts/release-dryrun.sh` (runs release.sh against a bare repo and
@@ -299,8 +352,9 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   unpushed tag: it caches the miss for ~30 minutes.
 - Performance: `scripts/bench.sh [ref]` compares benchmarks with a ref (default: latest tag).
 - Leaf isolation: `cd types && go list -deps ./... | grep rkolesnichenko` must show only itself.
-- Engine purity: `cd resolve && go list -deps . ./peval ./rtconfig ./consist` must NOT include
-  `net` (sockets live only in resolve/irrd, resolve/whois, resolve/rdap).
+- Engine purity: `cd resolve && go list -deps . ./peval ./rtconfig ./consist ./irrdq` must NOT
+  include `net` (sockets live only in resolve/irrd, resolve/whois, resolve/rdap, resolve/nrtm4
+  and resolve/irrdserver).
 - A `resolve`-module test that reads a file outside `resolve/` (a docs/*.md contract, such as
   `TestRpslconfDocs`) skips when `../../go.work` is absent: `resolve` publishes on its own, and
   release.sh step 6 tests that published zip from an empty module cache, where nothing outside

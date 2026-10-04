@@ -125,6 +125,7 @@ type config struct {
 	ranges            bool
 	serverSide        bool
 	srcMembers        bool
+	backendFlags      []string // the options naming the backend (-h, -S, --dump, …), for RunWith's refusal
 	special           bool
 	validate          bool
 	debug             bool
@@ -187,6 +188,10 @@ func parse(args []string) (*config, bool, error) {
 	}
 	for _, op := range opts {
 		var err error
+		switch op.name {
+		case "h", "S", "whois", "dump", "rpki", "slurm", "src-members":
+			c.backendFlags = append(c.backendFlags, op.name)
+		}
 		switch op.name {
 		case "help":
 			return nil, true, nil
@@ -427,6 +432,28 @@ func matchEscapes(v string) (string, error) {
 // Run runs rpslq with args, writing the list to stdout and warnings and errors
 // to stderr, and returns the exit code.
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	return run(ctx, args, stdout, stderr, nil)
+}
+
+// RunWith is Run over b, dumps the caller opened with backend.Open and keeps
+// (it is never closed here), so that one opened set of dumps serves many
+// command lines. b must be a dump backend — its Src the immutable MemSource
+// backend.Open builds from dumps — and any other is refused: Run raises an
+// IRRd source's answer cap for --server-expand and caps the connections
+// over whois, neither of which it may do to a server backend it shares.
+// Which dumps and which registries in which order — the RPKI pseudo
+// registry among them when b was opened with VRPs — are b's. b is never
+// RPKI-filtered (rpki.Filter wraps a MemSource, so a filtered backend is no
+// dump backend), so no route of it is hidden as RPKI-invalid. A command line
+// that names the backend (-h, -S, --whois, --dump, --rpki, --slurm,
+// --src-members), or --server-expand, is refused, and IRRD_SOURCES is not
+// read.
+func RunWith(ctx context.Context, args []string, stdout, stderr io.Writer, b *backend.Backend) int {
+	return run(ctx, args, stdout, stderr, b)
+}
+
+// run is Run, over b when it is not nil.
+func run(ctx context.Context, args []string, stdout, stderr io.Writer, b *backend.Backend) int {
 	c, help, err := parse(args)
 	switch {
 	case help || len(args) == 0:
@@ -437,6 +464,19 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	case err != nil:
 		fmt.Fprintln(stderr, "rpslq:", err)
+		return exitUsage
+	case b != nil && len(c.backendFlags) > 0:
+		flag := "-" + c.backendFlags[0]
+		if len(c.backendFlags[0]) > 1 {
+			flag = "-" + flag
+		}
+		fmt.Fprintf(stderr, "rpslq: %s names the backend, which is the caller's here\n", flag)
+		return exitUsage
+	case b != nil && !isDumps(b.Src):
+		fmt.Fprintf(stderr, "rpslq: RunWith takes a backend opened from dumps, not %T\n", b.Src)
+		return exitUsage
+	case b != nil && c.serverSide:
+		fmt.Fprintln(stderr, "rpslq: --server-expand asks an IRRd server to expand as-sets, so it needs IRRd, not dumps")
 		return exitUsage
 	}
 	if c.depth == 0 {
@@ -449,7 +489,12 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "rpslq:", err)
 		return exitFail
 	}
-	be, err := source(c.host, c.sources, c.whois, c.dumps, c.conc, c.srcMembers, vrps)
+	var be *backendT
+	if b != nil {
+		be = &backendT{src: b.Src, restrict: func(reg string) resolve.Source { return b.Restrict(reg) }, close: func() {}}
+	} else {
+		be, err = source(c.host, c.sources, c.whois, c.dumps, c.conc, c.srcMembers, vrps)
+	}
 	if err != nil {
 		fmt.Fprintln(stderr, "rpslq:", err)
 		return exitFail
@@ -649,6 +694,13 @@ func loadVRPs(file, slurm string) (*rpki.VRPs, error) {
 // readInput reads a file named on the command line — a dump, VRPs, SLURM —
 // through gzip when it is gzipped, naming it in any error but opening's.
 func readInput(name string, fn func(io.Reader) error) error { return backend.ReadInput(name, fn) }
+
+// isDumps reports whether src is what backend.Open serves dumps as: an
+// immutable MemSource, safe to share between command lines.
+func isDumps(src resolve.Source) bool {
+	_, ok := src.(*resolve.MemSource)
+	return ok
+}
 
 // source builds the backend the flags describe. With vrps, a dump backend
 // holds their pseudo route objects too, as the registry RPKI. srcMembers sets

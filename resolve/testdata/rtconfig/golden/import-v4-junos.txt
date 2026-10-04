@@ -103,7 +103,6 @@ policy-options {
    policy-statement prefix-list-153 {
       term prefixes {
          from {
-            route-filter 0.0.0.0/0 exact accept;
             route-filter 10.10.0.0/16 exact accept;
             route-filter 10.10.1.0/24 exact accept;
             route-filter 10.13.0.0/16 exact accept;

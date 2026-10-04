@@ -1,0 +1,108 @@
+=== rpki/!s-lc exact
+>>> "!s-lc\n"
+<<< "A10\nRIPE,RADB\nC\n"
+=== rpki/!j-* exact
+>>> "!j-*\n"
+<<< "A29\nRIPE:N:0-7\nRADB:N:-\nRPKI:N:-\nC\n"
+=== rpki/!jRPKI exact
+>>> "!jRPKI\n"
+<<< "A9\nRPKI:N:-\nC\n"
+=== rpki/!sRPKI exact
+>>> "!sRPKI\n"
+<<< "C\n"
+=== rpki/!gAS65001 words
+>>> "!gAS65001\n"
+<<< "A13\n192.0.2.0/24\nC\n"
+=== rpki/!6AS65001 words
+>>> "!6AS65001\n"
+<<< "A14\n2001:db8::/32\nC\n"
+=== rpki/!6AS65002 words
+>>> "!6AS65002\n"
+<<< "D\n"
+=== rpki/!gAS65003 words
+>>> "!gAS65003\n"
+<<< "D\n"
+=== rpki/!gAS65005 words
+>>> "!gAS65005\n"
+<<< "D\n"
+=== rpki/!gAS65009 words
+>>> "!gAS65009\n"
+<<< "D\n"
+=== rpki/!gAS65007 words
+>>> "!gAS65007\n"
+<<< "A14\n64.6.160.0/19\nC\n"
+=== rpki/!aAS-FOO words
+>>> "!aAS-FOO\n"
+<<< "A43\n2001:db8::/32 198.51.100.0/24 192.0.2.0/24\nC\n"
+=== rpki/!aAS-REF words
+>>> "!aAS-REF\n"
+<<< "A27\n2001:db8::/32 192.0.2.0/24\nC\n"
+=== rpki/!r192.0.2.0/24,o words
+>>> "!r192.0.2.0/24,o\n"
+<<< "A16\nAS65001 AS65001\nC\n"
+=== rpki/!iRS-INNER exact
+>>> "!iRS-INNER\n"
+<<< "A35\n192.0.2.128/25 198.18.0.0/15^16-24\nC\n"
+=== rpki/!iRS-INNER,1 exact
+>>> "!iRS-INNER,1\n"
+<<< "A35\n192.0.2.128/25 198.18.0.0/15^16-24\nC\n"
+=== rpki/!iRS-FOO exact
+>>> "!iRS-FOO\n"
+<<< "A117\n192.0.2.0/24 198.51.100.0/24^+ 2001:db8::/32 2001:db8:ff::/48^- 203.0.113.1/32 AS-BAR AS65001 AS65002^24 RS-INNER^25\nC\n"
+=== rpki/!iRS-FOO,1 exact
+>>> "!iRS-FOO,1\n"
+<<< "A130\n192.0.2.0/24 192.0.2.128/25 198.18.0.0/15^16-24 198.51.100.0/24 198.51.100.0/24^+ 2001:db8::/32 2001:db8:ff::/48^- 203.0.113.1/32\nC\n"
+=== rpki/!iAS-REF exact
+>>> "!iAS-REF\n"
+<<< "A16\nAS65001 AS65010\nC\n"
+=== rpki/!mroute,192.0.2.0/24AS65001 objects
+>>> "!mroute,192.0.2.0/24AS65001\n"
+<<< "A140\nroute:          192.0.2.0/24\ndescr:          first\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\nrpki-ov-state:  valid\nC\n"
+=== rpki/!mroute,192.0.2.0/25AS65001 objects
+>>> "!mroute,192.0.2.0/25AS65001\n"
+<<< "D\n"
+=== rpki/!mroute,203.0.113.0/24AS65003 objects
+>>> "!mroute,203.0.113.0/24AS65003\n"
+<<< "D\n"
+=== rpki/!mroute,64.6.160.0/19AS65007 objects
+>>> "!mroute,64.6.160.0/19AS65007\n"
+<<< "A182\nroute:          64.6.160.0/19\norigin:         AS65007\nmnt-by:         MNT-A\nsource:         RADB\nrpki-ov-state:  not_found # No ROAs found, or RPKI validation not enabled for source\nC\n"
+=== rpki/!mroute6,2001:db8:1::/48AS65002 objects
+>>> "!mroute6,2001:db8:1::/48AS65002\n"
+<<< "D\n"
+=== rpki/!r192.0.2.0/24 objects
+>>> "!r192.0.2.0/24\n"
+<<< "A259\nroute:          192.0.2.0/24\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         radb\nrpki-ov-state:  valid\n\nroute:          192.0.2.0/24\ndescr:          first\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\nrpki-ov-state:  valid\nC\n"
+=== rpki/!r192.0.2.0/24,M objects
+>>> "!r192.0.2.0/24,M\n"
+<<< "D\n"
+=== rpki/!r100.64.0.0/24 objects
+>>> "!r100.64.0.0/24\n"
+<<< "D\n"
+=== rpki/-T route 192.0.2.0/24 objects
+>>> "-T route 192.0.2.0/24\n"
+<<< "route:          192.0.2.0/24\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         radb\nrpki-ov-state:  valid\n\nroute:          192.0.2.0/24\ndescr:          first\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\nrpki-ov-state:  valid\n\n\n"
+=== rpki/-x 192.0.2.0/25 objects
+>>> "-x 192.0.2.0/25\n"
+<<< "%  No entries found for the selected source(s).\n\n\n"
+=== rpki/-i origin AS65001 objects
+>>> "-i origin AS65001\n"
+<<< "route:          192.0.2.0/24\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         radb\nrpki-ov-state:  valid\n\nroute:          192.0.2.0/24\ndescr:          first\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\nrpki-ov-state:  valid\n\nroute6:         2001:db8::/32\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RIPE\nrpki-ov-state:  valid\n\nroute6:         2001:db8::/32\norigin:         AS65001\nmnt-by:         MNT-A\nsource:         RADB\nrpki-ov-state:  valid\n\n\n"
+=== rpki/-K -i origin AS65001 objects
+>>> "-K -i origin AS65001\n"
+<<< "route: 192.0.2.0/24\norigin: AS65001\n\nroute6: 2001:db8::/32\norigin: AS65001\n\n\n"
+=== rpki/-i member-of RS-INNER objects
+>>> "-i member-of RS-INNER\n"
+<<< "%  No entries found for the selected source(s).\n\n\n"
+=== rpki/-s RPKI 192.0.2.0/24 objects
+>>> "-s RPKI 192.0.2.0/24\n"
+<<< "route:          192.0.2.0/24\ndescr:          RPKI ROA for 192.0.2.0/24 / AS65001\nremarks:        This AS65001 route object represents routing data retrieved\n                from the RPKI. This route object is the result of an automated\n                RPKI-to-IRR conversion process performed by IRRd.\nmax-length:     24\norigin:         AS65001\nsource:         RPKI  # Trust Anchor: TEST-TA\n\n\n"
+=== rpki/-s RPKI -i origin AS65001 objects
+>>> "-s RPKI -i origin AS65001\n"
+<<< "route:          192.0.2.0/24\ndescr:          RPKI ROA for 192.0.2.0/24 / AS65001\nremarks:        This AS65001 route object represents routing data retrieved\n                from the RPKI. This route object is the result of an automated\n                RPKI-to-IRR conversion process performed by IRRd.\nmax-length:     24\norigin:         AS65001\nsource:         RPKI  # Trust Anchor: TEST-TA\n\nroute6:         2001:db8::/32\ndescr:          RPKI ROA for 2001:db8::/32 / AS65001\nremarks:        This AS65001 route object represents routing data retrieved\n                from the RPKI. This route object is the result of an automated\n                RPKI-to-IRR conversion process performed by IRRd.\nmax-length:     32\norigin:         AS65001\nsource:         RPKI  # Trust Anchor: TEST-TA\n\n\n"
+=== rpki/pseudo objects
+>>> "!!\n!sRPKI\n!s-lc\n!gAS65001\n!gAS0\n!r192.0.2.0/24\n!mroute,192.0.2.0/24AS65001\n!r100.64.0.0/24\n!q\n"
+<<< "C\nA5\nRPKI\nC\nA13\n192.0.2.0/24\nC\nA14\n100.64.0.0/24\nC\nA391\nroute:          192.0.2.0/24\ndescr:          RPKI ROA for 192.0.2.0/24 / AS65001\nremarks:        This AS65001 route object represents routing data retrieved\n                from the RPKI. This route object is the result of an automated\n                RPKI-to-IRR conversion process performed by IRRd.\nmax-length:     24\norigin:         AS65001\nsource:         RPKI  # Trust Anchor: TEST-TA\nC\nD\nA381\nroute:          100.64.0.0/24\ndescr:          RPKI ROA for 100.64.0.0/24 / AS0\nremarks:        This AS0 route object represents routing data retrieved\n                from the RPKI. This route object is the result of an automated\n                RPKI-to-IRR conversion process performed by IRRd.\nmax-length:     24\norigin:         AS0\nsource:         RPKI  # Trust Anchor: TEST-TA\nC\n"
+=== rpki/all-sources words
+>>> "!!\n!sRIPE,RADB,RPKI\n!gAS65001\n!r192.0.2.0/24,o\n!q\n"
+<<< "C\nA13\n192.0.2.0/24\nC\nA24\nAS65001 AS65001 AS65001\nC\n"

@@ -17,7 +17,9 @@ import (
 	"github.com/rkolesnichenko/rpsl/resolve/consist"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/irrtest"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/routemodel"
+	"github.com/rkolesnichenko/rpsl/resolve/internal/rpsldtest"
 	"github.com/rkolesnichenko/rpsl/resolve/irrd"
+	"github.com/rkolesnichenko/rpsl/resolve/irrdq"
 	"github.com/rkolesnichenko/rpsl/resolve/peval"
 	"github.com/rkolesnichenko/rpsl/resolve/whois"
 	"github.com/rkolesnichenko/rpsl/types"
@@ -686,6 +688,7 @@ func TestModelConsist(t *testing.T) {
 // server.
 func TestModelConsistBackends(t *testing.T) {
 	kc := consistCounts{}
+	kr := consistCounts{} // rpsld, over irrd and whois
 	for seed := uint64(0); seed < 150; seed++ {
 		r := rand.New(rand.NewPCG(seed, 41))
 		label := fmt.Sprintf("seed %d", seed)
@@ -704,6 +707,14 @@ func TestModelConsistBackends(t *testing.T) {
 		ir.Close()
 		wh := &whois.Source{Addr: db.Whois(t), Sources: []string{"RIPE", "RADB"}, Timeout: 5 * time.Second}
 		cm.check(t, "whois "+label, &consist.Checker{Eval: peval.Evaluator{Src: wh}, MaxRanges: 1 << 16}, r, kc)
+		// rpsld's legs draw their own samples, so r's later draws stay as they were.
+		rr := rand.New(rand.NewPCG(seed, 43))
+		rs := rpsldtest.Serve(t, rpsldtest.Snapshot(t, cm.texts, irrdq.SnapshotOptions{}, "RIPE", "RADB"))
+		rp := &irrd.Source{Addr: rs, Sources: []string{"RIPE", "RADB"}, Pipeline: 8, Timeout: 5 * time.Second}
+		cm.check(t, "rpsld "+label, &consist.Checker{Eval: peval.Evaluator{Src: rp}, MaxRanges: 1 << 16}, rr, kr)
+		rp.Close()
+		rw := &whois.Source{Addr: rs, Sources: []string{"RIPE", "RADB"}, Timeout: 5 * time.Second}
+		cm.check(t, "rpsld whois "+label, &consist.Checker{Eval: peval.Evaluator{Src: rw}, MaxRanges: 1 << 16}, rr, kr)
 
 		// The index follows a replacement and a delete.
 		if err := l.Read(strings.NewReader(cm.autNum(t, r, seed, localAS))); err != nil {
@@ -717,14 +728,21 @@ func TestModelConsistBackends(t *testing.T) {
 		delete(cm.exports, localAS)
 		cm.checkNamedBy(t, label+" deleted", l.Source())
 	}
-	// corpus, irrd and whois pooled.
-	requireCounts(t, "backends", kc, map[string]int{
+	floors := map[string]int{
 		"not-imported": 6, "not-exported": 6, "no-import": 6, "no-export": 6, "no-aut-num": 6, "no policy": 6,
 		undNotImp + consist.WhySymbolic: 6, undNotImp + consist.WhyImporterUndecided: 6, undNotImp + consist.WhyExporterUndecided: 6,
 		undNotExp + consist.WhySymbolic: 6, undNotExp + consist.WhyExporterUndecided: 6, undNotExp + consist.WhyImporterUndecided: 6,
 		undNoImp + consist.WhyImporterUndecided: 6, undNoImp + consist.WhyExporterUndecided: 6,
 		undNoExp + consist.WhyImporterUndecided: 6, undNoExp + consist.WhyExporterUndecided: 6,
-	})
+	}
+	// corpus, irrd and whois pooled: 2 findings of each kind per backend.
+	requireCounts(t, "backends", kc, floors)
+	// rpsld's irrd and whois pooled apart, to the same 2 per backend.
+	rf := map[string]int{}
+	for k, n := range floors {
+		rf[k] = n * 2 / 3
+	}
+	requireCounts(t, "rpsld", kr, rf)
 }
 
 // checkNamedBy holds NamedBy to the AS numbers the model's peerings name.

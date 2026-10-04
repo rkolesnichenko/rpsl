@@ -17,7 +17,9 @@ import (
 // A route-set member written as an address without a length ("206.197.238.0",
 // in ARIN's rs-HCHBNET) expands to the host prefix, from memory and over the
 // IRRd protocol alike. IRRd stores such a member with its length, so irrtest
-// answers "!i" and "!i…,1" with "/32" and "/128" as rr.arin.net does.
+// answers "!i" and "!i…,1" with "/32" and "/128" as rr.arin.net does, sorted
+// as IRRd 4.5.3 sorts them (resolve/testdata/irrd/golden/plain.txt, cases
+// i/RS-NOLEN and i/RS-FOO).
 func TestNoLengthMembers(t *testing.T) {
 	texts := []string{
 		"route-set: RS-S\nmembers: 206.197.238.0, 192.0.2.0/24\nmp-members: 2001:db8::32^+\nsource: ARIN\n",
@@ -29,7 +31,7 @@ func TestNoLengthMembers(t *testing.T) {
 		objs = append(objs, obj)
 	}
 	db := irrtest.New(texts...).WithSources("ARIN")
-	if got, _ := db.Members(nil, "RS-S"); fmt.Sprint(got) != "[206.197.238.0/32 192.0.2.0/24 2001:db8::32/128^+]" {
+	if got, _ := db.Members(nil, "RS-S"); fmt.Sprint(got) != "[192.0.2.0/24 2001:db8::32/128^+ 206.197.238.0/32]" {
 		t.Errorf(`irrtest "!iRS-S" = %v; want the lengths IRRd adds`, got)
 	}
 	ir := &irrd.Source{Addr: db.IRRd(t), Sources: []string{"ARIN"}, Timeout: 5 * time.Second}

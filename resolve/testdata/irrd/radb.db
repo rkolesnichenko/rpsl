@@ -1,0 +1,82 @@
+mntner:         MNT-A
+descr:          same-named maintainer in RADB
+admin-c:        JD1-RIPE
+upd-to:         a@example.net
+auth:           MD5-PW # Filtered
+mnt-by:         MNT-A
+source:         RADB
+
+aut-num:        AS65003
+as-name:        THIRD
+member-of:      AS-REF
+admin-c:        JD1-RIPE
+tech-c:         JD1-RIPE
+mnt-by:         MNT-A
+source:         RADB
+
+as-set:         AS-FOO
+descr:          same name, other registry
+members:        AS65099
+mnt-by:         MNT-A
+source:         RADB
+
+as-set:         AS-RADBONLY
+members:        AS65005, AS-FOO
+mnt-by:         MNT-A
+source:         RADB
+
+route:          192.0.2.0/24
+origin:         AS65001
+mnt-by:         MNT-A
+source:         RADB
+
+route:          192.0.2.0/24
+origin:         AS65009
+mnt-by:         MNT-A
+source:         RADB
+
+route:          198.51.100.0/24
+origin:         AS65002
+mnt-by:         MNT-A
+source:         RADB
+
+route:          100.64.0.0/24
+origin:         AS65005
+mnt-by:         MNT-A
+source:         RADB
+
+route6:         2001:db8::/32
+origin:         AS65001
+mnt-by:         MNT-A
+source:         RADB
+
+route6:         2001:db8:5::/48
+origin:         AS65005
+mnt-by:         MNT-A
+source:         RADB
+
+as-set:         AS-NORM
+descr:          continuation probe
+MEMBERS:        AS65001 # comment
+                AS65002
++               AS65003,
+	AS65004
+members:	AS65005,   AS65006
+remarks:        tab	inside
+mnt-by:         MNT-A
+source:         RADB
+
+route:          064.006.160.000/19
+origin:         AS65007
+mnt-by:         MNT-A
+source:         RADB
+
+route-set:      RS-NOLEN
+members:        206.197.238.0, 206.197.238.0^+
+mnt-by:         MNT-A
+source:         RADB
+
+route:          192.0.2.0/24
+origin:         AS65001
+mnt-by:         MNT-A
+source:         radb

@@ -45,6 +45,8 @@ Every layer ships. Until v1.0.0, a minor version may change the API; the
 | `types.PrefixSpace` | An exact set of prefixes of both families — union, intersection, difference, without ever enumerating — that `resolve/consist` decides prefix consistency with | shipped |
 | `resolve/consist` | Whether two neighbours' `peval`-evaluated policies agree, in one address family — exact for prefixes, conditional (`Given`) or `Undecided` for AS-path and community tests, never guessed — plus a lint of one aut-num's own policies (dead clauses, missing sets/routers/aut-nums) | shipped |
 | `rpslcheck` | Lint an aut-num and check it against its neighbours, or sweep a dump and report totals, on `resolve/consist` (`resolve/cmd/rpslcheck`) | shipped |
+| `resolve/irrdq` + `resolve/irrdserver` | IRRd's query protocol over in-memory registries: IRRd 4.5.3's answers (or RFC 2622's, for `!i…,1` and `!a`), held to a recording of IRRd itself, served on one port with explicit limits | shipped |
+| `rpsld` | An IRRd-compatible mirror of dumps, NRTMv4 and RPKI, kept current, that bgpq4, IRRToolSet and `rpslq` query unchanged (`resolve/cmd/rpsld`, [`docs/rpsld.md`](docs/rpsld.md)) | shipped |
 
 RFC 4012 (RPSLng) is supported: `mp-import`/`mp-export`/`mp-default`, the `afi`
 dictionary and `afi`-scoped policies (`Import`/`Export`/`Default`/`Except`/
@@ -186,6 +188,8 @@ Imports run strictly downward — `resolve → object → policy → types → a
 | `resolve/rdap` | `…/rpsl/resolve/rdap` | RDAP registration client (not a `Source`) | `types` |
 | `resolve/nrtm4` | `…/rpsl/resolve/nrtm4` | NRTMv4 mirror `Client`: `Sync`/`Run`, `Source()` per version, `CopyTo` a `Corpus` | `resolve`, `object`, `ast` |
 | `resolve/rpki` | `…/rpsl/resolve/rpki` | VRPs (`ReadJSON`, `ApplySLURM`, RFC 6811 `Validate`), `Filter` (an RPKI-aware `Source`), IRRd's pseudo objects (`WriteRPSL`) | `resolve`, `object`, `types` |
+| `resolve/irrdq` | `…/rpsl/resolve/irrdq` | IRRd's query semantics over immutable registry snapshots (`Registry`, `Snapshot`, `Session.Do`); pure | `resolve`, `rpki`, `object`, `types`, `ast` |
+| `resolve/irrdserver` | `…/rpsl/resolve/irrdserver` | `Server`: `irrdq` on a listener, with `Limits` and `Shutdown` | `irrdq` |
 
 Per-module guides: [`lexer`](lexer/README.md) · [`ast`](ast/README.md) ·
 [`types`](types/README.md) · [`resolve`](resolve/README.md).
@@ -364,7 +368,7 @@ FUZZTIME=15s scripts/check.sh  # ... plus every fuzz target (what CI runs)
 - **Fuzz** (never panic, never drop input, and hold each parser's properties —
   see design §11): `FuzzTokenize` (lexer); `FuzzAttributeList`, `FuzzEdit`,
   `FuzzFormat` (ast); `FuzzParseSetName`, `FuzzParseRangeOperator`,
-  `FuzzParsePrefixRange`, `FuzzParseRouterID`, `FuzzParseSetRef` (types);
+  `FuzzParsePrefixRange`, `FuzzParseRouterID`, `FuzzParseSetRef`, `FuzzPrefixSpace` (types);
   `FuzzParseStream`, `FuzzDecode` (root); `FuzzParseSrcMember` (object);
   `FuzzParseImport`, `FuzzParseASPathRegexp`,
   `FuzzParseFilter`, `FuzzParsePeering`, `FuzzParseInject`,
@@ -374,7 +378,9 @@ FUZZTIME=15s scripts/check.sh  # ... plus every fuzz target (what CI runs)
   `FuzzReadFrame`, `FuzzParseMembers`, `FuzzParseRegistries` (resolve/irrd); `FuzzScanResponse`
   (resolve/whois); `FuzzReadJSON`, `FuzzApplySLURM` (resolve/rpki);
   `FuzzParseNotification`, `FuzzReadDelta` (resolve/nrtm4);
-  `FuzzAggregate` (resolve/internal/filtergen); `FuzzCorpusDelete`, `FuzzNormalizeFilter` (resolve).
+  `FuzzAggregate` (resolve/internal/filtergen); `FuzzCorpusDelete`, `FuzzNormalizeFilter` (resolve);
+  `FuzzTranslateRegexp` (resolve/rtconfig); `FuzzParseTemplate` (resolve/internal/rpslconf);
+  `FuzzSession` (resolve/irrdq); `FuzzSourceSpec` (resolve/internal/rpsld).
 - **Real data (opt-in)** — `scripts/fetch-irr-dumps.sh` downloads the public
   dumps of RIPE, APNIC, ARIN, AFRINIC, LACNIC, RADB and the ten IRRs RADB
   mirrors (about 13.3 million objects); `RPSL_REALDATA=$PWD/.data go test -run TestRealData ./examples/bulk-ripe/bulk`

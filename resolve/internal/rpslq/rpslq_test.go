@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rkolesnichenko/rpsl/resolve/internal/backend"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/irrtest"
 )
 
@@ -329,5 +330,59 @@ func TestSrcMembersOption(t *testing.T) {
 	}
 	if code, _, errs := rpslq(t, "--whois", "-h", addr, "--src-members", "AS-SRC"); code == 0 || !strings.Contains(errs, "--src-members") {
 		t.Errorf("--src-members with --whois: exit %d, %q; want a usage error", code, errs)
+	}
+}
+
+// RunWith over a backend opened once writes what Run --dump writes for the
+// same dump and registries, command line after command line, and refuses a
+// command line that names the backend.
+func TestRunWith(t *testing.T) {
+	dump := filepath.Join(t.TempDir(), "irr.db")
+	if err := os.WriteFile(dump, []byte(strings.Join(corpus, "\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := backend.Open(backend.Options{Dumps: []string{dump}, Sources: "TEST"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"-4", "AS-TOP"}, {"-6", "-j", "AS-TOP"}, {"-t", "-p", "AS-TOP"},
+		{"-4", "-A", "RS-TOP"}, {"-6", "RS-TOP"}, {"-4", "TEST::AS-INNER"}, {"-4", "AS-NOSUCH"}} {
+		var wantOut, wantErr, gotOut, gotErr bytes.Buffer
+		want := Run(context.Background(), append([]string{"--dump", dump, "-S", "TEST"}, args...), &wantOut, &wantErr)
+		got := RunWith(context.Background(), args, &gotOut, &gotErr, b)
+		if got != want || gotOut.String() != wantOut.String() || gotErr.String() != wantErr.String() {
+			t.Errorf("%v: RunWith exit %d, %q, %q; Run --dump exit %d, %q, %q",
+				args, got, gotOut.String(), gotErr.String(), want, wantOut.String(), wantErr.String())
+		}
+	}
+	for _, args := range [][]string{{"-S", "TEST", "AS-TOP"}, {"-h", "x", "AS-TOP"}, {"--dump", dump, "AS-TOP"},
+		{"--whois", "AS-TOP"}, {"--rpki", "v.json", "AS-TOP"}, {"--src-members", "AS-TOP"}} {
+		var out, errs bytes.Buffer
+		if code := RunWith(context.Background(), args, &out, &errs, b); code != exitUsage || !strings.Contains(errs.String(), "names the backend") {
+			t.Errorf("%v: exit %d, %q; want a refusal", args, code, errs.String())
+		}
+	}
+	// --server-expand needs an IRRd server, as Run refuses it with --dump.
+	var out, errs bytes.Buffer
+	if code := RunWith(context.Background(), []string{"--server-expand", "AS-TOP"}, &out, &errs, b); code != exitUsage ||
+		!strings.Contains(errs.String(), "--server-expand") {
+		t.Errorf("--server-expand over dumps: exit %d, %q; want a refusal", code, errs.String())
+	}
+	// A server backend is refused before anything is asked of it: Run would
+	// raise a shared IRRd source's answer cap, or open up to -c whois
+	// connections. Neither Open dials.
+	for _, o := range []backend.Options{{Host: "127.0.0.1:1", Sources: "TEST"}, {Host: "127.0.0.1:1", Whois: true, Sources: "TEST"}} {
+		srv, err := backend.Open(o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, args := range [][]string{{"-4", "AS-TOP"}, {"-c", "1024", "-4", "AS-TOP"}} {
+			var out, errs bytes.Buffer
+			if code := RunWith(context.Background(), args, &out, &errs, srv); code != exitUsage ||
+				!strings.Contains(errs.String(), "backend opened from dumps") || out.Len() > 0 {
+				t.Errorf("whois=%v %v: exit %d, %q, %q; want a refusal", o.Whois, args, code, out.String(), errs.String())
+			}
+		}
+		srv.Close()
 	}
 }

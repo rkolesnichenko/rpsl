@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/rkolesnichenko/rpsl"
+	"github.com/rkolesnichenko/rpsl/ast"
 	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/types"
@@ -140,11 +141,42 @@ func TestRealDataKeepPolicy(t *testing.T) {
 		if !ok {
 			continue
 		}
+		// Compared attribute by attribute, name and value as decoded: the
+		// corpus keeps an aut-num's text without the dump's header and the
+		// blank lines the stream attached around it (a member-of claimant
+		// whole, as streamed), and decodes it again on demand, which must
+		// give the same attributes the stream did.
 		got, err := src.AutNum(context.Background(), want.AS, "RIPE")
-		if err != nil || got.Raw().String() != want.Raw().String() {
-			t.Fatalf("%s: on-demand decode differs (%v)", want.AS, err)
+		if err != nil {
+			t.Fatalf("%s: %v", want.AS, err)
+		}
+		g, w := attrList(got.Raw()), attrList(want.Raw())
+		if !slices.Equal(g, w) {
+			i := 0
+			for i < len(g) && i < len(w) && g[i] == w[i] {
+				i++
+			}
+			t.Fatalf("%s: on-demand decode differs at attribute %d of %d (want %d): got %q, want %q",
+				want.AS, i, len(g), len(w), at(g, i), at(w, i))
 		}
 		n++
 	}
 	t.Logf("%d aut-nums, KeepPolicy +%d MB", n, (int64(with)-int64(without))>>20)
+}
+
+// attrList is o's attributes as (name, value) pairs, in order.
+func attrList(o *ast.Object) []string {
+	var out []string
+	for _, a := range o.Attributes() {
+		out = append(out, a.Name+": "+a.Value)
+	}
+	return out
+}
+
+// at is l[i], or "" past its end.
+func at(l []string, i int) string {
+	if i < len(l) {
+		return l[i]
+	}
+	return ""
 }

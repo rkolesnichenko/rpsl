@@ -47,6 +47,10 @@ type DumpLoader struct {
 	// Read.
 	IndexPeers bool
 
+	// KeepRouteText sets Corpus.KeepRouteText: every route's text is kept,
+	// for an IRRd-compatible server. Set it before the first Read.
+	KeepRouteText bool
+
 	// OnDiagnostics, when set, is called for every object that raised
 	// diagnostics, with the object and its diagnostics. It is the hook for a
 	// caller that wants to report on a dump's quality; leaving it nil keeps
@@ -65,6 +69,7 @@ type DumpLoader struct {
 func (l *DumpLoader) Read(r io.Reader) error {
 	l.corpus.KeepPolicy = l.KeepPolicy
 	l.corpus.IndexPeers = l.IndexPeers
+	l.corpus.KeepRouteText = l.KeepRouteText
 	for o, ds := range rpsl.Parse(r) {
 		l.Stats.Objects++
 		if len(ds) > 0 {

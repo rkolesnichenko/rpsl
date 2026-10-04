@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/rkolesnichenko/rpsl/resolve/internal/irrtest"
+	"github.com/rkolesnichenko/rpsl/resolve/internal/rpsldtest"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/rpslq"
+	"github.com/rkolesnichenko/rpsl/resolve/irrdq"
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
@@ -71,7 +73,8 @@ func TestRpslqServerSideMatchesBgpq4(t *testing.T) {
 	for seed := uint64(0); seed < 20; seed++ {
 		r := rand.New(rand.NewPCG(seed, 13))
 		m := randomModel(r, true)
-		db := irrtest.New(m.texts(r)...).WithSources("RIPE", "RADB")
+		texts := m.texts(r)
+		db := irrtest.New(texts...).WithSources("RIPE", "RADB")
 		addr := db.IRRd(t)
 		var tops []string
 		for name := range newOracle(m).sets {
@@ -102,7 +105,48 @@ func TestRpslqServerSideMatchesBgpq4(t *testing.T) {
 		if !used {
 			t.Fatalf("seed %d: no \"!a\" query was sent", seed)
 		}
+
+		// rpsld over the same objects: bgpq4 and rpslq --server-expand (its
+		// "!a"), and rpslq expanding itself, write against it what they write
+		// against irrtest. rpsld holds one object per primary key, as a
+		// registry does, so both servers are given the last of each.
+		lt := lastOfEach(texts)
+		ref := irrtest.New(lt...).WithSources("RIPE", "RADB").IRRd(t)
+		served := rpsldtest.Serve(t, rpsldtest.Snapshot(t, lt, irrdq.SnapshotOptions{}, "RIPE", "RADB"))
+		for _, top := range tops {
+			for _, format := range rpslqFormats {
+				for _, fam := range []string{"-4", "-6"} {
+					args := append(append([]string{fam}, format...), top)
+					on := func(addr string, extra ...string) []string {
+						return append(append([]string{"-h", addr, "-S", modelSources}, extra...), args...)
+					}
+					want := runBgpq4Text(t, on(ref))
+					if got := runBgpq4Text(t, on(served)); got != want {
+						t.Fatalf("seed %d: bgpq4 %v against rpsld differs from irrtest:\nrpsld:\n%s\nirrtest:\n%s\nobjects:\n%s",
+							seed, args, got, want, strings.Join(lt, "\n"))
+					}
+					if got := runRpslqText(t, on(served, "--server-expand")); got != want {
+						t.Fatalf("seed %d: rpslq --server-expand %v against rpsld differs from bgpq4 against irrtest:\nrpsld:\n%s\nirrtest:\n%s\nobjects:\n%s",
+							seed, args, got, want, strings.Join(lt, "\n"))
+					}
+					if got, want := runRpslqText(t, on(served)), runRpslqText(t, on(ref)); got != want {
+						t.Fatalf("seed %d: rpslq %v against rpsld differs from irrtest:\nrpsld:\n%s\nirrtest:\n%s\nobjects:\n%s",
+							seed, args, got, want, strings.Join(lt, "\n"))
+					}
+				}
+			}
+		}
 	}
+}
+
+// runRpslqText runs rpslq in process and returns what it writes to stdout.
+func runRpslqText(t *testing.T, args []string) string {
+	t.Helper()
+	var out, errs bytes.Buffer
+	if code := rpslq.Run(context.Background(), args, &out, &errs); code != 0 {
+		t.Fatalf("rpslq %s: exit %d: %s", strings.Join(args, " "), code, errs.String())
+	}
+	return out.String()
 }
 
 // runBgpq4Text runs bgpq4 and returns what it writes to stdout.
@@ -300,6 +344,9 @@ func TestRpslqSourcePrefixMatchesBgpq4(t *testing.T) {
 			if set.class != types.ClassAsSet {
 				continue // bgpq4 then expands route-sets shallowly: "source-route-set"
 			}
+			if listsItself(set) {
+				continue // IRRd's "!i" drops the self-reference bgpq4 would follow: "source-cycle"
+			}
 			top := set.source + "::" + set.name
 			for _, sources := range []string{"RIPE,RADB", "RADB", "RIPE"} {
 				for _, flags := range [][]string{{"-4"}, {"-6"}, {"-t", "-j"}} {
@@ -315,6 +362,16 @@ func TestRpslqSourcePrefixMatchesBgpq4(t *testing.T) {
 	if compared < 100 {
 		t.Errorf("only %d lists compared", compared)
 	}
+}
+
+// listsItself reports whether s names itself among its members.
+func listsItself(s *mSet) bool {
+	for _, mm := range s.members {
+		if mm.kind == "set" && mm.set == s.name && mm.op == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // Where rpslq and bgpq4 knowingly differ over SOURCE:: (divergences.md),
@@ -340,10 +397,10 @@ func TestRpslqSourceDivergences(t *testing.T) {
 		// nested references come from its own object, resolve/scoped_test.go's
 		// TestScopedFilterSetDoesNotCascade), so the unscoped self-reference is
 		// a node of its own, resolved like any other unscoped set — RADB's
-		// AS-TOP, by -S. bgpq4 reaches the same answer because it has not
-		// marked the top as seen either; no longer a divergence, but pinned so
-		// a regression on either side still fails here.
-		{"source-cycle", []string{"-tj", "RIPE::AS-TOP"}, `{"NN": [ 65001,65002 ]}`, `{"NN": [ 65001,65002 ]}`},
+		// AS-TOP, by -S. IRRd's "!i" removes the parameter from its answer
+		// (members_for_set, irrd/server/query_resolver.py), so bgpq4, asking
+		// "!sRIPE" then "!iAS-TOP", never sees the self-reference.
+		{"source-cycle", []string{"-tj", "RIPE::AS-TOP"}, `{"NN": [ 65001,65002 ]}`, `{"NN": [ 65001 ]}`},
 		// With -L (or EXCEPT), bgpq4 ignores SOURCE:: for the top itself and
 		// looks it up in the default sources alone (RADB's AS-TOP). rpslq still
 		// honors SOURCE:: for the top, and — the scope not cascading — also
