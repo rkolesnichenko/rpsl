@@ -119,7 +119,7 @@ type SnapshotOptions struct {
 - **RPKI.** With `VRPs`, the snapshot answers as IRRd 4's RPKI-aware mode
   (design §8.7): routes invalid under RFC 6811 vanish from every answer
   (`!g`, `!6`, `!a`, `!i` claimants, `!r`, `!m`, whois), a visible route's
-  text gains IRRd's `rpki-ov-state:` line, and the registry `RPKI` holds the
+  text gains IRRd's `rpki-ov-state:` line (a pseudo route's does not), and the registry `RPKI` holds the
   pseudo route objects. `rpsld` builds that registry from the text
   `rpki.WriteRPSL` writes, loaded by a `DumpLoader` that keeps route text, so
   the pseudo objects are served exactly as IRRd renders them. The pseudo
@@ -183,9 +183,9 @@ RIPE-style query, on the same port, as IRRd 4 serves both.
 | `!a`, `!a4`, `!a6` | an as-set's routes' prefixes, by family, sorted and distinct |
 | `!g<AS>`, `!6<AS>` | the prefixes an AS originates, sorted |
 | `!r<prefix>[,o\|l\|L\|M]` | route *objects* by default; origins with `o` (one per object); `l` the most specific route strictly less specific (sized across every selected registry), `L` every less specific and the exact one, `M` every more specific |
-| `!m<class>,<key>` | the object, for the classes kept (below); IRRToolSet's legacy `an`, `ir`, `rt` accepted, which IRRd 4.5.3 answers `D` |
+| `!m<class>,<key>` | the object, for the classes kept (below), matched by its canonical primary key only; IRRToolSet's legacy `an`, `ir`, `rt` accepted, which IRRd 4.5.3 answers `D` |
 | `-V <agent> !<command>` | the IRRd command, the user agent dropped (IRRd's handle_query) |
-| RIPE-style (no `!`) | the line split at spaces and read left to right: `-s` (selecting for the rest of the connection, as IRRd's does), `-T` (for the next search only), `-i origin\|member-of\|mbrs-by-ref\|members\|mp-members`, `-x`, `-l`, `-L`, `-M`, `-K`, `-k`; `-r`, `-F`, `-V <agent>` accepted and ignored; a key; IRRd's whois output and its "no entries" and error lines. `-B`, `-G` and any unknown flag are IRRd's `Unrecognised flag/search`, as IRRd 4.5.3 answers them |
+| RIPE-style (no `!`) | the line split at spaces and read left to right, flags whole words (`-rK` is no flag): `-s` (selecting for the rest of the connection, as IRRd's does), `-T` (for the next search only), `-i origin\|member-of\|mbrs-by-ref\|members\|mp-members`, `-x`, `-l`, `-L`, `-M`, `-K`, `-k`; `-r`, `-F`, `-V <agent>` accepted and ignored; a key; IRRd's whois output and its "no entries" and error lines. `-B`, `-G` and any unknown flag are IRRd's `Unrecognised flag/search`, as IRRd 4.5.3 answers them |
 
 - **Classes kept.** as-set, route-set, rtr-set, filter-set, peering-set,
   aut-num, inet-rtr (the loaders set `KeepPolicy`), and route/route6 (whole
@@ -275,7 +275,7 @@ var ErrServerClosed error
   (`SOCKET_DEFAULT_TIMEOUT`, 30 s, measured at 30.03 s), and `!t` overrides it
   per connection; the other four are `rpsld`'s own. A line over `MaxLine` is
   answered `F Line too long: over <MaxLine> bytes` and the connection closed,
-  as soon as that many bytes have arrived; an answer over `MaxReply` is
+  as soon as more than that many bytes have arrived; an answer over `MaxReply` is
   `F Answer larger than <MaxReply> bytes` and a command past `QueryTime`
   `F Query took longer than <QueryTime>`, both keeping the connection, never
   a truncated answer; over `MaxConns` a new connection is closed at once,
@@ -453,7 +453,9 @@ SPEC  dump:FILE[,FILE…]          dump files (gzip or plain), re-read when they
    in as-set, src-members), and RFC mode changes only `!i…,1` and `!a`.
 4. A failed sync or reload leaves the previous registry and its serial in
    place.
-5. Every limit refuses with `F`; nothing is truncated; nothing panics.
+5. The line, answer and query-time limits refuse with `F`; past `MaxConns`
+   or the idle timeout the connection is closed; nothing is truncated;
+   nothing panics.
 
 ## 10. Out of scope
 

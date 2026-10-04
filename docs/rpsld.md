@@ -121,7 +121,7 @@ whose first snapshot download failed.
 
 ### Flags
 
-From `rpsld -help`:
+From `rpsld -help` (the notes in brackets are not in the help text):
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
@@ -135,7 +135,7 @@ From `rpsld -help`:
 | `-keep-route-text` | off | keep every route's text, for `!m route`, `!r` and `-i origin` |
 | `-state-dir` | — | a directory for each NRTMv4 mirror's current signing key |
 | `-check-dumps` | `1m0s` | how often dump files' modification times are checked |
-| `-nrtm-interval` | `1m0s` | how often each NRTMv4 mirror polls (at least a minute) |
+| `-nrtm-interval` | `1m0s` | how often each NRTMv4 mirror polls [at least a minute: less exits 2] |
 | `-max-conns` | `256` | connections served at once |
 | `-idle-timeout` | `30s` | how long a connection may wait between commands (IRRd's default; `!t` overrides it) |
 | `-max-line` | `1048576` | bytes in one command line |
@@ -207,7 +207,7 @@ ordering, spacing, `D`/`F` choice and error text — except where
 | `!a<as-set>`, `!a4…`, `!a6…` | the prefixes the as-set's ASes originate, by family, sorted |
 | `!g<AS>`, `!6<AS>` | the prefixes an AS originates, sorted |
 | `!r<prefix>[,o\|l\|L\|M]` | route objects for the exact prefix, or with `l` the most specific less specific one, `L` every less specific one and the exact one, `M` every more specific one; with `o` the exact prefix's origins instead, one per object |
-| `!m<class>,<key>` | the object, from the first selected registry holding it; IRRToolSet's legacy `an`, `ir`, `rt` accepted |
+| `!m<class>,<key>` | the object, from the first selected registry holding it, matched by its canonical primary key only (`!maut-num,AS065001` finds nothing); IRRToolSet's legacy `an`, `ir`, `rt` accepted |
 | `-V <agent> !<command>` | the IRRd command, the user agent dropped |
 
 IRRd answers `!g`, `!6` and `!a` in hash order and multi-object answers in
@@ -226,6 +226,7 @@ from the engine are listed in `resolve/testdata/bgpq4/divergences.md`.
 
 RIPE-style queries read the line as IRRd 4.5.3's `handle_ripe_command`
 does: split at spaces, read left to right, the last search answering.
+Flags are whole words: `-rK` is no flag.
 
 | Flag | Meaning |
 | --- | --- |
@@ -259,7 +260,7 @@ With `-rpki`, `rpsld` answers as IRRd 4's RPKI-aware mode (design §8.7):
   stay;
 - a served route's text ends with IRRd's `rpki-ov-state:` line (`valid`,
   or `not_found # No ROAs found, or RPKI validation not enabled for
-  source`);
+  source`); a pseudo route of the registry `RPKI` carries none;
 - the registry `RPKI` holds IRRd's pseudo route object for each VRP, as
   `rpki.WriteRPSL` renders it. They are never hidden (an AS0 VRP's pseudo
   route included, as in IRRd), and `!m route,<prefix><origin>` does not
@@ -340,14 +341,15 @@ an IRRd mirror would not have the set at all.
 
 ## Limits
 
-Every limit is a flag. Over one, a client gets an `F` line naming it, as
-IRRd answers an error, never a cut-short answer.
+Every limit is a flag. Over the line, answer or query-time limit, a client
+gets an `F` line naming it, as IRRd answers an error, never a cut-short
+answer; past `-max-conns` or the idle timeout the connection is closed.
 
 | Limit | Default | Over it |
 | --- | --- | --- |
 | `-max-conns` | 256 | a further connection is closed as soon as it is accepted, unanswered |
 | `-idle-timeout` | 30 s | the connection is closed; `!t` sets it per connection, 1-1000 s |
-| `-max-line` | 1 MiB | `F Line too long: over 1048576 bytes`, and the connection is closed, as soon as that many bytes of one line have arrived, newline or not |
+| `-max-line` | 1 MiB | `F Line too long: over 1048576 bytes`, and the connection is closed, as soon as more than that many bytes of one line have arrived, newline or not |
 | `-max-reply` | 256 MiB | `F Answer larger than 268435456 bytes` in place of the answer; the connection stays |
 | `-query-time` | 1 min | `F Query took longer than 1m0s` in place of the answer; the connection stays |
 
@@ -356,8 +358,8 @@ The idle timeout is IRRd's (`SOCKET_DEFAULT_TIMEOUT`, 30 s, measured at
 two ways: past its `max_connections` (10) it queues a connection until one
 ends, where `rpsld` closes it at once, so the client can retry or go
 elsewhere; and it has no line limit (a 1 MB line was answered). An answer
-is built whole before it is sent — a `!r…,M` or `-M` answer can be tens of
-megabytes — so `-max-reply` applies before anything is written.
+is built whole before it is sent, so `-max-reply` applies before anything
+is written.
 
 The idle timeout also bounds how long the client takes to read each 64 KiB
 of an answer, not the whole answer. A client that reads just fast enough
@@ -456,8 +458,9 @@ rpslq --dump vs bgpq4 against rpsld: 315 sets picked; 309 the same; 1 differ and
 ```
 
 The one difference is bgpq4's `^n` bug (`AS12491:RS-IPPLANET-GERMANY`
-lists `169.239.72.0/22^24`); the five not compared are four bogon route-sets
-and `RS-MOUATS-V6-ROUTES` (`2607:f150:ffff::/48^48-128`), which `rpslq`
+lists `169.239.72.0/22^24`); the five not compared are four bogon and martian
+route-sets (`AS20483:RS-MARTIANS-OUT`, `AS12695:RS-BOGUS`, `RS-DISREGARD`,
+`AS210578:RS-BOGONS-V4`) and `RS-MOUATS-V6-ROUTES` (`2607:f150:ffff::/48^48-128`), which `rpslq`
 refuses at 2^23 prefixes and bgpq4 would enumerate without end.
 
 The RIPE Database mirrored live over NRTMv4 (`TestLiveMirror`, 2026-10-04):
@@ -484,8 +487,9 @@ RPSL_LIVE_NRTM=1 RPSL_REALDATA=$PWD/../.data go test -run TestLiveMirror ./inter
 
 - **0** — stopped as asked (SIGTERM or SIGINT), or `-v`.
 - **2** — a command line `rpsld` cannot use: no `-source`, a malformed or
-  repeated one, a limit or interval that is not positive, `-nrtm-interval`
-  under a minute, `-slurm` without `-rpki`; `-help` too.
+  repeated one, an argument that is no flag, a limit or interval that is
+  not positive, a negative `-grace` (0 is accepted), `-nrtm-interval` under
+  a minute, `-slurm` without `-rpki`; `-help` too.
 - **3** — could not complete: an input failed to load at startup (a dump
   that cannot be read, a mirror whose snapshot, signature or a delta is
   refused or whose notification file is over 24 hours old, a key file in

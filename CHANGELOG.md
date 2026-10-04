@@ -27,8 +27,9 @@ same version (see [RELEASING.md](RELEASING.md)).
   `Do`, `Timeout`) and `Reply` (`WriteTo`, `Close`, `Len`, `Refused`, `Fail`).
 - `resolve/irrdserver`: `Server` serves `irrdq` on a listener — IRRd and RIPE-style queries on
   one port, pipelined — with explicit `Limits` (connections 256, idle 30 s as IRRd's, line
-  1 MiB, answer 256 MiB, query 60 s), each refused with an `F` line, never a cut-short answer;
-  `Shutdown` writes out every completed answer whole; `ErrServerClosed`.
+  1 MiB, answer 256 MiB, query 60 s): the line, answer and query-time limits are each an `F`
+  line, never a cut-short answer, and past `MaxConns` or the idle timeout the connection is
+  closed; `Shutdown` writes out every completed answer whole; `ErrServerClosed`.
 - `rpsld` (`resolve/cmd/rpsld`; logic in `resolve/internal/rpsld`): an IRRd-compatible mirror
   of dumps, NRTMv4 mirrors and RPKI VRPs, kept current — dumps re-read when they change or on
   SIGHUP, NRTMv4 polled every minute, VRPs refreshed — each change published as a new

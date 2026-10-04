@@ -411,7 +411,7 @@ for _, cmd := range []string{"!!", "!iAS-X,1", "!aAS-X", "!j-*"} {
 This is the runnable `Example` test ([`irrdq/example_test.go`](irrdq/example_test.go)).
 
 The answers are IRRd 4.5.3's, including where IRRd and RFC 2622 differ — a
-member with a range operator is dropped from `!i…,1`, `AS-ANY` is a missing
+range operator on a set or AS member drops it from `!i…,1`, `AS-ANY` is a missing
 set — held to IRRd's own recorded answers; those semantics live in `irrdq`,
 never in the `Expander`. `SnapshotOptions.RFC` answers `!i…,1` and `!a` with
 the `Expander`'s RFC 2622 expansion instead, and changes no other command.

@@ -227,9 +227,10 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   - Deliberate differences from IRRd are pinned in `irrdq`'s `diverges` (and `irrdserver`'s
     tests for the limits) and listed in `resolve/testdata/rpsld/divergences.md`;
     `TestDivergencesDocumented` checks both directions.
-  - A failed sync or reload keeps the registry's previous data and `!j` serial. Every limit is
-    an `F` line, never a cut-short answer; a slow reader can hold a connection one idle timeout
-    per 64 KiB written, bounded only by `MaxConns`.
+  - A failed sync or reload keeps the registry's previous data and `!j` serial. The line,
+    answer and query-time limits are each an `F` line, never a cut-short answer; past `MaxConns`
+    or the idle timeout the connection is closed. A slow reader can hold a connection one idle
+    timeout per 64 KiB written, bounded only by `MaxConns`.
 
 ## Scope guardrails
 

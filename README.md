@@ -368,7 +368,7 @@ FUZZTIME=15s scripts/check.sh  # ... plus every fuzz target (what CI runs)
 - **Fuzz** (never panic, never drop input, and hold each parser's properties —
   see design §11): `FuzzTokenize` (lexer); `FuzzAttributeList`, `FuzzEdit`,
   `FuzzFormat` (ast); `FuzzParseSetName`, `FuzzParseRangeOperator`,
-  `FuzzParsePrefixRange`, `FuzzParseRouterID`, `FuzzParseSetRef` (types);
+  `FuzzParsePrefixRange`, `FuzzParseRouterID`, `FuzzParseSetRef`, `FuzzPrefixSpace` (types);
   `FuzzParseStream`, `FuzzDecode` (root); `FuzzParseSrcMember` (object);
   `FuzzParseImport`, `FuzzParseASPathRegexp`,
   `FuzzParseFilter`, `FuzzParsePeering`, `FuzzParseInject`,
@@ -379,6 +379,7 @@ FUZZTIME=15s scripts/check.sh  # ... plus every fuzz target (what CI runs)
   (resolve/whois); `FuzzReadJSON`, `FuzzApplySLURM` (resolve/rpki);
   `FuzzParseNotification`, `FuzzReadDelta` (resolve/nrtm4);
   `FuzzAggregate` (resolve/internal/filtergen); `FuzzCorpusDelete`, `FuzzNormalizeFilter` (resolve);
+  `FuzzTranslateRegexp` (resolve/rtconfig); `FuzzParseTemplate` (resolve/internal/rpslconf);
   `FuzzSession` (resolve/irrdq); `FuzzSourceSpec` (resolve/internal/rpsld).
 - **Real data (opt-in)** — `scripts/fetch-irr-dumps.sh` downloads the public
   dumps of RIPE, APNIC, ARIN, AFRINIC, LACNIC, RADB and the ten IRRs RADB
