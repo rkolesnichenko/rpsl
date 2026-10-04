@@ -711,3 +711,22 @@ func TestAnswersComeFromOneSnapshot(t *testing.T) {
 	}
 	t.Logf("answers from a: %d, from b: %d", seen[0].Load(), seen[1].Load())
 }
+
+// An internal error is logged with the command it answered: by name alone
+// unless LogQueries allows the line (a RIPE-style query's words may be
+// anything the client sent).
+func TestCommandName(t *testing.T) {
+	for line, want := range map[string]string{
+		"!iAS-FOO,1":           "!i",
+		"  !gAS1 ":             "!g",
+		"-V agent !aAS-X":      "!a",
+		"-T route 192.0.2.0":   "RIPE-style",
+		"!":                    "!",
+		"!éx":                  "!é",
+		"-V agent -T route AS": "RIPE-style",
+	} {
+		if got := irrdserver.CommandName(line); got != want {
+			t.Errorf("CommandName(%q) = %q, want %q", line, got, want)
+		}
+	}
+}

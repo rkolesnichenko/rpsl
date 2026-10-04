@@ -19,10 +19,12 @@ import (
 	"log/slog"
 	"net"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rkolesnichenko/rpsl/resolve/irrdq"
 )
@@ -41,7 +43,10 @@ type Limits struct {
 	// the connection closed. 1 MiB.
 	MaxLine int
 	// MaxReply is the bytes in one answer; a longer one is answered
-	// "F Answer larger than …" instead. 256 MiB.
+	// "F Answer larger than …" instead. The session stops building an
+	// answer as soon as it passes MaxReply (irrdq.Session.SetMaxReply), so
+	// a far larger one costs a connection about MaxReply bytes of memory,
+	// not its own size. 256 MiB.
 	MaxReply int64
 	// QueryTime is one command's evaluation; a command still evaluating
 	// after it is answered "F Query took longer than …". 60s.
@@ -285,6 +290,7 @@ func (s *Server) handle(c *conn) {
 		s.wg.Done()
 	}()
 	sess := irrdq.NewSession(s.Snapshot)
+	sess.SetMaxReply(s.lim.MaxReply)
 	idle := func() time.Duration {
 		if t := sess.Timeout(); t > 0 {
 			return t
@@ -339,8 +345,16 @@ func (s *Server) handle(c *conn) {
 			return
 		case err != nil:
 			r = r.Refused("Query took longer than " + s.lim.QueryTime.String())
-		case int64(r.Len()) > s.lim.MaxReply:
-			r = r.Refused(fmt.Sprintf("Answer larger than %d bytes", s.lim.MaxReply))
+		}
+		// An answer over MaxReply the session has refused already
+		// (SetMaxReply), without building it.
+		if cause := r.Cause(); cause != nil {
+			// The client is told only that an internal error occurred.
+			args := []any{"remote", remote, "command", commandName(line), "err", cause}
+			if s.LogQueries {
+				args = append(args, "line", line)
+			}
+			s.log(slog.LevelError, "query failed", args...)
 		}
 		if s.LogQueries {
 			s.log(slog.LevelInfo, "query", "remote", remote, "line", line, "bytes", r.Len(), "took", time.Since(began))
@@ -361,15 +375,36 @@ func (s *Server) handle(c *conn) {
 	}
 }
 
+// commandName is what a log line names a command by when the line itself is
+// not logged (LogQueries): "!" and its letter, or "RIPE-style" for a query
+// without "!" (whose words may be anything the client sent).
+func commandName(line string) string {
+	line = strings.TrimSpace(line)
+	if rest, found := strings.CutPrefix(line, "-V "); found {
+		if _, cmd, two := strings.Cut(rest, " "); two && strings.HasPrefix(cmd, "!") {
+			line = cmd
+		}
+	}
+	if !strings.HasPrefix(line, "!") {
+		return "RIPE-style"
+	}
+	_, size := utf8.DecodeRuneInString(line[1:])
+	return line[:1+size]
+}
+
 // lingerTime bounds how long a closing connection waits for the client to
 // finish sending.
 const lingerTime = time.Second
 
 // linger closes c's write side and discards what the client still sends,
-// until it closes too or lingerTime passes, so that closing with input
-// unread does not reset the connection and lose the answers just written.
-// It lingers during Shutdown too (that is when answers are most at risk),
-// so a client that keeps sending delays Shutdown by up to lingerTime.
+// until it closes too or lingerTime passes (or IdleTimeout, when shorter),
+// so that closing with input unread does not reset the connection and lose
+// the answers just written. Shutdown does not wait for lingering: a
+// connection already lingering when Shutdown halts it stops at once (halt
+// sets its read deadline to now), but one that reaches linger after the
+// halt — having finished its command — sets the deadline anew and lingers,
+// so a client that keeps sending can delay Shutdown by up to lingerTime.
+// Once Shutdown's context ends it closes every connection, lingering or not.
 func (s *Server) linger(c *conn, br *bufio.Reader) {
 	tc, ok := c.nc.(interface{ CloseWrite() error })
 	if !ok || tc.CloseWrite() != nil {

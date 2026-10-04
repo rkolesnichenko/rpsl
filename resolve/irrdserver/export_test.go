@@ -10,3 +10,6 @@ func GaveUp(s *Server) <-chan struct{} {
 	s.init()
 	return s.base.Done()
 }
+
+// CommandName is commandName, for the external tests.
+var CommandName = commandName
