@@ -78,11 +78,16 @@ func NewRegistry(name string, serial uint64, c *resolve.Corpus) (*Registry, erro
 }
 
 // index builds the inverse indexes from the objects c keeps whole whose
-// source is the registry's.
+// source is the registry's. An object is listed once under a value however
+// often it names it ("member-of: AS-X, AS-X"), as IRRd's SQL search returns
+// each object once.
 func (r *Registry) index(c *resolve.Corpus) {
 	r.claims, r.byMember, r.byMbrRef = map[string][]object.Object{}, map[string][]object.Object{}, map[string][]object.Object{}
+	var seen map[string]bool // the object's index entries so far
 	add := func(m map[string][]object.Object, k string, o object.Object) {
-		if k != "" {
+		id := fmt.Sprintf("%p %s", m, k)
+		if k != "" && !seen[id] {
+			seen[id] = true
 			m[k] = append(m[k], o)
 		}
 	}
@@ -91,6 +96,7 @@ func (r *Registry) index(c *resolve.Corpus) {
 		if raw == nil || sourceOfRaw(raw) != r.name {
 			continue
 		}
+		seen = map[string]bool{}
 		for _, a := range raw.GetAll("member-of") {
 			for _, it := range a.List() {
 				add(r.claims, strings.ToUpper(it.Value), o)
