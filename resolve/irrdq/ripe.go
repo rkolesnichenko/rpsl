@@ -3,9 +3,11 @@ package irrdq
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"slices"
 	"strings"
 
+	"github.com/rkolesnichenko/rpsl/ast"
 	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/types"
@@ -23,7 +25,8 @@ func init() {
 const noEntries = "%  No entries found for the selected source(s).\n\n\n"
 
 // internalErrorText is IRRd's message when a query fails for a reason of the
-// server's own (a Source's error): the cause is logged there, never sent.
+// server's own (a Source's error): the cause is never sent, but kept beside
+// the reply (Reply.Cause) for the server to log.
 const internalErrorText = "An internal error occurred while processing this query."
 
 // ripeError is IRRd's RIPE-style error answer.
@@ -172,11 +175,11 @@ read:
 	if q == nil {
 		return Reply{text: noEntries}
 	}
-	return snap.answerRIPE(ctx, *q)
+	return snap.answerRIPE(ctx, *q, s.newAnswer())
 }
 
-// answerRIPE answers one search.
-func (snap *Snapshot) answerRIPE(ctx context.Context, q ripeQuery) Reply {
+// answerRIPE answers one search, built in a.
+func (snap *Snapshot) answerRIPE(ctx context.Context, q ripeQuery, a *answer) Reply {
 	if q.kind == 'i' && !slices.Contains(inverseServed, q.attr) {
 		if inverseNotServed[q.attr] {
 			return ripeError(inverseRefused(q.attr))
@@ -191,10 +194,53 @@ func (snap *Snapshot) answerRIPE(ctx context.Context, q ripeQuery) Reply {
 	}
 	want := func(class string) bool { return len(q.classes) == 0 || slices.Contains(q.classes, class) }
 	regs := snap.selected(q.sources)
+	// emit adds one object, its text or (-K) its key block, each distinct
+	// block once, objects separated by a blank line.
+	found, refused := false, ""
+	seenRoute, seenBlock := map[routeKey]bool{}, map[string]bool{}
+	emit := func(e entry) bool {
+		if q.keys {
+			// A route's block is its prefix and origin, so it is told
+			// apart by them, and written without being built apart.
+			if e.obj == nil {
+				k := routeKey{e.rt.prefix, e.rt.origin}
+				if seenRoute[k] {
+					return true
+				}
+				seenRoute[k] = true
+			} else {
+				block := keyBlock(e)
+				if seenBlock[block] {
+					return true
+				}
+				seenBlock[block] = true
+			}
+			if found {
+				a.add("\n")
+			}
+			found = true
+			return addKeyBlock(a, e)
+		}
+		if found {
+			a.add("\n")
+		}
+		found = true
+		if !snap.addText(a, e) {
+			refused = textNotKept
+			return false
+		}
+		return true // past the budget too, for addText's check
+	}
+	emitAll := func(es []entry) {
+		for _, e := range es {
+			if !emit(e) {
+				return
+			}
+		}
+	}
 	var (
-		es      []entry
-		refused string
-		err     error
+		es  []entry
+		err error
 	)
 	switch q.kind {
 	case 't':
@@ -202,8 +248,10 @@ func (snap *Snapshot) answerRIPE(ctx context.Context, q ripeQuery) Reply {
 			return ripeError(lookupRefused(q.key))
 		}
 		es, err = snap.textSearch(ctx, regs, q.key, want)
+		emitAll(es)
 	case 'i':
 		es, err = snap.inverse(ctx, regs, q.attr, q.key, want)
+		emitAll(es)
 	default:
 		p, ok := parseSearchPrefix(q.key)
 		if !ok {
@@ -213,24 +261,22 @@ func (snap *Snapshot) answerRIPE(ctx context.Context, q ripeQuery) Reply {
 		if mode == 'x' {
 			mode = 0
 		}
-		es, err = snap.search(ctx, regs, p, mode)
-		es = wanted(es, want)
+		err = snap.search(ctx, regs, p, mode, func(e entry) bool {
+			return !want(e.class()) || emit(e)
+		})
 	}
 	switch {
 	case err != nil:
-		return ripeError(internalErrorText)
+		r := ripeError(internalErrorText)
+		r.cause = err
+		return r
 	case refused != "":
 		return ripeError(refused)
-	case len(es) == 0:
+	case !found:
 		return Reply{text: noEntries}
 	}
-	var blocks []string
-	if q.keys {
-		blocks = keyBlocks(es)
-	} else if blocks, refused = snap.texts(es); refused != "" {
-		return ripeError(refused)
-	}
-	return Reply{text: strings.Join(blocks, "\n") + "\n\n"}
+	a.add("\n\n")
+	return a.plain()
 }
 
 // wanted is the entries of es whose class want admits.
@@ -286,7 +332,7 @@ func (snap *Snapshot) textSearch(ctx context.Context, regs []*Registry, key stri
 		return out, nil
 	}
 	if p, ok := parseSearchPrefix(key); ok {
-		es, err := snap.search(ctx, regs, p, 'L')
+		es, err := snap.searchAll(ctx, regs, p, 'L')
 		return wanted(es, want), err
 	}
 	pk := strings.ToUpper(key)
@@ -351,10 +397,15 @@ func (snap *Snapshot) inverse(ctx context.Context, regs []*Registry, attr, value
 			}
 		}
 	case "member-of", "members", "mp-members", "mbrs-by-ref":
-		for _, r := range regs {
+		// The indexes list objects in load order, which a mirror's delta
+		// changes; the answer is ordered by class, primary key, then the
+		// registries' order, so that it does not.
+		rank := map[*Registry]int{}
+		for i, r := range regs {
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
+			rank[r] = i
 			var objs []object.Object
 			switch attr {
 			case "member-of":
@@ -370,52 +421,94 @@ func (snap *Snapshot) inverse(ctx context.Context, regs []*Registry, attr, value
 				}
 			}
 		}
+		slices.SortStableFunc(out, func(x, y entry) int {
+			if c := strings.Compare(x.class(), y.class()); c != 0 {
+				return c
+			}
+			if x.obj == nil && y.obj == nil {
+				if c := prefixCmp(x.rt.prefix, y.rt.prefix); c != 0 {
+					return c
+				}
+				if c := cmpASN(x.rt.origin, y.rt.origin); c != 0 {
+					return c
+				}
+			} else if x.obj != nil && y.obj != nil {
+				if c := strings.Compare(objectKey(x.class(), x.obj), objectKey(y.class(), y.obj)); c != 0 {
+					return c
+				}
+			}
+			if c := rank[x.reg] - rank[y.reg]; c != 0 {
+				return c
+			}
+			return strings.Compare(x.rt.text, y.rt.text) // two spellings of one route
+		})
 	}
 	return out, ctx.Err()
 }
 
-// keyBlocks reduces each entry to IRRd's -K form, each distinct block once,
-// in order: its primary key attributes as IRRd stores them (a route's
-// canonical prefix and its origin; a set's or an inet-rtr's name
-// upper-case; an aut-num's AS number), then each members: and mp-members:
-// item — normalized for an as-set or route-set (normMember), upper-cased
-// for an rtr-set, whose members are router names and addresses. A route
-// needs no text for it.
-func keyBlocks(es []entry) []string {
-	var out []string
-	seen := map[string]bool{}
-	for _, e := range es {
-		var b strings.Builder
-		class := e.class()
-		if e.obj == nil {
-			b.WriteString(class + ": " + e.rt.prefix.String() + "\norigin: " + e.rt.origin.String() + "\n")
-		} else {
-			key := strings.ToUpper(strings.TrimSpace(e.obj.Key()))
-			if as, err := types.ParseASN(key); err == nil && class == "aut-num" {
-				key = as.String()
-			} else if n, err := types.ParseSetName(key); err == nil {
-				key = n.String()
-			}
-			b.WriteString(class + ": " + key + "\n")
-			for _, attr := range []string{"members", "mp-members"} {
-				for _, a := range e.obj.GetAll(attr) {
-					for _, it := range a.List() {
-						if it.Value == "" {
-							continue
-						}
-						v := normMember(it.Value)
-						if class == "rtr-set" {
-							v = strings.ToUpper(it.Value)
-						}
-						b.WriteString(attr + ": " + v + "\n")
-					}
+func cmpASN(a, b types.ASN) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	}
+	return 0
+}
+
+// objectKey is an object's primary key as IRRd stores it: a set's or an
+// inet-rtr's name upper-case, an aut-num's AS number.
+func objectKey(class string, obj *ast.Object) string {
+	key := strings.ToUpper(strings.TrimSpace(obj.Key()))
+	if as, err := types.ParseASN(key); err == nil && class == "aut-num" {
+		return as.String()
+	}
+	if n, err := types.ParseSetName(key); err == nil {
+		return n.String()
+	}
+	return key
+}
+
+// routeKey is a route's primary key.
+type routeKey struct {
+	prefix netip.Prefix
+	origin types.ASN
+}
+
+// addKeyBlock adds keyBlock(e) to a; a route's without building it apart.
+func addKeyBlock(a *answer, e entry) bool {
+	if e.obj != nil {
+		return a.add(keyBlock(e))
+	}
+	return a.add(e.class(), ": ") && a.addPrefix(e.rt.prefix) && a.add("\norigin: ") &&
+		a.addAS(e.rt.origin) && a.add("\n")
+}
+
+// keyBlock is an entry in IRRd's -K form: its primary key attributes as IRRd
+// stores them (a route's canonical prefix and its origin, objectKey for any
+// other), then each members: and mp-members: item — normalized for an
+// as-set or route-set (normMember), upper-cased for an rtr-set, whose
+// members are router names and addresses. A route needs no text for it.
+func keyBlock(e entry) string {
+	class := e.class()
+	if e.obj == nil {
+		return class + ": " + e.rt.prefix.String() + "\norigin: " + e.rt.origin.String() + "\n"
+	}
+	var b strings.Builder
+	b.WriteString(class + ": " + objectKey(class, e.obj) + "\n")
+	for _, attr := range []string{"members", "mp-members"} {
+		for _, a := range e.obj.GetAll(attr) {
+			for _, it := range a.List() {
+				if it.Value == "" {
+					continue
 				}
+				v := normMember(it.Value)
+				if class == "rtr-set" {
+					v = strings.ToUpper(it.Value)
+				}
+				b.WriteString(attr + ": " + v + "\n")
 			}
-		}
-		if block := b.String(); !seen[block] {
-			seen[block] = true
-			out = append(out, block)
 		}
 	}
-	return out
+	return b.String()
 }

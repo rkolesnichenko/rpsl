@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 type Reply struct {
 	text  string
 	close bool
+	cause error // why an internal error was answered; never sent
 }
 
 // WriteTo writes the reply's bytes to w.
@@ -31,11 +33,18 @@ func (r Reply) Close() bool { return r.close }
 // Len is the number of bytes WriteTo writes.
 func (r Reply) Len() int { return len(r.text) }
 
+// Cause is why the reply is IRRd's internal-error answer — a Source's error,
+// with the selected registries named — or nil. The client is told only that
+// an internal error occurred; Cause is for the server's log.
+func (r Reply) Cause() error { return r.cause }
+
 // frame is IRRd's data answer: "A<len>", the payload and a newline (counted
-// in len), then "C".
+// in len), then "C". It is for small answers; one that can grow large is
+// built by an answer, under the session's budget.
 func frame(payload string) Reply {
-	payload += "\n"
-	return Reply{text: fmt.Sprintf("A%d\n%sC\n", len(payload), payload)}
+	a := &answer{}
+	a.add(payload, "\n")
+	return a.frame()
 }
 
 var (
@@ -46,6 +55,15 @@ var (
 
 // Fail is IRRd's error answer, "F <msg>".
 func Fail(msg string) Reply { return Reply{text: "F " + msg + "\n"} }
+
+// internalErr is IRRd's answer when a query fails for a reason of the
+// server's own (a Source's error): the message only, the cause kept beside
+// it for the server's log (Cause).
+func internalErr(cause error) Reply {
+	r := Fail(internalErrorText)
+	r.cause = cause
+	return r
+}
 
 // Refused is IRRd's error answer msg in place of r, closing the connection
 // when r would have: what a server sends when it cannot send r itself.
@@ -63,6 +81,7 @@ type Session struct {
 	sel        []string // nil: the snapshot's default
 	persistent bool
 	timeout    time.Duration
+	maxReply   int64 // 0: no budget
 }
 
 // NewSession starts a session that reads the current snapshot from snapshot,
@@ -71,6 +90,13 @@ func NewSession(snapshot func() *Snapshot) *Session { return &Session{snapshot: 
 
 // Timeout is what "!t" set, or 0.
 func (s *Session) Timeout() time.Duration { return s.timeout }
+
+// SetMaxReply sets the session's byte budget: a reply longer than n bytes is
+// "F Answer larger than <n> bytes" instead, and an answer that can grow large
+// (route objects, a list of origins, prefixes or members, RIPE-style
+// objects) stops being built as soon as it passes n, so a far larger answer
+// costs no more memory than n. n <= 0 removes the budget (the default).
+func (s *Session) SetMaxReply(n int64) { s.maxReply = max(n, 0) }
 
 // sources is the session's selected registry names.
 func (s *Session) sources(snap *Snapshot) []string {
@@ -97,6 +123,12 @@ func (s *Session) Do(ctx context.Context, line string) (Reply, error) {
 	}
 	snap := s.snapshot()
 	r := s.do(ctx, snap, line)
+	if s.maxReply > 0 && int64(r.Len()) > s.maxReply {
+		r = r.Refused(tooLargeMsg(s.maxReply))
+	}
+	if r.cause != nil {
+		r.cause = fmt.Errorf("sources %s: %w", strings.Join(s.sources(snap), ","), r.cause)
+	}
 	if !s.persistent && line != "!!" {
 		r.close = true
 	}
@@ -195,15 +227,18 @@ func (s *Session) selectSources(snap *Snapshot, arg string) Reply {
 const unavailable = "One or more selected sources are unavailable."
 
 // selection reads a list of registry names ("!s", RIPE-style "-s"): split at
-// commas only, as IRRd splits it, each name canonical upper-case; ok is
-// false unless every name is a registry of snap.
+// commas only, as IRRd splits it, each name canonical upper-case, a repeated
+// name kept once, where it first appears (IRRd selects with SQL's IN, which
+// never repeats a row); ok is false unless every name is a registry of snap.
 func (snap *Snapshot) selection(list string) (names []string, ok bool) {
 	for _, n := range strings.Split(list, ",") {
 		name, err := types.ParseSourceName(n)
 		if err != nil || snap.byName[name] == nil {
 			return nil, false
 		}
-		names = append(names, name)
+		if !slices.Contains(names, name) {
+			names = append(names, name)
+		}
 	}
 	return names, true
 }

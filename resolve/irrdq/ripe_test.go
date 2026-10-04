@@ -142,3 +142,61 @@ func TestRIPESourcesStick(t *testing.T) {
 		t.Errorf("%q, want %q", got, want)
 	}
 }
+
+// TestRIPEInverseOrder: an inverse search answers in the order of class,
+// primary key, then the registries' order — never the order objects were
+// loaded in, which a mirror's delta changes.
+func TestRIPEInverseOrder(t *testing.T) {
+	ripe := []string{
+		"route-set: RS-Z\nmembers: AS1\nmbrs-by-ref: MNT-A\nsource: RIPE\n",
+		"as-set: AS-Z\nmembers: AS1\nmbrs-by-ref: MNT-A\nsource: RIPE\n",
+		"route: 192.0.2.0/24\norigin: AS2\nmember-of: AS-Z, RS-Z\nmnt-by: MNT-A\nsource: RIPE\n",
+		"as-set: AS-A\nmembers: AS1\nmbrs-by-ref: MNT-A\nsource: RIPE\n",
+		"aut-num: AS7\nas-name: SEVEN\nmember-of: AS-Z\nmnt-by: MNT-A\nsource: RIPE\n",
+		"route: 192.0.2.0/24\norigin: AS1\nmember-of: RS-Z\nmnt-by: MNT-A\nsource: RIPE\n",
+		"route: 10.0.0.0/8\norigin: AS1\nmember-of: RS-Z\nmnt-by: MNT-A\nsource: RIPE\n",
+	}
+	radb := []string{
+		"as-set: AS-A\nmembers: AS1\nsource: RADB\n",
+		"aut-num: AS3\nas-name: THREE\nmember-of: AS-Z\nsource: RADB\n",
+	}
+	order := func(texts []string, reverse bool) []string {
+		out := append([]string(nil), texts...)
+		if reverse {
+			for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+		return out
+	}
+	keys := func(answer string) []string {
+		var out []string
+		for _, block := range strings.Split(strings.TrimSpace(answer), "\n\n") {
+			lines := strings.SplitN(block, "\n", 3)
+			out = append(out, strings.Join(strings.Fields(lines[0]+" "+lines[1]), " "))
+		}
+		return out
+	}
+	want := map[string][]string{
+		"-i members AS1":       {"as-set: AS-A members: AS1", "as-set: AS-A members: AS1", "as-set: AS-Z members: AS1", "route-set: RS-Z members: AS1"},
+		"-i member-of AS-Z":    {"aut-num: AS3 as-name: THREE", "aut-num: AS7 as-name: SEVEN", "route: 192.0.2.0/24 origin: AS2"},
+		"-i member-of RS-Z":    {"route: 10.0.0.0/8 origin: AS1", "route: 192.0.2.0/24 origin: AS1", "route: 192.0.2.0/24 origin: AS2"},
+		"-i mbrs-by-ref MNT-A": {"as-set: AS-A members: AS1", "as-set: AS-Z members: AS1", "route-set: RS-Z members: AS1"},
+	}
+	for _, reverse := range []bool{false, true} {
+		snap, err := NewSnapshot([]*Registry{mustRegistry(t, "RIPE", order(ripe, reverse)...), mustRegistry(t, "RADB", order(radb, reverse)...)}, SnapshotOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for cmd, w := range want {
+			got := keys(ask(t, snap, cmd))
+			if strings.Join(got, "|") != strings.Join(w, "|") {
+				t.Errorf("reversed %v, %s:\n got %q\nwant %q", reverse, cmd, got, w)
+			}
+		}
+		// Two registries' objects of one key keep the registries' order.
+		if got := ask(t, snap, "-i members AS1"); !strings.Contains(got, "source: RIPE\n\nas-set: AS-A\nmembers: AS1\nsource: RADB") {
+			t.Errorf("reversed %v: the RIPE and RADB AS-A out of order:\n%s", reverse, got)
+		}
+	}
+}

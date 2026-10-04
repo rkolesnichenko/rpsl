@@ -113,21 +113,27 @@ func cmdOriginated(ctx context.Context, s *Session, snap *Snapshot, arg string, 
 	}
 	ps, err := snap.originated(ctx, snap.selected(s.sources(snap)), as, afi)
 	if err != nil {
-		return internalError
+		return internalErr(err)
 	}
-	return prefixes(ps)
+	return s.newAnswer().prefixes(ps)
 }
 
-// prefixes is the answer listing ps, or "D" when it is empty.
-func prefixes(ps []netip.Prefix) Reply {
+// prefixes is the answer listing ps, or "D" when it is empty; each prefix is
+// written out only while the answer is within its budget.
+func (a *answer) prefixes(ps []netip.Prefix) Reply {
 	if len(ps) == 0 {
 		return notFound
 	}
-	words := make([]string, len(ps))
 	for i, p := range ps {
-		words[i] = p.String()
+		if i > 0 {
+			a.add(" ")
+		}
+		if !a.addPrefix(p) {
+			break
+		}
 	}
-	return frame(strings.Join(words, " "))
+	a.add("\n")
+	return a.frame()
 }
 
 // originated is the distinct prefixes as originates in regs, of afi

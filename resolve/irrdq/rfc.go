@@ -87,18 +87,20 @@ func (snap *Snapshot) expander(regs []*Registry, afi types.AFI) *resolve.Expande
 // rfcMembers is "!i<name>,1" in RFC mode: a route-set's prefix ranges (in
 // RPSL notation) or an as-set's AS numbers, sorted as strings; refused is
 // why it was not expanded, or "" (nothing for a missing set, a set of
-// another class, or a name of neither class).
-func (snap *Snapshot) rfcMembers(ctx context.Context, regs []*Registry, name string) (out []string, refused string) {
-	n, err := types.ParseSetName(name)
-	if err != nil {
-		return nil, ""
+// another class, or a name of neither class); err is a Source's error or
+// ctx's, an internal error.
+func (snap *Snapshot) rfcMembers(ctx context.Context, regs []*Registry, name string) (out []string, refused string, err error) {
+	n, perr := types.ParseSetName(name)
+	if perr != nil {
+		return nil, "", nil
 	}
 	e := snap.expander(regs, types.AFIAny)
 	switch n.Class() {
 	case types.ClassRouteSet:
 		rs, err := e.ExpandPrefixRanges(ctx, types.Ref(n))
 		if err != nil {
-			return nil, rfcRefusal(err)
+			refused, err := rfcRefusal(err)
+			return nil, refused, err
 		}
 		for _, r := range rs.List() {
 			out = append(out, r.String())
@@ -106,45 +108,48 @@ func (snap *Snapshot) rfcMembers(ctx context.Context, regs []*Registry, name str
 	case types.ClassAsSet:
 		as, err := e.ExpandAS(ctx, types.Ref(n))
 		if err != nil {
-			return nil, rfcRefusal(err)
+			refused, err := rfcRefusal(err)
+			return nil, refused, err
 		}
 		for _, a := range as.List() {
 			out = append(out, a.String())
 		}
 	}
 	slices.Sort(out)
-	return out, ""
+	return out, "", nil
 }
 
 // rfcPrefixes is "!a" in RFC mode: the prefixes of afi an as-set expands to,
-// sorted (prefixCmp); refused as for rfcMembers.
-func (snap *Snapshot) rfcPrefixes(ctx context.Context, regs []*Registry, name string, afi types.AFI) (out []netip.Prefix, refused string) {
-	n, err := types.ParseSetName(name)
-	if err != nil || n.Class() != types.ClassAsSet {
-		return nil, ""
+// sorted (prefixCmp); refused and err as for rfcMembers.
+func (snap *Snapshot) rfcPrefixes(ctx context.Context, regs []*Registry, name string, afi types.AFI) (out []netip.Prefix, refused string, err error) {
+	n, perr := types.ParseSetName(name)
+	if perr != nil || n.Class() != types.ClassAsSet {
+		return nil, "", nil
 	}
 	ps, err := snap.expander(regs, afi).ExpandPrefixes(ctx, types.Ref(n))
 	if err != nil {
-		return nil, rfcRefusal(err)
+		refused, err := rfcRefusal(err)
+		return nil, refused, err
 	}
 	out = ps.List()
 	slices.SortFunc(out, prefixCmp)
-	return out, ""
+	return out, "", nil
 }
 
-// rfcRefusal is the F message for an expansion error: "" for one that means
-// "nothing" (a missing set, a set of another class), internalErrorText for a
-// Source's error or a cancelled context.
-func rfcRefusal(err error) string {
+// rfcRefusal reads an expansion error: nothing for one that means
+// "nothing" (a missing set, a set of another class), the F message for one
+// the expansion refused (AS-ANY, a limit), and the error itself for a
+// Source's error or a cancelled context, an internal error.
+func rfcRefusal(err error) (refused string, internal error) {
 	var anySet *resolve.AnySetError
 	var big *resolve.SetTooLargeError
 	switch {
 	case err == nil, errors.Is(err, resolve.ErrNotFound), errors.Is(err, resolve.ErrSetClass):
-		return ""
+		return "", nil
 	case errors.As(err, &anySet):
-		return anySet.Name.String() + " denotes the whole registry: not expanded in RFC mode"
+		return anySet.Name.String() + " denotes the whole registry: not expanded in RFC mode", nil
 	case errors.As(err, &big):
-		return big.Error()
+		return big.Error(), nil
 	}
-	return internalErrorText
+	return "", err
 }

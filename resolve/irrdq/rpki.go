@@ -36,17 +36,22 @@ func (snap *Snapshot) claimVisible(r *Registry, o object.Object) bool {
 	return true
 }
 
-// routeText is a route's text as served: in RPKI-aware mode, with IRRd's
-// rpki-ov-state: line after it (not on a pseudo route). An invalid route is
-// never served, so its state is valid or not_found.
-func (snap *Snapshot) routeText(r *Registry, rt route) string {
+// ovState is the line a route's text is served with: in RPKI-aware mode,
+// IRRd's rpki-ov-state: line (not on a pseudo route), otherwise "". An
+// invalid route is never served, so its state is valid or not_found.
+func (snap *Snapshot) ovState(r *Registry, rt route) string {
 	v := snap.opts.VRPs
 	if v == nil || r.name == rpki.PseudoSource || rt.text == "" {
-		return rt.text
+		return ""
 	}
-	state := "valid"
 	if v.Validate(rt.prefix, rt.origin) != rpki.Valid {
-		state = notFoundState
+		return ovNotFound
 	}
-	return rt.text + "rpki-ov-state:  " + state + "\n"
+	return ovValid
 }
+
+// The rpki-ov-state: lines a served route carries in RPKI-aware mode.
+const (
+	ovValid    = "rpki-ov-state:  valid\n"
+	ovNotFound = "rpki-ov-state:  " + notFoundState + "\n"
+)

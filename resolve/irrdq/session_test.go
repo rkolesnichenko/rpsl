@@ -203,3 +203,74 @@ func TestRefused(t *testing.T) {
 		t.Error("a refusal in a persistent session closed the connection")
 	}
 }
+
+// TestCause: an internal error tells the client only that it occurred; its
+// cause, with the selected registries named, is kept beside the reply for
+// the server's log. Every other reply has none.
+func TestCause(t *testing.T) {
+	snap := fixture(t, SnapshotOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, line := range []string{"!iAS-FOO", "!iAS-FOO,1", "!aAS-FOO", "!gAS65001", "!maut-num,AS65001", "!r192.0.2.0/24", "-T as-set AS-FOO", "-i origin AS65001"} {
+		s := NewSession(func() *Snapshot { return snap })
+		s.Do(context.Background(), "!!")
+		s.Do(context.Background(), "!sRADB,RIPE")
+		r, _ := s.Do(ctx, line)
+		if !strings.Contains(r.text, internalErrorText) {
+			t.Errorf("%q with a cancelled context: %q", line, r.text)
+		}
+		if c := r.Cause(); !errors.Is(c, context.Canceled) || !strings.HasPrefix(c.Error(), "sources RADB,RIPE: ") {
+			t.Errorf("%q: cause %v", line, c)
+		}
+		if r, _ := s.Do(context.Background(), line); r.Cause() != nil {
+			t.Errorf("%q answered: cause %v", line, r.Cause())
+		}
+	}
+}
+
+// TestRepeatedSources: a source named twice in a selection ("!s", "-s") or
+// in the default counts once, where it first appears, as IRRd's SQL IN
+// selects each row once: nothing is answered twice.
+func TestRepeatedSources(t *testing.T) {
+	snap := fixture(t, SnapshotOptions{})
+	for _, sel := range []string{"!sRIPE,RIPE", "!sripe,RIPE,ripe"} {
+		s := NewSession(func() *Snapshot { return snap })
+		s.Do(context.Background(), "!!")
+		if r, _ := s.Do(context.Background(), sel); r.text != "C\n" {
+			t.Fatalf("%s: %q", sel, r.text)
+		}
+		if r, _ := s.Do(context.Background(), "!s-lc"); r.text != framed("RIPE") {
+			t.Errorf("%s, !s-lc: %q", sel, r.text)
+		}
+		if r, _ := s.Do(context.Background(), "!r192.0.2.0/24,o"); r.text != framed("AS65001") {
+			t.Errorf("%s, !r192.0.2.0/24,o: %q", sel, r.text)
+		}
+	}
+	s := NewSession(func() *Snapshot { return snap })
+	s.Do(context.Background(), "!!")
+	s.Do(context.Background(), "-s RIPE,RADB,RIPE -T route 192.0.2.0/25")
+	if r, _ := s.Do(context.Background(), "!s-lc"); r.text != framed("RIPE,RADB") {
+		t.Errorf("-s RIPE,RADB,RIPE, !s-lc: %q", r.text)
+	}
+	dup, err := NewSnapshot(snap.Registries(), SnapshotOptions{Default: []string{"RADB", "RIPE", "radb"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s = NewSession(func() *Snapshot { return dup })
+	s.Do(context.Background(), "!!")
+	if r, _ := s.Do(context.Background(), "!s-lc"); r.text != framed("RADB,RIPE") {
+		t.Errorf("a repeated default, !s-lc: %q", r.text)
+	}
+	if r, _ := s.Do(context.Background(), "!r192.0.2.0/24,o"); strings.Count(r.text, "AS65001") != strings.Count(snapAnswer(t, snap, "!r192.0.2.0/24,o"), "AS65001") {
+		t.Errorf("a repeated default, !r192.0.2.0/24,o: %q", r.text)
+	}
+}
+
+// snapAnswer is snap's answer to line in a fresh persistent session.
+func snapAnswer(t *testing.T, snap *Snapshot, line string) string {
+	t.Helper()
+	s := NewSession(func() *Snapshot { return snap })
+	s.Do(context.Background(), "!!")
+	r, _ := s.Do(context.Background(), line)
+	return r.text
+}

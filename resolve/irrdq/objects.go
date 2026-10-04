@@ -75,29 +75,36 @@ func (e entry) class() string {
 	return "route6"
 }
 
-// text is the entry's text as served, ending in a newline; ok is false for
-// a route whose text the registry does not keep.
-func (snap *Snapshot) text(e entry) (text string, ok bool) {
+// addText adds the entry's text as served, ending in a newline, to a; false
+// for a route whose text the registry does not keep. Once a is over its
+// budget nothing is built, but a route's text is still checked, so that a
+// refusal for text not kept comes first whatever the answer's size.
+func (snap *Snapshot) addText(a *answer, e entry) bool {
 	if e.obj != nil {
-		return objectText(e.obj), true
+		if !a.over {
+			a.add(objectText(e.obj))
+		}
+		return true
 	}
 	if e.rt.text == "" {
-		return "", false
+		return false
 	}
-	return snap.routeText(e.reg, e.rt), true
+	a.add(e.rt.text, snap.ovState(e.reg, e.rt))
+	return true
 }
 
-// texts is each entry's text, or textNotKept when one has none.
-func (snap *Snapshot) texts(es []entry) ([]string, string) {
-	out := make([]string, 0, len(es))
-	for _, e := range es {
-		t, ok := snap.text(e)
-		if !ok {
-			return nil, textNotKept
+// addTexts adds each entry's text to a, separated by blank lines, as IRRd
+// joins objects; refused is textNotKept when one has none.
+func (snap *Snapshot) addTexts(a *answer, es []entry) (refused string) {
+	for i, e := range es {
+		if i > 0 {
+			a.add("\n")
 		}
-		out = append(out, t)
+		if !snap.addText(a, e) {
+			return textNotKept
+		}
 	}
-	return out, ""
+	return ""
 }
 
 // objectEntry is the entry for o, an object r keeps whole: a route claimant
@@ -180,15 +187,15 @@ func cmdObject(ctx context.Context, s *Session, snap *Snapshot, arg string) Repl
 	es, err := snap.lookup(ctx, snap.selected(s.sources(snap)), class, key, true)
 	switch {
 	case err != nil:
-		return internalError
+		return internalErr(err)
 	case len(es) == 0:
 		return notFound
 	}
-	text, ok := snap.text(es[0])
-	if !ok {
+	a := s.newAnswer()
+	if !snap.addText(a, es[0]) {
 		return Fail(textNotKept)
 	}
-	return frame(strings.TrimSuffix(text, "\n"))
+	return a.frame()
 }
 
 // lookup is the objects of class (one the mirror keeps) whose primary key is
@@ -327,32 +334,36 @@ func parseSearchPrefix(s string) (netip.Prefix, bool) {
 // checkEvery is how many routes a scan reads between looks at its context.
 const checkEvery = 4096
 
-// search is the served routes of regs that mode selects for p — 0 the exact
-// prefix, 'L' it and every less specific one, 'l' the most specific less
-// specific prefix that any of regs holds a served route of (IRRd sizes it
-// over every selected source at once), 'M' every more specific one — in
-// regs' order, each registry's sorted (routeCmp). err is ctx's.
-func (snap *Snapshot) search(ctx context.Context, regs []*Registry, p netip.Prefix, mode byte) ([]entry, error) {
-	var out []entry
-	exact := func(r *Registry, q netip.Prefix) {
+// search yields the served routes of regs that mode selects for p — 0 the
+// exact prefix, 'L' it and every less specific one, 'l' the most specific
+// less specific prefix that any of regs holds a served route of (IRRd sizes
+// it over every selected source at once), 'M' every more specific one — in
+// regs' order, each registry's sorted (routeCmp), until yield returns false.
+// Nothing is collected: an answer of every route of a registry is built only
+// as far as its budget allows. err is ctx's.
+func (snap *Snapshot) search(ctx context.Context, regs []*Registry, p netip.Prefix, mode byte, yield func(entry) bool) error {
+	exact := func(r *Registry, q netip.Prefix) bool {
 		for _, i := range r.byPrefix[q] {
-			if e := (entry{reg: r, rt: r.routes[i]}); snap.served(e) {
-				out = append(out, e)
+			if e := (entry{reg: r, rt: r.routes[i]}); snap.served(e) && !yield(e) {
+				return false
 			}
 		}
+		return true
 	}
 	switch mode {
 	case 0:
 		for _, r := range regs {
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				return err
 			}
-			exact(r, p)
+			if !exact(r, p) {
+				return nil
+			}
 		}
 	case 'L':
 		for _, r := range regs {
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				return err
 			}
 			var idx []int
 			for bits := 0; bits <= p.Bits(); bits++ {
@@ -365,14 +376,16 @@ func (snap *Snapshot) search(ctx context.Context, regs []*Registry, p netip.Pref
 			}
 			slices.Sort(idx)
 			for _, i := range idx {
-				out = append(out, entry{reg: r, rt: r.routes[i]})
+				if !yield(entry{reg: r, rt: r.routes[i]}) {
+					return nil
+				}
 			}
 		}
 	case 'l':
 		best := -1
 		for _, r := range regs {
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				return err
 			}
 			for bits := p.Bits() - 1; bits > best; bits-- {
 				q, _ := p.Addr().Prefix(bits)
@@ -385,13 +398,15 @@ func (snap *Snapshot) search(ctx context.Context, regs []*Registry, p netip.Pref
 		if best >= 0 {
 			q, _ := p.Addr().Prefix(best)
 			for _, r := range regs {
-				exact(r, q)
+				if !exact(r, q) {
+					return nil
+				}
 			}
 		}
 	case 'M':
 		for _, r := range regs {
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				return err
 			}
 			// Routes are sorted by family, address and length, so p's more
 			// specifics follow the first route not before p, up to the first
@@ -400,20 +415,31 @@ func (snap *Snapshot) search(ctx context.Context, regs []*Registry, p netip.Pref
 			for i := lo; i < len(r.routes); i++ {
 				if (i-lo)%checkEvery == checkEvery-1 {
 					if err := ctx.Err(); err != nil {
-						return nil, err
+						return err
 					}
 				}
 				q := r.routes[i].prefix
 				if q.Addr().Is4() != p.Addr().Is4() || !p.Contains(q.Addr()) {
 					break
 				}
-				if e := (entry{reg: r, rt: r.routes[i]}); q.Bits() > p.Bits() && snap.served(e) {
-					out = append(out, e)
+				if e := (entry{reg: r, rt: r.routes[i]}); q.Bits() > p.Bits() && snap.served(e) && !yield(e) {
+					return nil
 				}
 			}
 		}
 	}
-	return out, ctx.Err()
+	return ctx.Err()
+}
+
+// searchAll is search's routes, collected: for the searches whose answer is
+// a few prefixes' routes.
+func (snap *Snapshot) searchAll(ctx context.Context, regs []*Registry, p netip.Prefix, mode byte) ([]entry, error) {
+	var out []entry
+	err := snap.search(ctx, regs, p, mode, func(e entry) bool {
+		out = append(out, e)
+		return true
+	})
+	return out, err
 }
 
 // cmdRouteSearch answers "!r<prefix>[,o|l|L|M]": route objects (origins with
@@ -432,23 +458,37 @@ func cmdRouteSearch(ctx context.Context, s *Session, snap *Snapshot, arg string)
 	default:
 		return Fail("Invalid route search option: " + opt)
 	}
-	es, err := snap.search(ctx, snap.selected(s.sources(snap)), p, mode)
-	if err != nil {
-		return internalError
-	}
-	if len(es) == 0 {
+	a := s.newAnswer()
+	found, refused := false, ""
+	err := snap.search(ctx, snap.selected(s.sources(snap)), p, mode, func(e entry) bool {
+		switch {
+		case opt == "o":
+			// One per object, duplicates kept, as IRRd lists them.
+			if found {
+				a.add(" ")
+			}
+			found = true
+			return a.addAS(e.rt.origin)
+		case found:
+			a.add("\n")
+		}
+		found = true
+		if !snap.addText(a, e) {
+			refused = textNotKept
+			return false
+		}
+		return true // past the budget too, for addText's check
+	})
+	switch {
+	case err != nil:
+		return internalErr(err)
+	case refused != "":
+		return Fail(refused)
+	case !found:
 		return notFound
 	}
 	if opt == "o" {
-		words := make([]string, len(es))
-		for i, e := range es {
-			words[i] = e.rt.origin.String() // one per object, duplicates kept, as IRRd lists them
-		}
-		return frame(strings.Join(words, " "))
+		a.add("\n")
 	}
-	texts, refused := snap.texts(es)
-	if refused != "" {
-		return Fail(refused)
-	}
-	return frame(strings.TrimSuffix(strings.Join(texts, "\n"), "\n"))
+	return a.frame()
 }

@@ -238,10 +238,6 @@ func distinctSorted(ms []string, drop string) []string {
 	return slices.Compact(out)
 }
 
-// internalError is IRRd's answer when a query fails for a reason of the
-// server's own (a Source's error): the cause is logged there, never sent.
-var internalError = Fail(internalErrorText)
-
 // cmdMembers answers "!i<set>" (the set's members, without the set's name
 // as sent) and "!i<set>,1" (IRRd's recursive resolution); "D" when either
 // is empty.
@@ -264,20 +260,16 @@ func cmdMembers(ctx context.Context, s *Session, snap *Snapshot, arg string) Rep
 		out = distinctSorted(ms, arg)
 	}
 	if err != nil {
-		return internalError
+		return internalErr(err)
 	}
-	if len(out) == 0 {
-		return notFound
-	}
-	return frame(strings.Join(out, " "))
+	return s.newAnswer().words(out)
 }
 
 // recursiveOrRFC is IRRd's recursion, or in RFC mode the engine's
 // expansion (rfcMembers), whose refusal is refused.
 func (snap *Snapshot) recursiveOrRFC(ctx context.Context, regs []*Registry, name string) (members []string, refused string, err error) {
 	if snap.opts.RFC {
-		members, refused = snap.rfcMembers(ctx, regs, name)
-		return members, refused, nil
+		return snap.rfcMembers(ctx, regs, name)
 	}
 	members, err = snap.recursive(ctx, regs, name, types.ClassUnknown)
 	return members, "", err
@@ -296,18 +288,21 @@ func cmdASetPrefixes(ctx context.Context, s *Session, snap *Snapshot, arg string
 		return Fail("Missing required set name for A query")
 	}
 	regs := snap.selected(s.sources(snap))
+	var ps []netip.Prefix
+	var err error
 	if snap.opts.RFC {
-		ps, refused := snap.rfcPrefixes(ctx, regs, arg, afi)
+		var refused string
+		ps, refused, err = snap.rfcPrefixes(ctx, regs, arg, afi)
 		if refused != "" {
 			return Fail(refused)
 		}
-		return prefixes(ps)
+	} else {
+		ps, err = snap.asSetPrefixes(ctx, regs, arg, afi)
 	}
-	ps, err := snap.asSetPrefixes(ctx, regs, arg, afi)
 	if err != nil {
-		return internalError
+		return internalErr(err)
 	}
-	return prefixes(ps)
+	return s.newAnswer().prefixes(ps)
 }
 
 // asSetPrefixes is "!a": the as-set resolved with an as-set root, then the

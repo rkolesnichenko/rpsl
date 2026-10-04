@@ -170,8 +170,8 @@ func (r *Registry) KeepsRouteText() bool { return r.text }
 // SnapshotOptions configures a Snapshot.
 type SnapshotOptions struct {
 	// Default is the registries a session selects until it sends "!s", in
-	// precedence order — IRRd's sources_default. nil: every registry, in
-	// order.
+	// precedence order — IRRd's sources_default; a repeated name counts
+	// once, where it first appears. nil: every registry, in order.
 	Default []string
 	// VRPs puts the snapshot in IRRd 4's RPKI-aware mode: every route and
 	// route6 of a registry other than rpki.PseudoSource that VRPs.Validate
@@ -222,7 +222,9 @@ func NewSnapshot(regs []*Registry, opts SnapshotOptions) (*Snapshot, error) {
 			if err != nil || s.byName[n] == nil {
 				return nil, fmt.Errorf("irrdq: default source %q is no registry", d)
 			}
-			s.dflt = append(s.dflt, n)
+			if !slices.Contains(s.dflt, n) { // a repeated name, once (selection)
+				s.dflt = append(s.dflt, n)
+			}
 		}
 	}
 	s.opts.Default = slices.Clone(s.dflt)
@@ -254,12 +256,12 @@ func (s *Snapshot) With(r *Registry) (*Snapshot, error) {
 func (s *Snapshot) Registries() []*Registry { return slices.Clone(s.regs) }
 
 // selected is the registries named by names (a session's selection), in
-// that order. A name with no registry is skipped: a selection is checked
-// when it is made, and With never removes a registry.
+// that order, each once. A name with no registry is skipped: a selection is
+// checked when it is made, and With never removes a registry.
 func (s *Snapshot) selected(names []string) []*Registry {
 	regs := make([]*Registry, 0, len(names))
 	for _, n := range names {
-		if r := s.byName[n]; r != nil {
+		if r := s.byName[n]; r != nil && !slices.Contains(regs, r) {
 			regs = append(regs, r)
 		}
 	}
