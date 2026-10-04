@@ -24,15 +24,18 @@ same version (see [RELEASING.md](RELEASING.md)).
   an inverse attribute or route text the registries do not keep is refused, never answered "not
   found". `Registry` (`NewRegistry`, `Name`, `Serial`, `KeepsRouteText`, `WithSerial`),
   `Snapshot` (`NewSnapshot`, `With`, `Registries`), `SnapshotOptions`, `Session` (`NewSession`,
-  `Do`, `Timeout`) and `Reply` (`WriteTo`, `Close`, `Len`, `Refused`, `Fail`).
+  `Do`, `Timeout`, `SetMaxReply`: a byte budget past which an answer stops being built and is
+  refused) and `Reply` (`WriteTo`, `Close`, `Len`, `Cause`, `Refused`, `Fail`).
 - `resolve/irrdserver`: `Server` serves `irrdq` on a listener — IRRd and RIPE-style queries on
   one port, pipelined — with explicit `Limits` (connections 256, idle 30 s as IRRd's, line
   1 MiB, answer 256 MiB, query 60 s): the line, answer and query-time limits are each an `F`
-  line, never a cut-short answer, and past `MaxConns` or the idle timeout the connection is
-  closed; `Shutdown` writes out every completed answer whole; `ErrServerClosed`.
+  line, never a cut-short answer (an answer far over `MaxReply` is refused without being
+  built), and past `MaxConns` or the idle timeout the connection is closed; `Shutdown` writes
+  out every completed answer whole; `ErrServerClosed`.
 - `rpsld` (`resolve/cmd/rpsld`; logic in `resolve/internal/rpsld`): an IRRd-compatible mirror
   of dumps, NRTMv4 mirrors and RPKI VRPs, kept current — dumps re-read when they change or on
-  SIGHUP, NRTMv4 polled every minute, VRPs refreshed — each change published as a new
+  SIGHUP, NRTMv4 polled every minute (backing off to an hour after failures), VRPs refreshed
+  hourly — each change published as a new
   immutable snapshot, a failed one keeping the previous data and `!j` serial. bgpq4,
   IRRToolSet, `rpslq`, `irrd.Source` and `whois.Source` run against it unchanged. Release
   binaries beside `rpslq`'s, `rpslconf`'s and `rpslcheck`'s (20 archives). See `docs/rpsld.md`.

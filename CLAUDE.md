@@ -228,7 +228,9 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
     tests for the limits) and listed in `resolve/testdata/rpsld/divergences.md`;
     `TestDivergencesDocumented` checks both directions.
   - A failed sync or reload keeps the registry's previous data and `!j` serial. The line,
-    answer and query-time limits are each an `F` line, never a cut-short answer; past `MaxConns`
+    answer and query-time limits are each an `F` line, never a cut-short answer; an answer that
+    grows with the data is built under the session's budget (`SetMaxReply`) and stops as soon as
+    it passes it, never built whole and then measured; past `MaxConns`
     or the idle timeout the connection is closed. A slow reader can hold a connection one idle
     timeout per 64 KiB written, bounded only by `MaxConns`.
 
@@ -326,17 +328,18 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   `RPKI` pseudo registry, last), all on one port for IRRd and RIPE-style queries. `-rfc` gives
   RFC 2622 answers for `!i…,1`/`!a`; `-keep-route-text` keeps route text for `!m route`, `!r`
   objects and `-i origin` (`whois.Source` needs it). NRTMv4 polls at least a minute apart
-  (`-nrtm-interval`); dumps are re-read on a changed mtime or SIGHUP. Exit status: 0 a clean
+  (`-nrtm-interval`), backing off by doubling to an hour after failures (each start or snapshot
+  reload of RIPE is ~400 MB); dumps are re-read on a changed mtime or SIGHUP; VRPs hourly. Exit status: 0 a clean
   stop, 2 a bad command line, 3 an input failing at startup or serving failing. See docs/rpsld.md.
   `RPSL_IRRD_DOCKER=1 go test -run TestRecord ./internal/irrdoracle` (from resolve/) re-records
   IRRd's answers in Docker (review the diff). Opt-in:
   `RPSL_REALDATA=$PWD/../.data go test -run TestRealDataServe ./internal/rpsld` (one registry per
   process: `RPSL_REALDATA_REGISTRY=RIPE|RADB`, `RPSL_REALDATA_KEEPTEXT=0|1`);
-  `RPSL_REALDATA=… go test -run TestRpsldMatchesRpslqRealData .` (bgpq4 against rpsld vs `rpslq
+  `RPSL_REALDATA=… go test -timeout 30m -run TestRpsldMatchesRpslqRealData .` (bgpq4 against rpsld vs `rpslq
   --dump` on RIPE's dumps; `RPSL_REALDATA_LARGEST`, `RPSL_REALDATA_SAMPLE`);
   `RPSL_LIVE_NRTM=1 RPSL_REALDATA=… go test -run TestLiveMirror ./internal/rpsld` (a live RIPE
   mirror vs whois.ripe.net, ~400 MB). Each holds a whole registry (measured peak RSS:
-  TestRealDataServe 2.7-4.8 GB, TestRpsldMatchesRpslqRealData 3.1 GB, TestLiveMirror 1.4 GB):
+  TestRealDataServe 2.7-4.8 GB, TestRpsldMatchesRpslqRealData 1851 MB, TestLiveMirror 1.4 GB):
   on a developer machine run them one at a time, alone, with a memory cap (GOMEMLIMIT and a
   watchdog), never beside check.sh or each other.
 - Releasing: `scripts/release.sh vX.Y.Z` does RELEASING.md's steps (tag order lexer/types → ast →

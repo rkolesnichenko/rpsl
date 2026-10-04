@@ -280,7 +280,13 @@ var ErrServerClosed error
   `F Query took longer than <QueryTime>`, both keeping the connection, never
   a truncated answer; over `MaxConns` a new connection is closed at once,
   unanswered. IRRd 4.5.3 queues a connection past its `max_connections` (10)
-  and has no line limit (a 1 MB line was answered).
+  and has no line limit (a 1 MB line was answered). The server hands
+  `MaxReply` to each session (`irrdq.Session.SetMaxReply`), and an answer
+  that grows with the data — route objects, lists of origins, prefixes or
+  members, RIPE-style objects and `-K` blocks — stops being built as soon as
+  it passes it, so a far larger answer costs a connection a small multiple
+  of `MaxReply`, not its own size; a route's text is held by reference and
+  copied once, into the reply.
 - **Writing.** An answer is written in 64 KiB pieces, each with its own write
   deadline of one idle timeout, so the timeout bounds how long the client
   takes to read a piece, not the whole answer. A client that reads just fast
@@ -305,7 +311,7 @@ rpsld -source NAME=SPEC [-source NAME=SPEC …] [flags]
 SPEC  dump:FILE[,FILE…]          dump files (gzip or plain), re-read when they change or on SIGHUP
       nrtm4:URL,key=PEMFILE      an NRTMv4 mirror (https:// or file://)
 
--rpki FILE|https://URL   VRPs (rpki-client/Routinator JSON); -rpki-refresh (10m), -slurm FILE
+-rpki FILE|https://URL   VRPs (rpki-client/Routinator JSON); -rpki-refresh (1h), -slurm FILE
 -rpki-default            the RPKI registry in the default selection, last (default true)
 -listen ADDR             IRRd and RIPE-style queries (default :43)
 -rfc                     RFC 2622 answers for !i…,1 and !a
@@ -329,21 +335,30 @@ SPEC  dump:FILE[,FILE…]          dump files (gzip or plain), re-read when they
   in `-state-dir` when one is saved there (so a rotation while the server was
   down still verifies; a saved key that cannot be read stops the start), and
   the key is written back, through a synced temporary file and a rename,
-  whenever it changes. `Client.MaxAge` is 24 hours, as IRRd's limit, so a
+  whenever it changes (a save that fails is tried again after the next
+  sync). `Client.MaxAge` is 24 hours, as IRRd's limit, so a
   restart cannot be fed a replayed old notification file. A dump registry
   keeps only the objects of its own source, counting the others in its log
   line.
 - **Running.** Each NRTMv4 mirror has `rpsld`'s own sync loop, not
   `Client.Run`: it calls `Client.Sync` every `-nrtm-interval` (never under a
-  minute, NRTMv4 §5.2: a smaller value exits 2), and after a failed sync
-  waits as `Client.Run` does — the minute, doubled with each further failure,
-  never above the interval. Whenever the client holds another (session,
+  minute, NRTMv4 §5.2: a smaller value exits 2), and after failed syncs in a
+  row backs off: twice the interval after the first, doubling with each
+  further one, up to a fixed ceiling of an hour (never below the interval),
+  starting again from the interval after a success. `Client.Sync` loads the
+  whole snapshot again after three failed deltas, so a ceiling at the
+  interval would fetch RIPE's 400 MB every few minutes for as long as a
+  delta is refused. Whenever the client holds another (session,
   version) than the one last published — also after a rebuild that failed,
   which the next sync retries — the registry is rebuilt from the client's
   version (`CopyTo` into a fresh `Corpus`) and swapped in. A dump registry is
   re-read when any of its files' modification times change (checked every
-  `-check-dumps`) or on SIGHUP, which reaches every dump registry. VRPs are
-  re-read every `-rpki-refresh`. Each rebuild happens beside the live
+  `-check-dumps`) or on SIGHUP, which reaches every dump registry; a read
+  that fails is tried again at the next change or SIGHUP, not at every
+  check. A dump is replaced atomically (written elsewhere, then renamed into
+  place): a plain file half written reads without error. VRPs are re-read
+  every `-rpki-refresh` (an hour, IRRd's `roa_import_timer` default; a
+  download over 512 MB is refused). Each rebuild happens beside the live
   snapshot; one atomic store publishes the next snapshot, and answers
   already in progress finish on the one they read.
 - **Serials.** An NRTMv4 registry's serial is its version; a dump
@@ -357,7 +372,8 @@ SPEC  dump:FILE[,FILE…]          dump files (gzip or plain), re-read when they
   reload, refusal and failure, with the registry, serial and duration;
   queries only with `-log-queries`.
 - **Exit status.** 0 after a clean shutdown (SIGTERM or SIGINT, or one asked
-  for during startup) and for `-v`; 2 for a bad command line (and `-help`);
+  for during startup; a second signal during `-grace` ends the process at
+  once, by Go's default handling) and for `-v`; 2 for a bad command line (and `-help`);
   3 when an input fails at startup, the port cannot be opened, or serving
   fails (`Serve` returning an error cancels the refreshers and exits 3,
   rather than hanging or exiting 0).

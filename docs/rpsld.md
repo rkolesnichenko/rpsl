@@ -85,6 +85,8 @@ to them. The example above uses NTT's export, IRRd's default `roa_source`.
 Once every input has loaded, `rpsld` listens; until then it answers
 nothing. It logs (`log/slog` text, to stderr) one line per load, sync,
 swap, reload and failure, with the registry, its serial and the time taken;
+a query that failed for a reason of the server's own (the client gets only
+IRRd's "An internal error occurred") with its cause and the command's name;
 each command only with `-log-queries`.
 
 ### A systemd unit
@@ -94,6 +96,8 @@ each command only with `-log-queries`.
 Description=rpsld, an IRRd-compatible mirror
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=3600
+StartLimitBurst=3
 
 [Service]
 User=rpsld
@@ -104,7 +108,7 @@ ExecStart=/usr/local/bin/rpsld \
     -state-dir ${STATE_DIRECTORY} -listen 127.0.0.1:43
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
-RestartSec=60
+RestartSec=300
 StateDirectory=rpsld
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 
@@ -117,7 +121,10 @@ WantedBy=multi-user.target
 re-reads every dump registry. SIGTERM (`systemctl stop`) stops it: the
 listener closes, open connections get `-grace` to finish, and it exits 0.
 `Restart=on-failure` starts it again after exit status 3, such as a mirror
-whose first snapshot download failed.
+whose first snapshot download failed: five minutes later, and at most three
+times an hour (`StartLimitIntervalSec`, `StartLimitBurst`), since each
+start of a mirror downloads its whole snapshot (RIPE's is about 400 MB). A
+second SIGTERM or SIGINT during `-grace` ends `rpsld` at once.
 
 ### Flags
 
@@ -127,7 +134,7 @@ From `rpsld -help` (the notes in brackets are not in the help text):
 | --- | --- | --- |
 | `-source` | — | a registry: `NAME=dump:FILE[,FILE…]` or `NAME=nrtm4:URL,key=PEMFILE` (repeatable; the order is precedence) |
 | `-rpki` | — | VRPs (rpki-client/Routinator JSON): a file or an https:// URL; serves the registry RPKI and hides RPKI-invalid routes |
-| `-rpki-refresh` | `10m0s` | how often `-rpki` is re-read |
+| `-rpki-refresh` | `1h0m0s` | how often `-rpki` is re-read (IRRd's roa_import_timer default; a download over 512 MB is refused) |
 | `-slurm` | — | an RFC 8416 SLURM file applied to `-rpki` |
 | `-rpki-default` | `true` | select the RPKI registry by default, last, as RADB does |
 | `-listen` | `:43` | the address of the IRRd and whois query port |
@@ -166,12 +173,24 @@ one they read.
 When a reload, a sync or a VRP refresh fails after startup, the registry
 keeps its previous data and its serial: the failure is logged, and a client
 sees the mirror fall behind in `!j`, never half-updated data. A dump file
-whose modification time cannot be read is logged once, not at every check.
+whose modification time cannot be read is logged once, not at every check,
+and a changed dump that cannot be read is tried again at its next change
+or SIGHUP, not at every check.
+
+Replace a dump atomically: write the new file elsewhere on the same file
+system, then rename it over the old one, as `scripts/fetch-irr-dumps.sh`
+does (it downloads to `FILE.part` and renames that). A plain dump read while it is still being
+written reads without error, as a shorter dump, and would be served so; a
+gzip file cut short fails its read, and the previous data stays.
 
 Each NRTMv4 mirror polls every `-nrtm-interval`, never more often than once
 a minute (NRTMv4 §5.2; a smaller value exits 2). After a failed sync it
-retries after a minute, doubling the wait with each further failure, never
-waiting longer than `-nrtm-interval` — as `nrtm4.Client.Run` does. Every
+waits twice `-nrtm-interval`, doubling the wait with each further failure
+in a row, up to an hour (never less than `-nrtm-interval`), and starts
+again from `-nrtm-interval` after a success. `nrtm4.Client` loads the whole
+snapshot again after three failed deltas in a row, so without the hour's
+backoff a delta the mirror keeps refusing would download RIPE's snapshot
+every few minutes. Every
 file is verified before it is used (design §8.8): an ES256 signature, a
 SHA-256 hash per file, the delta chain contiguous; a refused delta applies
 nothing, and nothing after it does. A notification file older than 24 hours
@@ -357,9 +376,17 @@ The idle timeout is IRRd's (`SOCKET_DEFAULT_TIMEOUT`, 30 s, measured at
 30.03 s); the other four are `rpsld`'s own. IRRd 4.5.3 behaves otherwise in
 two ways: past its `max_connections` (10) it queues a connection until one
 ends, where `rpsld` closes it at once, so the client can retry or go
-elsewhere; and it has no line limit (a 1 MB line was answered). An answer
-is built whole before it is sent, so `-max-reply` applies before anything
-is written.
+elsewhere; and it has no line limit (a 1 MB line was answered).
+
+An answer is never sent in part: `-max-reply` is decided before anything of
+it is written. Nor is one far over the limit built only to be refused: an
+answer that grows with the data — route objects (`!r`, `-M`, `-L`), a list
+of origins (`!r…,o`), of prefixes or members (`!g`, `!6`, `!a`, `!i`),
+RIPE-style objects and their `-K` forms — stops being built as soon as it
+passes `-max-reply`, so `!r0.0.0.0/0,M` over a whole registry costs a
+connection a small multiple of `-max-reply` in memory, not the answer's
+size. A route's text is held by reference while an answer is built and
+copied once, into the answer sent.
 
 The idle timeout also bounds how long the client takes to read each 64 KiB
 of an answer, not the whole answer. A client that reads just fast enough
@@ -370,7 +397,8 @@ At shutdown (SIGTERM, SIGINT) `rpsld` stops accepting, lets each connection
 finish the command it is answering, writes out every answer completed so
 far, whole, and closes. A command still running at the end of `-grace` is
 abandoned unanswered, and an answer still being written then may be cut
-short; the connection is closed either way.
+short; the connection is closed either way. A second SIGTERM or SIGINT
+during `-grace` ends `rpsld` at once.
 
 ## How it is tested
 
@@ -391,7 +419,10 @@ Two oracles:
 - **`irrtest`**, the library's in-process IRRd, written independently of
   `irrdq`, corrected against the same recordings (`TestMatchesIRRd`), so the
   two cannot share a bug the recordings would show. `TestIRRdqMatchesIrrtest`
-  holds `irrdq` to it on random IRRs.
+  holds `irrdq` to it on random IRRs, for every command family: `!i`,
+  `!i…,1`, `!a`, `!g` and `!6`; `!m`; RIPE-style `-T` lookups, `-i origin`
+  and `-i member-of` and their `-K` forms; and the lists and `!m` again in
+  RPKI-aware mode with random ROAs.
 
 Then the clients:
 
@@ -454,14 +485,18 @@ largest by direct members and a seeded sample of 150, deduplicated; an
 as-set's `-t` list and both classes' `-4` and `-6` lists, byte for byte.
 
 ```
-rpslq --dump vs bgpq4 against rpsld: 315 sets picked; 309 the same; 1 differ and 0 are refused by rpslq where a known divergence explains it (sets by divergence in the closure: single-length-range 1); 5 over a prefix limit, not compared; 7m45s in all, heap 1493 MB
+rpslq --dump vs bgpq4 against rpsld: 315 sets picked; 309 the same; 1 differ and 0 are refused by rpslq where a known divergence explains it (sets by divergence in the closure: single-length-range 1); 4 over a prefix limit, not compared; 0 with a range operator on a set or AS member in the closure, not compared; 1 past rpslq's 5m0s deadline, not compared; 10m45s in all, heap 1493 MB
 ```
 
 The one difference is bgpq4's `^n` bug (`AS12491:RS-IPPLANET-GERMANY`
-lists `169.239.72.0/22^24`); the five not compared are four bogon and martian
-route-sets (`AS20483:RS-MARTIANS-OUT`, `AS12695:RS-BOGUS`, `RS-DISREGARD`,
-`AS210578:RS-BOGONS-V4`) and `RS-MOUATS-V6-ROUTES` (`2607:f150:ffff::/48^48-128`), which `rpslq`
-refuses at 2^23 prefixes and bgpq4 would enumerate without end.
+lists `169.239.72.0/22^24`); the four over a prefix limit are bogon and
+martian route-sets (`AS20483:RS-MARTIANS-OUT`, `AS12695:RS-BOGUS`,
+`RS-DISREGARD`, `AS210578:RS-BOGONS-V4`), which `rpslq` refuses at 2^23
+prefixes; and the one past the deadline is `RS-MOUATS-V6-ROUTES`
+(`2607:f150:ffff::/48^48-128`), whose `-6` list `rpslq` was still building
+after five minutes (the run was at background priority, under a memory
+watchdog). bgpq4 is not run on either kind: it would enumerate them without
+end. Peak RSS of the test process and its bgpq4 children: 1851 MB.
 
 The RIPE Database mirrored live over NRTMv4 (`TestLiveMirror`, 2026-10-04):
 the snapshot and deltas loaded in 44 s, 654,678 objects at version 897793,
@@ -479,7 +514,7 @@ cap:
 ```sh
 cd resolve
 RPSL_REALDATA=$PWD/../.data go test -run TestRealDataServe ./internal/rpsld   # RPSL_REALDATA_REGISTRY=RIPE|RADB, RPSL_REALDATA_KEEPTEXT=0|1
-RPSL_REALDATA=$PWD/../.data go test -run TestRpsldMatchesRpslqRealData .      # bgpq4 installed; RPSL_REALDATA_LARGEST, RPSL_REALDATA_SAMPLE
+RPSL_REALDATA=$PWD/../.data go test -timeout 30m -run TestRpsldMatchesRpslqRealData .   # bgpq4 installed; RPSL_REALDATA_LARGEST, RPSL_REALDATA_SAMPLE
 RPSL_LIVE_NRTM=1 RPSL_REALDATA=$PWD/../.data go test -run TestLiveMirror ./internal/rpsld   # about 400 MB from RIPE
 ```
 

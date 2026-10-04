@@ -1134,16 +1134,22 @@ one line (1 MiB), one answer (256 MiB) and one command's evaluation (60 s).
 The line, answer and query-time limits are each refused with an `F` line
 naming the limit, never a cut-short answer; past `MaxConns` a connection is
 closed at once, unanswered (IRRd queues it), and past the idle timeout it is
-closed. An answer is
+closed. The answer limit is the session's own budget
+(`Session.SetMaxReply`): an answer that grows with the data stops being
+built as soon as it passes it, so one far over the limit costs a small
+multiple of the limit in memory, never its own size. An answer is
 written in 64 KiB pieces, each with its own deadline, so a client that reads
 just fast enough can hold a connection one idle timeout per piece; only
 `MaxConns` bounds that. `Shutdown` lets each connection finish its command
 and writes out every completed answer whole.
 
 **Kept current.** Each NRTMv4 mirror is synced every minute by `rpsld`'s own
-loop (a one-minute floor, `Client.Run`'s backoff), and its registry rebuilt
-from the client's version whenever that changes; a dump registry is re-read
-when a file's modification time changes or on SIGHUP; VRPs on a timer. A
+loop (a one-minute floor; after failures in a row the wait doubles up to an
+hour, since `Client.Sync` reloads the whole snapshot after three failed
+deltas), and its registry rebuilt from the client's version whenever that
+changes; a dump registry is re-read when a file's modification time changes
+or on SIGHUP (a failed read waits for the next change); VRPs hourly, as
+IRRd imports them. A
 failed sync or reload keeps the registry's previous data and its `!j`
 serial, so a client sees the mirror fall behind, never half-updated data.
 Every input loads before `rpsld` listens; one that fails at startup exits 3.
