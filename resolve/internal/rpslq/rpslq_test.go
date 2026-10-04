@@ -368,4 +368,21 @@ func TestRunWith(t *testing.T) {
 		!strings.Contains(errs.String(), "--server-expand") {
 		t.Errorf("--server-expand over dumps: exit %d, %q; want a refusal", code, errs.String())
 	}
+	// A server backend is refused before anything is asked of it: Run would
+	// raise a shared IRRd source's answer cap, or open up to -c whois
+	// connections. Neither Open dials.
+	for _, o := range []backend.Options{{Host: "127.0.0.1:1", Sources: "TEST"}, {Host: "127.0.0.1:1", Whois: true, Sources: "TEST"}} {
+		srv, err := backend.Open(o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, args := range [][]string{{"-4", "AS-TOP"}, {"-c", "1024", "-4", "AS-TOP"}} {
+			var out, errs bytes.Buffer
+			if code := RunWith(context.Background(), args, &out, &errs, srv); code != exitUsage ||
+				!strings.Contains(errs.String(), "backend opened from dumps") || out.Len() > 0 {
+				t.Errorf("whois=%v %v: exit %d, %q, %q; want a refusal", o.Whois, args, code, out.String(), errs.String())
+			}
+		}
+		srv.Close()
+	}
 }

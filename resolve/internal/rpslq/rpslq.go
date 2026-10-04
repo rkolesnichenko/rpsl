@@ -435,11 +435,15 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	return run(ctx, args, stdout, stderr, nil)
 }
 
-// RunWith is Run over b, a backend the caller opened with backend.Open and
-// keeps (it is never closed here), so that one opened set of dumps serves
-// many command lines. Which backend, which registries in which order, and
-// any RPKI filtering are b's, so a command line that names any of them (-h,
-// -S, --whois, --dump, --rpki, --slurm, --src-members) is refused, and
+// RunWith is Run over b, dumps the caller opened with backend.Open and keeps
+// (it is never closed here), so that one opened set of dumps serves many
+// command lines. b must be a dump backend — its Src the immutable MemSource
+// backend.Open builds from dumps — and any other is refused: Run raises an
+// IRRd source's answer cap for --server-expand and caps the connections
+// over whois, neither of which it may do to a server backend it shares.
+// Which dumps, which registries in which order, and any RPKI filtering are
+// b's, so a command line that names any of them (-h, -S, --whois, --dump,
+// --rpki, --slurm, --src-members), or --server-expand, is refused, and
 // IRRD_SOURCES is not read.
 func RunWith(ctx context.Context, args []string, stdout, stderr io.Writer, b *backend.Backend) int {
 	return run(ctx, args, stdout, stderr, b)
@@ -465,8 +469,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, b *backen
 		}
 		fmt.Fprintf(stderr, "rpslq: %s names the backend, which is the caller's here\n", flag)
 		return exitUsage
-	case b != nil && c.serverSide && !isIRRd(b.Src):
-		fmt.Fprintln(stderr, "rpslq: --server-expand asks an IRRd server to expand as-sets, and this backend is not one")
+	case b != nil && !isDumps(b.Src):
+		fmt.Fprintf(stderr, "rpslq: RunWith takes a backend opened from dumps, not %T\n", b.Src)
+		return exitUsage
+	case b != nil && c.serverSide:
+		fmt.Fprintln(stderr, "rpslq: --server-expand asks an IRRd server to expand as-sets, so it needs IRRd, not dumps")
 		return exitUsage
 	}
 	if c.depth == 0 {
@@ -685,10 +692,10 @@ func loadVRPs(file, slurm string) (*rpki.VRPs, error) {
 // through gzip when it is gzipped, naming it in any error but opening's.
 func readInput(name string, fn func(io.Reader) error) error { return backend.ReadInput(name, fn) }
 
-// isIRRd reports whether src is an IRRd server, the one backend that can
-// expand an as-set itself (--server-expand).
-func isIRRd(src resolve.Source) bool {
-	_, ok := src.(*irrd.Source)
+// isDumps reports whether src is what backend.Open serves dumps as: an
+// immutable MemSource, safe to share between command lines.
+func isDumps(src resolve.Source) bool {
+	_, ok := src.(*resolve.MemSource)
 	return ok
 }
 
