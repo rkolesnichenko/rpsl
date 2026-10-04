@@ -441,10 +441,13 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 // backend.Open builds from dumps — and any other is refused: Run raises an
 // IRRd source's answer cap for --server-expand and caps the connections
 // over whois, neither of which it may do to a server backend it shares.
-// Which dumps, which registries in which order, and any RPKI filtering are
-// b's, so a command line that names any of them (-h, -S, --whois, --dump,
-// --rpki, --slurm, --src-members), or --server-expand, is refused, and
-// IRRD_SOURCES is not read.
+// Which dumps and which registries in which order — the RPKI pseudo
+// registry among them when b was opened with VRPs — are b's. b is never
+// RPKI-filtered (rpki.Filter wraps a MemSource, so a filtered backend is no
+// dump backend), so no route of it is hidden as RPKI-invalid. A command line
+// that names the backend (-h, -S, --whois, --dump, --rpki, --slurm,
+// --src-members), or --server-expand, is refused, and IRRD_SOURCES is not
+// read.
 func RunWith(ctx context.Context, args []string, stdout, stderr io.Writer, b *backend.Backend) int {
 	return run(ctx, args, stdout, stderr, b)
 }
