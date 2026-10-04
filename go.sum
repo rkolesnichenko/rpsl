@@ -1,6 +1,6 @@
-github.com/rkolesnichenko/rpsl/ast v0.24.0 h1:OssduKqgrD1yN/qCC9csB8zJ7YruiwwLspSD6PZHfvI=
-github.com/rkolesnichenko/rpsl/ast v0.24.0/go.mod h1:3iieV/Q/Mwablv0ZgJnDMwbw/SJUuKaZBdUqIIxNGqo=
-github.com/rkolesnichenko/rpsl/lexer v0.24.0 h1:gPHE40BRKjIF4A03rUmiaKgDimXIy0BDpYqP8gC7vkg=
-github.com/rkolesnichenko/rpsl/lexer v0.24.0/go.mod h1:CT69LP6IwqlueH0c4Daf+YRsU3Zasr/p6L3HXibqZnU=
-github.com/rkolesnichenko/rpsl/types v0.24.0 h1:0jBmG2AuWqhiWgF0+k0V8xf9PMcRpt3arZDpMakM1UE=
-github.com/rkolesnichenko/rpsl/types v0.24.0/go.mod h1:4c3Mt/dWh5PeMcvWU/ydQgjVq90QHfL6Lf/g+w3rNSA=
+github.com/rkolesnichenko/rpsl/ast v0.24.1 h1:nJD9oFXCl1KiE/3Hdm4NIvYau1pi2e7crQ8X+cm1Ooo=
+github.com/rkolesnichenko/rpsl/ast v0.24.1/go.mod h1:Xm7UpBmpSWuJyc4aBE8dk7RvMvFin+9h5Q0Vg5KHD9I=
+github.com/rkolesnichenko/rpsl/lexer v0.24.1 h1:APgRQyLdMaas/XgI5FISIHCySOrKBfkjWzZO0vHHTM8=
+github.com/rkolesnichenko/rpsl/lexer v0.24.1/go.mod h1:CT69LP6IwqlueH0c4Daf+YRsU3Zasr/p6L3HXibqZnU=
+github.com/rkolesnichenko/rpsl/types v0.24.1 h1:rbFxA4O67HFczNpPWf54EinWSjYBtTum/rodWFnHG2I=
+github.com/rkolesnichenko/rpsl/types v0.24.1/go.mod h1:4c3Mt/dWh5PeMcvWU/ydQgjVq90QHfL6Lf/g+w3rNSA=
