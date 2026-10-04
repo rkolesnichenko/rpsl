@@ -646,10 +646,22 @@ func TestLimitDefaults(t *testing.T) {
 }
 
 // One answer, one snapshot: while snapshots swap, every answer is the old
-// snapshot's or the new one's, never a mixture.
+// snapshot's or the new one's, never a mixture. "!aAS-X" reads the as-set in
+// RIPE and each member's routes in both registries, every one of which
+// differs between the snapshots, so an answer that read two snapshots would
+// show it; and both snapshots must have answered.
 func TestAnswersComeFromOneSnapshot(t *testing.T) {
-	a := rpsldtest.Snapshot(t, []string{"as-set: AS-X\nmembers: AS1, AS2\nsource: RIPE\n"}, irrdq.SnapshotOptions{}, "RIPE")
-	b := rpsldtest.Snapshot(t, []string{"as-set: AS-X\nmembers: AS3, AS4, AS5\nsource: RIPE\n"}, irrdq.SnapshotOptions{}, "RIPE")
+	texts := func(r1, r2, r3 string) []string {
+		return []string{
+			"as-set: AS-X\nmembers: AS1, AS2\nsource: RIPE\n",
+			"route: " + r1 + "\norigin: AS1\nsource: RIPE\n",
+			"route: " + r2 + "\norigin: AS2\nsource: RADB\n",
+			"route: " + r3 + "\norigin: AS1\nsource: RADB\n",
+		}
+	}
+	a := rpsldtest.Snapshot(t, texts("10.1.0.0/16", "10.2.0.0/16", "10.3.0.0/16"), irrdq.SnapshotOptions{}, "RIPE", "RADB")
+	b := rpsldtest.Snapshot(t, texts("10.11.0.0/16", "10.12.0.0/16", "10.13.0.0/16"), irrdq.SnapshotOptions{}, "RIPE", "RADB")
+	fromA, fromB := "A36\n10.1.0.0/16 10.2.0.0/16 10.3.0.0/16\nC\n", "A39\n10.11.0.0/16 10.12.0.0/16 10.13.0.0/16\nC\n"
 	var cur atomic.Pointer[irrdq.Snapshot]
 	cur.Store(a)
 	_, addr, _ := start(t, func() *irrdq.Snapshot { return cur.Load() }, irrdserver.Limits{})
@@ -668,48 +680,54 @@ func TestAnswersComeFromOneSnapshot(t *testing.T) {
 			} else {
 				cur.Store(a)
 			}
+			runtime.Gosched()
 		}
 	}()
-	errs := make(chan error, 4)
 	var seen [2]atomic.Int64
-	var wg sync.WaitGroup
-	for w := 0; w < 4; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			got, err := talk(addr, "!!\n"+strings.Repeat("!iAS-X\n", 200)+"!q\n")
-			if err != nil {
-				errs <- err
-				return
-			}
-			n := 0
-			for _, r := range strings.SplitAfter(got, "C\n") {
-				switch r {
-				case "":
-					continue
-				case asX:
-					seen[0].Add(1)
-				case "A12\nAS3 AS4 AS5\nC\n":
-					seen[1].Add(1)
-				default:
-					errs <- fmt.Errorf("a mixed or broken answer: %q", r)
+	for round := 0; round < 20 && (seen[0].Load() == 0 || seen[1].Load() == 0); round++ {
+		errs := make(chan error, 4)
+		var wg sync.WaitGroup
+		for w := 0; w < 4; w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				got, err := talk(addr, "!!\n"+strings.Repeat("!aAS-X\n", 200)+"!q\n")
+				if err != nil {
+					errs <- err
 					return
 				}
-				n++
-			}
-			if n != 200 {
-				errs <- fmt.Errorf("%d answers, want 200", n)
-			}
-		}()
+				n := 0
+				for _, r := range strings.SplitAfter(got, "C\n") {
+					switch r {
+					case "":
+						continue
+					case fromA:
+						seen[0].Add(1)
+					case fromB:
+						seen[1].Add(1)
+					default:
+						errs <- fmt.Errorf("a mixed or broken answer: %q", r)
+						return
+					}
+					n++
+				}
+				if n != 200 {
+					errs <- fmt.Errorf("%d answers, want 200", n)
+				}
+			}()
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			t.Error(err)
+		}
 	}
-	wg.Wait()
 	close(stop)
 	<-swapped
-	close(errs)
-	for err := range errs {
-		t.Error(err)
-	}
 	t.Logf("answers from a: %d, from b: %d", seen[0].Load(), seen[1].Load())
+	if seen[0].Load() == 0 || seen[1].Load() == 0 {
+		t.Error("the answers did not come from both snapshots: nothing shows a mixture could not happen")
+	}
 }
 
 // An internal error is logged with the command it answered: by name alone

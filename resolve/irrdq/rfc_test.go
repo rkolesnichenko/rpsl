@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -284,9 +285,34 @@ func rfcCommand(send string) bool {
 	return false
 }
 
+// rfcDiffering is the golden cases divergences.md's RFC-mode row says RFC
+// mode answers otherwise, for config ("plain" or "rpki"), and the count it
+// gives for them.
+func rfcDiffering(t *testing.T, config string) (names []string, count int) {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(irrdoracle.Fixture(t), "..", "rpsld", "divergences.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	re := regexp.MustCompile(`(\d+) recorded ` + "`!i…,1`/`!a`" + ` exchanges of the plain goldens are answered otherwise \(([^:]*):`)
+	if config == "rpki" {
+		re = regexp.MustCompile(`and (\d+) of the rpki ones \(([^)]*)\)`)
+	}
+	m := re.FindStringSubmatch(string(b))
+	if m == nil {
+		t.Fatalf("divergences.md's RFC-mode row lists no %s cases (%s)", config, re)
+	}
+	count, _ = strconv.Atoi(m[1])
+	for _, n := range regexp.MustCompile("`([^`]+)`").FindAllStringSubmatch(m[2], -1) {
+		names = append(names, n[1])
+	}
+	return names, count
+}
+
 // TestRFCModeChangesNothingElse: every recorded golden exchange without an
 // "!a" or "!i…,1" — the plain and the rpki ones — is answered in RFC mode
-// exactly as without it; the ones with one that differ are logged.
+// exactly as without it, and the ones with one that RFC mode answers
+// otherwise are exactly the ones divergences.md's RFC-mode row lists.
 func TestRFCModeChangesNothingElse(t *testing.T) {
 	rpkiBase := fixtureRPKI(t)
 	rpkiOpts := rpkiBase.opts
@@ -302,7 +328,8 @@ func TestRFCModeChangesNothingElse(t *testing.T) {
 		{"plain", fixture(t, SnapshotOptions{}), fixture(t, SnapshotOptions{RFC: true})},
 		{"rpki", rpkiBase, rpkiRFC},
 	} {
-		same, other := 0, 0
+		same := 0
+		var other []string
 		for _, g := range irrdoracle.Load(t, c.config) {
 			if c.config == "plain" && !isCovered(g.Name) {
 				continue
@@ -314,14 +341,21 @@ func TestRFCModeChangesNothingElse(t *testing.T) {
 			case !rfcCommand(g.Send):
 				same++
 			case a != b:
-				other++
+				other = append(other, g.Name)
 				t.Logf("%s: RFC %q, IRRd mode %q", g.Name, a, b)
 			}
 		}
 		if same == 0 {
 			t.Errorf("%s: no golden case compared", c.config)
 		}
-		t.Logf("%s: %d cases unchanged, %d !a/!i…,1 cases answered otherwise", c.config, same, other)
+		t.Logf("%s: %d cases unchanged, %d !a/!i…,1 cases answered otherwise", c.config, same, len(other))
+		listed, count := rfcDiffering(t, c.config)
+		slices.Sort(other)
+		slices.Sort(listed)
+		if !slices.Equal(other, listed) || count != len(other) {
+			t.Errorf("%s: RFC mode answers otherwise %d cases %q; divergences.md's RFC-mode row says %d: %q",
+				c.config, len(other), other, count, listed)
+		}
 	}
 }
 
@@ -412,6 +446,20 @@ func TestRFCModeLimits(t *testing.T) {
 			"!iRS-L2,1": "F resolve: expansion of RS-L2 exceeds MaxPrefixes (1): reached 2\n",
 			"!aAS-L2":   "F resolve: expansion of AS-L2 exceeds MaxPrefixes (1): reached 2\n",
 		}},
+		// One above each limit (R9): the true depth, set count and prefix
+		// count pass, so a limit is refused only when exceeded.
+		{resolve.Expander{MaxDepth: 2}, map[string]string{
+			"!iAS-L1,1": framed("AS1 AS2 AS3"),
+			"!aAS-L1":   framed("10.1.0.0/16 10.2.0.0/16 2001:db8:3::/48"),
+		}},
+		{resolve.Expander{MaxVisited: 2}, map[string]string{
+			"!iRS-L1,1": framed("10.0.0.0/8 10.1.0.0/16 192.0.2.0/24"),
+			"!aAS-L2":   framed("10.2.0.0/16 2001:db8:3::/48"),
+		}},
+		{resolve.Expander{MaxPrefixes: 2}, map[string]string{
+			"!iRS-L2,1": framed("10.1.0.0/16 192.0.2.0/24"),
+			"!aAS-L2":   framed("10.2.0.0/16 2001:db8:3::/48"),
+		}},
 	} {
 		snap, err := NewSnapshot([]*Registry{reg}, SnapshotOptions{RFC: true, Expander: c.lim})
 		if err != nil {
@@ -431,7 +479,12 @@ func TestRFCModeLimits(t *testing.T) {
 				_, err = engineMembers(t, &e, name)
 			}
 			var big *resolve.SetTooLargeError
-			if !errors.As(err, &big) || "F "+big.Error()+"\n" != want {
+			switch {
+			case !strings.HasPrefix(want, "F "):
+				if err != nil {
+					t.Errorf("%+v %s: the engine refuses it: %v", c.lim, send, err)
+				}
+			case !errors.As(err, &big) || "F "+big.Error()+"\n" != want:
 				t.Errorf("%+v %s: the engine's error is %v", c.lim, send, err)
 			}
 		}
