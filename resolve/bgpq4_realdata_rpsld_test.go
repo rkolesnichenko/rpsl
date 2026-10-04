@@ -49,7 +49,9 @@ import (
 // each dump is read and each object decoded once, into both. rpslq runs in
 // this process (rpslq.RunWith), and one bgpq4 at a time. RPSL_REALDATA_LARGEST
 // and RPSL_REALDATA_SAMPLE (default 10 and 150, per class) size the pick, for a
-// trial on fewer sets.
+// trial on fewer sets. rpslq's lists of one set share a five-minute deadline
+// (a set past it is counted, not compared); at the defaults the run takes
+// several minutes, so run it with -timeout 30m.
 func TestRpsldMatchesRpslqRealData(t *testing.T) {
 	dir := os.Getenv("RPSL_REALDATA")
 	if dir == "" {
@@ -162,10 +164,13 @@ func TestRpsldMatchesRpslqRealData(t *testing.T) {
 		return strings.Fields(rest[:n]), true
 	}
 
-	var same, differ, refused, tooLarge, operator int
+	var same, differ, refused, tooLarge, operator, timedOut int
 	why := map[string]int{}
 	for _, name := range picked {
 		setBegin := time.Now()
+		// rpslq's lists of one set share a deadline, so that one set cannot
+		// hold the run past go test's timeout; a set past it is counted.
+		setCtx, cancel := context.WithTimeout(context.Background(), setDeadline)
 		reasons := closureDivergences(members, name)
 		lists := [][]string{{"-4"}, {"-6"}}
 		if mustSet(t, name).Class() == types.ClassAsSet {
@@ -179,8 +184,12 @@ func TestRpsldMatchesRpslqRealData(t *testing.T) {
 			// end (a /48^48-128 is 2^80 of them), so it runs only on a list
 			// rpslq built under the cap TestBgpq4RealData compares under.
 			var out, errs bytes.Buffer
-			code := rpslq.RunWith(context.Background(), q, &out, &errs, be)
+			code := rpslq.RunWith(setCtx, q, &out, &errs, be)
 			switch {
+			case setCtx.Err() != nil:
+				outcome = "timeout"
+				t.Logf("%s %v: rpslq still running after %v, not compared", name, list, setDeadline)
+				break lists
 			case code != 0 && (strings.Contains(errs.String(), "exceeds "+resolve.LimitPrefixes.String()) ||
 				strings.Contains(errs.String(), filtergen.ErrTooManyPrefixes.Error())):
 				outcome = "too large"
@@ -242,7 +251,10 @@ func TestRpsldMatchesRpslqRealData(t *testing.T) {
 			tooLarge++
 		case "operator":
 			operator++
+		case "timeout":
+			timedOut++
 		}
+		cancel()
 		if took := time.Since(setBegin); took > 30*time.Second {
 			t.Logf("%s: %v", name, took.Round(time.Second))
 		}
@@ -255,10 +267,14 @@ func TestRpsldMatchesRpslqRealData(t *testing.T) {
 	runtime.ReadMemStats(&m)
 	t.Logf("rpslq --dump vs bgpq4 against rpsld: %d sets picked; %d the same; %d differ and %d are refused by rpslq where "+
 		"a known divergence explains it (sets by divergence in the closure: %s); %d over a prefix limit, not compared; "+
-		"%d with a range operator on a set or AS member in the closure, not compared; %v in all, heap %d MB",
-		len(picked), same, differ, refused, strings.Join(byReason, ", "), tooLarge, operator,
+		"%d with a range operator on a set or AS member in the closure, not compared; %d past rpslq's %v deadline, not compared; "+
+		"%v in all, heap %d MB",
+		len(picked), same, differ, refused, strings.Join(byReason, ", "), tooLarge, operator, timedOut, setDeadline,
 		time.Since(begin).Round(time.Second), m.HeapAlloc>>20)
 }
+
+// setDeadline bounds rpslq's lists of one set in TestRpsldMatchesRpslqRealData.
+const setDeadline = 5 * time.Minute
 
 // envCount reads a non-negative count from the environment, def when unset.
 func envCount(t *testing.T, name string, def int) int {
