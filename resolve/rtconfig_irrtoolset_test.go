@@ -430,7 +430,9 @@ func TestRtconfigMatches(t *testing.T) {
 		g.v4only = true
 		export := r.IntN(2) == 0
 		pol := rtconfigPolicy(r, g, export)
-		texts := append(m.texts(r), pol)
+		// One object per primary key for both servers, as for peval's
+		// differential (lastOfEach).
+		texts := lastOfEach(append(m.texts(r), pol))
 		addr := irrtest.New(texts...).WithSources("RIPE", "RADB").WithLegacyClasses().IRRd(t)
 		// rpsld over the same objects, which answers "!man" always: rtconfig
 		// must write against it what it writes against irrtest.

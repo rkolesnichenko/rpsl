@@ -53,7 +53,10 @@ func TestPevalMatchesIRRToolSet(t *testing.T) {
 		m := randomModel(r, true)
 		g := newFilterGen(r, newOracle(m))
 		g.v4only = true
-		texts := m.texts(r)
+		// The IRR a registry could hold — one object per primary key — for
+		// both servers: irrtest keeps every copy, rpsld the last
+		// (lastOfEach), and the model can draw a key twice.
+		texts := lastOfEach(m.texts(r))
 		db := irrtest.New(texts...).WithSources("RIPE", "RADB")
 		addr := db.IRRd(t)
 		// rpsld over the same objects: peval must write against it what it
