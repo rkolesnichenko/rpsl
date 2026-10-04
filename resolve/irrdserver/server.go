@@ -44,9 +44,11 @@ type Limits struct {
 	MaxLine int
 	// MaxReply is the bytes in one answer; a longer one is answered
 	// "F Answer larger than …" instead. The session stops building an
-	// answer as soon as it passes MaxReply (irrdq.Session.SetMaxReply), so
-	// a far larger one costs a connection about MaxReply bytes of memory,
-	// not its own size. 256 MiB.
+	// answer's text as soon as it passes MaxReply
+	// (irrdq.Session.SetMaxReply), so a far larger one's text is never
+	// built; the list some answers are made from (a set's members or
+	// expansion, an AS's prefixes, an inverse search's objects) is gathered
+	// whole first, bounded by the registry rather than by MaxReply. 256 MiB.
 	MaxReply int64
 	// QueryTime is one command's evaluation; a command still evaluating
 	// after it is answered "F Query took longer than …". 60s.

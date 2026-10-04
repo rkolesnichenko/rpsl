@@ -9,6 +9,14 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Fixed
+
+- Docs: `-max-reply` (`Session.SetMaxReply`, `Limits.MaxReply`) bounds an answer's text, not
+  the list some answers are made from — the members or expansion of `!i`, `!i…,1` and `!a`, the
+  prefixes of `!g` and `!6`, the objects an `-i` search finds — which is gathered whole, bounded
+  by the registry. docs/rpsld.md, both godocs, design §8.13 and the server spec said the whole
+  answer was bounded.
+
 ## [0.24.0] - 2026-10-04
 
 ### Added
