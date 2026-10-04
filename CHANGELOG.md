@@ -11,6 +11,10 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ### Fixed
 
+- `resolve/irrdserver` (`rpsld`): connections refused past `MaxConns` no longer log one line
+  each, so a flood of them does not flood the log: the first after a quiet spell is logged with
+  its address, the rest as one count every 10 s while they keep coming, and `Shutdown` logs what
+  is still counted and nothing after.
 - Docs: `-max-reply` (`Session.SetMaxReply`, `Limits.MaxReply`) bounds an answer's text, not
   the list some answers are made from — the members or expansion of `!i`, `!i…,1` and `!a`, the
   prefixes of `!g` and `!6`, the objects an `-i` search finds — which is gathered whole, bounded

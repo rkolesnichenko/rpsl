@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -303,6 +304,95 @@ func TestMaxConns(t *testing.T) {
 	}
 	if got != "C\n" {
 		t.Errorf("after one closed: %q", got)
+	}
+}
+
+// A flood of connections refused past MaxConns is not a flood of log lines:
+// the first after a quiet spell is logged with its address, the rest as a
+// count once per period, and Shutdown logs what is still counted.
+func TestRefusedLogged(t *testing.T) {
+	const period = 500 * time.Millisecond
+	var logs syncBuffer
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &irrdserver.Server{Snapshot: fixed(t), Limits: irrdserver.Limits{MaxConns: 1}, Log: slog.New(slog.NewTextHandler(&logs, nil))}
+	irrdserver.SetRefusedLogEvery(s, period)
+	done := make(chan error, 1)
+	go func() { done <- s.Serve(ln) }()
+	addr := ln.Addr().String()
+	held, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	io.WriteString(held, "!!\n!n x\n")
+	held.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if l, err := bufio.NewReader(held).ReadString('\n'); l != "C\n" {
+		t.Fatalf("held connection: %q, %v", l, err)
+	}
+	// refused counts the lines naming an address and the refusals counted.
+	count := regexp.MustCompile(` count=(\d+) `)
+	refused := func() (addressed, counted int) {
+		for _, l := range strings.Split(logs.String(), "\n") {
+			if !strings.Contains(l, `msg="refused: too many connections"`) {
+				continue
+			}
+			if strings.Contains(l, " remote=") {
+				addressed++
+			}
+			if m := count.FindStringSubmatch(l); m != nil {
+				n, _ := strconv.Atoi(m[1])
+				counted += n
+			}
+		}
+		return
+	}
+	burst := func(n int) {
+		for range n {
+			if got := mustTalk(t, addr, "!v\n"); got != "" {
+				t.Fatalf("a connection over MaxConns was answered: %q", got)
+			}
+		}
+	}
+
+	burst(5)
+	// The first is logged at once; the rest are counted (and may already
+	// be logged, on a machine slow enough that the burst outlasts a period).
+	if a, c := refused(); a != 1 || c > 4 {
+		t.Fatalf("at once: %d lines with an address, %d counted; want 1, at most 4\n%s", a, c, logs.String())
+	}
+	// The other four are logged as a count when the period ends; a period
+	// with refusals starts another, so however slow the burst there is
+	// still one line with an address.
+	for i := 0; i < 100; i++ {
+		if _, c := refused(); c == 4 {
+			break
+		}
+		time.Sleep(period / 10)
+	}
+	if a, c := refused(); a != 1 || c != 4 {
+		t.Fatalf("after the period: %d lines with an address, %d counted; want 1, 4\n%s", a, c, logs.String())
+	}
+	// After a quiet period the next refusal is logged at once again; what is
+	// counted when Shutdown begins is logged by Shutdown.
+	time.Sleep(3 * period)
+	burst(3)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	held.Close()
+	if err := s.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if a, c := refused(); a != 2 || c != 6 {
+		t.Fatalf("at Shutdown: %d lines with an address, %d counted; want 2, 6\n%s", a, c, logs.String())
+	}
+	before := logs.String()
+	time.Sleep(2 * period)
+	if after := logs.String(); after != before {
+		t.Errorf("logged after Shutdown:\n%s", strings.TrimPrefix(after, before))
 	}
 }
 
