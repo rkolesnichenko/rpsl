@@ -2,8 +2,8 @@
 // (resolve/testdata/irrd): the cases, their recorded answers (goldens), and
 // how to compare another server's answer with one. TestRecord re-records the
 // goldens from IRRd in Docker when RPSL_IRRD_DOCKER=1; every other test reads
-// them, so CI holds irrtest (Task 3) and irrdq (Tasks 4-7) to IRRd without
-// running it.
+// them, so CI holds irrtest (the library's in-process IRRd) and irrdq (the
+// server rpsld runs) to IRRd without running it.
 //
 // It is a test helper: only _test.go files import it, and it imports neither
 // irrdq nor irrtest, so it can judge both.

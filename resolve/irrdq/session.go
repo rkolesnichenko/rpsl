@@ -200,7 +200,8 @@ func suffix(v string) string {
 	return " " + v
 }
 
-// commands are the query commands Tasks 5-7 add: '!' + letter -> handler.
+// commands are the query commands each file registers in its init: '!' +
+// letter -> handler.
 var commands = map[rune]func(ctx context.Context, s *Session, snap *Snapshot, arg string) Reply{}
 
 // selectSources answers "!s": "-lc" lists the selection, "-*" is accepted
