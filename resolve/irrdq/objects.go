@@ -93,20 +93,6 @@ func (snap *Snapshot) addText(a *answer, e entry) bool {
 	return true
 }
 
-// addTexts adds each entry's text to a, separated by blank lines, as IRRd
-// joins objects; refused is textNotKept when one has none.
-func (snap *Snapshot) addTexts(a *answer, es []entry) (refused string) {
-	for i, e := range es {
-		if i > 0 {
-			a.add("\n")
-		}
-		if !snap.addText(a, e) {
-			return textNotKept
-		}
-	}
-	return ""
-}
-
 // objectEntry is the entry for o, an object r keeps whole: a route claimant
 // becomes a route entry, so that it is served (and hidden) as routes are.
 func objectEntry(r *Registry, o object.Object) entry {
