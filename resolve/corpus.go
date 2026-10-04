@@ -48,8 +48,9 @@ type Corpus struct {
 	// KeepRouteText keeps each route and route6 that claims nothing as its
 	// text too, beside its prefix, origin and source, so that Routes yields
 	// it — what an IRRd-compatible server (resolve/irrdq) needs to answer
-	// "!m route", "!r …,o" and whois "-i origin". Set it before the first
-	// Put. Without it such a route's text is gone once Put returns.
+	// "!m route", "!r" for route objects (not "!r …,o", which lists origins)
+	// and whois "-i origin". Set it before the first Put. Without it such a
+	// route's text is gone once Put returns.
 	KeepRouteText bool
 
 	whole     map[wholeKey]held
