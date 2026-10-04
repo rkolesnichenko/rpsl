@@ -1117,7 +1117,7 @@ func (db *DB) inverseSearch(sel, classes []string, attr, value string) []entry {
 
 // keyFields is e as IRRd's -K writes it: its primary key attributes (a
 // route's prefix and origin, a person's or role's nic-hdl) and each of its
-// members: and mp-members: items once, as IRRd parsed them.
+// members: and mp-members: items, as IRRd parsed them.
 func keyFields(e entry) string {
 	var b strings.Builder
 	switch e.class {
@@ -1137,15 +1137,23 @@ func keyFields(e entry) string {
 	case "person", "role":
 		fmt.Fprintf(&b, "nic-hdl: %s\n", e.pk)
 	default:
-		fmt.Fprintf(&b, "%s: %s\n", e.class, strings.TrimSpace(e.obj.Key()))
+		// IRRd writes parsed_data, which holds a set name, an inet-rtr's DNS
+		// name and an AS number upper-case (their fields' keep_case is
+		// False), a set name's AS components and an AS number canonical.
+		key := strings.ToUpper(strings.TrimSpace(e.obj.Key()))
+		if n, err := types.ParseSetName(key); err == nil {
+			key = n.String()
+		} else if as, err := types.ParseASN(key); err == nil && e.class == "aut-num" {
+			key = as.String()
+		}
+		fmt.Fprintf(&b, "%s: %s\n", e.class, key)
 	}
 	for _, name := range []string{"members", "mp-members"} {
-		var seen []string
+		// Every item, a repeated one too: IRRd's parsed_data keeps each
+		// (IRRd 4.5.3's parser, asked directly: "members: AS1, as1" is
+		// ['AS1', 'AS1']).
 		for _, it := range items(e.obj, name) {
-			if m := normalizeMember(e.class, it); !contains(seen, m) {
-				seen = append(seen, m)
-				fmt.Fprintf(&b, "%s: %s\n", name, m)
-			}
+			fmt.Fprintf(&b, "%s: %s\n", name, normalizeMember(e.class, it))
 		}
 	}
 	return b.String()
