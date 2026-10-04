@@ -3,7 +3,7 @@ module github.com/rkolesnichenko/rpsl
 go 1.23
 
 require (
-	github.com/rkolesnichenko/rpsl/ast v0.23.0
-	github.com/rkolesnichenko/rpsl/lexer v0.23.0
-	github.com/rkolesnichenko/rpsl/types v0.23.0
+	github.com/rkolesnichenko/rpsl/ast v0.24.0
+	github.com/rkolesnichenko/rpsl/lexer v0.24.0
+	github.com/rkolesnichenko/rpsl/types v0.24.0
 )
