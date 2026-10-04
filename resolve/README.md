@@ -370,6 +370,54 @@ are compared by identity only, so a finding over one is conditional
 is `Undecided`. [`docs/rpslcheck.md`](../docs/rpslcheck.md) is the operator's
 page for the `rpslcheck` command built on this package.
 
+## An IRRd-compatible server (`irrdq`, `irrdserver`)
+
+`resolve/irrdq` answers IRRd's query protocol, and RIPE-style whois queries,
+over registries held in memory; `resolve/irrdserver` serves it on a port, with
+explicit limits. A registry is one source's data, built from a `Corpus`; a
+snapshot is the registries in precedence order, immutable; a session reads the
+current snapshot once per command.
+
+```go
+c := &resolve.Corpus{KeepPolicy: true}
+for _, text := range []string{
+	"as-set: AS-X\nmembers: AS1, AS-Y\nsource: RIPE\n",
+	"as-set: AS-Y\nmembers: AS2\nsource: RIPE\n",
+	"route: 192.0.2.0/24\norigin: AS2\nsource: RIPE\n",
+} {
+	o, _ := rpsl.ParseObject(text)
+	obj, _ := rpsl.Decode(o)
+	c.Put(obj)
+}
+reg, _ := irrdq.NewRegistry("RIPE", 1, c)
+snap, _ := irrdq.NewSnapshot([]*irrdq.Registry{reg}, irrdq.SnapshotOptions{})
+s := irrdq.NewSession(func() *irrdq.Snapshot { return snap })
+for _, cmd := range []string{"!!", "!iAS-X,1", "!aAS-X", "!j-*"} {
+	r, _ := s.Do(context.Background(), cmd)
+	r.WriteTo(os.Stdout)
+}
+// Output:
+// A8
+// AS1 AS2
+// C
+// A13
+// 192.0.2.0/24
+// C
+// A11
+// RIPE:N:0-1
+// C
+```
+
+This is the runnable `Example` test ([`irrdq/example_test.go`](irrdq/example_test.go)).
+
+The answers are IRRd 4.5.3's, including where IRRd and RFC 2622 differ — a
+member with a range operator is dropped from `!i…,1`, `AS-ANY` is a missing
+set — held to IRRd's own recorded answers; those semantics live in `irrdq`,
+never in the `Expander`. `SnapshotOptions.RFC` answers `!i…,1` and `!a` with
+the `Expander`'s RFC 2622 expansion instead, and changes no other command.
+[`docs/rpsld.md`](../docs/rpsld.md) is the page for `rpsld`, the mirror built
+on both packages.
+
 ## Concurrency
 
 `Expander.Concurrency` fetches a whole breadth-first level at once, which hides
