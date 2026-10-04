@@ -88,7 +88,10 @@ func askIRRdq(t testing.TB, snap *irrdq.Snapshot, send string) string {
 	s := irrdq.NewSession(func() *irrdq.Snapshot { return snap })
 	var b strings.Builder
 	lines := strings.Split(send, "\n")
-	for _, l := range lines[:len(lines)-1] {
+	if lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1] // a last line without its newline is a command too
+	}
+	for _, l := range lines {
 		r, err := s.Do(context.Background(), l)
 		if err != nil {
 			t.Fatalf("Do(%q): %v", l, err)
@@ -101,8 +104,8 @@ func askIRRdq(t testing.TB, snap *irrdq.Snapshot, send string) string {
 	return b.String()
 }
 
-// askTCP sends send on a fresh connection to addr and returns everything
-// read until the server closes it.
+// askTCP sends send on a fresh connection to addr (irrdoracle.Send) and
+// returns everything read until the server closes it.
 func askTCP(t testing.TB, addr, send string) string {
 	t.Helper()
 	c, err := net.DialTimeout("tcp", addr, 5*time.Second)
@@ -111,7 +114,7 @@ func askTCP(t testing.TB, addr, send string) string {
 	}
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(30 * time.Second))
-	if _, err := c.Write([]byte(send)); err != nil {
+	if err := irrdoracle.Send(c, send); err != nil {
 		t.Fatal(err)
 	}
 	var out []byte

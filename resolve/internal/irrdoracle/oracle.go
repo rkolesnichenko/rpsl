@@ -12,6 +12,8 @@ package irrdoracle
 import (
 	"bufio"
 	"fmt"
+	"io"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -49,6 +51,7 @@ func (k Kind) String() string {
 
 // Case is one exchange: what is sent on a fresh connection, under which
 // IRRd configuration ("plain" or "rpki"), and how its answer is compared.
+// It is sent with Send.
 type Case struct {
 	Name   string
 	Config string
@@ -141,6 +144,23 @@ func Write(path string, gs []Golden) error {
 		fmt.Fprintf(&b, "=== %s %s\n>>> %s\n<<< %s\n", g.Name, g.Kind, strconv.Quote(g.Send), strconv.Quote(g.Got))
 	}
 	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+// Send writes send to c, as a case is sent: a send that does not end in a
+// newline is followed by closing c's sending side, as `printf … | nc -N`
+// does, so the server reads its last line to the end of the input.
+func Send(c net.Conn, send string) error {
+	if _, err := io.WriteString(c, send); err != nil {
+		return err
+	}
+	if strings.HasSuffix(send, "\n") {
+		return nil
+	}
+	tc, ok := c.(interface{ CloseWrite() error })
+	if !ok {
+		return fmt.Errorf("irrdoracle: %T cannot close its sending side", c)
+	}
+	return tc.CloseWrite()
 }
 
 // Split cuts an answer stream into replies: an IRRd frame (A<len>, its
@@ -353,9 +373,11 @@ func objectsOf(text string) (form string, objs []string) {
 // stripped, continuation lines joined), every run of whitespace one space,
 // no space after a comma; list attributes item by item; a route's or
 // route6's key, and a route-set's prefix members, as netip prints them
-// (zero padding gone, a bare address given its host length). These are the
-// rewrites IRRd makes when it serves an object, so an object as loaded and
-// as IRRd serves it normalize alike.
+// (zero padding gone, a bare address given its host length); an AS number
+// among an as-set's or route-set's members upper-case ("as65003" is
+// "AS65003"; a set name there keeps its case). These are the rewrites IRRd
+// makes when it serves an object, so an object as loaded and as IRRd serves
+// it normalize alike.
 func Normalize(objText string) string {
 	o, _ := rpsl.ParseObject(objText)
 	if o == nil || len(o.Attributes()) == 0 {
@@ -371,7 +393,7 @@ func Normalize(objText string) string {
 			if i == 0 && (class == "route" || class == "route6") {
 				v = canonPrefix(v)
 			}
-			if class == "route-set" && (name == "members" || name == "mp-members") {
+			if (class == "as-set" || class == "route-set") && (name == "members" || name == "mp-members") {
 				v = canonMember(v)
 			}
 			items = append(items, v)
@@ -390,7 +412,9 @@ func canonPrefix(s string) string {
 
 func canonMember(s string) string {
 	base, op, hasOp := strings.Cut(s, "^")
-	if p, err := types.ParsePrefix(base); err == nil {
+	if len(base) > 2 && strings.EqualFold(base[:2], "AS") && isDigits(base[2:]) {
+		base = strings.ToUpper(base)
+	} else if p, err := types.ParsePrefix(base); err == nil {
 		base = p.String()
 	} else if a, err := types.ParseAddr(base); err == nil {
 		base = netip.PrefixFrom(a, a.BitLen()).String()

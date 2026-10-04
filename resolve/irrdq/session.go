@@ -92,10 +92,13 @@ func NewSession(snapshot func() *Snapshot) *Session { return &Session{snapshot: 
 func (s *Session) Timeout() time.Duration { return s.timeout }
 
 // SetMaxReply sets the session's byte budget: a reply longer than n bytes is
-// "F Answer larger than <n> bytes" instead, and an answer that can grow large
-// (route objects, a list of origins, prefixes or members, RIPE-style
-// objects) stops being built as soon as it passes n, so a far larger answer
-// costs no more memory than n. n <= 0 removes the budget (the default).
+// "F Answer larger than <n> bytes" instead, and the text of an answer that
+// can grow large (route objects, a list of origins, prefixes or members,
+// RIPE-style objects) stops being built as soon as it passes n, so a far
+// larger one's text is never built. What an answer is made from is not under
+// the budget: the members or prefixes of "!i", "!i…,1", "!a", "!g" and "!6",
+// and the objects an inverse search finds, are gathered whole first, bounded
+// by the registry rather than by n. n <= 0 removes the budget (the default).
 func (s *Session) SetMaxReply(n int64) { s.maxReply = max(n, 0) }
 
 // sources is the session's selected registry names.

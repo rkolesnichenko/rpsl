@@ -281,12 +281,15 @@ var ErrServerClosed error
   a truncated answer; over `MaxConns` a new connection is closed at once,
   unanswered. IRRd 4.5.3 queues a connection past its `max_connections` (10)
   and has no line limit (a 1 MB line was answered). The server hands
-  `MaxReply` to each session (`irrdq.Session.SetMaxReply`), and an answer
-  that grows with the data — route objects, lists of origins, prefixes or
-  members, RIPE-style objects and `-K` blocks — stops being built as soon as
-  it passes it, so a far larger answer costs a connection a small multiple
-  of `MaxReply`, not its own size; a route's text is held by reference and
-  copied once, into the reply.
+  `MaxReply` to each session (`irrdq.Session.SetMaxReply`), and the text of
+  an answer that grows with the data — route objects, lists of origins,
+  prefixes or members, RIPE-style objects and `-K` blocks — stops being
+  built as soon as it passes it, so a far larger answer's text costs a
+  connection a small multiple of `MaxReply`, not its own size; a route's
+  text is held by reference and copied once, into the reply. The list some
+  answers are made from — a set's members or expansion (`!i`, `!i…,1`,
+  `!a`), an AS's prefixes (`!g`, `!6`), an inverse search's objects — is
+  gathered whole first, bounded by the registry rather than by `MaxReply`.
 - **Writing.** An answer is written in 64 KiB pieces, each with its own write
   deadline of one idle timeout, so the timeout bounds how long the client
   takes to read a piece, not the whole answer. A client that reads just fast
@@ -388,7 +391,7 @@ SPEC  dump:FILE[,FILE…]          dump files (gzip or plain), re-read when they
   (`resolve/testdata/irrd`: RIPE and RADB, a set for each corner case, ROAs),
   recorded once: IRRd 4.5.3 in Docker (PostgreSQL and Redis, objects loaded
   with `irrd_load_database`), pinned by version in the Dockerfile and named
-  in the test, answers 247 exchanges in plain and RPKI-aware mode, checked
+  in the test, answers 274 exchanges in plain and RPKI-aware mode, checked
   in as `golden/plain.txt` and `golden/rpki.txt`. `RPSL_IRRD_DOCKER=1 go test
   -run TestRecord ./internal/irrdoracle` re-records them (a case is asked
   until two answers agree, since IRRd now and then answers a fresh

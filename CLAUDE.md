@@ -228,9 +228,11 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
     tests for the limits) and listed in `resolve/testdata/rpsld/divergences.md`;
     `TestDivergencesDocumented` checks both directions.
   - A failed sync or reload keeps the registry's previous data and `!j` serial. The line,
-    answer and query-time limits are each an `F` line, never a cut-short answer; an answer that
-    grows with the data is built under the session's budget (`SetMaxReply`) and stops as soon as
-    it passes it, never built whole and then measured; past `MaxConns`
+    answer and query-time limits are each an `F` line, never a cut-short answer; an answer's text
+    that grows with the data is built under the session's budget (`SetMaxReply`) and stops as soon
+    as it passes it, never built whole and then measured (the list it is made from — an
+    expansion, an AS's prefixes, an inverse search's objects — is gathered whole, bounded by the
+    registry, and the docs say so); past `MaxConns`
     or the idle timeout the connection is closed. A slow reader can hold a connection one idle
     timeout per 64 KiB written, bounded only by `MaxConns`.
 

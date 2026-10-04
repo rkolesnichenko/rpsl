@@ -19,10 +19,13 @@ package irrtest
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -490,10 +493,15 @@ func (db *DB) Members(sel []string, name string) (members []string, ok bool) {
 
 // normalizeMember returns a member of a set of class as IRRd parses it: an AS
 // number in its plain form ("as65002^24" is "AS65002^24"), a set name
-// upper-cased, a prefix as netip prints it (in a route-set an address without
-// a length gets its host length), anything else as written. A range operator
-// is kept as written.
+// upper-cased in an as-set and as written in a route-set (recorded: RS-LOWER
+// lists "rs-inner, as-Bar"), a prefix as netip prints it (in a route-set an
+// address without a length gets its host length), anything else as written.
+// A range operator is kept as written. An rtr-set's members, router names and
+// addresses, are upper-cased as written (recorded: -K -T rtr-set RTRS-FOO).
 func normalizeMember(class, item string) string {
+	if class == "rtr-set" {
+		return strings.ToUpper(strings.TrimSpace(item))
+	}
 	base, op, hasOp := strings.Cut(item, "^")
 	suffix := ""
 	if hasOp {
@@ -503,6 +511,9 @@ func normalizeMember(class, item string) string {
 		return as.String() + suffix
 	}
 	if _, err := types.ParseSetName(base); err == nil {
+		if class == "route-set" {
+			return base + suffix
+		}
 		return strings.ToUpper(base) + suffix
 	}
 	if class == "route-set" {
@@ -680,8 +691,10 @@ func (db *DB) irrdConn(c net.Conn) {
 	persistent := false
 	var sel []string
 	for {
+		// A last line cut off by the end of the input is a command too, as
+		// IRRd reads it (recorded: eof/*).
 		line, err := br.ReadString('\n')
-		if err != nil {
+		if err != nil && (line == "" || !errors.Is(err, io.EOF)) {
 			return
 		}
 		cmd := strings.TrimSpace(line) // IRRd strips each line; a blank one is no query
@@ -1108,7 +1121,22 @@ func (db *DB) textSearch(sel, classes []string, value string) []entry {
 func (db *DB) inverseSearch(sel, classes []string, attr, value string) []entry {
 	var out []entry
 	for _, e := range db.objs {
-		if db.wanted(e, sel, classes) && containsFold(items(e.obj, attr), value) {
+		if !db.wanted(e, sel, classes) {
+			continue
+		}
+		its := items(e.obj, attr)
+		match := containsFold(its, value)
+		if (e.class == "as-set" || e.class == "route-set" || e.class == "rtr-set") && (attr == "members" || attr == "mp-members") {
+			// IRRd upper-cases the value searched for and compares it with
+			// each member as its parser stored it, so a route-set's set
+			// name spelled otherwise, stored as written, is never found
+			// (recorded: "-i members as-bar" finds AS-LOWER, not RS-LOWER's
+			// "as-Bar"), nor an IPv6 prefix with a letter, stored
+			// lower-case ("-i mp-members 2001:db8:1::/48").
+			want := strings.ToUpper(strings.TrimSpace(value))
+			match = slices.ContainsFunc(its, func(it string) bool { return normalizeMember(e.class, it) == want })
+		}
+		if match {
 			out = append(out, e)
 		}
 	}

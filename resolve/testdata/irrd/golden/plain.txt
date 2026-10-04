@@ -3,7 +3,7 @@
 <<< "A22\nIRRd -- version 4.5.3\nC\n"
 === session/pipeline words
 >>> "!!\n!v\n!gAS65001\n!6AS65001\n!iAS-FOO\n!q\n"
-<<< "A22\nIRRd -- version 4.5.3\nC\nA26\n192.0.2.0/24 192.0.2.0/25\nC\nA14\n2001:db8::/32\nC\nA50\nAS-ANY AS-BAR AS-MISSING AS65001 AS65002 RS-INNER\nC\n"
+<<< "A22\nIRRd -- version 4.5.3\nC\nA26\n192.0.2.0/25 192.0.2.0/24\nC\nA14\n2001:db8::/32\nC\nA50\nAS-ANY AS-BAR AS-MISSING AS65001 AS65002 RS-INNER\nC\n"
 === session/not-persistent exact
 >>> "!v\n!gAS65001\n"
 <<< "A22\nIRRd -- version 4.5.3\nC\n"
@@ -223,6 +223,18 @@
 === i1/RS-NOLEN exact
 >>> "!iRS-NOLEN,1\n"
 <<< "A36\n206.197.238.0/32 206.197.238.0/32^+\nC\n"
+=== i/RS-LOWER exact
+>>> "!iRS-LOWER\n"
+<<< "A65\n192.0.2.0/24 2001:db8:1::/48 AS65003 Rs-Inner^25 as-Bar rs-inner\nC\n"
+=== i1/RS-LOWER exact
+>>> "!iRS-LOWER,1\n"
+<<< "A139\n192.0.2.0/24 192.0.2.0/25 192.0.2.128/25 198.18.0.0/15^16-24 198.51.100.0/24 2001:db8:1::/48 2001:db8::/32 203.0.113.0/24 203.0.113.128/25\nC\n"
+=== i/AS-LOWER exact
+>>> "!iAS-LOWER\n"
+<<< "A15\nAS-BAR AS65003\nC\n"
+=== i1/AS-LOWER exact
+>>> "!iAS-LOWER,1\n"
+<<< "A24\nAS65001 AS65002 AS65003\nC\n"
 === i/empty exact
 >>> "!i\n"
 <<< "F Missing parameter for i query\n"
@@ -234,16 +246,16 @@
 <<< "D\n"
 === a/aAS-FOO words
 >>> "!aAS-FOO\n"
-<<< "A104\n192.0.2.0/24 203.0.113.0/24 2001:db8::/32 203.0.113.128/25 192.0.2.0/25 2001:db8:1::/48 198.51.100.0/24\nC\n"
+<<< "A104\n2001:db8:1::/48 192.0.2.0/25 198.51.100.0/24 203.0.113.128/25 192.0.2.0/24 2001:db8::/32 203.0.113.0/24\nC\n"
 === a/a4AS-FOO words
 >>> "!a4AS-FOO\n"
-<<< "A74\n192.0.2.0/24 203.0.113.0/24 203.0.113.128/25 192.0.2.0/25 198.51.100.0/24\nC\n"
+<<< "A74\n192.0.2.0/25 198.51.100.0/24 203.0.113.128/25 192.0.2.0/24 203.0.113.0/24\nC\n"
 === a/a6AS-FOO words
 >>> "!a6AS-FOO\n"
-<<< "A30\n2001:db8:1::/48 2001:db8::/32\nC\n"
+<<< "A30\n2001:db8::/32 2001:db8:1::/48\nC\n"
 === a/aAS-BAR words
 >>> "!aAS-BAR\n"
-<<< "A104\n192.0.2.0/24 203.0.113.0/24 2001:db8::/32 203.0.113.128/25 192.0.2.0/25 2001:db8:1::/48 198.51.100.0/24\nC\n"
+<<< "A104\n2001:db8:1::/48 192.0.2.0/25 198.51.100.0/24 203.0.113.128/25 192.0.2.0/24 2001:db8::/32 203.0.113.0/24\nC\n"
 === a/aRS-FOO words
 >>> "!aRS-FOO\n"
 <<< "D\n"
@@ -258,7 +270,7 @@
 <<< "D\n"
 === a/aAS-RADBONLY words
 >>> "!aAS-RADBONLY\n"
-<<< "A134\n192.0.2.0/24 203.0.113.0/24 100.64.0.0/24 2001:db8::/32 203.0.113.128/25 192.0.2.0/25 2001:db8:1::/48 2001:db8:5::/48 198.51.100.0/24\nC\n"
+<<< "A134\n2001:db8:1::/48 192.0.2.0/25 198.51.100.0/24 203.0.113.128/25 100.64.0.0/24 192.0.2.0/24 2001:db8::/32 2001:db8:5::/48 203.0.113.0/24\nC\n"
 === a/aAS-ANY words
 >>> "!aAS-ANY\n"
 <<< "D\n"
@@ -273,13 +285,19 @@
 <<< "F Missing required set name for A query\n"
 === a/aas-foo words
 >>> "!aas-foo\n"
-<<< "A104\n192.0.2.0/24 203.0.113.0/24 2001:db8::/32 203.0.113.128/25 2001:db8:1::/48 198.51.100.0/24 192.0.2.0/25\nC\n"
+<<< "A104\n2001:db8:1::/48 192.0.2.0/25 198.51.100.0/24 203.0.113.128/25 192.0.2.0/24 2001:db8::/32 203.0.113.0/24\nC\n"
 === a/aAS-REF words
 >>> "!aAS-REF\n"
-<<< "A40\n2001:db8::/32 192.0.2.0/24 192.0.2.0/25\nC\n"
+<<< "A40\n2001:db8::/32 192.0.2.0/25 192.0.2.0/24\nC\n"
+=== a/aRS-LOWER words
+>>> "!aRS-LOWER\n"
+<<< "D\n"
+=== a/aAS-LOWER words
+>>> "!aAS-LOWER\n"
+<<< "A104\n2001:db8:1::/48 192.0.2.0/25 198.51.100.0/24 203.0.113.128/25 192.0.2.0/24 2001:db8::/32 203.0.113.0/24\nC\n"
 === g/gAS65001 words
 >>> "!gAS65001\n"
-<<< "A26\n192.0.2.0/24 192.0.2.0/25\nC\n"
+<<< "A26\n192.0.2.0/25 192.0.2.0/24\nC\n"
 === g/gAS65002 words
 >>> "!gAS65002\n"
 <<< "A16\n198.51.100.0/24\nC\n"
@@ -294,7 +312,7 @@
 <<< "D\n"
 === g/gas65001 words
 >>> "!gas65001\n"
-<<< "A26\n192.0.2.0/24 192.0.2.0/25\nC\n"
+<<< "A26\n192.0.2.0/25 192.0.2.0/24\nC\n"
 === g/g65001 words
 >>> "!g65001\n"
 <<< "F Invalid AS number 65001: must start with \"AS\"\n"
@@ -558,7 +576,7 @@
 <<< "%% ERROR: One or more selected sources are unavailable.\n\n\n"
 === ripe/-i foo bar words
 >>> "-i foo bar\n"
-<<< "%% ERROR: Inverse attribute search not supported for foo,only supported for attributes: role, mnt-by, person, origin, members, zone-c, mp-members, mbrs-by-ref, member-of, admin-c, tech-c\n\n\n"
+<<< "%% ERROR: Inverse attribute search not supported for foo,only supported for attributes: zone-c, member-of, mbrs-by-ref, tech-c, admin-c, origin, person, mp-members, mnt-by, role, members\n\n\n"
 === ripe/-i origin objects
 >>> "-i origin\n"
 <<< "%% ERROR: Missing argument for flag/search: i\n\n\n"
@@ -622,6 +640,57 @@
 === ripe/-s RADB AS-NORM objects
 >>> "-s RADB AS-NORM\n"
 <<< "as-set:         AS-NORM\ndescr:          continuation probe\nmembers:        AS65001 # comment\n                AS65002\n+               AS65003,\n\t               AS65004\nmembers:        AS65005,AS65006\nremarks:        tab\tinside\nmnt-by:         MNT-A\nsource:         RADB\n\n\n"
+=== ripe/-K -T route-set RS-LOWER objects
+>>> "-K -T route-set RS-LOWER\n"
+<<< "route-set: RS-LOWER\nmembers: rs-inner\nmembers: as-Bar\nmembers: 192.0.2.0/24\nmembers: AS65003\nmembers: Rs-Inner^25\nmp-members: 2001:db8:1::/48\n\n\n"
+=== ripe/-K -T as-set AS-LOWER objects
+>>> "-K -T as-set AS-LOWER\n"
+<<< "as-set: AS-LOWER\nmembers: AS-BAR\nmembers: AS65003\n\n\n"
+=== ripe/-i members rs-inner objects
+>>> "-i members rs-inner\n"
+<<< "as-set:         AS-FOO\ndescr:          the main as-set\nmembers:        AS65001,AS65002,AS-BAR\nmembers:        RS-INNER,AS-ANY,AS-MISSING\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\n\n"
+=== ripe/-i members RS-INNER objects
+>>> "-i members RS-INNER\n"
+<<< "as-set:         AS-FOO\ndescr:          the main as-set\nmembers:        AS65001,AS65002,AS-BAR\nmembers:        RS-INNER,AS-ANY,AS-MISSING\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\n\n"
+=== ripe/-i members as-bar objects
+>>> "-i members as-bar\n"
+<<< "as-set:         AS-FOO\ndescr:          the main as-set\nmembers:        AS65001,AS65002,AS-BAR\nmembers:        RS-INNER,AS-ANY,AS-MISSING\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\nas-set:         AS-LOWER\ndescr:          case probe: set names in members: spelled in lower case\nmembers:        as-bar,AS65003\nmnt-by:         MNT-A\nsource:         RADB\n\nroute-set:      RS-FOO\nmembers:        192.0.2.0/24,198.51.100.0/24^+,203.0.113.1/32\nmembers:        RS-INNER^25,AS65001,AS-BAR,AS65002^24\nmp-members:     2001:db8::/32,2001:db8:ff::/48^-\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\n\n"
+=== ripe/-i members AS-BAR objects
+>>> "-i members AS-BAR\n"
+<<< "as-set:         AS-FOO\ndescr:          the main as-set\nmembers:        AS65001,AS65002,AS-BAR\nmembers:        RS-INNER,AS-ANY,AS-MISSING\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\nas-set:         AS-LOWER\ndescr:          case probe: set names in members: spelled in lower case\nmembers:        as-bar,AS65003\nmnt-by:         MNT-A\nsource:         RADB\n\nroute-set:      RS-FOO\nmembers:        192.0.2.0/24,198.51.100.0/24^+,203.0.113.1/32\nmembers:        RS-INNER^25,AS65001,AS-BAR,AS65002^24\nmp-members:     2001:db8::/32,2001:db8:ff::/48^-\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\n\n"
+=== ripe/-T route-set RS-LOWER objects
+>>> "-T route-set RS-LOWER\n"
+<<< "route-set:      RS-LOWER\ndescr:          case probe: set names in members: spelled in lower case\nmembers:        rs-inner,as-Bar,192.0.2.0/24,AS65003,Rs-Inner^25\nmp-members:     2001:db8:1::/48\nmnt-by:         MNT-A\nsource:         RADB\n\n\n"
+=== ripe/-i mp-members 2001:db8:1::/48 objects
+>>> "-i mp-members 2001:db8:1::/48\n"
+<<< "%  No entries found for the selected source(s).\n\n\n"
+=== ripe/-i mp-members 2001:DB8:1::/48 objects
+>>> "-i mp-members 2001:DB8:1::/48\n"
+<<< "%  No entries found for the selected source(s).\n\n\n"
+=== ripe/-i mp-members 2001:db8::/32 objects
+>>> "-i mp-members 2001:db8::/32\n"
+<<< "%  No entries found for the selected source(s).\n\n\n"
+=== ripe/-i members 192.0.2.0/24 objects
+>>> "-i members 192.0.2.0/24\n"
+<<< "route-set:      RS-FOO\nmembers:        192.0.2.0/24,198.51.100.0/24^+,203.0.113.1/32\nmembers:        RS-INNER^25,AS65001,AS-BAR,AS65002^24\nmp-members:     2001:db8::/32,2001:db8:ff::/48^-\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\nroute-set:      RS-LOWER\ndescr:          case probe: set names in members: spelled in lower case\nmembers:        rs-inner,as-Bar,192.0.2.0/24,AS65003,Rs-Inner^25\nmp-members:     2001:db8:1::/48\nmnt-by:         MNT-A\nsource:         RADB\n\n\n"
+=== ripe/-i members as65003 objects
+>>> "-i members as65003\n"
+<<< "as-set:         AS-BAR\nmembers:        AS65003,AS-FOO\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\nas-set:         AS-LOWER\ndescr:          case probe: set names in members: spelled in lower case\nmembers:        as-bar,AS65003\nmnt-by:         MNT-A\nsource:         RADB\n\nas-set:         AS-NORM\ndescr:          continuation probe\nmembers:        AS65001 # comment\n                AS65002\n+               AS65003,\n\t               AS65004\nmembers:        AS65005,AS65006\nremarks:        tab\tinside\nmnt-by:         MNT-A\nsource:         RADB\n\nroute-set:      RS-LOWER\ndescr:          case probe: set names in members: spelled in lower case\nmembers:        rs-inner,as-Bar,192.0.2.0/24,AS65003,Rs-Inner^25\nmp-members:     2001:db8:1::/48\nmnt-by:         MNT-A\nsource:         RADB\n\n\n"
+=== ripe/-i members 192.0.2.1 objects
+>>> "-i members 192.0.2.1\n"
+<<< "rtr-set:        RTRS-FOO\nmembers:        rtr1.example.net,192.0.2.1\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\n\n"
+=== ripe/-i members 192.0.2.1/32 objects
+>>> "-i members 192.0.2.1/32\n"
+<<< "%  No entries found for the selected source(s).\n\n\n"
+=== ripe/-i members rtr1.example.net objects
+>>> "-i members rtr1.example.net\n"
+<<< "rtr-set:        RTRS-FOO\nmembers:        rtr1.example.net,192.0.2.1\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\n\n"
+=== ripe/-i members RTR1.EXAMPLE.NET objects
+>>> "-i members RTR1.EXAMPLE.NET\n"
+<<< "rtr-set:        RTRS-FOO\nmembers:        rtr1.example.net,192.0.2.1\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\n\n"
+=== ripe/-K -T rtr-set RTRS-FOO objects
+>>> "-K -T rtr-set RTRS-FOO\n"
+<<< "rtr-set: RTRS-FOO\nmembers: RTR1.EXAMPLE.NET\nmembers: 192.0.2.1\n\n\n"
 === ripe/in-session objects
 >>> "!!\n-T as-set AS-FOO\n!v\n-i origin AS65003\nAS-NOSUCH\n!q\n"
 <<< "as-set:         AS-FOO\ndescr:          the main as-set\nmembers:        AS65001,AS65002,AS-BAR\nmembers:        RS-INNER,AS-ANY,AS-MISSING\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\nas-set:         AS-FOO\ndescr:          same name, other registry\nmembers:        AS65099\nmnt-by:         MNT-A\nsource:         RADB\n\n\nA22\nIRRd -- version 4.5.3\nC\nroute:          203.0.113.0/24\norigin:         AS65003\nmember-of:      RS-INNER\nmnt-by:         MNT-A\nsource:         RIPE\n\nroute:          203.0.113.128/25\norigin:         AS65003\nmember-of:      RS-INNER\nmnt-by:         MNT-B\nsource:         RIPE\n\n\n%  No entries found for the selected source(s).\n\n\n"
@@ -631,3 +700,15 @@
 === ripe/s-flag-sticks objects
 >>> "!!\n!sRADB\n-T as-set AS-FOO\n-s RIPE -T as-set AS-FOO\n!s-lc\n!q\n"
 <<< "C\nas-set:         AS-FOO\ndescr:          same name, other registry\nmembers:        AS65099\nmnt-by:         MNT-A\nsource:         RADB\n\n\nas-set:         AS-FOO\ndescr:          the main as-set\nmembers:        AS65001,AS65002,AS-BAR\nmembers:        RS-INNER,AS-ANY,AS-MISSING\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\n\nA5\nRIPE\nC\n"
+=== eof/v exact
+>>> "!v"
+<<< "A22\nIRRd -- version 4.5.3\nC\n"
+=== eof/session exact
+>>> "!!\n!v\n!v"
+<<< "A22\nIRRd -- version 4.5.3\nC\nA22\nIRRd -- version 4.5.3\nC\n"
+=== eof/g words
+>>> "!gAS65001"
+<<< "A26\n192.0.2.0/25 192.0.2.0/24\nC\n"
+=== eof/ripe objects
+>>> "-T as-set AS-FOO"
+<<< "as-set:         AS-FOO\ndescr:          the main as-set\nmembers:        AS65001,AS65002,AS-BAR\nmembers:        RS-INNER,AS-ANY,AS-MISSING\nadmin-c:        JD1-RIPE\ntech-c:         JD1-RIPE\nmnt-by:         MNT-A\nsource:         RIPE\n\nas-set:         AS-FOO\ndescr:          same name, other registry\nmembers:        AS65099\nmnt-by:         MNT-A\nsource:         RADB\n\n\n"

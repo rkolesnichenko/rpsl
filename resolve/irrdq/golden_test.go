@@ -18,7 +18,7 @@ import (
 
 // covered are the golden-case name prefixes irrdq answers so far; every
 // case under one must agree with IRRd, or be in diverges.
-var covered = []string{"session/", "i/", "i1/", "a/", "g/", "m/", "r/", "ripe/"}
+var covered = []string{"session/", "i/", "i1/", "a/", "g/", "m/", "r/", "ripe/", "eof/"}
 
 // framed is IRRd's frame of payload: "A<len>", the payload and its newline
 // (counted in len), then "C". Pinned answers are built with it, so a length
@@ -41,6 +41,8 @@ var diverges = map[string]string{
 	"session/crlf":             version,
 	"session/spaces-first":     version,
 	"session/blank-in-session": version,
+	"eof/v":                    version,
+	"eof/session":              version + version,
 	// A Words case (IRRd's "!g" order varies), pinned for its "!v".
 	"session/pipeline": version + framed("192.0.2.0/24 192.0.2.0/25") + framed("2001:db8::/32") +
 		framed("AS-ANY AS-BAR AS-MISSING AS65001 AS65002 RS-INNER"),
@@ -179,14 +181,18 @@ func fixture(t *testing.T, opts SnapshotOptions) *Snapshot {
 
 // replay plays send as a client on a fresh connection would: line by line
 // through one Session, each reply written in order, until a reply closes the
-// connection. A last fragment without a newline is never answered (IRRd waits
-// for its end).
+// connection. A last line without its newline is a command too: a case's
+// client closes its sending side after it (irrdoracle.Send), and IRRd, like
+// irrdserver, answers it.
 func replay(t *testing.T, snap *Snapshot, send string) string {
 	t.Helper()
 	s := NewSession(func() *Snapshot { return snap })
 	var out strings.Builder
 	lines := strings.Split(send, "\n")
-	for _, line := range lines[:len(lines)-1] {
+	if lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	for _, line := range lines {
 		r, err := s.Do(context.Background(), line)
 		if err != nil {
 			t.Fatalf("Do(%q): %v", line, err)

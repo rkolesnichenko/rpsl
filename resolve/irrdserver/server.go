@@ -32,7 +32,9 @@ import (
 // Limits bound what one client can take. A zero field is its default.
 type Limits struct {
 	// MaxConns is the connections served at once; one more is closed as
-	// soon as it is accepted, unanswered. 256.
+	// soon as it is accepted, unanswered. The first refused after a quiet
+	// spell is logged with its address, and those after it as a count every
+	// 10 s while they keep coming. 256.
 	MaxConns int
 	// IdleTimeout is how long the server waits for a command, or for the
 	// client to read a part of an answer; "!t" overrides it for the
@@ -44,9 +46,11 @@ type Limits struct {
 	MaxLine int
 	// MaxReply is the bytes in one answer; a longer one is answered
 	// "F Answer larger than …" instead. The session stops building an
-	// answer as soon as it passes MaxReply (irrdq.Session.SetMaxReply), so
-	// a far larger one costs a connection about MaxReply bytes of memory,
-	// not its own size. 256 MiB.
+	// answer's text as soon as it passes MaxReply
+	// (irrdq.Session.SetMaxReply), so a far larger one's text is never
+	// built; the list some answers are made from (a set's members or
+	// expansion, an AS's prefixes, an inverse search's objects) is gathered
+	// whole first, bounded by the registry rather than by MaxReply. 256 MiB.
 	MaxReply int64
 	// QueryTime is one command's evaluation; a command still evaluating
 	// after it is answered "F Query took longer than …". 60s.
@@ -94,6 +98,97 @@ type Server struct {
 	conns   map[*conn]struct{}
 	wg      sync.WaitGroup
 	closing atomic.Bool
+
+	refused refusals
+}
+
+// refusedLogEvery is how often, at most, refused connections are logged.
+const refusedLogEvery = 10 * time.Second
+
+// refusals logs connections refused past MaxConns without letting a flood of
+// them flood the log: the first after a quiet spell is logged at once, with
+// its address; those after it are counted, and their count logged once per
+// period while they keep coming. Shutdown logs what is still counted, and
+// nothing after.
+type refusals struct {
+	mu    sync.Mutex
+	every time.Duration // refusedLogEvery, or a test's
+	n     int           // refused since the last line
+	timer *time.Timer   // ends the current period; nil in a quiet spell
+	gen   int           // the current period's, so a stale timer does nothing
+	done  bool          // Shutdown has logged the last count: log nothing more
+}
+
+// refuse logs a connection from remote refused past MaxConns (see refusals).
+func (s *Server) refuse(remote string) {
+	r := &s.refused
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.done {
+		return
+	}
+	if r.timer != nil {
+		r.n++
+		return
+	}
+	s.log(slog.LevelWarn, "refused: too many connections", "remote", remote, "max", s.lim.MaxConns)
+	s.startRefusedPeriod()
+}
+
+// startRefusedPeriod starts a period; under refused.mu.
+func (s *Server) startRefusedPeriod() {
+	r := &s.refused
+	r.gen++
+	gen := r.gen
+	r.timer = time.AfterFunc(r.period(), func() { s.refusedPeriodEnd(gen) })
+}
+
+func (r *refusals) period() time.Duration {
+	if r.every > 0 {
+		return r.every
+	}
+	return refusedLogEvery
+}
+
+// refusedPeriodEnd logs the refusals counted in the period just ended and
+// starts another, or, if there were none, ends the run of them.
+func (s *Server) refusedPeriodEnd(gen int) {
+	r := &s.refused
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.timer == nil || r.gen != gen { // flushed by Shutdown, or stale
+		return
+	}
+	if r.n == 0 {
+		r.timer = nil
+		return
+	}
+	s.logRefusedCount()
+	s.startRefusedPeriod()
+}
+
+// logRefusedCount logs the refusals counted and clears the count; under
+// refused.mu.
+func (s *Server) logRefusedCount() {
+	r := &s.refused
+	s.log(slog.LevelWarn, "refused: too many connections", "count", r.n, "within", r.period(), "max", s.lim.MaxConns)
+	r.n = 0
+}
+
+// flushRefused logs what is still counted and ends the period; a connection
+// refused after it (accepted as Shutdown closed the listeners) is not logged.
+func (s *Server) flushRefused() {
+	r := &s.refused
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.done = true
+	if r.timer != nil {
+		r.timer.Stop()
+		r.timer = nil
+	}
+	if r.n > 0 {
+		s.logRefusedCount()
+	}
 }
 
 // conn is one served connection. stop, under mu, says Shutdown has begun:
@@ -180,7 +275,7 @@ func (s *Server) Serve(ln net.Listener) error {
 		select {
 		case s.sem <- struct{}{}:
 		default:
-			s.log(slog.LevelWarn, "refused: too many connections", "remote", nc.RemoteAddr().String(), "max", s.lim.MaxConns)
+			s.refuse(nc.RemoteAddr().String())
 			nc.Close()
 			continue
 		}
@@ -213,8 +308,10 @@ var errLineTooLong = errors.New("line too long")
 
 // readLine reads one line without its "\n", at most max bytes long. A line
 // is too long as soon as more than max of its bytes have arrived, newline or
-// not, so a client waiting with a part of one is refused at once. A line
-// cut off by the end of the input is no command (unless already too long).
+// not, so a client waiting with a part of one is refused at once. A last
+// line cut off by the end of the input — the client closed its sending side
+// after it, as `printf '!gAS1' | nc -N` does — is a line, as IRRd reads it
+// (golden eof/*); one cut off by an error or a deadline is not.
 func readLine(br *bufio.Reader, max int) (string, error) {
 	var line []byte
 	scanned := 0 // the buffered bytes already known to hold no newline
@@ -240,7 +337,16 @@ func readLine(br *bufio.Reader, max int) (string, error) {
 		}
 		// Wait for at least one more byte.
 		if _, err := br.Peek(len(buf) + 1); err != nil {
-			return "", err
+			rest, _ := br.Peek(br.Buffered())
+			if !errors.Is(err, io.EOF) || len(line)+len(rest) == 0 {
+				return "", err
+			}
+			if len(line)+len(rest) > max {
+				return "", errLineTooLong
+			}
+			line = append(line, rest...)
+			br.Discard(len(rest))
+			return string(line), nil
 		}
 	}
 }
@@ -431,6 +537,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		c.halt()
 	}
 	s.mu.Unlock()
+	s.flushRefused()
 	done := make(chan struct{})
 	go func() { s.wg.Wait(); close(done) }()
 	select {

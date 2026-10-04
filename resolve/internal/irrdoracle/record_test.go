@@ -62,7 +62,7 @@ func askStable(t *testing.T, addr string, c Case) string {
 	return ""
 }
 
-// ask sends send on a fresh connection and returns every byte answered until
+// ask sends send on a fresh connection (Send) and returns every byte answered until
 // the server closes it or two seconds pass without one.
 func ask(t *testing.T, addr, send string) string {
 	t.Helper()
@@ -71,7 +71,7 @@ func ask(t *testing.T, addr, send string) string {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	if _, err := c.Write([]byte(send)); err != nil {
+	if err := Send(c, send); err != nil {
 		t.Fatal(err)
 	}
 	var out []byte

@@ -102,14 +102,15 @@ func (r *Registry) index(c *resolve.Corpus) {
 				add(r.claims, strings.ToUpper(it.Value), o)
 			}
 		}
-		if _, isSet := o.(object.NamedSet); !isSet {
+		set, isSet := o.(object.NamedSet)
+		if !isSet {
 			continue
 		}
 		for _, attr := range []string{"members", "mp-members"} {
 			for _, a := range raw.GetAll(attr) {
 				for _, it := range a.List() {
 					if it.Value != "" {
-						add(r.byMember, attr+" "+normMember(it.Value), o)
+						add(r.byMember, attr+" "+storedMember(set.SetName().Class(), it.Value), o)
 					}
 				}
 			}

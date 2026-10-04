@@ -413,7 +413,13 @@ func (snap *Snapshot) inverse(ctx context.Context, regs []*Registry, attr, value
 			case "mbrs-by-ref":
 				objs = r.byMbrRef[strings.ToUpper(value)]
 			default:
-				objs = r.byMember[attr+" "+normMember(value)]
+				// IRRd upper-cases the value and looks it up as given, against
+				// each member as its parser stored it: a route-set's member
+				// spelled in lower case, stored as written, is not found
+				// (recorded: "-i members as-bar" finds AS-LOWER, not
+				// RS-LOWER's "as-Bar"), nor is an IPv6 prefix with a letter,
+				// stored lower-case ("-i mp-members 2001:db8:1::/48").
+				objs = r.byMember[attr+" "+strings.ToUpper(strings.TrimSpace(value))]
 			}
 			for _, o := range objs {
 				if e := objectEntry(r, o); snap.served(e) && want(e.class()) {
@@ -486,13 +492,19 @@ func addKeyBlock(a *answer, e entry) bool {
 
 // keyBlock is an entry in IRRd's -K form: its primary key attributes as IRRd
 // stores them (a route's canonical prefix and its origin, objectKey for any
-// other), then each members: and mp-members: item — normalized for an
-// as-set or route-set (normMember), upper-cased for an rtr-set, whose
-// members are router names and addresses. A route needs no text for it.
+// other), then each members: and mp-members: item as IRRd stores it
+// (storedMember). A route needs no text for it.
 func keyBlock(e entry) string {
 	class := e.class()
 	if e.obj == nil {
 		return class + ": " + e.rt.prefix.String() + "\norigin: " + e.rt.origin.String() + "\n"
+	}
+	setClass := types.ClassAsSet
+	switch class {
+	case "route-set":
+		setClass = types.ClassRouteSet
+	case "rtr-set":
+		setClass = types.ClassRtrSet
 	}
 	var b strings.Builder
 	b.WriteString(class + ": " + objectKey(class, e.obj) + "\n")
@@ -502,11 +514,7 @@ func keyBlock(e entry) string {
 				if it.Value == "" {
 					continue
 				}
-				v := normMember(it.Value)
-				if class == "rtr-set" {
-					v = strings.ToUpper(it.Value)
-				}
-				b.WriteString(attr + ": " + v + "\n")
+				b.WriteString(attr + ": " + storedMember(setClass, it.Value) + "\n")
 			}
 		}
 	}

@@ -80,3 +80,16 @@ route:          192.0.2.0/24
 origin:         AS65001
 mnt-by:         MNT-A
 source:         radb
+
+route-set:      RS-LOWER
+descr:          case probe: set names in members: spelled in lower case
+members:        rs-inner, as-Bar, 192.0.2.0/24, as65003, Rs-Inner^25
+mp-members:     2001:DB8:1::/48
+mnt-by:         MNT-A
+source:         RADB
+
+as-set:         AS-LOWER
+descr:          case probe: set names in members: spelled in lower case
+members:        as-bar, as65003
+mnt-by:         MNT-A
+source:         RADB

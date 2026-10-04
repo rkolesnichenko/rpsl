@@ -251,7 +251,7 @@ Flags are whole words: `-rK` is no flag.
 | --- | --- |
 | `-s <list>` | select registries, for the rest of the connection |
 | `-T <classes>` | restrict the next search to these classes |
-| `-i <attr> <value>` | inverse search on `origin`, `member-of`, `mbrs-by-ref`, `members` or `mp-members` |
+| `-i <attr> <value>` | inverse search on `origin`, `member-of`, `mbrs-by-ref`, `members` or `mp-members`; as in IRRd, the value is upper-cased and matched as given against each member as stored, so a route-set member spelled in lower case, or an IPv6 prefix with a letter in it, is not found, and an rtr-set's address is found as written, not as a host prefix |
 | `-x`, `-l`, `-L`, `-M <prefix>` | route search: exact, one level less specific, all less specific, more specific |
 | `-K` | primary keys and members only |
 | `-k` | keep the connection open |
@@ -379,14 +379,19 @@ ends, where `rpsld` closes it at once, so the client can retry or go
 elsewhere; and it has no line limit (a 1 MB line was answered).
 
 An answer is never sent in part: `-max-reply` is decided before anything of
-it is written. Nor is one far over the limit built only to be refused: an
-answer that grows with the data — route objects (`!r`, `-M`, `-L`), a list
-of origins (`!r…,o`), of prefixes or members (`!g`, `!6`, `!a`, `!i`),
-RIPE-style objects and their `-K` forms — stops being built as soon as it
-passes `-max-reply`, so `!r0.0.0.0/0,M` over a whole registry costs a
-connection a small multiple of `-max-reply` in memory, not the answer's
-size. A route's text is held by reference while an answer is built and
-copied once, into the answer sent.
+it is written. Nor is one far over the limit built only to be refused: the
+text of an answer that grows with the data — route objects (`!r`, `-M`,
+`-L`), a list of origins (`!r…,o`), of prefixes or members (`!g`, `!6`,
+`!a`, `!i`), RIPE-style objects and their `-K` forms — stops being built as
+soon as it passes `-max-reply`, so `!r0.0.0.0/0,M` over a whole registry
+costs a connection a small multiple of `-max-reply` in memory, not the
+answer's size. A route's text is held by reference while an answer is built
+and copied once, into the answer sent. Only the text is under the limit, not
+what some answers are made from: the members or prefixes of `!i`, `!i…,1`
+and `!a` (the whole expansion), the prefixes of `!g` and `!6`, and the
+objects an `-i` search finds (with a copy of the text of each route that
+names the set in `member-of:`) are gathered whole first, so they cost memory
+in proportion to what the registry holds for them, whatever `-max-reply` is.
 
 The idle timeout also bounds how long the client takes to read each 64 KiB
 of an answer, not the whole answer. A client that reads just fast enough
@@ -406,7 +411,7 @@ Two oracles:
 
 - **IRRd itself.** `resolve/testdata/irrd` holds a fixed fixture (two
   registries, RIPE and RADB, with a set for each of IRRd's corner cases, and
-  ROAs) and IRRd 4.5.3's recorded answers to 247 exchanges on it, in plain
+  ROAs) and IRRd 4.5.3's recorded answers to 274 exchanges on it, in plain
   and RPKI-aware mode (`golden/plain.txt`, `golden/rpki.txt`). They were
   recorded from IRRd in Docker, and are re-recorded with
   `RPSL_IRRD_DOCKER=1 go test -run TestRecord ./internal/irrdoracle` (from

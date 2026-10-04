@@ -9,6 +9,41 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Fixed
+
+- `resolve/irrdserver` (`rpsld`): a last command line without its newline, from a client that
+  then closes its sending side (`printf '!gAS1' | nc -N host 43`), is answered, as IRRd 4.5.3
+  answers it; it was dropped unanswered. A line without its newline from a client that keeps
+  sending is still no command.
+- `resolve/irrdq` (`rpsld`): a set name among a route-set's `members:`/`mp-members:` is served
+  as written by `!i` and `-K` (`rs-inner`, `as-Bar`), as IRRd keeps its case; it was
+  upper-cased. An as-set's members are upper-cased as before, and AS numbers and prefixes in
+  either class are normalized as before.
+- `resolve/irrdq` (`rpsld`): `-i members`/`-i mp-members` look the value up as IRRd does,
+  upper-cased and as given, against each member as stored: a route-set's set name spelled
+  otherwise than in upper case, and an IPv6 prefix with a letter in it (stored lower-case), are
+  never found; an rtr-set's address is found as written (`192.0.2.1`), not as a host prefix.
+  They were found, by a normalized lookup IRRd does not make.
+- `resolve/irrdserver` (`rpsld`): connections refused past `MaxConns` no longer log one line
+  each, so a flood of them does not flood the log: the first after a quiet spell is logged with
+  its address, the rest as one count every 10 s while they keep coming, and `Shutdown` logs what
+  is still counted and nothing after.
+- Docs: `-max-reply` (`Session.SetMaxReply`, `Limits.MaxReply`) bounds an answer's text, not
+  the list some answers are made from — the members or expansion of `!i`, `!i…,1` and `!a`, the
+  prefixes of `!g` and `!6`, the objects an `-i` search finds — which is gathered whole, bounded
+  by the registry. docs/rpsld.md, both godocs, design §8.13 and the server spec said the whole
+  answer was bounded.
+
+### Changed
+
+- The IRRd 4.5.3 recordings (`resolve/testdata/irrd`) cover these: RADB's fixture gains
+  RS-LOWER and AS-LOWER (set names, an AS number and an IPv6 prefix in members spelled in
+  other cases), and 27 new exchanges (274 in all) ask `!i`, `!i…,1`, `!a`, `-K`, `-T`,
+  `-i members` and `-i mp-members` about them and about RTRS-FOO, and send four commands
+  without a final newline.
+  `irrdoracle.Send` sends a case so, closing the sending side after it. `irrtest` answers as
+  the recordings do.
+
 ## [0.24.0] - 2026-10-04
 
 ### Added

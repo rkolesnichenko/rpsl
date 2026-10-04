@@ -40,7 +40,7 @@ func Cases() []Case {
 
 	sets := []string{"AS-FOO", "as-foo", "AS-BAR", "RS-FOO", "RS-INNER", "AS-REF", "AS-EMPTY",
 		"AS-MISSING", "AS-ANY", "RS-ANY", "AS-RADBONLY", "FLTR-FOO", "RTRS-FOO", "PRNG-FOO",
-		"AS65001", "AS-NORM", "RS-NOLEN"}
+		"AS65001", "AS-NORM", "RS-NOLEN", "RS-LOWER", "AS-LOWER"}
 	for _, s := range sets {
 		add("plain", Exact, "i/"+s, line("!i"+s))
 		add("plain", Exact, "i1/"+s, line("!i"+s+",1"))
@@ -50,7 +50,7 @@ func Cases() []Case {
 	add("plain", Exact, "i1/space", line("!iAS-FOO, 1"))
 
 	for _, s := range []string{"!aAS-FOO", "!a4AS-FOO", "!a6AS-FOO", "!aAS-BAR", "!aRS-FOO", "!a4RS-FOO",
-		"!aAS-MISSING", "!aAS-EMPTY", "!aAS-RADBONLY", "!aAS-ANY", "!a", "!a4", "!a6", "!aas-foo", "!aAS-REF"} {
+		"!aAS-MISSING", "!aAS-EMPTY", "!aAS-RADBONLY", "!aAS-ANY", "!a", "!a4", "!a6", "!aas-foo", "!aAS-REF", "!aRS-LOWER", "!aAS-LOWER"} {
 		add("plain", Words, "a/"+strings.TrimPrefix(s, "!"), line(s))
 	}
 	for _, s := range []string{"!gAS65001", "!gAS65002", "!gAS65003", "!gAS65005", "!gAS65099",
@@ -89,7 +89,12 @@ func Cases() []Case {
 		"192.0.2.0/24", "-x 192.0.2.0/24", "-M 192.0.2.0/24", "-T route6 2001:db8::/32", "MNT-A",
 		"-i mnt-by MNT-B", "-T mntner MNT-A", "-B AS65001", "-G AS65001", "-s ripe AS-FOO",
 		"-T foo AS65001", "-Z AS65001", "AS65001 AS65002", "-i origin as65001", "-i member-of as-ref",
-		"rtr1.example.net", "JD1-RIPE", "-K AS-NORM", "-s RADB AS-NORM"} {
+		"rtr1.example.net", "JD1-RIPE", "-K AS-NORM", "-s RADB AS-NORM", "-K -T route-set RS-LOWER",
+		"-K -T as-set AS-LOWER", "-i members rs-inner", "-i members RS-INNER", "-i members as-bar", "-i members AS-BAR",
+		"-T route-set RS-LOWER", "-i mp-members 2001:db8:1::/48", "-i mp-members 2001:DB8:1::/48",
+		"-i mp-members 2001:db8::/32", "-i members 192.0.2.0/24", "-i members as65003",
+		"-i members 192.0.2.1", "-i members 192.0.2.1/32", "-i members rtr1.example.net",
+		"-i members RTR1.EXAMPLE.NET", "-K -T rtr-set RTRS-FOO"} {
 		k := Objects
 		if s == "-i foo bar" {
 			// IRRd lists the attributes it can search in Python set order,
@@ -101,6 +106,14 @@ func Cases() []Case {
 	add("plain", Objects, "ripe/in-session", "!!\n-T as-set AS-FOO\n!v\n-i origin AS65003\nAS-NOSUCH\n!q\n")
 	add("plain", Objects, "ripe/k-and-query", "-k -T as-set AS-FOO\n-T aut-num AS65003\n!q\n")
 	add("plain", Objects, "ripe/s-flag-sticks", "!!\n!sRADB\n-T as-set AS-FOO\n-s RIPE -T as-set AS-FOO\n!s-lc\n!q\n")
+
+	// A last line without its newline: the client then closes its sending
+	// side (a Send that does not end in "\n" is sent so, as `printf … | nc -N`
+	// does), so the line is all there will be.
+	add("plain", Exact, "eof/v", "!v")
+	add("plain", Exact, "eof/session", "!!\n!v\n!v")
+	add("plain", Words, "eof/g", "!gAS65001")
+	add("plain", Objects, "eof/ripe", "-T as-set AS-FOO")
 
 	// RPKI-aware mode.
 	for _, s := range []string{"!s-lc", "!j-*", "!jRPKI", "!sRPKI"} {
