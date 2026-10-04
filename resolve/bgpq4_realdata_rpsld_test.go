@@ -29,7 +29,7 @@ import (
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
-// TestBgpq4RealDataRpsld (opt-in: RPSL_REALDATA=<the directory
+// TestRpsldMatchesRpslqRealData (opt-in: RPSL_REALDATA=<the directory
 // scripts/fetch-irr-dumps.sh fills, or its ripe/ directory> and bgpq4 1.16
 // installed) serves RIPE's as-set, route-set, aut-num, route and route6 dumps
 // with rpsld — one registry, RIPE, as rpsld's dump loader builds it — and holds
@@ -50,7 +50,7 @@ import (
 // this process (rpslq.RunWith), and one bgpq4 at a time. RPSL_REALDATA_LARGEST
 // and RPSL_REALDATA_SAMPLE (default 10 and 150, per class) size the pick, for a
 // trial on fewer sets.
-func TestBgpq4RealDataRpsld(t *testing.T) {
+func TestRpsldMatchesRpslqRealData(t *testing.T) {
 	dir := os.Getenv("RPSL_REALDATA")
 	if dir == "" {
 		t.Skip("set RPSL_REALDATA to the directory scripts/fetch-irr-dumps.sh fills")
@@ -162,7 +162,7 @@ func TestBgpq4RealDataRpsld(t *testing.T) {
 		return strings.Fields(rest[:n]), true
 	}
 
-	var same, differ, refused, tooLarge int
+	var same, differ, refused, tooLarge, operator int
 	why := map[string]int{}
 	for _, name := range picked {
 		setBegin := time.Now()
@@ -202,6 +202,13 @@ func TestBgpq4RealDataRpsld(t *testing.T) {
 					strings.Count(out.String(), "\n"), maxComparedEntries)
 				break lists
 			}
+			if slices.Contains(reasons, "operator-on-set-or-as-member") {
+				// rpslq applies the operator, which may narrow a range;
+				// bgpq4 drops it and may list far more than rpslq did.
+				outcome = "operator"
+				t.Logf("%s %v: a range operator on a set or AS member in its closure; bgpq4 is not run on it", name, list)
+				break lists
+			}
 			want, err := bgpq4Text(append([]string{"-h", addr, "-S", "RIPE"}, q...))
 			switch {
 			case err != nil:
@@ -233,6 +240,8 @@ func TestBgpq4RealDataRpsld(t *testing.T) {
 			}
 		case "too large":
 			tooLarge++
+		case "operator":
+			operator++
 		}
 		if took := time.Since(setBegin); took > 30*time.Second {
 			t.Logf("%s: %v", name, took.Round(time.Second))
@@ -246,7 +255,8 @@ func TestBgpq4RealDataRpsld(t *testing.T) {
 	runtime.ReadMemStats(&m)
 	t.Logf("rpslq --dump vs bgpq4 against rpsld: %d sets picked; %d the same; %d differ and %d are refused by rpslq where "+
 		"a known divergence explains it (sets by divergence in the closure: %s); %d over a prefix limit, not compared; "+
-		"%v in all, heap %d MB", len(picked), same, differ, refused, strings.Join(byReason, ", "), tooLarge,
+		"%d with a range operator on a set or AS member in the closure, not compared; %v in all, heap %d MB",
+		len(picked), same, differ, refused, strings.Join(byReason, ", "), tooLarge, operator,
 		time.Since(begin).Round(time.Second), m.HeapAlloc>>20)
 }
 
@@ -264,7 +274,7 @@ func envCount(t *testing.T, name string, def int) int {
 	return n
 }
 
-// maxComparedEntries is the longest list TestBgpq4RealDataRpsld hands bgpq4,
+// maxComparedEntries is the longest list TestRpsldMatchesRpslqRealData hands bgpq4,
 // the engine's default MaxPrefixes, which TestBgpq4RealData compares under:
 // bgpq4's memory grows with the list, and it holds no cap of its own.
 const maxComparedEntries = 1 << 20
@@ -300,11 +310,10 @@ func firstDifference(got, want string) string {
 	return "no difference"
 }
 
-// closureDivergences is TestBgpq4RealData's divergentFeatures over a members
-// function — here rpsld's own "!i", which lists a set's members as IRRd
-// does — rather than over irrtest: it walks everything the set can reach,
-// following every set name as bgpq4 and IRRd would, and names the known
-// divergences it meets.
+// closureDivergences walks everything a set can reach through members — a
+// set's members as IRRd's "!i" lists them: rpsld's own here, irrtest's for
+// TestBgpq4RealData — following every set name as bgpq4 and IRRd would, and
+// names the known divergences it meets.
 func closureDivergences(members func(set string) ([]string, bool), name string) []string {
 	found := map[string]bool{}
 	seen := map[string]bool{}

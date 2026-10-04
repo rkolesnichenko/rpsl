@@ -54,8 +54,12 @@ func TestLiveMirror(t *testing.T) {
 		code <- Run(ctx, []string{"-source", "RIPE=nrtm4:" + ripeNotification + ",key=../../nrtm4/testdata/ripe-public-key.pem",
 			"-listen", "127.0.0.1:0"}, io.Discard, log, make(chan struct{}))
 	}()
+	exited := false // reported already, by the wait for "listening"
 	t.Cleanup(func() {
 		cancel()
+		if exited {
+			return
+		}
 		select {
 		case c := <-code:
 			if c != 0 {
@@ -73,7 +77,7 @@ func TestLiveMirror(t *testing.T) {
 		}
 		select {
 		case c := <-code:
-			code <- c
+			exited = true
 			t.Fatalf("exited %d before listening; log:\n%s", c, log.String())
 		default:
 		}

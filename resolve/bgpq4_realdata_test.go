@@ -121,42 +121,5 @@ func TestBgpq4RealData(t *testing.T) {
 // divergentFeatures walks everything a set can reach, following every set name
 // as bgpq4 and IRRd would, and names the known divergences it meets.
 func divergentFeatures(db *irrtest.DB, name string) []string {
-	found := map[string]bool{}
-	seen := map[string]bool{}
-	var walk func(set string, class types.SetClass)
-	walk = func(set string, class types.SetClass) {
-		if seen[strings.ToUpper(set)] {
-			return
-		}
-		seen[strings.ToUpper(set)] = true
-		members, ok := db.Members([]string{"RIPE"}, set)
-		if !ok {
-			return
-		}
-		for _, m := range members {
-			base, op, hasOp := strings.Cut(m, "^")
-			n, err := types.ParseSetName(base)
-			switch {
-			case hasOp && !strings.Contains(base, "/"):
-				found["operator-on-set-or-as-member"] = true
-			case hasOp && !strings.Contains(op, "-") && op != "+":
-				found["single-length-range"] = true
-			case err == nil && (n.String() == "AS-ANY" || n.String() == "RS-ANY"):
-				found["as-any"] = true
-			case err == nil && class == types.ClassAsSet && n.Class() == types.ClassRouteSet:
-				found["route-set-in-as-set"] = true
-			}
-			if err == nil && !hasOp {
-				walk(base, n.Class())
-			}
-		}
-	}
-	n, _ := types.ParseSetName(name)
-	walk(name, n.Class())
-	var out []string
-	for f := range found {
-		out = append(out, f)
-	}
-	sort.Strings(out)
-	return out
+	return closureDivergences(func(set string) ([]string, bool) { return db.Members([]string{"RIPE"}, set) }, name)
 }
