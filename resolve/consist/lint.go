@@ -32,11 +32,14 @@ const (
 var ruleSeverity = map[string]ast.Severity{
 	RuleShadowed: ast.Warning, RuleEmpty: ast.Info, RuleMissingSet: ast.Warning, RuleMissingRouter: ast.Warning,
 	RuleNoAutNum: ast.Warning, RuleUndecided: ast.Info, RuleLimit: ast.Warning,
+	RuleASPAMissingProvider: ast.Warning, RuleASPAStaleProvider: ast.Info, RuleASPACustomerSet: ast.Warning,
 }
 
-// Rules returns every rule Lint reports, in documentation order.
+// Rules returns every rule Lint reports, in documentation order; the
+// lint/aspa-* rules only with Checker.ASPAs.
 func Rules() []string {
-	return []string{RuleShadowed, RuleEmpty, RuleMissingSet, RuleMissingRouter, RuleNoAutNum, RuleUndecided, RuleLimit}
+	return []string{RuleShadowed, RuleEmpty, RuleMissingSet, RuleMissingRouter, RuleNoAutNum, RuleUndecided, RuleLimit,
+		RuleASPAMissingProvider, RuleASPAStaleProvider, RuleASPACustomerSet}
 }
 
 // Issue is a Diagnostic — Rule, Severity, Message, and the Span of the
@@ -97,6 +100,19 @@ func (c *Checker) Lint(ctx context.Context, as types.ASN) ([]Issue, error) {
 		return nil, err
 	}
 	l := newLinter(ctx, ev, an)
+	if c.ASPAs != nil {
+		l.real = map[types.ASN]bool{}
+		for _, list := range [][]types.ASN{peers.Forward, peers.Reverse} {
+			for _, p := range list {
+				l.real[p] = true
+			}
+		}
+		if c.SetPeers {
+			for _, p := range peers.ViaSets {
+				l.real[p] = true
+			}
+		}
+	}
 	if err := l.sets(ctx, c); err != nil {
 		return nil, err
 	}
@@ -117,6 +133,9 @@ func (c *Checker) Lint(ctx context.Context, as types.ASN) ([]Issue, error) {
 		if err := l.session(ctx, ev, as, anyPeer); err != nil {
 			return nil, err
 		}
+	}
+	if c.ASPAs != nil {
+		l.missingProviders(as, c.ASPAs)
 	}
 	if l.err != nil {
 		return nil, l.err
@@ -220,6 +239,9 @@ func (l *linter) session(ctx context.Context, ev *peval.Evaluator, as, peer type
 				dep = dependent(p.Clauses, p2.Clauses, err != nil)
 			}
 			l.policy(kind, p, peer, af, dep)
+			if kind == "import" {
+				l.noteFullTables(p, peer, af)
+			}
 		}
 		d, err := ev.Default(ctx, s)
 		if ok, err := l.failed(err, peer, af); ok || err != nil {
@@ -340,6 +362,12 @@ type linter struct {
 	// the walk did not report it for that attribute — so a set missing inside
 	// one that exists is still reported for every other attribute reaching it.
 	reported map[setKey]bool
+	// With Checker.ASPAs: the peers sessions run toward that the aut-num
+	// names or that name it (Forward, Reverse, and ViaSets with SetPeers) —
+	// never a set peering's representative or the AS-ANY sentinel — and the
+	// full-table imports found toward them.
+	real  map[types.ASN]bool
+	fulls []fullImport
 }
 
 // setKey is a set the static walk reported missing for the attribute kind's

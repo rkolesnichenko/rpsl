@@ -159,3 +159,21 @@ code):
   aut-num's first attribute, however the source decoded it.
 - **`lint/limit`** (Warning) — a session's evaluation hit a limit; the other
   sessions are still linted.
+- **`lint/aspa-missing-provider`** (Warning) — with `Checker.ASPAs`: the
+  aut-num imports a full table from a peer — a decided `import:` or
+  `mp-import:` clause whose peering names the peer (not `AS-ANY`) and whose
+  filter has a conjunct accepting the family's whole space less any negated
+  prefixes, with no positive AS-path or community test — but its ASPA does
+  not list that peer, or is an AS0 ASPA. Networks verifying ASPA would treat
+  its routes through that peer as leaks. Only for peers the aut-num's
+  peerings name or that name it, never a set peering's representative.
+- **`lint/aspa-stale-provider`** (Info) — with `Checker.ASPAs`: the aut-num's
+  ASPA lists a provider none of its peerings names, directly or through a
+  set. Silent when a peering could name any AS (`AS-ANY`, a regexp, a set
+  template).
+- **`lint/aspa-customer-set`** (Warning) — with `Checker.ASPAs`: the aut-num
+  announces an as-set (named outside `NOT` and outside AS-path regexps in an
+  `export:`/`mp-export:` filter) whose direct member AS — listed, or an
+  aut-num claiming `member-of:` that `mbrs-by-ref:` admits — has an ASPA that
+  does not name the aut-num, or an AS0 one. The issue's `Peers` holds that
+  member. Nested sets are not followed.
