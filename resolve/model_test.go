@@ -915,7 +915,8 @@ func checkModel(t *testing.T, label string, o *oracle, texts []string, src resol
 // Every expansion of every random IRR matches the oracle, with objects loaded
 // in random order and same-named sets in both sources.
 func TestModelMemSource(t *testing.T) {
-	for seed := uint64(0); seed < 3000; seed++ {
+	seeds, _ := resolve.ModelSeeds(3000)
+	for seed := uint64(0); seed < seeds; seed++ {
 		r := rand.New(rand.NewPCG(seed, 5))
 		m := randomModel(r, false)
 		texts := m.texts(r)
@@ -931,7 +932,8 @@ func TestModelMemSource(t *testing.T) {
 // only with SrcMembers; without it, it sees what IRRd does, which is the
 // oracle that ignores them.
 func TestModelBackends(t *testing.T) {
-	for seed := uint64(0); seed < 150; seed++ {
+	seeds, _ := resolve.ModelSeeds(150)
+	for seed := uint64(0); seed < seeds; seed++ {
 		r := rand.New(rand.NewPCG(seed, 5))
 		m := randomModel(r, false)
 		texts, idx := m.textsOf(r)

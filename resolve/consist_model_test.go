@@ -646,10 +646,14 @@ func (cm *consistModel) check(t *testing.T, label string, c *consist.Checker, r 
 }
 
 // requireCounts fails when the model did not exercise a kind of finding as
-// often as floors asks.
-func requireCounts(t *testing.T, label string, kc consistCounts, floors map[string]int) {
+// often as floors asks. The floors are calibrated to a test's full seed
+// count, so with fewer (full false, under the race detector) it only logs.
+func requireCounts(t *testing.T, label string, kc consistCounts, floors map[string]int, full bool) {
 	t.Helper()
 	t.Logf("%s: %v", label, kc)
+	if !full {
+		return
+	}
 	keys := slices.Sorted(maps.Keys(floors))
 	for _, k := range keys {
 		if kc[k] < floors[k] {
@@ -667,7 +671,8 @@ const (
 
 func TestModelConsist(t *testing.T) {
 	kc := consistCounts{}
-	for seed := uint64(0); seed < 400; seed++ {
+	seeds, full := resolve.ModelSeeds(400)
+	for seed := uint64(0); seed < seeds; seed++ {
 		r := rand.New(rand.NewPCG(seed, 41))
 		cm := randomConsist(t, r, seed)
 		c := &consist.Checker{Eval: peval.Evaluator{Src: resolve.NewMemSource(decodeAll(t, cm.texts), "RIPE", "RADB")}, MaxRanges: 1 << 16}
@@ -679,7 +684,7 @@ func TestModelConsist(t *testing.T) {
 		undNotExp + consist.WhySymbolic: 25, undNotExp + consist.WhyExporterUndecided: 5, undNotExp + consist.WhyImporterUndecided: 10,
 		undNoImp + consist.WhyImporterUndecided: 15, undNoImp + consist.WhyExporterUndecided: 45,
 		undNoExp + consist.WhyImporterUndecided: 55, undNoExp + consist.WhyExporterUndecided: 25,
-	})
+	}, full)
 }
 
 // The same over a Corpus with IndexPeers, whose NamedBy is held to the
@@ -689,7 +694,8 @@ func TestModelConsist(t *testing.T) {
 func TestModelConsistBackends(t *testing.T) {
 	kc := consistCounts{}
 	kr := consistCounts{} // rpsld, over irrd and whois
-	for seed := uint64(0); seed < 150; seed++ {
+	seeds, full := resolve.ModelSeeds(150)
+	for seed := uint64(0); seed < seeds; seed++ {
 		r := rand.New(rand.NewPCG(seed, 41))
 		label := fmt.Sprintf("seed %d", seed)
 		cm := randomConsist(t, r, seed)
@@ -736,13 +742,13 @@ func TestModelConsistBackends(t *testing.T) {
 		undNoExp + consist.WhyImporterUndecided: 6, undNoExp + consist.WhyExporterUndecided: 6,
 	}
 	// corpus, irrd and whois pooled: 2 findings of each kind per backend.
-	requireCounts(t, "backends", kc, floors)
+	requireCounts(t, "backends", kc, floors, full)
 	// rpsld's irrd and whois pooled apart, to the same 2 per backend.
 	rf := map[string]int{}
 	for k, n := range floors {
 		rf[k] = n * 2 / 3
 	}
-	requireCounts(t, "rpsld", kr, rf)
+	requireCounts(t, "rpsld", kr, rf, full)
 }
 
 // checkNamedBy holds NamedBy to the AS numbers the model's peerings name.

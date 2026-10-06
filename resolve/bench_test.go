@@ -9,6 +9,7 @@ import (
 
 	"github.com/rkolesnichenko/rpsl"
 	"github.com/rkolesnichenko/rpsl/object"
+	"github.com/rkolesnichenko/rpsl/policy"
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
@@ -23,10 +24,10 @@ func benchDecode(texts []string) []object.Object {
 	return out
 }
 
-// coneSource is a customer cone the size of a large transit network's: AS-CONE
+// coneObjects is a customer cone the size of a large transit network's: AS-CONE
 // lists 100 as-sets, each lists 100 ASNs, and each ASN originates 5 routes —
 // 10,000 ASNs and 50,000 prefixes.
-var coneSource = sync.OnceValue(func() *MemSource {
+var coneObjects = sync.OnceValue(func() []object.Object {
 	var texts []string
 	var top []string
 	n := 0
@@ -44,8 +45,11 @@ var coneSource = sync.OnceValue(func() *MemSource {
 		texts = append(texts, fmt.Sprintf("as-set: AS-CUST-%d\nmembers: %s\nsource: TEST\n", i, strings.Join(members, ", ")))
 	}
 	texts = append(texts, "as-set: AS-CONE\nmembers: "+strings.Join(top, ", ")+"\nsource: TEST\n")
-	return NewMemSource(benchDecode(texts))
+	return benchDecode(texts)
 })
+
+// coneSource serves coneObjects.
+var coneSource = sync.OnceValue(func() *MemSource { return NewMemSource(coneObjects()) })
 
 // operatorSource is a ring of 30 route-sets, within the default MaxDepth, with
 // range operators on every nested reference, AS members with their own
@@ -114,6 +118,67 @@ func BenchmarkExpandPrefixRanges(b *testing.B) {
 		got, err := e.ExpandPrefixRanges(ctx, types.Ref(name))
 		if err != nil || got.Len() == 0 {
 			b.Fatalf("ExpandPrefixRanges: %d ranges, %v", got.Len(), err)
+		}
+	}
+}
+
+// BenchmarkCorpusSource is the rebuild an NRTMv4 mirror (resolve/nrtm4) and
+// rpsld do for each new version: a MemSource from a Corpus holding the cone.
+func BenchmarkCorpusSource(b *testing.B) {
+	var c Corpus
+	for _, o := range coneObjects() {
+		c.Put(o)
+	}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		src := c.Source()
+		if ps, err := src.OriginatedRoutes(ctx, 100000, types.AFIv4); err != nil || len(ps) != 5 {
+			b.Fatalf("OriginatedRoutes(AS100000): %v, %v; want 5 prefixes", ps, err)
+		}
+	}
+}
+
+// benchFilter parses a filter for the filter benchmarks.
+func benchFilter(b *testing.B, s string) policy.Filter {
+	b.Helper()
+	f, diags := policy.ParseFilter(s)
+	if len(diags) > 0 {
+		b.Fatalf("ParseFilter(%q): %v", s, diags)
+	}
+	return f
+}
+
+// BenchmarkEvalFilter evaluates the cone intersected with a prefix list, OR
+// one of its as-sets under a range operator.
+func BenchmarkEvalFilter(b *testing.B) {
+	e := &Expander{Src: coneSource(), AFI: types.AFIv4}
+	f := benchFilter(b, "(AS-CONE AND {10.0.0.0/10^+, 10.128.0.0/9^24}) OR AS-CUST-7^25")
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		got, err := e.EvalFilter(ctx, f)
+		if err != nil || got.Len() == 0 {
+			b.Fatalf("EvalFilter: %d ranges, %v", got.Len(), err)
+		}
+	}
+}
+
+// BenchmarkNormalizeFilter normalizes a filter EvalFilter refuses: the cone
+// less a prefix list, with AS-path and community tests kept symbolic, so NOT
+// is pushed to the leaves and the OR multiplies conjuncts.
+func BenchmarkNormalizeFilter(b *testing.B) {
+	e := &Expander{Src: coneSource(), AFI: types.AFIv4}
+	f := benchFilter(b, "AS-CONE AND NOT {10.0.0.0/12^+} AND (<^AS-CUST-1+$> OR community(65000:1) OR NOT <AS100000$>)")
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		got, err := e.NormalizeFilter(ctx, f)
+		if err != nil || len(got.Conjuncts) != 3 {
+			b.Fatalf("NormalizeFilter: %d conjuncts, %v; want 3", len(got.Conjuncts), err)
 		}
 	}
 }

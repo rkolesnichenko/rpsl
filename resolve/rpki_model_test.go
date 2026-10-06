@@ -121,7 +121,8 @@ func pseudoTexts(t *testing.T, v *rpki.VRPs) []string {
 // agrees with the RPKI-aware oracle on every expansion of every random IRR.
 func TestModelRPKI(t *testing.T) {
 	suppressed := 0
-	for seed := uint64(0); seed < 2000; seed++ {
+	seeds, full := resolve.ModelSeeds(2000)
+	for seed := uint64(0); seed < seeds; seed++ {
 		r := rand.New(rand.NewPCG(seed, 5))
 		m := randomModel(r, false)
 		texts := m.texts(r)
@@ -142,7 +143,7 @@ func TestModelRPKI(t *testing.T) {
 		withPseudo := resolve.NewMemSource(decodeAll(t, all), "RIPE", "RADB", "RPKI")
 		checkModel(t, label+" with the RPKI source", o.withRPKI(roas, true), all, &rpki.Filter{Src: withPseudo, VRPs: v}, true)
 	}
-	if suppressed < 500 {
+	if full && suppressed < 500 {
 		t.Errorf("only %d routes suppressed over all seeds: the ROAs miss the model", suppressed)
 	}
 }
@@ -151,7 +152,8 @@ func TestModelRPKI(t *testing.T) {
 // suppresses, and serves the pseudo source when selected — and rpki.Filter over
 // a server that does neither, agree with the oracle.
 func TestModelRPKIBackends(t *testing.T) {
-	for seed := uint64(0); seed < 150; seed++ {
+	seeds, _ := resolve.ModelSeeds(150)
+	for seed := uint64(0); seed < seeds; seed++ {
 		r := rand.New(rand.NewPCG(seed, 5))
 		m := randomModel(r, false)
 		texts, idx := m.textsOf(r)
