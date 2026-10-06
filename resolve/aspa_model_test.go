@@ -33,11 +33,13 @@ const aspaLocal = types.ASN(64500)
 var aspaPeers = []types.ASN{64501, 64502, 64503, 64504}
 
 type aspaImp struct {
-	peering string // "as", "router", "any", "set", "or"
+	peering string // "as", "router", "any", "set", "or", "anyor" (AS-ANY OR as)
 	as, as2 types.ASN
+	swap    bool   // "anyor": as first, AS-ANY second
 	form    string // "import", "v6", "mp"
 	filter  string
 	full    bool
+	empty   bool // the filter looks full (ANY AND NOT …) but accepts nothing in its families
 }
 
 type aspaExp struct {
@@ -62,24 +64,39 @@ type aspaModel struct {
 	texts  []string
 }
 
-// The filter menu: full tables, then filters that are not.
-func aspaFilters(form string) (full, partial []string) {
+// The filter menu: full tables, filters that are not, and filters that look
+// like a full table (ANY less a prefix list) but whose list removes every
+// prefix of their families, so they accept nothing and are not one. The
+// first removes the family's whole range in one entry, which normalization
+// already drops; the second in three entries (the default route and each
+// half's more-specifics), none covering ANY alone, so the conjunct keeps
+// AnyPrefix and only its empty Space tells it apart from a full table.
+func aspaFilters(form string) (full, partial, empty []string) {
 	pfx := map[string]string{"import": "{10.0.0.0/8^+}", "v6": "{2001:db8::/32^+}", "mp": "{10.0.0.0/8^+, 2001:db8::/32^+}"}[form]
 	full = []string{"ANY", "ANY AND NOT " + pfx, "NOT <^AS64999>"}
 	partial = []string{"<^PeerAS+$>", "ANY AND community(65000:1)", pfx, "AS-C1", "PeerAS"}
-	return full, partial
+	whole := map[string]string{"import": "{0.0.0.0/0^0-32}", "v6": "{::/0^0-128}", "mp": "{0.0.0.0/0^0-32, ::/0^0-128}"}[form]
+	v4, v6 := "0.0.0.0/0, 0.0.0.0/1^+, 128.0.0.0/1^+", "::/0, ::/1^+, 8000::/1^+"
+	split := map[string]string{"import": "{" + v4 + "}", "v6": "{" + v6 + "}", "mp": "{" + v4 + ", " + v6 + "}"}[form]
+	return full, partial, []string{"ANY AND NOT " + whole, "ANY AND NOT " + split}
 }
 
 func randomASPAModel(r *rand.Rand) *aspaModel {
 	m := &aspaModel{namesL: map[types.ASN]bool{}, aspas: map[types.ASN][]types.ASN{}}
 	peer := func() types.ASN { return aspaPeers[r.IntN(len(aspaPeers))] }
 	for n := 1 + r.IntN(4); n > 0; n-- {
-		im := aspaImp{peering: []string{"as", "router", "any", "set", "or"}[r.IntN(5)], as: peer(), as2: peer(),
-			form: []string{"import", "v6", "mp"}[r.IntN(3)]}
-		full, partial := aspaFilters(im.form)
-		if im.full = r.IntN(2) == 0; im.full {
-			im.filter = full[r.IntN(len(full))]
-		} else {
+		// "set" twice: a set peering is what lets the reverse index and
+		// SetPeers change an answer, cases the test requires to be drawn.
+		kinds := []string{"as", "router", "any", "set", "set", "or", "anyor"}
+		im := aspaImp{peering: kinds[r.IntN(len(kinds))], as: peer(), as2: peer(),
+			swap: r.IntN(2) == 0, form: []string{"import", "v6", "mp"}[r.IntN(3)]}
+		full, partial, empty := aspaFilters(im.form)
+		switch k := r.IntN(8); {
+		case k < 4:
+			im.full, im.filter = true, full[r.IntN(len(full))]
+		case k < 5:
+			im.empty, im.filter = true, empty[r.IntN(len(empty))]
+		default:
 			im.filter = partial[r.IntN(len(partial))]
 		}
 		m.imps = append(m.imps, im)
@@ -167,6 +184,11 @@ func (m *aspaModel) render() []string {
 			peering = "AS-UP"
 		case "or":
 			peering = "(" + im.as.String() + " OR " + im.as2.String() + ")"
+		case "anyor":
+			peering = "(AS-ANY OR " + im.as.String() + ")"
+			if im.swap {
+				peering = "(" + im.as.String() + " OR AS-ANY)"
+			}
 		}
 		switch im.form {
 		case "import":
@@ -225,42 +247,7 @@ func (m *aspaModel) set() *rpki.ASPAs {
 // oracle returns the lint/aspa-* issues the model's choices imply, as
 // "rule index peers afs|S" lines, sorted.
 func (m *aspaModel) oracle(setPeers, index bool) []string {
-	forward := map[types.ASN]bool{}
-	anyPeering, setPeering := false, false
-	for _, im := range m.imps {
-		switch im.peering {
-		case "as", "router":
-			forward[im.as] = true
-		case "or":
-			forward[im.as], forward[im.as2] = true, true
-		case "any":
-			anyPeering = true
-		case "set":
-			setPeering = true
-		}
-	}
-	for _, e := range m.exps {
-		forward[e.to] = true
-	}
-	viaSets := map[types.ASN]bool{}
-	if setPeering {
-		for _, a := range m.up {
-			if !forward[a] {
-				viaSets[a] = true
-			}
-		}
-	}
-	real := maps.Clone(forward)
-	if index {
-		for p := range m.namesL {
-			real[p] = true
-		}
-	}
-	if setPeers {
-		for p := range viaSets {
-			real[p] = true
-		}
-	}
+	forward, viaSets, real, anyPeering := m.peers(setPeers, index)
 	var out []string
 	providers, hasASPA := m.aspas[aspaLocal]
 	lists := func(ps []types.ASN, x types.ASN) bool { return slices.Contains(ps, x) }
@@ -270,18 +257,9 @@ func (m *aspaModel) oracle(setPeers, index bool) []string {
 			if !im.full {
 				continue
 			}
-			var cands []types.ASN
-			switch im.peering {
-			case "as":
-				cands = []types.ASN{im.as}
-			case "or":
-				cands = []types.ASN{im.as, im.as2}
-			case "set":
-				cands = m.up
-			}
 			afs := map[string]string{"import": "[ipv4.unicast]", "v6": "[ipv6.unicast]", "mp": "[ipv4.unicast ipv6.unicast]"}[im.form]
 			seen := map[types.ASN]bool{}
-			for _, x := range cands {
+			for _, x := range im.names(m.up) {
 				if seen[x] || !real[x] || lists(providers, x) {
 					continue
 				}
@@ -298,7 +276,78 @@ func (m *aspaModel) oracle(setPeers, index bool) []string {
 			}
 		}
 	}
-	// Customer sets.
+	out = append(out, m.customerSets()...)
+	slices.Sort(out)
+	return out
+}
+
+// names returns the ASes an import's peering names as its peer (ruling 1):
+// an AS number, either side of an OR of two, an as-set's members — never
+// through AS-ANY, alone or inside an OR, and never a peering with a router
+// the session does not give (undecided).
+func (im aspaImp) names(up []types.ASN) []types.ASN {
+	switch im.peering {
+	case "as":
+		return []types.ASN{im.as}
+	case "or":
+		return []types.ASN{im.as, im.as2}
+	case "set":
+		return up
+	}
+	return nil
+}
+
+// peers returns what consist.Peers lists — Forward, ViaSets — the peers Lint
+// runs a real session toward (Forward, Reverse with an index, ViaSets with
+// setPeers), and whether a peering reaches AS-ANY (Skipped).
+func (m *aspaModel) peers(setPeers, index bool) (forward, viaSets, real map[types.ASN]bool, anyPeering bool) {
+	forward = map[types.ASN]bool{}
+	setPeering := false
+	for _, im := range m.imps {
+		switch im.peering {
+		case "as", "router":
+			forward[im.as] = true
+		case "or":
+			forward[im.as], forward[im.as2] = true, true
+		case "any":
+			anyPeering = true
+		case "anyor":
+			forward[im.as], anyPeering = true, true
+		case "set":
+			setPeering = true
+		}
+	}
+	for _, e := range m.exps {
+		forward[e.to] = true
+	}
+	viaSets = map[types.ASN]bool{}
+	if setPeering {
+		for _, a := range m.up {
+			if !forward[a] {
+				viaSets[a] = true
+			}
+		}
+	}
+	real = maps.Clone(forward)
+	if index {
+		for p := range m.namesL {
+			real[p] = true
+		}
+	}
+	if setPeers {
+		for p := range viaSets {
+			real[p] = true
+		}
+	}
+	return forward, viaSets, real, anyPeering
+}
+
+// customerSets returns the lint/aspa-customer-set lines: each direct member
+// (listed AS numbers, allowed claimants; nested sets not followed) of an
+// as-set an export names positively, whose ASPA does not list aspaLocal.
+func (m *aspaModel) customerSets() []string {
+	var out []string
+	lists := func(ps []types.ASN, x types.ASN) bool { return slices.Contains(ps, x) }
 	members := func(s aspaSet) []types.ASN {
 		var out []types.ASN
 		for _, x := range s.members {
@@ -327,8 +376,7 @@ func (m *aspaModel) oracle(setPeers, index bool) []string {
 			}
 		}
 	}
-	slices.Sort(out)
-	return slices.Compact(out)
+	return out
 }
 
 // lintLines lints aspaLocal and renders its lint/aspa-* issues as the oracle
@@ -351,13 +399,18 @@ func lintLines(t *testing.T, label string, src resolve.PolicySource, aspas *rpki
 		}
 		line := fmt.Sprintf("%s %d %v [%s]", is.Rule, is.Index, is.Peers, strings.Join(afs, " "))
 		if is.Rule == consist.RuleASPACustomerSet {
-			set := strings.Fields(strings.TrimPrefix(is.Message, "announces "))[0]
-			line += "|" + strings.TrimSuffix(set, ",")
+			rest, ok := strings.CutPrefix(is.Message, "announces ")
+			if !ok || len(strings.Fields(rest)) == 0 {
+				t.Fatalf("%s: %s message %q does not begin \"announces <set>\"", label, is.Rule, is.Message)
+			}
+			line += "|" + strings.TrimSuffix(strings.Fields(rest)[0], ",")
 		}
 		out = append(out, line)
 	}
+	// Not compacted: Lint merges an issue's sessions itself, so a line twice
+	// is a duplicated issue, and the comparison must see it.
 	slices.Sort(out)
-	return slices.Compact(out)
+	return out
 }
 
 func TestModelASPA(t *testing.T) {
@@ -411,6 +464,8 @@ func TestModelASPA(t *testing.T) {
 		consist.RuleASPAMissingProvider, consist.RuleASPAMissingProvider + " AS0", consist.RuleASPAMissingProvider + " both families",
 		consist.RuleASPAStaleProvider, consist.RuleASPACustomerSet, consist.RuleASPACustomerSet + " AS0",
 		consist.RuleASPACustomerSet + " claimant", "reverse peers change it", "set peers change it",
+		"AS-ANY in an OR, full table from an omitted peer", "empty full-looking filter from an omitted peer (whole)",
+		"empty full-looking filter from an omitted peer (split)",
 	} {
 		if counts[k] < 10 {
 			t.Errorf("%q: %d seeds, want at least 10", k, counts[k])
@@ -463,6 +518,26 @@ func (m *aspaModel) count(counts map[string]int) {
 					if member == 64514 || member == 64515 {
 						seen[rule+" claimant"] = true
 					}
+				}
+			}
+		}
+		// Situations where a rule would fire but for ruling 1 (a peering
+		// with AS-ANY inside an OR names no peer) or for a full-looking
+		// filter accepting nothing.
+		providers, hasASPA := m.aspas[aspaLocal]
+		for _, sp := range []bool{false, true} {
+			_, _, real, _ := m.peers(sp, idx)
+			omits := func(x types.ASN) bool { return hasASPA && real[x] && !slices.Contains(providers, x) }
+			for _, im := range m.imps {
+				if im.peering == "anyor" && im.full && omits(im.as) {
+					seen["AS-ANY in an OR, full table from an omitted peer"] = true
+				}
+				if im.empty && slices.ContainsFunc(im.names(m.up), omits) {
+					kind := "(whole)"
+					if strings.Contains(im.filter, "/1^+") {
+						kind = "(split)"
+					}
+					seen["empty full-looking filter from an omitted peer "+kind] = true
 				}
 			}
 		}
