@@ -96,6 +96,29 @@ func TestASPAMissingProvider(t *testing.T) {
 			[]rpki.ASPA{aspa(1, 3)}, false, nil},
 		{"reverse-only peer through a set", []string{"import: from AS-PEERS accept ANY"}, []rpki.ASPA{aspa(1, 2)}, false,
 			[]string{"lint/aspa-missing-provider import 0 [AS3] " + v4 + ": " + "imports a full table from AS3, but AS1's ASPA does not list it as a provider"}},
+		// Ruling R7: a set reaching AS-ANY, directly or nested, and a
+		// peering-set naming AS-ANY, name no peer.
+		{"as-set reaching AS-ANY", []string{"import: from AS2 accept AS2", "import: from AS-UP accept ANY"}, []rpki.ASPA{aspa(1, 3)}, false, nil},
+		{"as-set reaching AS-ANY through a nested set", []string{"import: from AS2 accept AS2", "import: from AS-UP accept ANY"},
+			[]rpki.ASPA{aspa(1, 3)}, false, nil},
+		{"as-set reaching AS-ANY, in an AND", []string{"import: from AS2 accept AS2", "import: from AS-UP AND AS2 accept ANY"},
+			[]rpki.ASPA{aspa(1, 3)}, false, nil},
+		{"peering-set naming AS-ANY", []string{"import: from AS2 accept AS2", "import: from PRNG-UP accept ANY"}, []rpki.ASPA{aspa(1, 3)}, false, nil},
+		{"as-set listing the peer", []string{"import: from AS2 accept AS2", "import: from AS-UP accept ANY"}, []rpki.ASPA{aspa(1, 3)},
+			false, []string{"lint/aspa-missing-provider import 1 [AS2] " + v4 + ": " + missingAS2}},
+		{"peering-set listing the peer", []string{"import: from AS2 accept AS2", "import: from PRNG-UP accept ANY"}, []rpki.ASPA{aspa(1, 3)},
+			false, []string{"lint/aspa-missing-provider import 1 [AS2] " + v4 + ": " + missingAS2}},
+		// Ruling R9: a set template is instantiated for the session's peer.
+		{"template naming the peer", []string{"import: from AS1:AS-UP:PeerAS accept ANY", "export: to AS2 announce AS1"},
+			[]rpki.ASPA{aspa(1, 3)}, false, []string{"lint/aspa-missing-provider import 0 [AS2] " + v4 + ": " + missingAS2}},
+		{"template reaching AS-ANY", []string{"import: from AS1:AS-UP:PeerAS accept ANY", "export: to AS2 announce AS1"},
+			[]rpki.ASPA{aspa(1, 3)}, false, nil},
+		{"template's set missing", []string{"import: from AS1:AS-UP:PeerAS accept ANY", "export: to AS2 announce AS1"},
+			[]rpki.ASPA{aspa(1, 3)}, false, nil},
+		{"template in a peering-set", []string{"import: from PRNG-UP accept ANY", "export: to AS2 announce AS1"},
+			[]rpki.ASPA{aspa(1, 3)}, false, []string{"lint/aspa-missing-provider import 0 [AS2] " + v4 + ": " + missingAS2}},
+		{"template in a peering-set reaching AS-ANY", []string{"import: from PRNG-UP accept ANY", "export: to AS2 announce AS1"},
+			[]rpki.ASPA{aspa(1, 3)}, false, nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			objs := []string{autNum(2), autNum(3)} // other aut-nums, unless the case names its own
@@ -104,6 +127,24 @@ func TestASPAMissingProvider(t *testing.T) {
 				objs = append(objs, autNum(5))
 			case "reverse-only peer through a set":
 				objs = []string{autNum(2), autNum(3, "export: to AS1 announce AS3")}
+			case "as-set reaching AS-ANY", "as-set reaching AS-ANY, in an AND":
+				objs = append(objs, asSetText("AS-UP", "AS3, AS2, AS-ANY"))
+			case "as-set reaching AS-ANY through a nested set":
+				objs = append(objs, asSetText("AS-UP", "AS3, AS2, AS-MID"), asSetText("AS-MID", "AS-ANY"))
+			case "as-set listing the peer":
+				objs = append(objs, asSetText("AS-UP", "AS3, AS2"))
+			case "peering-set naming AS-ANY":
+				objs = append(objs, peeringSetText("PRNG-UP", "AS-ANY"))
+			case "peering-set listing the peer":
+				objs = append(objs, peeringSetText("PRNG-UP", "AS2"))
+			case "template naming the peer":
+				objs = append(objs, asSetText("AS1:AS-UP:AS2", "AS2"))
+			case "template reaching AS-ANY":
+				objs = append(objs, asSetText("AS1:AS-UP:AS2", "AS3, AS-ANY"))
+			case "template in a peering-set":
+				objs = append(objs, peeringSetText("PRNG-UP", "AS1:AS-UP:PeerAS"), asSetText("AS1:AS-UP:AS2", "AS2"))
+			case "template in a peering-set reaching AS-ANY":
+				objs = append(objs, peeringSetText("PRNG-UP", "AS1:AS-UP:PeerAS"), asSetText("AS1:AS-UP:AS2", "AS2, AS-ANY"))
 			}
 			ch := checker(t, append([]string{autNum(1, c.lines...)}, objs...)...)
 			ch.SetPeers = c.setPeers
@@ -143,9 +184,32 @@ func TestASPAStaleProvider(t *testing.T) {
 		{"through a set", []string{"import: from AS-PEERS accept {10.0.0.0/8^+}"}, aspa(1, 3), nil},
 		{"AS-ANY could name it", []string{"import: from AS-ANY accept ANY"}, aspa(1, 3), nil},
 		{"AS0 ASPA", []string{"import: from AS2 accept ANY"}, aspa(1, 0), nil},
+		// Ruling R8: a set a peering reaches that the Source lacks could
+		// name the provider.
+		{"missing set", []string{"import: from AS2 accept ANY", "import: from AS-UPSTREAMS accept ANY"}, aspa(1, 2, 3), nil},
+		{"missing nested set", []string{"import: from AS2 accept ANY", "import: from AS-UP accept ANY"}, aspa(1, 2, 3), nil},
+		{"every set present", []string{"import: from AS2 accept ANY", "import: from AS-UP accept ANY"}, aspa(1, 2, 3), []string{stale(3)}},
+		{"missing peering-set", []string{"import: from AS2 accept ANY", "import: from PRNG-UP accept ANY"}, aspa(1, 2, 3), nil},
+		{"missing set in a peering-set", []string{"import: from AS2 accept ANY", "import: from PRNG-UP accept ANY"}, aspa(1, 2, 3), nil},
+		{"missing peering-set in a peering-set", []string{"import: from AS2 accept ANY", "import: from PRNG-UP accept ANY"}, aspa(1, 2, 3), nil},
+		{"every peering-set present", []string{"import: from AS2 accept ANY", "import: from PRNG-UP accept ANY"}, aspa(1, 2, 3), []string{stale(3)}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			ch := checker(t, autNum(1, c.lines...), autNum(2), autNum(3))
+			objs := []string{autNum(1, c.lines...), autNum(2), autNum(3)}
+			switch c.name {
+			case "missing nested set":
+				objs = append(objs, asSetText("AS-UP", "AS2, AS-ELSEWHERE"))
+			case "every set present":
+				objs = append(objs, asSetText("AS-UP", "AS2, AS-ELSEWHERE"), asSetText("AS-ELSEWHERE", "AS4"))
+			case "missing set in a peering-set":
+				objs = append(objs, peeringSetText("PRNG-UP", "AS-ELSEWHERE"))
+			case "missing peering-set in a peering-set":
+				objs = append(objs, peeringSetText("PRNG-UP", "PRNG-ELSEWHERE"))
+			case "every peering-set present":
+				objs = append(objs, peeringSetText("PRNG-UP", "PRNG-ELSEWHERE"), peeringSetText("PRNG-ELSEWHERE", "AS-ELSEWHERE"),
+					asSetText("AS-ELSEWHERE", "AS4"))
+			}
+			ch := checker(t, objs...)
 			got := lintASPA(t, ch, 1, newASPAs(t, c.aspa), RuleASPAStaleProvider)
 			if strings.Join(got, "\n") != strings.Join(c.want, "\n") {
 				t.Errorf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(c.want, "\n"))
@@ -272,4 +336,12 @@ func TestPositiveASSetsExcept(t *testing.T) {
 	if len(got) != 1 || got[0].String() != "AS-NESTED" {
 		t.Errorf("got %v, want [AS-NESTED]", got)
 	}
+}
+
+func asSetText(name, members string) string {
+	return "as-set: " + name + "\nmembers: " + members + "\nmnt-by: MNT-A\nsource: RIPE\n"
+}
+
+func peeringSetText(name, peering string) string {
+	return "peering-set: " + name + "\npeering: " + peering + "\nmnt-by: MNT-A\nsource: RIPE\n"
 }

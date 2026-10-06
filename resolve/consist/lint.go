@@ -90,7 +90,7 @@ func (c *Checker) Lint(ctx context.Context, as types.ASN) ([]Issue, error) {
 	if err != nil {
 		return nil, fmt.Errorf("consist: %w", err)
 	}
-	peers, groups, err := c.peers(ctx, as)
+	peers, info, err := c.peers(ctx, as)
 	if isLimit(err) {
 		l := newLinter(ctx, ev, an)
 		l.add(RuleLimit, "", -1, err.Error(), 0, nil)
@@ -101,6 +101,7 @@ func (c *Checker) Lint(ctx context.Context, as types.ASN) ([]Issue, error) {
 	}
 	l := newLinter(ctx, ev, an)
 	if c.ASPAs != nil {
+		l.den = info.den
 		l.real = map[types.ASN]bool{}
 		for _, list := range [][]types.ASN{peers.Forward, peers.Reverse} {
 			for _, p := range list {
@@ -119,7 +120,7 @@ func (c *Checker) Lint(ctx context.Context, as types.ASN) ([]Issue, error) {
 	if err := l.routers(ctx, c); err != nil {
 		return nil, err
 	}
-	for _, peer := range c.sessionPeers(as, peers, groups) {
+	for _, peer := range c.sessionPeers(as, peers, info.groups) {
 		if _, err := ev.Src.AutNum(ctx, peer, ev.Source); errors.Is(err, resolve.ErrNotFound) {
 			l.add(RuleNoAutNum, "", -1, fmt.Sprintf("%s's aut-num is not in the source", peer), peer, nil)
 		} else if err != nil {
@@ -136,7 +137,7 @@ func (c *Checker) Lint(ctx context.Context, as types.ASN) ([]Issue, error) {
 	}
 	if c.ASPAs != nil {
 		l.missingProviders(as, c.ASPAs)
-		l.staleProviders(as, peers, c.ASPAs)
+		l.staleProviders(as, peers, info.missing, c.ASPAs)
 		if err := l.customerSets(ctx, ev.Src, as, c.ASPAs); err != nil {
 			return nil, err
 		}
@@ -244,7 +245,9 @@ func (l *linter) session(ctx context.Context, ev *peval.Evaluator, as, peer type
 			}
 			l.policy(kind, p, peer, af, dep)
 			if kind == "import" {
-				l.noteFullTables(p, peer, af)
+				if err := l.noteFullTables(p, peer, af); err != nil {
+					return err
+				}
 			}
 		}
 		d, err := ev.Default(ctx, s)
@@ -369,9 +372,11 @@ type linter struct {
 	// With Checker.ASPAs: the peers sessions run toward that the aut-num
 	// names or that name it (Forward, Reverse, and ViaSets with SetPeers) —
 	// never a set peering's representative or the AS-ANY sentinel — and the
-	// full-table imports found toward them.
+	// full-table imports found toward them, and the denoter Peers expanded
+	// the peerings' sets with, whose memos decide which clauses name a peer.
 	real  map[types.ASN]bool
 	fulls []fullImport
+	den   *denoter
 }
 
 // setKey is a set the static walk reported missing for the attribute kind's

@@ -6,6 +6,7 @@ import (
 	"maps"
 	"math/rand/v2"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -33,7 +34,7 @@ const aspaLocal = types.ASN(64500)
 var aspaPeers = []types.ASN{64501, 64502, 64503, 64504}
 
 type aspaImp struct {
-	peering string // "as", "router", "any", "set", "or", "anyor" (AS-ANY OR as)
+	peering string // "as", "router", "any", "set", "or", "anyor" (AS-ANY OR as), "gone" (a missing set), "tpl" (a set template)
 	as, as2 types.ASN
 	swap    bool   // "anyor": as first, AS-ANY second
 	form    string // "import", "v6", "mp"
@@ -58,6 +59,9 @@ type aspaModel struct {
 	imps   []aspaImp
 	exps   []aspaExp
 	up     []types.ASN               // AS-UP's members
+	upAny  bool                      // AS-UP also lists AS-ANY
+	upGone bool                      // AS-UP also lists AS-NOWHERE, a set the registry lacks
+	tpl    map[types.ASN][]string    // AS64500:AS-T:<peer>'s members; no entry: no such set
 	sets   []aspaSet                 // AS-C1, AS-C2
 	namesL map[types.ASN]bool        // peers whose aut-num imports from aspaLocal
 	aspas  map[types.ASN][]types.ASN // customer -> providers ([0]: AS0)
@@ -82,12 +86,16 @@ func aspaFilters(form string) (full, partial, empty []string) {
 }
 
 func randomASPAModel(r *rand.Rand) *aspaModel {
-	m := &aspaModel{namesL: map[types.ASN]bool{}, aspas: map[types.ASN][]types.ASN{}}
+	m := &aspaModel{namesL: map[types.ASN]bool{}, aspas: map[types.ASN][]types.ASN{}, tpl: map[types.ASN][]string{}}
 	peer := func() types.ASN { return aspaPeers[r.IntN(len(aspaPeers))] }
-	for n := 1 + r.IntN(4); n > 0; n-- {
+	for n := 1 + r.IntN(5); n > 0; n-- {
 		// "set" twice: a set peering is what lets the reverse index and
 		// SetPeers change an answer, cases the test requires to be drawn.
+		// One import in four draws a missing set or a set template instead.
 		kinds := []string{"as", "router", "any", "set", "set", "or", "anyor"}
+		if r.IntN(4) == 0 {
+			kinds = []string{"gone", "tpl", "tpl"}
+		}
 		im := aspaImp{peering: kinds[r.IntN(len(kinds))], as: peer(), as2: peer(),
 			swap: r.IntN(2) == 0, form: []string{"import", "v6", "mp"}[r.IntN(3)]}
 		full, partial, empty := aspaFilters(im.form)
@@ -123,6 +131,17 @@ func randomASPAModel(r *rand.Rand) *aspaModel {
 	}
 	if len(m.up) == 0 {
 		m.up = []types.ASN{aspaPeers[0]}
+	}
+	m.upAny, m.upGone = r.IntN(3) == 0, r.IntN(4) == 0
+	for _, p := range aspaPeers {
+		switch r.IntN(4) {
+		case 1:
+			m.tpl[p] = []string{p.String()}
+		case 2:
+			m.tpl[p] = []string{peer().String()}
+		case 3:
+			m.tpl[p] = []string{p.String(), "AS-ANY"}
+		}
 	}
 	mbrs := func() string { return []string{"", "MNT-A", "ANY"}[r.IntN(3)] }
 	c1 := aspaSet{name: "AS-C1", mbrs: mbrs()}
@@ -182,6 +201,10 @@ func (m *aspaModel) render() []string {
 			peering = "AS-ANY"
 		case "set":
 			peering = "AS-UP"
+		case "gone":
+			peering = "AS-GONE"
+		case "tpl":
+			peering = "AS64500:AS-T:PeerAS"
 		case "or":
 			peering = "(" + im.as.String() + " OR " + im.as2.String() + ")"
 		case "anyor":
@@ -215,7 +238,18 @@ func (m *aspaModel) render() []string {
 	for _, a := range m.up {
 		up = append(up, a.String())
 	}
+	if m.upAny {
+		up = append(up, "AS-ANY")
+	}
+	if m.upGone {
+		up = append(up, "AS-NOWHERE")
+	}
 	texts = append(texts, "as-set: AS-UP\nmembers: "+strings.Join(up, ", ")+"\nmnt-by: MNT-A\nsource: RIPE\n")
+	for _, p := range aspaPeers {
+		if ms, ok := m.tpl[p]; ok {
+			texts = append(texts, "as-set: AS64500:AS-T:"+p.String()+"\nmembers: "+strings.Join(ms, ", ")+"\nmnt-by: MNT-A\nsource: RIPE\n")
+		}
+	}
 	for _, s := range m.sets {
 		t := "as-set: " + s.name + "\n"
 		if len(s.members) > 0 {
@@ -247,7 +281,8 @@ func (m *aspaModel) set() *rpki.ASPAs {
 // oracle returns the lint/aspa-* issues the model's choices imply, as
 // "rule index peers afs|S" lines, sorted.
 func (m *aspaModel) oracle(setPeers, index bool) []string {
-	forward, viaSets, real, anyPeering := m.peers(setPeers, index)
+	v := m.peers(setPeers, index)
+	forward, viaSets, real := v.forward, v.viaSets, v.real
 	var out []string
 	providers, hasASPA := m.aspas[aspaLocal]
 	lists := func(ps []types.ASN, x types.ASN) bool { return slices.Contains(ps, x) }
@@ -259,7 +294,7 @@ func (m *aspaModel) oracle(setPeers, index bool) []string {
 			}
 			afs := map[string]string{"import": "[ipv4.unicast]", "v6": "[ipv6.unicast]", "mp": "[ipv4.unicast ipv6.unicast]"}[im.form]
 			seen := map[types.ASN]bool{}
-			for _, x := range im.names(m.up) {
+			for _, x := range m.names(im) {
 				if seen[x] || !real[x] || lists(providers, x) {
 					continue
 				}
@@ -269,7 +304,7 @@ func (m *aspaModel) oracle(setPeers, index bool) []string {
 		}
 	}
 	// Stale providers.
-	if hasASPA && providers[0] != 0 && !anyPeering {
+	if hasASPA && providers[0] != 0 && !v.anyPeering && !v.missing {
 		for _, p := range providers {
 			if !forward[p] && !viaSets[p] {
 				out = append(out, fmt.Sprintf("%s -1 [%s] []", consist.RuleASPAStaleProvider, p))
@@ -282,26 +317,47 @@ func (m *aspaModel) oracle(setPeers, index bool) []string {
 }
 
 // names returns the ASes an import's peering names as its peer (ruling 1):
-// an AS number, either side of an OR of two, an as-set's members — never
-// through AS-ANY, alone or inside an OR, and never a peering with a router
-// the session does not give (undecided).
-func (im aspaImp) names(up []types.ASN) []types.ASN {
+// an AS number, either side of an OR of two, an as-set's members unless the
+// set also lists AS-ANY (ruling R7), each peer whose instantiation of the
+// set template lists it and not AS-ANY (ruling R9) — never through AS-ANY,
+// alone or inside an OR, never a missing set, and never a peering with a
+// router the session does not give (undecided).
+func (m *aspaModel) names(im aspaImp) []types.ASN {
 	switch im.peering {
 	case "as":
 		return []types.ASN{im.as}
 	case "or":
 		return []types.ASN{im.as, im.as2}
 	case "set":
-		return up
+		if !m.upAny {
+			return m.up
+		}
+	case "tpl":
+		var out []types.ASN
+		for _, p := range aspaPeers {
+			if ms := m.tpl[p]; slices.Contains(ms, p.String()) && !slices.Contains(ms, "AS-ANY") {
+				out = append(out, p)
+			}
+		}
+		return out
 	}
 	return nil
 }
 
+// aspaPeerView is what the oracle derives of consist.Peers for the model.
+type aspaPeerView struct {
+	forward, viaSets, real map[types.ASN]bool
+	anyPeering             bool // a peering reaches AS-ANY, or is a set template (Skipped)
+	missing                bool // a peering reaches a set the registry lacks (ruling R8)
+}
+
 // peers returns what consist.Peers lists — Forward, ViaSets — the peers Lint
 // runs a real session toward (Forward, Reverse with an index, ViaSets with
-// setPeers), and whether a peering reaches AS-ANY (Skipped).
-func (m *aspaModel) peers(setPeers, index bool) (forward, viaSets, real map[types.ASN]bool, anyPeering bool) {
-	forward = map[types.ASN]bool{}
+// setPeers), whether a peering reaches AS-ANY or is a set template
+// (Skipped), and whether one reaches a missing set.
+func (m *aspaModel) peers(setPeers, index bool) aspaPeerView {
+	v := aspaPeerView{forward: map[types.ASN]bool{}, viaSets: map[types.ASN]bool{}}
+	forward := v.forward
 	setPeering := false
 	for _, im := range m.imps {
 		switch im.peering {
@@ -309,37 +365,41 @@ func (m *aspaModel) peers(setPeers, index bool) (forward, viaSets, real map[type
 			forward[im.as] = true
 		case "or":
 			forward[im.as], forward[im.as2] = true, true
-		case "any":
-			anyPeering = true
+		case "any", "tpl":
+			v.anyPeering = true
 		case "anyor":
-			forward[im.as], anyPeering = true, true
+			forward[im.as], v.anyPeering = true, true
 		case "set":
 			setPeering = true
+		case "gone":
+			v.missing = true
 		}
 	}
 	for _, e := range m.exps {
 		forward[e.to] = true
 	}
-	viaSets = map[types.ASN]bool{}
 	if setPeering {
+		// AS-UP lists AS-ANY: its expansion lists no AS (Skipped instead).
+		v.anyPeering = v.anyPeering || m.upAny
+		v.missing = v.missing || m.upGone
 		for _, a := range m.up {
-			if !forward[a] {
-				viaSets[a] = true
+			if !forward[a] && !m.upAny {
+				v.viaSets[a] = true
 			}
 		}
 	}
-	real = maps.Clone(forward)
+	v.real = maps.Clone(forward)
 	if index {
 		for p := range m.namesL {
-			real[p] = true
+			v.real[p] = true
 		}
 	}
 	if setPeers {
-		for p := range viaSets {
-			real[p] = true
+		for p := range v.viaSets {
+			v.real[p] = true
 		}
 	}
-	return forward, viaSets, real, anyPeering
+	return v
 }
 
 // customerSets returns the lint/aspa-customer-set lines: each direct member
@@ -464,6 +524,8 @@ func TestModelASPA(t *testing.T) {
 		consist.RuleASPAMissingProvider, consist.RuleASPAMissingProvider + " AS0", consist.RuleASPAMissingProvider + " both families",
 		consist.RuleASPAStaleProvider, consist.RuleASPACustomerSet, consist.RuleASPACustomerSet + " AS0",
 		consist.RuleASPACustomerSet + " claimant", "reverse peers change it", "set peers change it",
+		consist.RuleASPAMissingProvider + " template", "set reaching AS-ANY, full table from an omitted peer",
+		"template reaching AS-ANY, full table from an omitted peer", "missing set silences a stale provider",
 		"AS-ANY in an OR, full table from an omitted peer", "empty full-looking filter from an omitted peer (whole)",
 		"empty full-looking filter from an omitted peer (split)",
 	} {
@@ -508,6 +570,9 @@ func (m *aspaModel) count(counts map[string]int) {
 					if m.aspas[aspaLocal][0] == 0 {
 						seen[rule+" AS0"] = true
 					}
+					if i, err := strconv.Atoi(f[1]); err == nil && m.imps[i].peering == "tpl" {
+						seen[rule+" template"] = true
+					}
 					if strings.Contains(line, "ipv4.unicast ipv6.unicast") {
 						seen[rule+" both families"] = true
 					}
@@ -526,13 +591,21 @@ func (m *aspaModel) count(counts map[string]int) {
 		// filter accepting nothing.
 		providers, hasASPA := m.aspas[aspaLocal]
 		for _, sp := range []bool{false, true} {
-			_, _, real, _ := m.peers(sp, idx)
-			omits := func(x types.ASN) bool { return hasASPA && real[x] && !slices.Contains(providers, x) }
+			v := m.peers(sp, idx)
+			omits := func(x types.ASN) bool { return hasASPA && v.real[x] && !slices.Contains(providers, x) }
 			for _, im := range m.imps {
 				if im.peering == "anyor" && im.full && omits(im.as) {
 					seen["AS-ANY in an OR, full table from an omitted peer"] = true
 				}
-				if im.empty && slices.ContainsFunc(im.names(m.up), omits) {
+				if im.peering == "set" && m.upAny && im.full && slices.ContainsFunc(m.up, omits) {
+					seen["set reaching AS-ANY, full table from an omitted peer"] = true
+				}
+				if im.peering == "tpl" && im.full && slices.ContainsFunc(aspaPeers, func(x types.ASN) bool {
+					return slices.Contains(m.tpl[x], x.String()) && slices.Contains(m.tpl[x], "AS-ANY") && omits(x)
+				}) {
+					seen["template reaching AS-ANY, full table from an omitted peer"] = true
+				}
+				if im.empty && slices.ContainsFunc(m.names(im), omits) {
 					kind := "(whole)"
 					if strings.Contains(im.filter, "/1^+") {
 						kind = "(split)"
@@ -543,6 +616,13 @@ func (m *aspaModel) count(counts map[string]int) {
 		}
 		if !slices.Equal(m.oracle(false, idx), m.oracle(true, idx)) {
 			seen["set peers change it"] = true
+		}
+		// A provider no peering names, that a missing set alone keeps from
+		// being reported (ruling R8).
+		v := m.peers(false, idx)
+		if ps, ok := m.aspas[aspaLocal]; ok && ps[0] != 0 && !v.anyPeering && v.missing &&
+			slices.ContainsFunc(ps, func(p types.ASN) bool { return !v.forward[p] && !v.viaSets[p] }) {
+			seen["missing set silences a stale provider"] = true
 		}
 	}
 	for _, sp := range []bool{false, true} {

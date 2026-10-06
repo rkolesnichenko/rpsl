@@ -165,15 +165,17 @@ code):
   a conjunct that accepts the family's whole space less any negated
   prefixes, has no positive AS-path or community test, and accepts at least
   one prefix — but its ASPA does not list that peer, or is an AS0 ASPA. A
-  peering whose AS expression mentions `AS-ANY` anywhere on its positive
-  side (in an `OR` or `AND`, or left of an `EXCEPT`) names no peer, so its
-  clause never counts. Networks verifying ASPA would treat
+  peering that reaches `AS-ANY` anywhere on its positive side (in an `OR` or
+  `AND`, or left of an `EXCEPT`) — written, through an as-set's expansion, or
+  in a peering-set — names no peer, so its clause never counts; a set
+  template is instantiated for the peer, and names it only if that set lists
+  it (a missing one names nobody). Networks verifying ASPA would treat
   its routes through that peer as leaks. Only for peers the aut-num's
   peerings name or that name it, never a set peering's representative.
 - **`lint/aspa-stale-provider`** (Info) — with `Checker.ASPAs`: the aut-num's
   ASPA lists a provider none of its peerings names, directly or through a
   set. Silent when a peering could name any AS (`AS-ANY`, a regexp, a set
-  template).
+  template), or reaches a set, at any depth, that the source does not have.
 - **`lint/aspa-customer-set`** (Warning) — with `Checker.ASPAs`: the aut-num
   announces an as-set (named outside `NOT` and outside AS-path regexps in an
   `export:`/`mp-export:` filter) whose direct member AS — listed, or an

@@ -1075,10 +1075,14 @@ members and ASPA provider lists, never an AS path. `lint/aspa-missing-provider`
 (or its ASPA is AS0). A full table is a conjunct of a decided clause accepting the
 family's whole space less negated prefixes, with no positive AS-path or community
 test, and accepting at least one prefix; the clause counts only if its own peering
-names the peer, so a peering whose AS expression mentions `AS-ANY` anywhere on its
-positive side (in `OR`, `AND`, or left of `EXCEPT`) names no peer and never counts.
+names the peer, so a peering reaching `AS-ANY` anywhere on its positive side (in
+`OR`, `AND`, or left of `EXCEPT`) — written, through an as-set's expansion, or in a
+peering-set — names no peer and never counts; a set template is instantiated for
+the peer and names it only if that set lists it. Each set is expanded once per
+`Lint` call: the rule reuses `Peers`' expansions.
 `lint/aspa-stale-provider` (Info): the ASPA lists a provider none of the aut-num's
-peerings names, directly or through a set; silent when a peering could name any AS.
+peerings names, directly or through a set; silent when a peering could name any AS,
+or reaches a set, at any depth, that the `Source` does not have.
 `lint/aspa-customer-set` (Warning): an as-set the aut-num announces has a direct
 member (listed, or claiming `member-of:` under `mbrs-by-ref:`) whose ASPA does not
 name the aut-num, or is AS0; the issue's `Peers` holds that member. An AS with no

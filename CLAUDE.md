@@ -209,7 +209,7 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   - A direction where neither side has any term is `Direction.NoPolicy` ("no policy either way"), never "consistent".
   - "Announces" means "permits announcing" (policy text, not a RIB).
   - `Corpus.IndexPeers` keeps AS numbers only, never decoded policies.
-  - The ASPA rules (`Checker.ASPAs`) read conjunct structure, peerings, set members and ASPA provider lists only; "full table" is AnyPrefix, non-empty, with only negated tests; never a path. A clause counts only if its own peering names the peer: a peering mentioning AS-ANY on its positive side (OR, AND, left of EXCEPT) names none.
+  - The ASPA rules (`Checker.ASPAs`) read conjunct structure, peerings, set members and ASPA provider lists only; "full table" is AnyPrefix, non-empty, with only negated tests; never a path. A clause counts only if its own peering names the peer: a peering reaching AS-ANY on its positive side (OR, AND, left of EXCEPT) — written, through an as-set, or in a peering-set — names none; a set template is instantiated for the peer. Stale-provider is silent when a peering reaches a missing set (`peerInfo.missing`, never `PeerList.Skipped`).
 
 - **The server (`resolve/irrdq`) answers as IRRd 4.5.3 does.**
   - IRRd's semantics live in `irrdq`, never in the engine (`!i…,1` drops an operator member and
