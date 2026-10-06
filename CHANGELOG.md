@@ -9,6 +9,35 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+## [0.25.0] - Unreleased
+
+### Added
+
+- `resolve/rpki`: `ASPA`, `ASPAs` (`Providers`, `Len`, `All`), `NewASPAs` and `ReadASPAs` --
+  RPKI ASPA payloads (draft-ietf-sidrops-aspa-profile-29), validated strictly and merged per
+  customer, read from the `aspas` array of rpki-client's (`customer_asid`) or Routinator's
+  (`customer`) JSON export; an export with no `aspas`, or with rpki-client 8.0-8.4's
+  `provider_authorizations`, is an error. `MaxProviders` is 10,000. ASPA SLURM is not applied.
+- `resolve/consist`: `Checker.ASPAs` turns on three `Lint` rules: `lint/aspa-missing-provider`
+  (Warning), `lint/aspa-stale-provider` (Info) and `lint/aspa-customer-set` (Warning); see
+  docs/diagnostics.md. A clause counts only if its own peering names the peer (a peering with
+  `AS-ANY` on its positive side names none), and a full table is a conjunct accepting the whole
+  family less negated prefixes, with no positive AS-path or community test, accepting at least
+  one prefix.
+- `rpslcheck -rpki FILE`: lint with the ASPAs of a validator's export, in all three modes.
+- `resolve/nrtm4`: the notification file's signature may be ES256, ES384, ES512, Ed25519, RS256
+  or PS256, each bound to its key type (RSA keys of at least 2048 bits); `EdDSA` (deprecated by
+  RFC 9864), `Ed448`, MACs and `none` are refused.
+- Tests: `TestModelASPA` (seven backends), `FuzzReadASPAs`, `FuzzVerifyJWS` (45 fuzz targets in
+  all); `TestRealDataConsist` takes `RPSL_CONSIST_ASPA=1`; `scripts/check.sh` holds
+  `resolve/rpki` to the engine-purity check (no `net`).
+
+### Changed
+
+| Before | After | Migration |
+| --- | --- | --- |
+| `nrtm4.ParsePublicKey` returned `*ecdsa.PublicKey` | returns `crypto.PublicKey` | type-assert where the ECDSA key is needed: `k.(*ecdsa.PublicKey)` |
+
 ## [0.24.1] - 2026-10-04
 
 ### Fixed

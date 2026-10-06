@@ -60,8 +60,8 @@ done
 step "tools: scripts/mkproxy builds and vets"
 (cd scripts/mkproxy && GOWORK=off go build -o /dev/null . && GOWORK=off go vet .) || bad "scripts/mkproxy"
 
-step "engine purity: resolve, resolve/peval, resolve/rtconfig, resolve/consist and resolve/irrdq do not import net"
-if (cd resolve && go list -deps . ./peval ./rtconfig ./consist ./irrdq) | grep -qx net; then bad "resolve, resolve/peval, resolve/rtconfig, resolve/consist or resolve/irrdq imports net"; fi
+step "engine purity: resolve, resolve/peval, resolve/rtconfig, resolve/consist, resolve/irrdq and resolve/rpki do not import net"
+if (cd resolve && go list -deps . ./peval ./rtconfig ./consist ./irrdq ./rpki) | grep -qx net; then bad "resolve, resolve/peval, resolve/rtconfig, resolve/consist, resolve/irrdq or resolve/rpki imports net"; fi
 
 bin=$(go env GOPATH)/bin
 for tool in staticcheck govulncheck; do

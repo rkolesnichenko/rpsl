@@ -44,6 +44,7 @@ Every layer ships. Until v1.0.0, a minor version may change the API; the
 | `rpslconf` | IRRToolSet's `RtConfig` and `peval` on this engine: router configuration for Cisco IOS, Junos, IOS-XR and BIRD 2 from `@RtConfig` templates, and filters' normal forms (`resolve/cmd/rpslconf`) | shipped |
 | `types.PrefixSpace` | An exact set of prefixes of both families — union, intersection, difference, without ever enumerating — that `resolve/consist` decides prefix consistency with | shipped |
 | `resolve/consist` | Whether two neighbours' `peval`-evaluated policies agree, in one address family — exact for prefixes, conditional (`Given`) or `Undecided` for AS-path and community tests, never guessed — plus a lint of one aut-num's own policies (dead clauses, missing sets/routers/aut-nums) | shipped |
+| ASPA lint | `rpki.ASPAs`/`ReadASPAs` (rpki-client and Routinator exports, draft-ietf-sidrops-aspa-profile-29) and three `lint/aspa-*` rules in `resolve/consist` comparing an aut-num's policy and announced as-sets with its ASPA; `rpslcheck -rpki FILE`; the NRTMv4 client also verifies ES384, ES512, Ed25519, RS256 and PS256 | shipped |
 | `rpslcheck` | Lint an aut-num and check it against its neighbours, or sweep a dump and report totals, on `resolve/consist` (`resolve/cmd/rpslcheck`) | shipped |
 | `resolve/irrdq` + `resolve/irrdserver` | IRRd's query protocol over in-memory registries: IRRd 4.5.3's answers (or RFC 2622's, for `!i…,1` and `!a`), held to a recording of IRRd itself, served on one port with explicit limits | shipped |
 | `rpsld` | An IRRd-compatible mirror of dumps, NRTMv4 and RPKI, kept current, that bgpq4, IRRToolSet and `rpslq` query unchanged (`resolve/cmd/rpsld`, [`docs/rpsld.md`](docs/rpsld.md)) | shipped |
@@ -376,8 +377,8 @@ FUZZTIME=15s scripts/check.sh  # ... plus every fuzz target (what CI runs)
   `FuzzParseInterface`, `FuzzParsePeer`, `FuzzParseRPAttribute`,
   `FuzzParseTypedef`, `FuzzParseProtocol`, `FuzzFilterString`, `FuzzParseMPFilter` (policy);
   `FuzzReadFrame`, `FuzzParseMembers`, `FuzzParseRegistries` (resolve/irrd); `FuzzScanResponse`
-  (resolve/whois); `FuzzReadJSON`, `FuzzApplySLURM` (resolve/rpki);
-  `FuzzParseNotification`, `FuzzReadDelta` (resolve/nrtm4);
+  (resolve/whois); `FuzzReadJSON`, `FuzzApplySLURM`, `FuzzReadASPAs` (resolve/rpki);
+  `FuzzParseNotification`, `FuzzReadDelta`, `FuzzVerifyJWS` (resolve/nrtm4);
   `FuzzAggregate` (resolve/internal/filtergen); `FuzzCorpusDelete`, `FuzzNormalizeFilter` (resolve);
   `FuzzTranslateRegexp` (resolve/rtconfig); `FuzzParseTemplate` (resolve/internal/rpslconf);
   `FuzzSession` (resolve/irrdq); `FuzzSourceSpec` (resolve/internal/rpsld).

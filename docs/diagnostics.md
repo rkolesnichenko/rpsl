@@ -161,10 +161,13 @@ code):
   sessions are still linted.
 - **`lint/aspa-missing-provider`** (Warning) — with `Checker.ASPAs`: the
   aut-num imports a full table from a peer — a decided `import:` or
-  `mp-import:` clause whose peering names the peer (not `AS-ANY`) and whose
-  filter has a conjunct accepting the family's whole space less any negated
-  prefixes, with no positive AS-path or community test — but its ASPA does
-  not list that peer, or is an AS0 ASPA. Networks verifying ASPA would treat
+  `mp-import:` clause whose own peering names the peer, and whose filter has
+  a conjunct that accepts the family's whole space less any negated
+  prefixes, has no positive AS-path or community test, and accepts at least
+  one prefix — but its ASPA does not list that peer, or is an AS0 ASPA. A
+  peering whose AS expression mentions `AS-ANY` anywhere on its positive
+  side (in an `OR` or `AND`, or left of an `EXCEPT`) names no peer, so its
+  clause never counts. Networks verifying ASPA would treat
   its routes through that peer as leaks. Only for peers the aut-num's
   peerings name or that name it, never a set peering's representative.
 - **`lint/aspa-stale-provider`** (Info) — with `Checker.ASPAs`: the aut-num's

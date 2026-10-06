@@ -191,7 +191,7 @@ again from `-nrtm-interval` after a success. `nrtm4.Client` loads the whole
 snapshot again after three failed deltas in a row, so without the hour's
 backoff a delta the mirror keeps refusing would download RIPE's snapshot
 every few minutes. Every
-file is verified before it is used (design §8.8): an ES256 signature, a
+file is verified before it is used (design §8.8): a signature (ES256, ES384, ES512, Ed25519, RS256 or PS256, each bound to its key type), a
 SHA-256 hash per file, the delta chain contiguous; a refused delta applies
 nothing, and nothing after it does. A notification file older than 24 hours
 is refused, as IRRd refuses one, so a restart cannot be fed a replayed old

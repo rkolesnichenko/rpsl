@@ -172,7 +172,7 @@ severities as [`docs/diagnostics.md`](diagnostics.md):
 | `lint/no-aut-num` | Warning | A peering names an AS whose aut-num the source does not have (an AS named only through a set: with `-set-peers`, or as its peering's representative). |
 | `lint/undecided` | Info | A term `peval` cannot decide for a session, or a session whose filter cannot be evaluated at all (it names a set reaching `AS-ANY`, or has no normal form); the other sessions are still linted. |
 | `lint/limit` | Warning | A session's evaluation hit a limit; the other sessions are still linted. |
-| `lint/aspa-missing-provider` | Warning | With `-rpki`: the aut-num takes a full table (`ANY`, less negated prefixes, with no positive AS-path or community test) from a peer its peering names, and its ASPA does not list that peer, or is AS0. |
+| `lint/aspa-missing-provider` | Warning | With `-rpki`: the aut-num takes a full table from a peer, and its ASPA does not list that peer, or is AS0. A full table is a conjunct accepting the family's whole space less negated prefixes, with no positive AS-path or community test, that accepts at least one prefix; the clause counts only if its own peering names the peer, and a peering whose AS expression mentions `AS-ANY` on its positive side (`OR`, `AND`, left of `EXCEPT`) names no peer. |
 | `lint/aspa-stale-provider` | Info | With `-rpki`: the aut-num's ASPA lists a provider none of its peerings names (silent when a peering could name any AS). |
 | `lint/aspa-customer-set` | Warning | With `-rpki`: the aut-num announces an as-set whose direct member AS has an ASPA not naming it, or an AS0 one. |
 
@@ -279,6 +279,26 @@ The three `lint/aspa-*` rules compare registry data (an aut-num's
 import/export policy and as-sets) with the ASPAs. They never look at AS
 paths. A finding is a snapshot of one export: a later export, or a changed
 registry, can give another.
+
+Measured: `RPSL_CONSIST_ASPA=1` (`TestRealDataConsist`, `resolve/consist`) lints with
+NTT's export (`metadata.buildtime` 2026-09-27T15:06:50Z, 3,269 customers with an
+ASPA, the export's own `uniquevaps`) against the RIPE dumps downloaded on
+2026-09-27, run on 2026-10-06. A sweep of all 39,918 aut-nums (6,469 s, peak RSS
+4,372 MB) reports:
+
+| Rule | Issues |
+| --- | ---: |
+| `lint/aspa-customer-set` | 95,353 |
+| `lint/aspa-missing-provider` | 4,036 |
+| `lint/aspa-stale-provider` | 1,834 |
+
+A seeded sample of 2,000 aut-nums (RPSL_CONSIST_SAMPLE=2000, 379 s, peak RSS
+2,673 MB) gave 2,049, 138 and 60. An issue is one attribute and one peer (or
+set member), merged across families, so one aut-num can have many: AS1764
+announces AS-NEXTLAYER, whose members AS208089 and AS58299 have ASPAs that do
+not list it. Five examples of each rule were checked by hand against the dump
+and the export (the aut-num's `import:`/`export:` lines, its as-set, the ASPA's
+providers) and all agreed.
 
 ## Sweeps
 
