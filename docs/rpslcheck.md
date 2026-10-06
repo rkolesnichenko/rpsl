@@ -283,17 +283,17 @@ registry, can give another.
 Measured: `RPSL_CONSIST_ASPA=1` (`TestRealDataConsist`, `resolve/consist`) lints with
 NTT's export (`metadata.buildtime` 2026-09-27T15:06:50Z, 3,269 customers with an
 ASPA, the export's own `uniquevaps`) against the RIPE dumps downloaded on
-2026-09-27, run on 2026-10-06. A sweep of all 39,918 aut-nums (6,469 s, peak RSS
-4,372 MB) reports:
+2026-09-27, run on 2026-10-06. A sweep of all 39,918 aut-nums (6,480 s, peak RSS
+4,356 MB) reports:
 
 | Rule | Issues |
 | --- | ---: |
 | `lint/aspa-customer-set` | 95,353 |
-| `lint/aspa-missing-provider` | 4,036 |
-| `lint/aspa-stale-provider` | 1,834 |
+| `lint/aspa-missing-provider` | 3,940 |
+| `lint/aspa-stale-provider` | 1,771 |
 
-A seeded sample of 2,000 aut-nums (RPSL_CONSIST_SAMPLE=2000, 379 s, peak RSS
-2,673 MB) gave 2,049, 138 and 60. These are issues, not aut-nums. For
+A seeded sample of 2,000 aut-nums (RPSL_CONSIST_SAMPLE=2000, 378 s, peak RSS
+2,663 MB) gave 2,049, 138 and 60. These are issues, not aut-nums. For
 `lint/aspa-customer-set` an issue is one export attribute, one announced as-set
 and one member, merged across families: an aut-num that announces one as-set to
 many peers on separate `export:` lines repeats each member once per line, so
