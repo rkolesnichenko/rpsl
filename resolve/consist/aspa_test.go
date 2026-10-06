@@ -88,9 +88,23 @@ func TestASPAMissingProvider(t *testing.T) {
 		{"through a set, without SetPeers", []string{"import: from AS-PEERS accept ANY"}, []rpki.ASPA{aspa(1, 2)}, false, nil},
 		{"through a set, with SetPeers", []string{"import: from AS-PEERS accept ANY"}, []rpki.ASPA{aspa(1, 2)},
 			true, []string{"lint/aspa-missing-provider import 0 [AS3] " + v4 + ": imports a full table from AS3, but AS1's ASPA does not list it as a provider"}},
+		{"OR with AS-ANY, toward the named AS", []string{"import: from AS2 OR AS-ANY accept ANY"}, []rpki.ASPA{aspa(1, 3)}, false, nil},
+		{"OR with AS-ANY, toward another peer", []string{"import: from AS2 OR AS-ANY accept ANY", "export: to AS5 announce AS1"},
+			[]rpki.ASPA{aspa(1, 3)}, false, nil},
+		{"AS-ANY EXCEPT an AS", []string{"import: from AS-ANY EXCEPT AS3 accept ANY", "export: to AS2 announce AS1"},
+			[]rpki.ASPA{aspa(1, 3)}, false, nil},
+		{"reverse-only peer through a set", []string{"import: from AS-PEERS accept ANY"}, []rpki.ASPA{aspa(1, 2)}, false,
+			[]string{"lint/aspa-missing-provider import 0 [AS3] " + v4 + ": " + "imports a full table from AS3, but AS1's ASPA does not list it as a provider"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			ch := checker(t, autNum(1, c.lines...), autNum(2), autNum(3))
+			objs := []string{autNum(2), autNum(3)} // other aut-nums, unless the case names its own
+			switch c.name {
+			case "OR with AS-ANY, toward another peer":
+				objs = append(objs, autNum(5))
+			case "reverse-only peer through a set":
+				objs = []string{autNum(2), autNum(3, "export: to AS1 announce AS3")}
+			}
+			ch := checker(t, append([]string{autNum(1, c.lines...)}, objs...)...)
 			ch.SetPeers = c.setPeers
 			var aspas *rpki.ASPAs
 			if c.aspas != nil {

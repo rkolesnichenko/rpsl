@@ -56,13 +56,29 @@ func onlyNegated(cj resolve.Conjunct) bool {
 
 // namesPeer reports whether a peering names its peer specifically: an AS
 // number, an as-set other than AS-ANY or a peering-set — not AS-ANY, which
-// names no AS. Under EXCEPT only the left side names the peer.
+// names no AS, nor an expression mentioning it (AS2 OR AS-ANY). Under EXCEPT only the left side names the peer.
 func namesPeer(p policy.Peering) bool {
 	switch x := p.(type) {
 	case policy.PeeringAS:
-		return asExprNames(x.AS)
+		return !mentionsAny(x.AS) && asExprNames(x.AS)
 	case policy.PeeringSetRef:
 		return true
+	}
+	return false
+}
+
+// mentionsAny reports whether AS-ANY occurs on the positive side of e, at any
+// depth: inside OR or AND, or the left side of EXCEPT. Such a peering can
+// match a peer through AS-ANY alone, so it does not name the peer.
+func mentionsAny(e policy.ASExpr) bool {
+	switch x := e.(type) {
+	case policy.ASSetRef:
+		return anySets[x.Name.String()]
+	case policy.ASExprBinary:
+		if x.Op == policy.ASExcept {
+			return mentionsAny(x.L)
+		}
+		return mentionsAny(x.L) || mentionsAny(x.R)
 	}
 	return false
 }
