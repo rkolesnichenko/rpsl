@@ -63,13 +63,24 @@ func algsFor(key crypto.PublicKey) []string {
 			return []string{"ES512"}
 		}
 	case ed25519.PublicKey:
-		return []string{"Ed25519"}
+		if len(k) == ed25519.PublicKeySize {
+			return []string{"Ed25519"}
+		}
 	case *rsa.PublicKey:
 		if k.N.BitLen() >= 2048 {
 			return []string{"RS256", "PS256"}
 		}
 	}
 	return nil
+}
+
+// quoteAll renders algs as "A" or "B".
+func quoteAll(algs []string) string {
+	q := make([]string, len(algs))
+	for i, a := range algs {
+		q[i] = fmt.Sprintf("%q", a)
+	}
+	return strings.Join(q, " or ")
 }
 
 func describeKey(k crypto.PublicKey) string {
@@ -109,10 +120,10 @@ func verifyJWS(compact []byte, key crypto.PublicKey) ([]byte, error) {
 	}
 	allowed := algsFor(key)
 	if !slices.Contains(allowed, alg) {
-		if alg == "EdDSA" {
+		if _, isEd := key.(ed25519.PublicKey); isEd && alg == "EdDSA" {
 			return nil, errors.New(`JWS algorithm "EdDSA" is deprecated (RFC 9864); an Ed25519 key signs as "Ed25519"`)
 		}
-		return nil, fmt.Errorf("JWS algorithm %q, want %q for this key", alg, strings.Join(allowed, `" or "`))
+		return nil, fmt.Errorf("JWS algorithm %q, want %s for this key", alg, quoteAll(allowed))
 	}
 	if _, ok := h["crit"]; ok {
 		return nil, fmt.Errorf("JWS header names critical extensions %s, which are not understood", h["crit"])

@@ -208,18 +208,55 @@ func signAs(t testing.TB, alg string, key crypto.Signer, header, payload string)
 	return input + "." + base64.RawURLEncoding.EncodeToString(sig)
 }
 
-// testKeys generates one key of each accepted type, once per test binary.
+// testKeys generates a fresh key of each accepted type on every call.
 func testKeys(t testing.TB) map[string]crypto.Signer {
 	t.Helper()
-	p256, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	p384, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-	p521, _ := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
-	_, ed, _ := ed25519.GenerateKey(rand.Reader)
-	rk, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
+	must := func(k crypto.Signer, err error) crypto.Signer {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return k
 	}
-	return map[string]crypto.Signer{"ES256": p256, "ES384": p384, "ES512": p521, "Ed25519": ed, "RS256": rk, "PS256": rk}
+	ec := func(c elliptic.Curve) crypto.Signer {
+		k, err := ecdsa.GenerateKey(c, rand.Reader)
+		return must(k, err)
+	}
+	_, ed, err := ed25519.GenerateKey(rand.Reader)
+	must(ed, err)
+	rk, err := rsa.GenerateKey(rand.Reader, 2048)
+	must(rk, err)
+	return map[string]crypto.Signer{"ES256": ec(elliptic.P256()), "ES384": ec(elliptic.P384()), "ES512": ec(elliptic.P521()), "Ed25519": ed, "RS256": rk, "PS256": rk}
+}
+
+// Every accepted algorithm refuses a signature that is not its key's over this
+// header and payload: another key of the same type, another payload, a flipped byte.
+func TestVerifyBadSignatures(t *testing.T) {
+	keys, others := testKeys(t), testKeys(t)
+	for alg, k := range keys {
+		pub, err := ParsePublicKey(pemOf(t, k.Public()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		hdr := `{"alg":"` + alg + `"}`
+		good := signAs(t, alg, k, hdr, "payload")
+		if _, err := verifyJWS([]byte(good), pub); err != nil {
+			t.Fatalf("%s: good JWS: %v", alg, err)
+		}
+		parts := strings.Split(good, ".")
+		sig, _ := base64.RawURLEncoding.DecodeString(parts[2])
+		flipped := append([]byte(nil), sig...)
+		flipped[len(flipped)/2] ^= 1
+		for name, jws := range map[string]string{
+			"another key of the type":  signAs(t, alg, others[alg], hdr, "payload"),
+			"another payload":          parts[0] + "." + b64s("other") + "." + parts[2],
+			"a flipped signature byte": parts[0] + "." + parts[1] + "." + base64.RawURLEncoding.EncodeToString(flipped),
+		} {
+			if _, err := verifyJWS([]byte(jws), pub); err == nil {
+				t.Errorf("%s, %s: verified", alg, name)
+			}
+		}
+	}
 }
 
 // Every accepted algorithm verifies with its own key type, and only with it.
@@ -239,7 +276,10 @@ func TestVerifyAlgorithms(t *testing.T) {
 			if ko.Public().(interface{ Equal(crypto.PublicKey) bool }).Equal(k.Public()) {
 				continue // RS256 and PS256 share one RSA key
 			}
-			opub, _ := ParsePublicKey(pemOf(t, ko.Public()))
+			opub, err := ParsePublicKey(pemOf(t, ko.Public()))
+			if err != nil {
+				t.Fatal(err)
+			}
 			if _, err := verifyJWS([]byte(jws), opub); err == nil {
 				t.Errorf("%s file verified with the %s key", alg, other)
 			}

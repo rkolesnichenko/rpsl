@@ -102,7 +102,10 @@ func FuzzVerifyJWS(f *testing.F) {
 		if err != nil {
 			return
 		}
-		if strings.TrimSpace(jws) != signed[alg] && !strings.HasPrefix(strings.TrimSpace(jws), strings.Split(signed[alg], ".")[0]+".") {
+		// Only the signed header and payload verify; ECDSA's (r, n-s)
+		// re-signature is the one legitimate variant.
+		hdr := strings.Split(signed[alg], ".")[0]
+		if string(p) != "payload" || strings.Split(strings.TrimSpace(jws), ".")[0] != hdr {
 			t.Fatalf("an input the fuzzer made verified as %s: %q (payload %q)", alg, jws, p)
 		}
 	})
