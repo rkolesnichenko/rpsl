@@ -1,0 +1,13 @@
+{"type":"issue","as":"AS65101","rule":"lint/aspa-stale-provider","severity":"info","message":"AS65101's ASPA lists AS65104 as a provider, but no peering of AS65101 names it","index":-1,"peers":["AS65104"]}
+{"type":"issue","as":"AS65101","rule":"lint/aspa-missing-provider","severity":"warning","message":"imports a full table from AS65102, but AS65101's ASPA does not list it as a provider","attr":"import","index":0,"line":3,"peers":["AS65102"],"afs":["ipv4.unicast"]}
+{"type":"issue","as":"AS65101","rule":"lint/aspa-customer-set","severity":"warning","message":"announces AS-CUSTOMERS, whose member AS65111 has an ASPA that does not list AS65101 as a provider","attr":"export","index":0,"line":5,"peers":["AS65111"]}
+{"type":"issue","as":"AS65101","rule":"lint/empty","severity":"info","message":"export term AS65102 | AS-CUSTOMERS accepts no route","attr":"export","index":0,"line":5,"peers":["AS65102"],"afs":["ipv4.unicast"]}
+{"type":"direction","from":"AS65101","to":"AS65102","af":"ipv4.unicast","findings":0}
+{"type":"direction","from":"AS65102","to":"AS65101","af":"ipv4.unicast","findings":0}
+{"type":"direction","from":"AS65101","to":"AS65102","af":"ipv6.unicast","findings":0,"no_policy":true}
+{"type":"direction","from":"AS65102","to":"AS65101","af":"ipv6.unicast","findings":0,"no_policy":true}
+{"type":"direction","from":"AS65101","to":"AS65103","af":"ipv4.unicast","findings":0}
+{"type":"direction","from":"AS65103","to":"AS65101","af":"ipv4.unicast","findings":1}
+{"type":"finding","from":"AS65103","to":"AS65101","af":"ipv4.unicast","kind":"not-exported","severity":"info","example":"0.0.0.0/0","ranges":["0.0.0.0/0^+"],"given":["\u003c^ AS65103+ $\u003e"],"import_lines":[4]}
+{"type":"direction","from":"AS65101","to":"AS65103","af":"ipv6.unicast","findings":0,"no_policy":true}
+{"type":"direction","from":"AS65103","to":"AS65101","af":"ipv6.unicast","findings":0,"no_policy":true}

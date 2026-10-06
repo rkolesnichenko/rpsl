@@ -17,8 +17,10 @@ import (
 )
 
 const (
-	fixture    = "../../testdata/rpslcheck/objects.rpsl"
-	setFixture = "../../testdata/rpslcheck/setpeers.rpsl" // AS65010 names AS-IX's members only through it
+	fixture     = "../../testdata/rpslcheck/objects.rpsl"
+	setFixture  = "../../testdata/rpslcheck/setpeers.rpsl" // AS65010 names AS-IX's members only through it
+	aspaFixture = "../../testdata/rpslcheck/aspa.rpsl"
+	aspaJSON    = "../../testdata/rpslcheck/aspa.json"
 )
 
 func run(t *testing.T, args ...string) (stdout, stderr string, code int) {
@@ -65,6 +67,9 @@ func TestGoldens(t *testing.T) {
 		{"setpeers-set-peers", []string{"-dump", setFixture, "-set-peers", "AS65010"}, 1},
 		{"sweep-setpeers", []string{"-dump", setFixture, "-sweep"}, 1},
 		{"sweep-setpeers-json", []string{"-dump", setFixture, "-sweep", "-json"}, 1},
+		{"aspa", []string{"-dump", aspaFixture, "-rpki", aspaJSON, "AS65101"}, 1},
+		{"aspa-json", []string{"-dump", aspaFixture, "-rpki", aspaJSON, "-json", "AS65101"}, 1},
+		{"sweep-aspa", []string{"-dump", aspaFixture, "-rpki", aspaJSON, "-sweep"}, 1},
 		{"sweep-setpeers-set-peers", []string{"-dump", setFixture, "-sweep", "-set-peers"}, 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -280,7 +285,7 @@ source: RIPE
 	src := slowRouters{l.Source()}
 	afs, _ := families("both")
 	var out, errw bytes.Buffer
-	code := runSweep(context.Background(), src, afs, 0, 1, 1, 200*time.Millisecond, false, newWriter(&out, false), &errw)
+	code := runSweep(context.Background(), src, afs, 0, 1, 1, 200*time.Millisecond, false, nil, newWriter(&out, false), &errw)
 	if code == exitFailed {
 		t.Fatalf("exit %d; stderr %s", code, errw.String())
 	}
@@ -412,6 +417,25 @@ func TestSweepCountsSetPeers(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("-set-peers: want %q in:\n%s", want, out)
+		}
+	}
+}
+
+// An -rpki file that cannot be used stops the run (exit 3) and says why,
+// rather than reporting no ASPA issues.
+func TestRPKIFlagErrors(t *testing.T) {
+	dir := t.TempDir()
+	roasOnly := filepath.Join(dir, "roas.json")
+	if err := os.WriteFile(roasOnly, []byte(`{"roas": []}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct{ file, want string }{
+		"ROA-only export": {roasOnly, `no "aspas" member`},
+		"no such file":    {filepath.Join(dir, "missing.json"), "-rpki"},
+	} {
+		_, errw, code := run(t, "-dump", aspaFixture, "-rpki", c.file, "AS65101")
+		if code != 3 || !strings.Contains(errw, c.want) {
+			t.Errorf("%s: exit %d, stderr %q; want 3 and %q", name, code, errw, c.want)
 		}
 	}
 }

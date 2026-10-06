@@ -16,6 +16,7 @@ import (
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/consist"
 	"github.com/rkolesnichenko/rpsl/resolve/peval"
+	"github.com/rkolesnichenko/rpsl/resolve/rpki"
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
@@ -95,7 +96,7 @@ func (b budget) overError() string { return fmt.Sprintf("over its time budget of
 // peer list comes first, so a lint that runs out never drops a pair. The
 // pairs are each aut-num's Forward peers — and its ViaSets with setPeers;
 // without it, a ViaSets peer no pair covers is counted, not checked.
-func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFamily, sample int, seed uint64, conc int, checkTimeout time.Duration, setPeers bool, w *writer, stderr io.Writer) int {
+func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFamily, sample int, seed uint64, conc int, checkTimeout time.Duration, setPeers bool, aspas *rpki.ASPAs, w *writer, stderr io.Writer) int {
 	pi, ok := src.(resolve.PolicyIndex)
 	if !ok {
 		fmt.Fprintln(stderr, "rpslcheck: -sweep: the source cannot list its aut-nums")
@@ -113,7 +114,7 @@ func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFam
 		ases = ases[:sample]
 		slices.Sort(ases)
 	}
-	c := &consist.Checker{Eval: peval.Evaluator{Src: src}, SetPeers: setPeers}
+	c := &consist.Checker{Eval: peval.Evaluator{Src: src}, SetPeers: setPeers, ASPAs: aspas}
 	if !w.json {
 		w.only = ast.Warning
 	}

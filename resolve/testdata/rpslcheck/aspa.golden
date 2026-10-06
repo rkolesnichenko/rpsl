@@ -1,0 +1,15 @@
+AS65101 lint
+  info lint/aspa-stale-provider: AS65101's ASPA lists AS65104 as a provider, but no peering of AS65101 names it [AS65104]
+  warning lint/aspa-missing-provider import (line 3): imports a full table from AS65102, but AS65101's ASPA does not list it as a provider [AS65102; ipv4.unicast]
+  warning lint/aspa-customer-set export (line 5): announces AS-CUSTOMERS, whose member AS65111 has an ASPA that does not list AS65101 as a provider [AS65111]
+  info lint/empty export (line 5): export term AS65102 | AS-CUSTOMERS accepts no route [AS65102; ipv4.unicast]
+AS65101 -> AS65102 ipv4.unicast: consistent
+AS65102 -> AS65101 ipv4.unicast: consistent
+AS65101 -> AS65102 ipv6.unicast: no policy either way
+AS65102 -> AS65101 ipv6.unicast: no policy either way
+AS65101 -> AS65103 ipv4.unicast: consistent
+AS65103 -> AS65101 ipv4.unicast
+  info not-exported: AS65101's import (line 4) accepts routes AS65103's export does not permit announcing: 0.0.0.0/0^+ (e.g. 0.0.0.0/0)
+    given: <^ AS65103+ $>
+AS65101 -> AS65103 ipv6.unicast: no policy either way
+AS65103 -> AS65101 ipv6.unicast: no policy either way

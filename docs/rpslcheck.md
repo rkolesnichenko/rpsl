@@ -76,6 +76,7 @@ Generated from `rpslcheck -help`:
 | `-timeout` | `10m0s` | give up on the whole run after this long (0: never); a `-sweep` has no deadline unless this is given |
 | `-check-timeout` | `1m0s` | sweep: give each aut-num's peer list, its lint, and each pair's check this long, each its own budget, counting the ones that run out (0: no limit) |
 | `-set-peers` | off | also check (and lint toward) the peers named only through as-sets and peering-sets; there can be tens of thousands |
+| `-rpki` | — | a validator's JSON export (rpki-client `-j`, Routinator `json`): lint each aut-num against its ASPAs too (the `lint/aspa-*` rules); an export without ASPAs is an error |
 | `-v` | — | print rpslcheck's version and exit |
 
 ## Reading the output
@@ -171,6 +172,9 @@ severities as [`docs/diagnostics.md`](diagnostics.md):
 | `lint/no-aut-num` | Warning | A peering names an AS whose aut-num the source does not have (an AS named only through a set: with `-set-peers`, or as its peering's representative). |
 | `lint/undecided` | Info | A term `peval` cannot decide for a session, or a session whose filter cannot be evaluated at all (it names a set reaching `AS-ANY`, or has no normal form); the other sessions are still linted. |
 | `lint/limit` | Warning | A session's evaluation hit a limit; the other sessions are still linted. |
+| `lint/aspa-missing-provider` | Warning | With `-rpki`: the aut-num takes a full table (`ANY`, less negated prefixes, with no positive AS-path or community test) from a peer its peering names, and its ASPA does not list that peer, or is AS0. |
+| `lint/aspa-stale-provider` | Info | With `-rpki`: the aut-num's ASPA lists a provider none of its peerings names (silent when a peering could name any AS). |
+| `lint/aspa-customer-set` | Warning | With `-rpki`: the aut-num announces an as-set whose direct member AS has an ASPA not naming it, or an AS0 one. |
 
 `Lint` always evaluates both families; `-af` chooses which issues are
 written (and count toward the exit status and a sweep's totals): those of a
@@ -262,6 +266,19 @@ and a sweep counts them in its totals. Its lint still covers a peering
 through a set: each one that reaches none of the peers already linted is
 evaluated toward its lowest AS, so a term such a peering makes dead is still
 reported (with that AS as its peer).
+
+## ASPA (-rpki)
+
+`-rpki FILE` reads a relying party's JSON export and lints each aut-num
+against the ASPAs (RPKI Autonomous System Provider Authorization objects) in
+it. rpki-client writes ASPAs to its JSON unless run with `-A`; Routinator
+only with `enable-aspa`. An export with no `aspas` member is an error (exit
+3), not a run with no ASPA findings.
+
+The three `lint/aspa-*` rules compare registry data (an aut-num's
+import/export policy and as-sets) with the ASPAs. They never look at AS
+paths. A finding is a snapshot of one export: a later export, or a changed
+registry, can give another.
 
 ## Sweeps
 

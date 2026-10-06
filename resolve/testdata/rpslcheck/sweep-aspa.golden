@@ -1,0 +1,17 @@
+AS65101 warning lint/aspa-missing-provider import (line 3): imports a full table from AS65102, but AS65101's ASPA does not list it as a provider [AS65102; ipv4.unicast]
+AS65101 warning lint/aspa-customer-set export (line 5): announces AS-CUSTOMERS, whose member AS65111 has an ASPA that does not list AS65101 as a provider [AS65111]
+totals
+  aut-nums                                 3
+  pairs checked (per family)               4
+  peers through sets, not checked          0
+  directions                               8
+  directions consistent                    3
+  directions with no policy either way     4
+  directions with not-exported             1
+  lint/aspa-customer-set                   1
+  lint/aspa-missing-provider               1
+  lint/aspa-stale-provider                 1
+  lint/empty                               4
+  pairs over a limit or not decidable      0
+  checks over their time budget            0
+  most warnings: AS65101 (2)
