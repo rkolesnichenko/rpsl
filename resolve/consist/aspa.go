@@ -1,9 +1,12 @@
 package consist
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"slices"
 
+	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/policy"
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/peval"
@@ -161,4 +164,146 @@ func (l *linter) staleProviders(as types.ASN, pl PeerList, aspas *rpki.ASPAs) {
 		}
 		l.add(RuleASPAStaleProvider, "", -1, fmt.Sprintf("%s's ASPA lists %s as a provider, but no peering of %s names it", as, p, as), p, nil)
 	}
+}
+
+// positiveASSets appends the as-sets a filter names positively: not under
+// NOT, not inside an AS-path regexp, not a set template; under an AS
+// expression's EXCEPT only its left side.
+func positiveASSets(out []types.SetName, f policy.Filter) []types.SetName {
+	switch x := f.(type) {
+	case policy.FilterSetRef:
+		if x.Name.Class() == types.ClassAsSet {
+			return addSet(out, x.Name)
+		}
+	case policy.FilterASExpr:
+		return positiveASExprSets(out, x.AS)
+	case policy.FilterAnd:
+		for _, t := range x.Terms {
+			out = positiveASSets(out, t)
+		}
+	case policy.FilterOr:
+		for _, t := range x.Terms {
+			out = positiveASSets(out, t)
+		}
+	}
+	return out
+}
+
+func positiveASExprSets(out []types.SetName, e policy.ASExpr) []types.SetName {
+	switch x := e.(type) {
+	case policy.ASSetRef:
+		return addSet(out, x.Name)
+	case policy.ASExprBinary:
+		out = positiveASExprSets(out, x.L)
+		if x.Op != policy.ASExcept {
+			out = positiveASExprSets(out, x.R)
+		}
+	}
+	return out
+}
+
+// exprFilters returns the filters of one policy expression, in order.
+func exprFilters(e policy.Expr) []policy.Filter {
+	var out []policy.Filter
+	var walk func(policy.Expr)
+	walk = func(e policy.Expr) {
+		switch x := e.(type) {
+		case policy.Factor:
+			out = append(out, x.Filter)
+		case policy.ExprList:
+			for _, s := range x.Exprs {
+				walk(s)
+			}
+		case policy.Except:
+			walk(x.Left)
+			walk(x.Right)
+		case policy.Refine:
+			walk(x.Left)
+			walk(x.Right)
+		}
+	}
+	walk(e)
+	return out
+}
+
+// directASNs returns the AS numbers a set's direct members hold, ascending:
+// the ASNs object.DirectMembers lists, and the aut-nums claiming membership
+// that resolve.ClaimAllowed admits. Nested sets are not followed. A set the
+// source does not have, or whose class is not its name's, has none (ok
+// false): lint/missing-set reports it.
+func directASNs(ctx context.Context, src resolve.Source, n types.SetName) (asns []types.ASN, ok bool, err error) {
+	set, err := src.GetSet(ctx, types.Ref(n))
+	switch {
+	case errors.Is(err, resolve.ErrNotFound):
+		return nil, false, nil
+	case err != nil:
+		return nil, false, err
+	case set == nil || set.Class() != n.Class().String():
+		return nil, false, nil
+	}
+	if s, ok := set.(object.Set); ok {
+		for _, m := range object.DirectMembers(s) {
+			if m.Kind == object.MemberAS && !slices.Contains(asns, m.AS) {
+				asns = append(asns, m.AS)
+			}
+		}
+	}
+	claimants, err := src.MembersByRef(ctx, set)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, o := range claimants {
+		if !resolve.ClaimAllowed(o, set) {
+			continue
+		}
+		var a types.ASN
+		switch an := o.(type) {
+		case object.AutNum:
+			a = an.AS
+		case *object.AutNum:
+			a = an.AS
+		default:
+			continue
+		}
+		if !slices.Contains(asns, a) {
+			asns = append(asns, a)
+		}
+	}
+	slices.Sort(asns)
+	return asns, true, nil
+}
+
+// customerSets reports, for each as-set as's export filters announce, each
+// direct member AS whose ASPA does not name as, or is an AS0 one
+// (lint/aspa-customer-set). Each set is fetched once per call.
+func (l *linter) customerSets(ctx context.Context, src resolve.Source, as types.ASN, aspas *rpki.ASPAs) error {
+	members := map[types.SetName][]types.ASN{}
+	for i, ex := range exportExprs(l.an) {
+		var names []types.SetName
+		for _, f := range exprFilters(ex) {
+			names = positiveASSets(names, f)
+		}
+		for _, n := range names {
+			ms, seen := members[n]
+			if !seen {
+				var err error
+				if ms, _, err = directASNs(ctx, src, n); err != nil {
+					return err
+				}
+				members[n] = ms
+			}
+			for _, m := range ms {
+				ps, ok := aspas.Providers(m)
+				if m == as || !ok || slices.Contains(ps, as) {
+					continue
+				}
+				msg := fmt.Sprintf("announces %s, whose member %s has an ASPA that does not list %s as a provider", n, m, as)
+				if len(ps) == 0 {
+					msg = fmt.Sprintf("announces %s, whose member %s declares no transit providers (AS0)", n, m)
+				}
+				l.add(RuleASPACustomerSet, "export", i, msg, m, nil)
+			}
+		}
+	}
+	return nil
 }

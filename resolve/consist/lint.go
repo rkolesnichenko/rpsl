@@ -137,6 +137,9 @@ func (c *Checker) Lint(ctx context.Context, as types.ASN) ([]Issue, error) {
 	if c.ASPAs != nil {
 		l.missingProviders(as, c.ASPAs)
 		l.staleProviders(as, peers, c.ASPAs)
+		if err := l.customerSets(ctx, ev.Src, as, c.ASPAs); err != nil {
+			return nil, err
+		}
 	}
 	if l.err != nil {
 		return nil, l.err

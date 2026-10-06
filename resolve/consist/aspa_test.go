@@ -199,3 +199,54 @@ func TestASPAStaleManyProviders(t *testing.T) {
 		}
 	}
 }
+
+// The customer-set fixture: AS-CUST lists AS1 (the announcer), AS10, AS11
+// and AS-NESTED (AS12); AS13 claims membership with MNT-A, which
+// mbrs-by-ref admits, AS14 with MNT-B, which it does not.
+var customerObjects = []string{
+	"as-set: AS-CUST\nmembers: AS1, AS10, AS11, AS-NESTED\nmbrs-by-ref: MNT-A\nmnt-by: MNT-A\nsource: RIPE\n",
+	"as-set: AS-NESTED\nmembers: AS12\nmnt-by: MNT-A\nsource: RIPE\n",
+	"aut-num: AS13\nas-name: X\nmember-of: AS-CUST\nmnt-by: MNT-A\nsource: RIPE\n",
+	"aut-num: AS14\nas-name: X\nmember-of: AS-CUST\nmnt-by: MNT-B\nsource: RIPE\n",
+}
+
+var customerASPAs = []rpki.ASPA{
+	aspa(10, 1), // names AS1: fine
+	aspa(11, 2), // does not: a finding
+	aspa(12, 2), // nested: not followed
+	aspa(13, 0), // AS0: a finding
+	aspa(14, 2), // a refused claim: not a member
+}
+
+func TestASPACustomerSet(t *testing.T) {
+	finding := func(attr string, m int, as0 bool) string {
+		msg := fmt.Sprintf("announces AS-CUST, whose member AS%d has an ASPA that does not list AS1 as a provider", m)
+		if as0 {
+			msg = fmt.Sprintf("announces AS-CUST, whose member AS%d declares no transit providers (AS0)", m)
+		}
+		return fmt.Sprintf("lint/aspa-customer-set %s 0 [AS%d] []: %s", attr, m, msg)
+	}
+	both := []string{finding("export", 11, false), finding("export", 13, true)}
+	for _, c := range []struct {
+		name string
+		line string
+		want []string
+	}{
+		{"announced", "export: to AS2 announce AS-CUST", both},
+		{"in an OR", "export: to AS2 announce AS1 OR AS-CUST", both},
+		{"mp-export", "mp-export: to AS2 announce AS-CUST", []string{finding("mp-export", 11, false), finding("mp-export", 13, true)}},
+		{"under NOT", "export: to AS2 announce ANY AND NOT AS-CUST", nil},
+		{"inside a regexp", "export: to AS2 announce <AS-CUST>", nil},
+		{"missing set", "export: to AS2 announce AS-MISSING", nil},
+		{"the nested set itself", "export: to AS2 announce AS-NESTED", []string{
+			"lint/aspa-customer-set export 0 [AS12] []: announces AS-NESTED, whose member AS12 has an ASPA that does not list AS1 as a provider"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ch := checker(t, append([]string{autNum(1, c.line), autNum(2)}, customerObjects...)...)
+			got := lintASPA(t, ch, 1, newASPAs(t, customerASPAs...), RuleASPACustomerSet)
+			if strings.Join(got, "\n") != strings.Join(c.want, "\n") {
+				t.Errorf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(c.want, "\n"))
+			}
+		})
+	}
+}
