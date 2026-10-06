@@ -148,7 +148,8 @@ func (g opGraph) corpus(t *testing.T) *MemSource {
 // Route-sets with operators along cycles expand to the RFC's least fixpoint,
 // for every set of every random graph.
 func TestPropertyOperatorFixpoint(t *testing.T) {
-	for seed := uint64(1); seed <= 400; seed++ {
+	seeds, _ := modelSeeds(400)
+	for seed := uint64(1); seed <= seeds; seed++ {
 		r := rand.New(rand.NewPCG(seed, 7))
 		g := randomOpGraph(r, 2+r.IntN(7))
 		want := g.oracle()

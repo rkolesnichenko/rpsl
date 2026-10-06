@@ -1263,7 +1263,7 @@ The correctness bar is "matches the tools operators already trust," so testing i
 
 10. **Benchmarks** of every hot path — the lexer, the stream, decoding and validation, the policy parser, the expansion engine — on inputs generated in code, and (opt-in, `RPSL_REALDATA`) on the RIPE dumps. `check.sh` runs each once so none breaks unnoticed; `scripts/bench.sh` compares two refs on one machine with `benchstat`. Nothing times them in CI, where shared runners make timing meaningless.
 
-`scripts/check.sh` runs 1–7 for every module under the race detector, and each benchmark of 10 once, with per-package coverage (plus gofmt, staticcheck, govulncheck and the leaf-isolation and engine-purity invariants); CI installs bgpq4 and runs it with a short `FUZZTIME` on Go 1.23 and the latest stable Go.
+`scripts/check.sh` runs 1–7 for every module under the race detector, then every test again without it for per-package coverage, and each benchmark of 10 once, plus gofmt, staticcheck, govulncheck and the leaf-isolation and engine-purity invariants. Under the detector the slowest model tests of item 3 draw a quarter of their seeds (`modelSeeds` in `resolve`), and the floors calibrated to their full seed counts are checked only in the coverage pass, which draws them all. CI installs bgpq4 and runs it with a short `FUZZTIME` on Go 1.23 and the latest stable Go.
 
 ---
 

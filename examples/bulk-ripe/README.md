@@ -49,7 +49,12 @@ zcat ripe.db.as-set.gz | go run ./examples/bulk-ripe -
 | `--max-retain-routes` | `500000` | Cap on `route` + `route6` objects retained (combined). |
 
 Retention caps only matter when `--expand` is on; otherwise the harness
-streams without holding objects.
+streams without holding objects. Retained objects go into a `resolve.Corpus`,
+as the engine's own loaders keep them: sets and `member-of:` claimants whole,
+other routes as their prefix, origin and source, and other aut-nums not at all
+(the expansion never reads them; `--max-retain-aut-nums` still counts every
+aut-num streamed). As in a registry, a later object with the same class,
+primary key and source replaces an earlier one.
 
 ## Where to get a real dump
 

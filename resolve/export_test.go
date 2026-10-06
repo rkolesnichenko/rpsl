@@ -6,6 +6,9 @@ import (
 	"github.com/rkolesnichenko/rpsl/policy"
 )
 
+// ModelSeeds is modelSeeds, for the model tests outside the package.
+var ModelSeeds = modelSeeds
+
 // NormalizePeak is NormalizeFilter that also returns the largest disjunction
 // it built, or the most tests in one conjunct if more, for the test that
 // MaxConjuncts holds exactly there.

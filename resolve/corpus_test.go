@@ -206,12 +206,13 @@ func corpusOf(objs []object.Object) *resolve.Corpus {
 // and objects the engine has no use for.
 func TestCorpusMatchesMemSource(t *testing.T) {
 	checked := 0
+	seeds, full := resolve.ModelSeeds(1500)
 	defer func() {
-		if !t.Failed() && checked < 100 {
+		if full && !t.Failed() && checked < 100 {
 			t.Errorf("only %d seeds were checked against the oracle", checked)
 		}
 	}()
-	for seed := uint64(0); seed < 1500; seed++ {
+	for seed := uint64(0); seed < seeds; seed++ {
 		r := rand.New(rand.NewPCG(seed, 5))
 		m := randomModel(r, false)
 		texts := m.texts(r)

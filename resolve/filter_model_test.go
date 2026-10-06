@@ -632,7 +632,8 @@ func mustParseFilter(t *testing.T, label, s string) policy.Filter {
 
 func TestModelNormalizeFilter(t *testing.T) {
 	ctx := context.Background()
-	for seed := uint64(0); seed < 400; seed++ {
+	seeds, _ := resolve.ModelSeeds(400)
+	for seed := uint64(0); seed < seeds; seed++ {
 		r := rand.New(rand.NewPCG(seed, 11))
 		m := withTemplateSets(r, randomModel(r, false))
 		o := newOracle(m)
@@ -751,7 +752,8 @@ func TestModelMaxConjuncts(t *testing.T) {
 func TestModelNormalizeExclude(t *testing.T) {
 	ctx := context.Background()
 	narrowed := 0
-	for seed := uint64(0); seed < 500; seed++ {
+	seeds, _ := resolve.ModelSeeds(500)
+	for seed := uint64(0); seed < seeds; seed++ {
 		r := rand.New(rand.NewPCG(seed, 19))
 		m := randomModel(r, false)
 		o := newOracle(m)
