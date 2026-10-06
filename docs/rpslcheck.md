@@ -293,10 +293,14 @@ ASPA, the export's own `uniquevaps`) against the RIPE dumps downloaded on
 | `lint/aspa-stale-provider` | 1,834 |
 
 A seeded sample of 2,000 aut-nums (RPSL_CONSIST_SAMPLE=2000, 379 s, peak RSS
-2,673 MB) gave 2,049, 138 and 60. An issue is one attribute and one peer (or
-set member), merged across families, so one aut-num can have many: AS1764
-announces AS-NEXTLAYER, whose members AS208089 and AS58299 have ASPAs that do
-not list it. Five examples of each rule were checked by hand against the dump
+2,673 MB) gave 2,049, 138 and 60. These are issues, not aut-nums. For
+`lint/aspa-customer-set` an issue is one export attribute, one announced as-set
+and one member, merged across families: an aut-num that announces one as-set to
+many peers on separate `export:` lines repeats each member once per line, so
+95,353 is not 95,353 ASes. For `lint/aspa-missing-provider` it is one import
+attribute and one peer, and for `lint/aspa-stale-provider` one provider. One
+aut-num can have many: AS1764 announces AS-NEXTLAYER, whose members AS208089 and
+AS58299 have ASPAs that do not list it. Five examples of each rule were checked by hand against the dump
 and the export (the aut-num's `import:`/`export:` lines, its as-set, the ASPA's
 providers) and all agreed.
 

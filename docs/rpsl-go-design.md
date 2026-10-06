@@ -670,15 +670,17 @@ prefixes without origins.
 
 **ASPAs (v0.25.0).** `rpki.ASPAs` is the other RPKI payload this package
 holds: ASPA (draft-ietf-sidrops-aspa-profile-29), the provider list an AS signs
-for itself. `NewASPAs` validates each `rpki.ASPA` (customer, providers) to the
-profile (at most `MaxProviders` = 10,000 providers; no duplicate; the customer is
-not its own provider; AS0 stands alone) and merges the ASPAs of one customer into
-the union of their providers; `Providers`, `Len` and `All` read it, and an ASPA
-with no providers is an AS0 ASPA ("no transit providers"). `ReadASPAs` reads the top-level
+for itself. `NewASPAs` validates each `rpki.ASPA` (customer, providers): the customer is
+not AS0; the providers are non-empty, strictly ascending (so no duplicates) and never
+the customer; AS0 appears only alone; at most `MaxProviders` = 10,000. ASPAs of one
+customer merge into the union of their providers, with AS0 dropped when another of
+them names providers, and the 10,000 cap is checked again after merging. `Providers`,
+`Len` and `All` read the result: for an AS0 ASPA (no transit providers) `Providers`
+reports ok with no providers and `All` yields providers `[0]`, as the profile writes it. `ReadASPAs` reads the top-level
 `aspas` array of a validator's JSON export in both shapes in use — rpki-client's
 (`customer_asid`) and Routinator's (`customer`). It is strict as `ReadJSON` is: one bad
 record fails the read, an export with no `aspas` member is an error (an empty set would
-make every rule fire), and rpki-client 8.0-8.4's pre-profile `provider_authorizations`
+make every check silently report nothing), and rpki-client 8.0-8.4's pre-profile `provider_authorizations`
 is refused. ASPA SLURM is not applied: draft-ietf-sidrops-aspa-slurm-04 has
 expired. Nothing in IRRd or the registries' data depends on ASPAs; `resolve/consist`
 reads them (§8.12) and `rpki` stays pure (no `net`). On NTT's export of 2026-09-27
@@ -705,10 +707,9 @@ Every file is verified before any of it is used:
   key verifies only ES256, P-384 ES384, P-521 ES512, Ed25519 only Ed25519, an
   RSA key of at least 2048 bits RS256 or PS256), so a header cannot pick a
   different check than the key was issued for; `EdDSA` (deprecated by RFC
-  9864), `Ed448`, `none`, every MAC and a short RSA key are refused. It must
+  9864), `Ed448`, `none`, every MAC and a short RSA key are refused (as is any other). It must
   verify with the current key, or with the key a valid file announced in `next_signing_key`,
-  after which the old key is never used again (§9.6). Nothing else — `none`, a
-  MAC, `crit` — is accepted. The standard library does the cryptography;
+  after which the old key is never used again (§9.6). `crit` is refused too. The standard library does the cryptography;
 - each snapshot and delta is hashed (SHA-256, as served) against the
   notification file, and its header checked against the session and version
   it should have. A URL must stay on the notification file's scheme and host —
