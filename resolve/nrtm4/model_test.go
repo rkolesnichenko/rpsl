@@ -131,6 +131,7 @@ func TestModel(t *testing.T) {
 		r := rand.New(rand.NewPCG(seed, 23))
 		s := nrtmtest.New(t, "TEST")
 		clients := []*Client{newClient(s, "TEST")}
+		announced := false
 		for step := 0; step < 40; step++ {
 			switch k := r.IntN(20); {
 			case k < 12:
@@ -147,6 +148,19 @@ func TestModel(t *testing.T) {
 				s.NewSession()
 			case k == 17:
 				clients = append(clients, newClient(s, "TEST"))
+			case k == 18 && !announced && r.IntN(4) == 0:
+				s.AnnounceKeyOf([]string{"Ed25519", "ES384", "RS256"}[r.IntN(3)])
+				announced = true
+			case k == 19 && announced:
+				// Every client reads the announcement before the server
+				// switches, as §9.6 requires of a rotation.
+				for i, c := range clients {
+					if _, err := c.Sync(context.Background()); err != nil {
+						t.Fatalf("seed %d step %d client %d before rotating: %v", seed, step, i, err)
+					}
+				}
+				s.RotateKey()
+				announced = false
 			}
 			for i, c := range clients {
 				if r.IntN(3) > 0 {

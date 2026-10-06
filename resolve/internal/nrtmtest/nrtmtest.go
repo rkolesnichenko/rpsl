@@ -9,16 +9,21 @@ package nrtmtest
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/sha512"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -44,8 +49,9 @@ type Server struct {
 	srv    *httptest.Server
 
 	mu       sync.Mutex
-	key      *ecdsa.PrivateKey
-	next     *ecdsa.PrivateKey // announced in next_signing_key, or nil
+	key      crypto.Signer
+	next     crypto.Signer     // announced in next_signing_key, or nil
+	algs     map[string]string // public-key PEM -> the algorithm AnnounceKeyOf chose
 	session  string
 	version  int64
 	objects  map[string]string // class + " " + upper-case pk -> text
@@ -68,7 +74,7 @@ type file struct {
 // snapshot.
 func New(t testing.TB, source string) *Server {
 	t.Helper()
-	s := &Server{t: t, source: source, key: newKey(t), objects: map[string]string{}, files: map[string][]byte{},
+	s := &Server{t: t, source: source, key: newKey(t), algs: map[string]string{}, objects: map[string]string{}, files: map[string][]byte{},
 		now: time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)}
 	s.srv = httptest.NewTLSServer(http.HandlerFunc(s.serve))
 	t.Cleanup(s.srv.Close)
@@ -88,7 +94,7 @@ func (s *Server) HTTPClient() *http.Client { return s.srv.Client() }
 func (s *Server) PublicKey() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return pemOf(s.t, &s.key.PublicKey)
+	return pemOf(s.t, s.key.Public())
 }
 
 // Session is the current session_id.
@@ -245,7 +251,7 @@ func (s *Server) AnnounceKey() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.next = newKey(s.t)
-	return pemOf(s.t, &s.next.PublicKey)
+	return pemOf(s.t, s.next.Public())
 }
 
 // RotateKey signs with the announced key from now on, and announces none.
@@ -256,7 +262,7 @@ func (s *Server) RotateKey() {
 }
 
 // SignWith signs with key from now on, announced or not.
-func (s *Server) SignWith(key *ecdsa.PrivateKey) {
+func (s *Server) SignWith(key crypto.Signer) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.key = key
@@ -288,7 +294,7 @@ func (s *Server) EditNotification(edit func(map[string]any) error) {
 func NewKey(t testing.TB) *ecdsa.PrivateKey { return newKey(t) }
 
 // PEM returns a public key as NRTMv4 distributes it.
-func PEM(t testing.TB, key *ecdsa.PrivateKey) string { return pemOf(t, &key.PublicKey) }
+func PEM(t testing.TB, key crypto.Signer) string { return pemOf(t, key.Public()) }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
@@ -326,7 +332,7 @@ func (s *Server) notification() []byte {
 	p := map[string]any{"nrtm_version": 4, "timestamp": s.now.Format(time.RFC3339), "type": "notification",
 		"source": s.source, "session_id": s.session, "version": s.version, "snapshot": s.snapshot, "deltas": deltas}
 	if s.next != nil {
-		p["next_signing_key"] = pemOf(s.t, &s.next.PublicKey)
+		p["next_signing_key"] = pemOf(s.t, s.next.Public())
 	}
 	if s.unf != nil {
 		// Round-trip through JSON so that edit sees plain maps and slices.
@@ -341,7 +347,7 @@ func (s *Server) notification() []byte {
 	if err != nil {
 		s.t.Errorf("nrtmtest: %v", err)
 	}
-	return []byte(signES256(s.t, s.key, payload))
+	return []byte(sign(s.t, s.alg(s.key), s.key, payload))
 }
 
 func (s *Server) put(name string, data []byte, version int64) file {
@@ -361,17 +367,113 @@ func (s *Server) record(b *bytes.Buffer, v any) {
 	b.WriteByte('\n')
 }
 
-func signES256(t testing.TB, key *ecdsa.PrivateKey, payload []byte) string {
-	input := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"ES256"}`)) + "." + base64.RawURLEncoding.EncodeToString(payload)
-	digest := sha256.Sum256([]byte(input))
-	r, sg, err := ecdsa.Sign(rand.Reader, key, digest[:])
+// sign writes a compact JWS with header {"alg":alg}, signing as RFC 7518
+// (ES*: raw R||S, each half as long as the curve's order; RS256, PS256) and
+// RFC 8037 (Ed25519, over the input itself) say.
+func sign(t testing.TB, alg string, key crypto.Signer, payload []byte) string {
+	input := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"`+alg+`"}`)) + "." + base64.RawURLEncoding.EncodeToString(payload)
+	var sig []byte
+	var err error
+	switch alg {
+	case "ES256", "ES384", "ES512":
+		k, ok := key.(*ecdsa.PrivateKey)
+		if !ok {
+			t.Fatalf("nrtmtest: %s needs an ECDSA key", alg)
+		}
+		var digest []byte
+		switch alg {
+		case "ES256":
+			d := sha256.Sum256([]byte(input))
+			digest = d[:]
+		case "ES384":
+			d := sha512.Sum384([]byte(input))
+			digest = d[:]
+		default:
+			d := sha512.Sum512([]byte(input))
+			digest = d[:]
+		}
+		var r, sg *big.Int
+		r, sg, err = ecdsa.Sign(rand.Reader, k, digest)
+		if err == nil {
+			n := (k.Curve.Params().BitSize + 7) / 8
+			sig = make([]byte, 2*n)
+			r.FillBytes(sig[:n])
+			sg.FillBytes(sig[n:])
+		}
+	case "Ed25519":
+		sig, err = key.Sign(rand.Reader, []byte(input), crypto.Hash(0))
+	case "RS256":
+		d := sha256.Sum256([]byte(input))
+		sig, err = key.Sign(rand.Reader, d[:], crypto.SHA256)
+	case "PS256":
+		d := sha256.Sum256([]byte(input))
+		sig, err = key.Sign(rand.Reader, d[:], &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: crypto.SHA256})
+	default:
+		t.Fatalf("nrtmtest: cannot sign with %s", alg)
+	}
 	if err != nil {
 		t.Fatalf("nrtmtest: %v", err)
 	}
-	sig := make([]byte, 64)
-	r.FillBytes(sig[:32])
-	sg.FillBytes(sig[32:])
 	return input + "." + base64.RawURLEncoding.EncodeToString(sig)
+}
+
+// alg is the algorithm to sign with key: the one AnnounceKeyOf chose for it,
+// otherwise its type's default.
+func (s *Server) alg(key crypto.Signer) string {
+	if a, ok := s.algs[pemOf(s.t, key.Public())]; ok {
+		return a
+	}
+	switch k := key.(type) {
+	case *ecdsa.PrivateKey:
+		switch k.Curve {
+		case elliptic.P384():
+			return "ES384"
+		case elliptic.P521():
+			return "ES512"
+		}
+		return "ES256"
+	case ed25519.PrivateKey:
+		return "Ed25519"
+	case *rsa.PrivateKey:
+		return "RS256"
+	}
+	s.t.Fatalf("nrtmtest: unknown key type %T", key)
+	return ""
+}
+
+// AnnounceKeyOf is AnnounceKey with a key for alg ("ES256", "ES384",
+// "ES512", "Ed25519", "RS256" or "PS256").
+func (s *Server) AnnounceKeyOf(alg string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.next = NewKeyOf(s.t, alg)
+	pub := pemOf(s.t, s.next.Public())
+	s.algs[pub] = alg
+	return pub
+}
+
+// NewKeyOf returns a fresh key for alg, for SignWith or AnnounceKeyOf.
+func NewKeyOf(t testing.TB, alg string) crypto.Signer {
+	var k crypto.Signer
+	var err error
+	switch alg {
+	case "ES256":
+		k, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	case "ES384":
+		k, err = ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	case "ES512":
+		k, err = ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
+	case "Ed25519":
+		_, k, err = ed25519.GenerateKey(rand.Reader)
+	case "RS256", "PS256":
+		k, err = rsa.GenerateKey(rand.Reader, 2048)
+	default:
+		t.Fatalf("nrtmtest: no key for %s", alg)
+	}
+	if err != nil {
+		t.Fatalf("nrtmtest: %v", err)
+	}
+	return k
 }
 
 func newKey(t testing.TB) *ecdsa.PrivateKey {
@@ -382,7 +484,7 @@ func newKey(t testing.TB) *ecdsa.PrivateKey {
 	return k
 }
 
-func pemOf(t testing.TB, pub *ecdsa.PublicKey) string {
+func pemOf(t testing.TB, pub crypto.PublicKey) string {
 	der, err := x509.MarshalPKIXPublicKey(pub)
 	if err != nil {
 		t.Fatalf("nrtmtest: %v", err)

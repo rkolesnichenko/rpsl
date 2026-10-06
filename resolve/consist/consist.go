@@ -31,6 +31,7 @@ import (
 	"github.com/rkolesnichenko/rpsl/policy"
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/peval"
+	"github.com/rkolesnichenko/rpsl/resolve/rpki"
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
@@ -44,6 +45,12 @@ type Checker struct {
 	// refused.
 	Eval      peval.Evaluator
 	MaxRanges int // cap on Finding.Ranges; 0 means 64
+
+	// ASPAs, when set, adds the ASPA rules to Lint (lint/aspa-*): the
+	// aut-num's policy and the as-sets it announces compared with the
+	// validated ASPAs (draft-ietf-sidrops-aspa-profile-29). nil: Lint is
+	// unchanged. Check does not read it.
+	ASPAs *rpki.ASPAs
 	// SetPeers makes Lint evaluate a session toward every peer in
 	// PeerList.ViaSets too, the ASes named only through as-sets and
 	// peering-sets — there can be very many: an exchange's as-set names

@@ -421,7 +421,8 @@ func TestLintMissingAutNum(t *testing.T) {
 }
 
 func TestRules(t *testing.T) {
-	want := []string{RuleShadowed, RuleEmpty, RuleMissingSet, RuleMissingRouter, RuleNoAutNum, RuleUndecided, RuleLimit}
+	want := []string{RuleShadowed, RuleEmpty, RuleMissingSet, RuleMissingRouter, RuleNoAutNum, RuleUndecided, RuleLimit,
+		RuleASPAMissingProvider, RuleASPAStaleProvider, RuleASPACustomerSet}
 	if !slices.Equal(Rules(), want) {
 		t.Errorf("Rules %v", Rules())
 	}

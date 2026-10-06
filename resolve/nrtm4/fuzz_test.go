@@ -77,3 +77,36 @@ func FuzzReadDelta(f *testing.F) {
 		}
 	})
 }
+
+// FuzzVerifyJWS: no input panics with any key type, and only a correctly
+// signed file in the key's own algorithm verifies — which the fuzzer cannot
+// forge, so verifying an input it changed means a check was skipped.
+func FuzzVerifyJWS(f *testing.F) {
+	keys := testKeys(f)
+	signed := map[string]string{}
+	for alg, k := range keys {
+		signed[alg] = signAs(f, alg, k, `{"alg":"`+alg+`"}`, "payload")
+		f.Add(signed[alg], alg)
+	}
+	f.Add("e30.e30.", "ES256")
+	f.Fuzz(func(t *testing.T, jws, alg string) {
+		k, ok := keys[alg]
+		if !ok {
+			return
+		}
+		pub, err := ParsePublicKey(pemOf(t, k.Public()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := verifyJWS([]byte(jws), pub)
+		if err != nil {
+			return
+		}
+		// Only the signed header and payload verify; ECDSA's (r, n-s)
+		// re-signature is the one legitimate variant.
+		hdr := strings.Split(signed[alg], ".")[0]
+		if string(p) != "payload" || strings.Split(strings.TrimSpace(jws), ".")[0] != hdr {
+			t.Fatalf("an input the fuzzer made verified as %s: %q (payload %q)", alg, jws, p)
+		}
+	})
+}

@@ -279,7 +279,7 @@ go c.Run(ctx, time.Minute, nil)
 e := &resolve.Expander{Src: c.Source()} // one version, whole, per expansion
 ```
 
-Every file is verified — the notification file's ES256 signature (with
+Every file is verified — the notification file's signature (ES256, ES384, ES512, Ed25519, RS256 or PS256, each bound to its key type; with
 in-band key rotation), each snapshot's and delta's SHA-256 — and a delta
 applies whole or not at all. Persist `Status().CurrentKey`: after a rotation
 it, not the key you started with, verifies.

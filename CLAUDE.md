@@ -144,8 +144,8 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   `WriteRPSL` is IRRd's pseudo-object text byte for byte (fixture captured from RADB).
   irrtest's `WithRPKI` is an independent port — keep it independent of package rpki.
   Only RADB's and NTT's dumps are RPKI-filtered; the other mirrors on RADB's FTP are not.
-- **NRTMv4 (`resolve/nrtm4`) verifies before it uses.** ES256 on the notification file (key
-  rotation: current, then announced next, never the old again), SHA-256 on each file, headers
+- **NRTMv4 (`resolve/nrtm4`) verifies before it uses.** The notification file's signature is ES256, ES384, ES512, Ed25519, RS256 or PS256, each bound to its key type (`EdDSA` is refused, RFC 9864). Key
+  rotation: current, then announced next, never the old again. SHA-256 on each file, headers
   against session/version, the delta chain contiguous from the version held — a delta applies
   whole or not at all, nothing after a refused one. Each version is published as a new immutable
   MemSource (one expansion = one version). `internal/nrtmtest` is an independent spec-following
@@ -209,6 +209,7 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   - A direction where neither side has any term is `Direction.NoPolicy` ("no policy either way"), never "consistent".
   - "Announces" means "permits announcing" (policy text, not a RIB).
   - `Corpus.IndexPeers` keeps AS numbers only, never decoded policies.
+  - The ASPA rules (`Checker.ASPAs`) read conjunct structure, peerings, set members and ASPA provider lists only; "full table" is AnyPrefix, non-empty, with only negated tests; never a path. A clause counts only if its own peering names the peer: a peering reaching AS-ANY on its positive side (OR, AND, left of EXCEPT) — written, through an as-set, or in a peering-set — names none; a set template is instantiated for the peer. Stale-provider is silent when a peering reaches a missing set (`peerInfo.missing`, never `PeerList.Skipped`).
 
 - **The server (`resolve/irrdq`) answers as IRRd 4.5.3 does.**
   - IRRd's semantics live in `irrdq`, never in the engine (`!i…,1` drops an operator member and
@@ -250,11 +251,12 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
 
 - **`go test ./...` only covers the ROOT module** (rpsl, object, policy, auth). Run everything
   (all six modules incl. examples/bulk-ripe under -race, gofmt, invariants) with
-  `scripts/check.sh`; `FUZZTIME=15s scripts/check.sh` also runs every fuzz target.
+  `scripts/check.sh`; `FUZZTIME=15s scripts/check.sh` also runs every fuzz target;
+  on a developer machine run it with `GOMAXPROCS=4` under a memory guard (measured: 8.7 GB peak at the default GOMAXPROCS of 14, in FuzzTranslateRegexp; 4.5 GB with 4).
   The slowest `resolve` model tests draw a quarter of their seeds under `-race` (`modelSeeds`); check.sh's
   coverage pass, without `-race`, draws them all and checks the seed-calibrated floors.
 - `go test -run 'TestRoundTrip|TestStreamRoundTrip' .` — the lossless guard (root module).
-- Fuzz (43 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
+- Fuzz (45 targets, must never panic): FuzzTokenize (lexer); FuzzAttributeList, FuzzEdit,
   FuzzFormat (ast); FuzzParseSetName, FuzzParseRangeOperator, FuzzParsePrefixRange,
   FuzzParseRouterID, FuzzParseSetRef, FuzzPrefixSpace (types); FuzzParseStream, FuzzDecode (root);
   FuzzParseSrcMember (object); FuzzParseImport,
@@ -263,8 +265,8 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   FuzzParseRPAttribute, FuzzParseTypedef, FuzzParseProtocol, FuzzFilterString,
   FuzzParseMPFilter (policy);
   FuzzReadFrame, FuzzParseMembers, FuzzParseRegistries (resolve/irrd); FuzzScanResponse (resolve/whois);
-  FuzzAggregate (resolve/internal/filtergen); FuzzReadJSON, FuzzApplySLURM (resolve/rpki);
-  FuzzParseNotification, FuzzReadDelta (resolve/nrtm4); FuzzCorpusDelete, FuzzNormalizeFilter (resolve);
+  FuzzAggregate (resolve/internal/filtergen); FuzzReadJSON, FuzzApplySLURM, FuzzReadASPAs (resolve/rpki);
+  FuzzParseNotification, FuzzReadDelta, FuzzVerifyJWS (resolve/nrtm4); FuzzCorpusDelete, FuzzNormalizeFilter (resolve);
   FuzzTranslateRegexp (resolve/rtconfig); FuzzParseTemplate (resolve/internal/rpslconf);
   FuzzSession (resolve/irrdq); FuzzSourceSpec (resolve/internal/rpsld).
   Verify the count with `grep -o '"[^"]* Fuzz[A-Za-z]*"' scripts/check.sh | wc -l`.
@@ -356,7 +358,7 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   unpushed tag: it caches the miss for ~30 minutes.
 - Performance: `scripts/bench.sh [ref]` compares benchmarks with a ref (default: latest tag).
 - Leaf isolation: `cd types && go list -deps ./... | grep rkolesnichenko` must show only itself.
-- Engine purity: `cd resolve && go list -deps . ./peval ./rtconfig ./consist ./irrdq` must NOT
+- Engine purity: `cd resolve && go list -deps . ./peval ./rtconfig ./consist ./irrdq ./rpki` must NOT
   include `net` (sockets live only in resolve/irrd, resolve/whois, resolve/rdap, resolve/nrtm4
   and resolve/irrdserver).
 - A `resolve`-module test that reads a file outside `resolve/` (a docs/*.md contract, such as

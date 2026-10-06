@@ -20,6 +20,7 @@ import (
 
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/peval"
+	"github.com/rkolesnichenko/rpsl/resolve/rpki"
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
@@ -37,7 +38,9 @@ import (
 // of it is counted as a verify timeout). A limit, a timeout or a pair whose
 // filter cannot be evaluated is counted, and goes no further (a pair
 // counted so is not among "pairs"); any other error fails. A direction with
-// no policy either way is counted apart from the consistent ones.
+// no policy either way is counted apart from the consistent ones. With
+// RPSL_CONSIST_ASPA=1 it lints with NTT's ASPAs (rpki/vrps.json) too, and
+// logs five examples of each lint/aspa-* rule.
 func TestRealDataConsist(t *testing.T) {
 	dir := os.Getenv("RPSL_REALDATA")
 	if dir == "" {
@@ -98,6 +101,19 @@ func TestRealDataConsist(t *testing.T) {
 		slices.Sort(ases)
 	}
 	c := &Checker{Eval: peval.Evaluator{Src: resolve.NewCache(src, 0)}, MaxRanges: 64}
+	if os.Getenv("RPSL_CONSIST_ASPA") != "" {
+		f, err := os.Open(filepath.Join(dir, "rpki", "vrps.json"))
+		if err != nil {
+			t.Fatalf("RPSL_CONSIST_ASPA needs rpki/vrps.json (scripts/fetch-irr-dumps.sh rpki): %v", err)
+		}
+		c.ASPAs, err = rpki.ReadASPAs(f)
+		f.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("ASPAs: %d customers", c.ASPAs.Len())
+	}
+	examples := map[string][]string{} // lint/aspa-* rule -> up to five "AS: message"
 	// Each unordered pair a peering names, from either side, is checked
 	// once, by whichever side claims it first: the set of pairs does not
 	// depend on the order, and a pair only one side names is checked too.
@@ -152,6 +168,13 @@ func TestRealDataConsist(t *testing.T) {
 			}
 			for _, is := range issues {
 				count("lint: "+is.Rule, 1)
+				if strings.HasPrefix(is.Rule, "lint/aspa-") {
+					mu.Lock()
+					if len(examples[is.Rule]) < 5 {
+						examples[is.Rule] = append(examples[is.Rule], fmt.Sprintf("%s: %s", as, is.Message))
+					}
+					mu.Unlock()
+				}
 			}
 			mu.Lock()
 			viaSets[as] = pl.ViaSets
@@ -232,6 +255,11 @@ func TestRealDataConsist(t *testing.T) {
 		fmt.Fprintf(&b, "  %-60s %d\n", k, stats[k])
 	}
 	t.Logf("%d aut-nums swept in %s:\n%s", len(ases), time.Since(start).Round(time.Second), b.String())
+	for _, r := range []string{RuleASPAMissingProvider, RuleASPAStaleProvider, RuleASPACustomerSet} {
+		for _, e := range examples[r] {
+			t.Logf("%s example: %s", r, e)
+		}
+	}
 }
 
 // counted counts a limit, a timeout or a filter that cannot be evaluated

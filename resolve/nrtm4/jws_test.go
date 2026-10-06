@@ -1,11 +1,14 @@
 package nrtm4
 
 import (
+	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/sha512"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
@@ -84,7 +87,8 @@ func TestVerifyRefuses(t *testing.T) {
 		"the wrong key":     sign(t, other, `{"alg":"ES256"}`, "payload"),
 		"alg none":          unsigned,
 		"HS256":             sign(t, key, `{"alg":"HS256"}`, "payload"),
-		"ES384":             sign(t, key, `{"alg":"ES384"}`, "payload"),
+		"EdDSA":             sign(t, key, `{"alg":"EdDSA"}`, "payload"),
+		"RS256 on EC key":   sign(t, key, `{"alg":"RS256"}`, "payload"),
 		"no alg":            sign(t, key, `{"kid":"x"}`, "payload"),
 		"crit":              sign(t, key, `{"alg":"ES256","crit":["exp"],"exp":1}`, "payload"),
 		"a header not JSON": sign(t, key, `alg`, "payload"),
@@ -103,17 +107,17 @@ func TestVerifyRefuses(t *testing.T) {
 }
 
 func TestParsePublicKey(t *testing.T) {
-	key := newKey(t)
-	if _, err := ParsePublicKey(pemOf(t, &key.PublicKey)); err != nil {
-		t.Fatal(err)
+	for alg, k := range testKeys(t) {
+		if _, err := ParsePublicKey(pemOf(t, k.Public())); err != nil {
+			t.Errorf("%s key: %v", alg, err)
+		}
 	}
-	p384, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 1024)
+	key := newKey(t)
+	rsa1024, _ := rsa.GenerateKey(rand.Reader, 1024)
 	for name, text := range map[string]string{
 		"no PEM":         "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE",
 		"a private key":  strings.Replace(pemOf(t, &key.PublicKey), "PUBLIC KEY", "EC PRIVATE KEY", 2),
-		"P-384":          pemOf(t, &p384.PublicKey),
-		"RSA":            pemOf(t, &rsaKey.PublicKey),
+		"RSA 1024":       pemOf(t, &rsa1024.PublicKey),
 		"trailing data":  pemOf(t, &key.PublicKey) + "junk",
 		"a broken block": "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n",
 	} {
@@ -156,4 +160,150 @@ func sign(t testing.TB, key *ecdsa.PrivateKey, header, payload string) string {
 	r.FillBytes(sig[:32])
 	s.FillBytes(sig[32:])
 	return input + "." + base64.RawURLEncoding.EncodeToString(sig)
+}
+
+// signAs makes a JWS signed as alg with key, whatever header says.
+func signAs(t testing.TB, alg string, key crypto.Signer, header, payload string) string {
+	t.Helper()
+	input := b64s(header) + "." + b64s(payload)
+	var sig []byte
+	var err error
+	switch alg {
+	case "ES256", "ES384", "ES512":
+		k := key.(*ecdsa.PrivateKey)
+		var digest []byte
+		switch alg {
+		case "ES256":
+			d := sha256.Sum256([]byte(input))
+			digest = d[:]
+		case "ES384":
+			d := sha512.Sum384([]byte(input))
+			digest = d[:]
+		default:
+			d := sha512.Sum512([]byte(input))
+			digest = d[:]
+		}
+		r, s, e := ecdsa.Sign(rand.Reader, k, digest)
+		if e != nil {
+			t.Fatal(e)
+		}
+		size := (k.Curve.Params().BitSize + 7) / 8
+		sig = make([]byte, 2*size)
+		r.FillBytes(sig[:size])
+		s.FillBytes(sig[size:])
+	case "Ed25519":
+		sig = ed25519.Sign(key.(ed25519.PrivateKey), []byte(input))
+	case "RS256":
+		d := sha256.Sum256([]byte(input))
+		sig, err = rsa.SignPKCS1v15(rand.Reader, key.(*rsa.PrivateKey), crypto.SHA256, d[:])
+	case "PS256":
+		d := sha256.Sum256([]byte(input))
+		sig, err = rsa.SignPSS(rand.Reader, key.(*rsa.PrivateKey), crypto.SHA256, d[:], &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash})
+	default:
+		t.Fatalf("signAs: %s", alg)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return input + "." + base64.RawURLEncoding.EncodeToString(sig)
+}
+
+// testKeys generates a fresh key of each accepted type on every call.
+func testKeys(t testing.TB) map[string]crypto.Signer {
+	t.Helper()
+	must := func(k crypto.Signer, err error) crypto.Signer {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return k
+	}
+	ec := func(c elliptic.Curve) crypto.Signer {
+		k, err := ecdsa.GenerateKey(c, rand.Reader)
+		return must(k, err)
+	}
+	_, ed, err := ed25519.GenerateKey(rand.Reader)
+	must(ed, err)
+	rk, err := rsa.GenerateKey(rand.Reader, 2048)
+	must(rk, err)
+	return map[string]crypto.Signer{"ES256": ec(elliptic.P256()), "ES384": ec(elliptic.P384()), "ES512": ec(elliptic.P521()), "Ed25519": ed, "RS256": rk, "PS256": rk}
+}
+
+// Every accepted algorithm refuses a signature that is not its key's over this
+// header and payload: another key of the same type, another payload, a flipped byte.
+func TestVerifyBadSignatures(t *testing.T) {
+	keys, others := testKeys(t), testKeys(t)
+	for alg, k := range keys {
+		pub, err := ParsePublicKey(pemOf(t, k.Public()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		hdr := `{"alg":"` + alg + `"}`
+		good := signAs(t, alg, k, hdr, "payload")
+		if _, err := verifyJWS([]byte(good), pub); err != nil {
+			t.Fatalf("%s: good JWS: %v", alg, err)
+		}
+		parts := strings.Split(good, ".")
+		sig, _ := base64.RawURLEncoding.DecodeString(parts[2])
+		flipped := append([]byte(nil), sig...)
+		flipped[len(flipped)/2] ^= 1
+		for name, jws := range map[string]string{
+			"another key of the type":  signAs(t, alg, others[alg], hdr, "payload"),
+			"another payload":          parts[0] + "." + b64s("other") + "." + parts[2],
+			"a flipped signature byte": parts[0] + "." + parts[1] + "." + base64.RawURLEncoding.EncodeToString(flipped),
+		} {
+			if _, err := verifyJWS([]byte(jws), pub); err == nil {
+				t.Errorf("%s, %s: verified", alg, name)
+			}
+		}
+	}
+}
+
+// Every accepted algorithm verifies with its own key type, and only with it.
+func TestVerifyAlgorithms(t *testing.T) {
+	keys := testKeys(t)
+	for alg, k := range keys {
+		pub, err := ParsePublicKey(pemOf(t, k.Public()))
+		if err != nil {
+			t.Fatalf("%s key: %v", alg, err)
+		}
+		jws := signAs(t, alg, k, `{"alg":"`+alg+`"}`, "payload")
+		if p, err := verifyJWS([]byte(jws), pub); err != nil || string(p) != "payload" {
+			t.Errorf("%s: %q, %v", alg, p, err)
+		}
+		// The same file presented with any other algorithm's key is refused.
+		for other, ko := range keys {
+			if ko.Public().(interface{ Equal(crypto.PublicKey) bool }).Equal(k.Public()) {
+				continue // RS256 and PS256 share one RSA key
+			}
+			opub, err := ParsePublicKey(pemOf(t, ko.Public()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := verifyJWS([]byte(jws), opub); err == nil {
+				t.Errorf("%s file verified with the %s key", alg, other)
+			}
+		}
+	}
+	// A header naming another algorithm than the key's is refused before any
+	// signature check: an ES256 key never verifies "ES384".
+	p256 := keys["ES256"]
+	pub, _ := ParsePublicKey(pemOf(t, p256.Public()))
+	if _, err := verifyJWS([]byte(signAs(t, "ES256", p256, `{"alg":"ES384"}`, "x")), pub); err == nil || !strings.Contains(err.Error(), `"ES384"`) {
+		t.Errorf("an ES384 header on a P-256 key: %v", err)
+	}
+	// Review Focus 3: an Ed25519 key with the deprecated "EdDSA" header.
+	ed := keys["Ed25519"]
+	edPub, _ := ParsePublicKey(pemOf(t, ed.Public()))
+	if _, err := verifyJWS([]byte(signAs(t, "Ed25519", ed, `{"alg":"EdDSA"}`, "x")), edPub); err == nil ||
+		!strings.Contains(err.Error(), "deprecated") || !strings.Contains(err.Error(), `"Ed25519"`) {
+		t.Errorf(`"EdDSA" header: %v; want refused as deprecated, naming "Ed25519"`, err)
+	}
+	// RS256 and PS256 are two algorithms on one RSA key: each verifies only
+	// its own signature.
+	rk := keys["RS256"]
+	rpub, _ := ParsePublicKey(pemOf(t, rk.Public()))
+	if _, err := verifyJWS([]byte(signAs(t, "RS256", rk, `{"alg":"PS256"}`, "x")), rpub); err == nil {
+		t.Error("a PKCS#1 v1.5 signature verified as PS256")
+	}
 }

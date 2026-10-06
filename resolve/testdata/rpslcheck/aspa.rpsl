@@ -1,0 +1,26 @@
+aut-num: AS65101
+as-name: CUSTOMER
+import: from AS65102 accept ANY
+import: from AS65103 accept <^PeerAS+$>
+export: to AS65102 announce AS-CUSTOMERS
+mnt-by: MNT-A
+source: RIPE
+
+aut-num: AS65102
+as-name: PROVIDER
+import: from AS65101 accept AS-CUSTOMERS
+export: to AS65101 announce ANY
+mnt-by: MNT-A
+source: RIPE
+
+aut-num: AS65103
+as-name: PEER
+import: from AS65101 accept AS65101
+export: to AS65101 announce AS65103
+mnt-by: MNT-A
+source: RIPE
+
+as-set: AS-CUSTOMERS
+members: AS65101, AS65110, AS65111
+mnt-by: MNT-A
+source: RIPE

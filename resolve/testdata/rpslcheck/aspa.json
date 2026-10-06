@@ -1,0 +1,5 @@
+{"metadata": {"buildtime": "2026-10-06T00:00:00Z"}, "roas": [], "aspas": [
+	{ "customer_asid": 65101, "expires": 1791385200, "providers": [ 65104 ] },
+	{ "customer_asid": 65110, "expires": 1791385200, "providers": [ 65101 ] },
+	{ "customer_asid": 65111, "expires": 1791385200, "providers": [ 65199 ] }
+]}

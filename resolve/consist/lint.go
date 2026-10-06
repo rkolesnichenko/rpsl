@@ -32,11 +32,14 @@ const (
 var ruleSeverity = map[string]ast.Severity{
 	RuleShadowed: ast.Warning, RuleEmpty: ast.Info, RuleMissingSet: ast.Warning, RuleMissingRouter: ast.Warning,
 	RuleNoAutNum: ast.Warning, RuleUndecided: ast.Info, RuleLimit: ast.Warning,
+	RuleASPAMissingProvider: ast.Warning, RuleASPAStaleProvider: ast.Info, RuleASPACustomerSet: ast.Warning,
 }
 
-// Rules returns every rule Lint reports, in documentation order.
+// Rules returns every rule Lint reports, in documentation order; the
+// lint/aspa-* rules only with Checker.ASPAs.
 func Rules() []string {
-	return []string{RuleShadowed, RuleEmpty, RuleMissingSet, RuleMissingRouter, RuleNoAutNum, RuleUndecided, RuleLimit}
+	return []string{RuleShadowed, RuleEmpty, RuleMissingSet, RuleMissingRouter, RuleNoAutNum, RuleUndecided, RuleLimit,
+		RuleASPAMissingProvider, RuleASPAStaleProvider, RuleASPACustomerSet}
 }
 
 // Issue is a Diagnostic — Rule, Severity, Message, and the Span of the
@@ -87,7 +90,7 @@ func (c *Checker) Lint(ctx context.Context, as types.ASN) ([]Issue, error) {
 	if err != nil {
 		return nil, fmt.Errorf("consist: %w", err)
 	}
-	peers, groups, err := c.peers(ctx, as)
+	peers, info, err := c.peers(ctx, as)
 	if isLimit(err) {
 		l := newLinter(ctx, ev, an)
 		l.add(RuleLimit, "", -1, err.Error(), 0, nil)
@@ -97,13 +100,27 @@ func (c *Checker) Lint(ctx context.Context, as types.ASN) ([]Issue, error) {
 		return nil, err
 	}
 	l := newLinter(ctx, ev, an)
+	if c.ASPAs != nil {
+		l.den = info.den
+		l.real = map[types.ASN]bool{}
+		for _, list := range [][]types.ASN{peers.Forward, peers.Reverse} {
+			for _, p := range list {
+				l.real[p] = true
+			}
+		}
+		if c.SetPeers {
+			for _, p := range peers.ViaSets {
+				l.real[p] = true
+			}
+		}
+	}
 	if err := l.sets(ctx, c); err != nil {
 		return nil, err
 	}
 	if err := l.routers(ctx, c); err != nil {
 		return nil, err
 	}
-	for _, peer := range c.sessionPeers(as, peers, groups) {
+	for _, peer := range c.sessionPeers(as, peers, info.groups) {
 		if _, err := ev.Src.AutNum(ctx, peer, ev.Source); errors.Is(err, resolve.ErrNotFound) {
 			l.add(RuleNoAutNum, "", -1, fmt.Sprintf("%s's aut-num is not in the source", peer), peer, nil)
 		} else if err != nil {
@@ -115,6 +132,13 @@ func (c *Checker) Lint(ctx context.Context, as types.ASN) ([]Issue, error) {
 	}
 	if namesAny(peers.Skipped) {
 		if err := l.session(ctx, ev, as, anyPeer); err != nil {
+			return nil, err
+		}
+	}
+	if c.ASPAs != nil {
+		l.missingProviders(as, c.ASPAs)
+		l.staleProviders(as, peers, info.missing, c.ASPAs)
+		if err := l.customerSets(ctx, ev.Src, as, c.ASPAs); err != nil {
 			return nil, err
 		}
 	}
@@ -220,6 +244,11 @@ func (l *linter) session(ctx context.Context, ev *peval.Evaluator, as, peer type
 				dep = dependent(p.Clauses, p2.Clauses, err != nil)
 			}
 			l.policy(kind, p, peer, af, dep)
+			if kind == "import" {
+				if err := l.noteFullTables(p, peer, af); err != nil {
+					return err
+				}
+			}
 		}
 		d, err := ev.Default(ctx, s)
 		if ok, err := l.failed(err, peer, af); ok || err != nil {
@@ -340,6 +369,14 @@ type linter struct {
 	// the walk did not report it for that attribute — so a set missing inside
 	// one that exists is still reported for every other attribute reaching it.
 	reported map[setKey]bool
+	// With Checker.ASPAs: the peers sessions run toward that the aut-num
+	// names or that name it (Forward, Reverse, and ViaSets with SetPeers) —
+	// never a set peering's representative or the AS-ANY sentinel — and the
+	// full-table imports found toward them, and the denoter Peers expanded
+	// the peerings' sets with, whose memos decide which clauses name a peer.
+	real  map[types.ASN]bool
+	fulls []fullImport
+	den   *denoter
 }
 
 // setKey is a set the static walk reported missing for the attribute kind's
@@ -710,27 +747,12 @@ func (l *linter) sets(ctx context.Context, c *Checker) error {
 	for kind, exprs := range map[string][]policy.Expr{"import": importExprs(l.an), "export": exportExprs(l.an)} {
 		for i, ex := range exprs {
 			var names []types.SetName
-			var walk func(policy.Expr)
-			walk = func(e policy.Expr) {
-				switch x := e.(type) {
-				case policy.Factor:
-					for _, pa := range x.Peers {
-						names = peeringSets(names, pa.Peering)
-					}
-					names = filterSets(names, x.Filter)
-				case policy.ExprList:
-					for _, s := range x.Exprs {
-						walk(s)
-					}
-				case policy.Except:
-					walk(x.Left)
-					walk(x.Right)
-				case policy.Refine:
-					walk(x.Left)
-					walk(x.Right)
+			eachFactor(ex, func(x policy.Factor) {
+				for _, pa := range x.Peers {
+					names = peeringSets(names, pa.Peering)
 				}
-			}
-			walk(ex)
+				names = filterSets(names, x.Filter)
+			})
 			if err := check(kind, i, names); err != nil {
 				return err
 			}

@@ -99,46 +99,113 @@ func combine(op policy.ASOp, l, r asSet) asSet {
 	return asSet{members: out}
 }
 
-// peers is Peers, plus what each set peering — one whose AS expression
-// names an as-set, or a peering-set — denotes, in document order, for
-// Lint's representative sessions. A set peering that denotes every AS
-// (AS-ANY) is left out: the AS-ANY session covers it.
-func (c *Checker) peers(ctx context.Context, as types.ASN) (PeerList, []asSet, error) {
+// denoter expands the sets peerings name, each at most once per Lint (or
+// Peers) call: Peers' listing and the ASPA rules' per-clause denotations
+// share its memos.
+type denoter struct {
+	ctx   context.Context
+	e     resolve.Expander
+	as    map[types.SetName]asSet
+	prngs map[types.SetName]prngSet
+	// via collects every AS an as-set expansion lists, skipped the sets
+	// found to reach AS-ANY (Peers' ViaSets and Skipped).
+	via     map[types.ASN]bool
+	skipped map[string]bool
+	// missing: a set some expansion reached is not in the Source, at the top
+	// (resolve.ErrNotFound) or nested (Missing()).
+	missing bool
+}
+
+// prngSet is what a peering-set expanded to: its peerings, nested
+// peering-sets already replaced, or every AS (any: it reaches AS-ANY).
+type prngSet struct {
+	peerings []policy.Peering
+	any      bool
+}
+
+func newDenoter(ctx context.Context, e resolve.Expander) *denoter {
+	return &denoter{ctx: ctx, e: e, as: map[types.SetName]asSet{}, prngs: map[types.SetName]prngSet{},
+		via: map[types.ASN]bool{}, skipped: map[string]bool{}}
+}
+
+// expandAS returns what the as-set n denotes: its AS numbers, every AS when
+// it reaches AS-ANY, nothing when the Source lacks it.
+func (d *denoter) expandAS(n types.SetName) (asSet, error) {
+	if s, ok := d.as[n]; ok {
+		return s, nil
+	}
+	set, err := d.e.ExpandAS(d.ctx, types.Ref(n))
+	var anyErr *resolve.AnySetError
+	var s asSet
+	switch {
+	case errors.As(err, &anyErr):
+		d.skipped[n.String()] = true
+		s.any = true
+	case errors.Is(err, resolve.ErrNotFound):
+		d.missing = true
+	case err != nil:
+		return asSet{}, err
+	default:
+		d.missing = d.missing || len(set.Missing()) > 0
+		s.members = map[types.ASN]bool{}
+		for _, a := range set.List() {
+			s.members[a] = true
+			d.via[a] = true
+		}
+	}
+	d.as[n] = s
+	return s, nil
+}
+
+// expandPeerings returns what the peering-set n expands to; one the Source
+// lacks has no peerings.
+func (d *denoter) expandPeerings(n types.SetName) (prngSet, error) {
+	if s, ok := d.prngs[n]; ok {
+		return s, nil
+	}
+	ps, err := d.e.ExpandPeerings(d.ctx, types.Ref(n))
+	var anyErr *resolve.AnySetError
+	var s prngSet
+	switch {
+	case errors.As(err, &anyErr):
+		d.skipped[n.String()] = true
+		s.any = true
+	case errors.Is(err, resolve.ErrNotFound):
+		d.missing = true
+	case err != nil:
+		return prngSet{}, err
+	default:
+		d.missing = d.missing || len(ps.Missing()) > 0
+		s.peerings = ps.List()
+	}
+	d.prngs[n] = s
+	return s, nil
+}
+
+// peerInfo is what peers finds beside the PeerList: what each set peering
+// — one whose AS expression names an as-set, or a peering-set — denotes, in
+// document order, for Lint's representative sessions (a set peering that
+// denotes every AS is left out: the AS-ANY session covers it); whether a set
+// some peering reaches is missing from the Source (ruling R8: then
+// lint/aspa-stale-provider cannot say no peering names a provider); and the
+// denoter, whose memos the ASPA rules reuse.
+type peerInfo struct {
+	groups  []asSet
+	missing bool
+	den     *denoter
+}
+
+// peers is Peers, plus peerInfo.
+func (c *Checker) peers(ctx context.Context, as types.ASN) (PeerList, peerInfo, error) {
 	ev := c.eval()
 	an, err := ev.Src.AutNum(ctx, as, ev.Source)
 	if err != nil {
-		return PeerList{}, nil, fmt.Errorf("consist: %w", err)
+		return PeerList{}, peerInfo{}, fmt.Errorf("consist: %w", err)
 	}
 	e := ev.Expander
 	e.Src = ev.Src
-	fwd, via := map[types.ASN]bool{}, map[types.ASN]bool{}
-	skipped := map[string]bool{}
-	// Each set is expanded once per call, however many peerings name it.
-	expanded := map[types.SetName]asSet{}
-	expandAS := func(n types.SetName) (asSet, error) {
-		if s, ok := expanded[n]; ok {
-			return s, nil
-		}
-		set, err := e.ExpandAS(ctx, types.Ref(n))
-		var anyErr *resolve.AnySetError
-		var s asSet
-		switch {
-		case errors.As(err, &anyErr):
-			skipped[n.String()] = true
-			s.any = true
-		case errors.Is(err, resolve.ErrNotFound):
-		case err != nil:
-			return asSet{}, err
-		default:
-			s.members = map[types.ASN]bool{}
-			for _, a := range set.List() {
-				s.members[a] = true
-				via[a] = true
-			}
-		}
-		expanded[n] = s
-		return s, nil
-	}
+	d := newDenoter(ctx, e)
+	fwd, via, skipped := map[types.ASN]bool{}, d.via, d.skipped
 	// isSet records whether the peering being walked names a set.
 	var isSet bool
 	// asExpr records the AS numbers x names in names (directly) and via
@@ -151,7 +218,7 @@ func (c *Checker) peers(ctx context.Context, as types.ASN) (PeerList, []asSet, e
 			return asSet{members: map[types.ASN]bool{y.AS: true}}, nil
 		case policy.ASSetRef:
 			isSet = true
-			return expandAS(y.Name)
+			return d.expandAS(y.Name)
 		case policy.ASSetTemplate:
 			skipped[y.Template.String()] = true
 		case policy.ASExprBinary:
@@ -176,26 +243,19 @@ func (c *Checker) peers(ctx context.Context, as types.ASN) (PeerList, []asSet, e
 			return asExpr(x.AS, names)
 		case policy.PeeringSetRef:
 			isSet = true
-			ps, err := e.ExpandPeerings(ctx, types.Ref(x.Name))
-			var anyErr *resolve.AnySetError
-			switch {
-			case errors.As(err, &anyErr):
-				skipped[x.Name.String()] = true
-				return asSet{any: true}, nil
-			case errors.Is(err, resolve.ErrNotFound):
-				return asSet{}, nil
-			case err != nil:
-				return asSet{}, err
+			ps, err := d.expandPeerings(x.Name)
+			if err != nil || ps.any {
+				return asSet{any: ps.any}, err
 			}
 			// What a peering-set's peerings name, directly or not, is named
 			// through the set.
 			var out asSet
-			for _, q := range ps.List() {
-				d, err := peering(q, via)
+			for _, q := range ps.peerings {
+				dq, err := peering(q, via)
 				if err != nil {
 					return asSet{}, err
 				}
-				out = combine(policy.ASOr, out, d)
+				out = combine(policy.ASOr, out, dq)
 			}
 			return out, nil
 		case policy.PeeringRegexp:
@@ -206,14 +266,17 @@ func (c *Checker) peers(ctx context.Context, as types.ASN) (PeerList, []asSet, e
 	var groups []asSet
 	for _, p := range policyPeerings(an) {
 		isSet = false
-		d, err := peering(p, fwd)
+		dp, err := peering(p, fwd)
 		if err != nil {
-			return PeerList{}, nil, fmt.Errorf("consist: peers of %s: %w", as, err)
+			return PeerList{}, peerInfo{}, fmt.Errorf("consist: peers of %s: %w", as, err)
 		}
-		if isSet && !d.any {
-			groups = append(groups, d)
+		if isSet && !dp.any {
+			groups = append(groups, dp)
 		}
 	}
+	info := peerInfo{groups: groups, missing: d.missing, den: d}
+	// A copy: the denoter's map keeps growing as the ASPA rules use it.
+	via = maps.Clone(via)
 	if fwd[0] || via[0] {
 		skipped["AS0"] = true
 	}
@@ -228,19 +291,19 @@ func (c *Checker) peers(ctx context.Context, as types.ASN) (PeerList, []asSet, e
 	pi, ok := ev.Src.(resolve.PolicyIndex)
 	if !ok {
 		pl.NoIndex = true
-		return pl, groups, nil
+		return pl, info, nil
 	}
 	rev, err := pi.NamedBy(as)
 	switch {
 	case errors.Is(err, resolve.ErrNoIndex):
 		pl.NoIndex = true
 	case err != nil:
-		return PeerList{}, nil, err
+		return PeerList{}, peerInfo{}, err
 	default:
 		// Cloned: PolicyIndex does not promise a slice of the caller's own.
 		pl.Reverse = slices.DeleteFunc(slices.Clone(rev), func(a types.ASN) bool { return a == as || a == 0 })
 	}
-	return pl, groups, nil
+	return pl, info, nil
 }
 
 // policyPeerings returns every peering of an's import, export and default
@@ -272,28 +335,32 @@ func exportExprs(an object.AutNum) []policy.Expr {
 	return out
 }
 
+// eachFactor calls f for each factor of a policy expression, in document
+// order: through lists, and both sides of EXCEPT and REFINE.
+func eachFactor(e policy.Expr, f func(policy.Factor)) {
+	switch x := e.(type) {
+	case policy.Factor:
+		f(x)
+	case policy.ExprList:
+		for _, s := range x.Exprs {
+			eachFactor(s, f)
+		}
+	case policy.Except:
+		eachFactor(x.Left, f)
+		eachFactor(x.Right, f)
+	case policy.Refine:
+		eachFactor(x.Left, f)
+		eachFactor(x.Right, f)
+	}
+}
+
 // exprPeerings returns the peerings of one policy expression, in order.
 func exprPeerings(e policy.Expr) []policy.Peering {
 	var out []policy.Peering
-	var walk func(policy.Expr)
-	walk = func(e policy.Expr) {
-		switch x := e.(type) {
-		case policy.Factor:
-			for _, pa := range x.Peers {
-				out = append(out, pa.Peering)
-			}
-		case policy.ExprList:
-			for _, s := range x.Exprs {
-				walk(s)
-			}
-		case policy.Except:
-			walk(x.Left)
-			walk(x.Right)
-		case policy.Refine:
-			walk(x.Left)
-			walk(x.Right)
+	eachFactor(e, func(x policy.Factor) {
+		for _, pa := range x.Peers {
+			out = append(out, pa.Peering)
 		}
-	}
-	walk(e)
+	})
 	return out
 }

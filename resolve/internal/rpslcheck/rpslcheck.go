@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"runtime"
 	"slices"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"github.com/rkolesnichenko/rpsl/resolve/internal/backend"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/buildinfo"
 	"github.com/rkolesnichenko/rpsl/resolve/peval"
+	"github.com/rkolesnichenko/rpsl/resolve/rpki"
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
@@ -56,6 +58,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	timeout := fs.Duration("timeout", 10*time.Minute, "give up on the whole run after this long (0: never); a -sweep has no deadline unless this is given")
 	checkTimeout := fs.Duration("check-timeout", time.Minute, "sweep: give each aut-num's peer list, its lint, and each pair's check this long, each its own budget, counting the ones that run out (0: no limit)")
 	setPeers := fs.Bool("set-peers", false, "also check (and lint toward) the peers named only through as-sets and peering-sets; there can be tens of thousands")
+	rpkiFile := fs.String("rpki", "", "a validator's JSON export `file` (rpki-client -j, Routinator json): lint each aut-num against its ASPAs too")
 	showVersion := fs.Bool("v", false, "print rpslcheck's version and exit")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -102,6 +105,19 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		ctx, cancel = context.WithTimeout(ctx, d)
 		defer cancel()
 	}
+	// The ASPAs are read first: a bad export fails before a long dump load.
+	var aspas *rpki.ASPAs
+	if *rpkiFile != "" {
+		f, err := os.Open(*rpkiFile)
+		if err == nil {
+			aspas, err = rpki.ReadASPAs(f)
+			f.Close()
+		}
+		if err != nil {
+			fmt.Fprintf(stderr, "rpslcheck: -rpki: %v\n", err)
+			return exitFailed
+		}
+	}
 	b, err := backend.Open(backend.Options{Host: hostPort(*host, *port), Sources: *sources, Whois: *useWhois,
 		Dumps: dumps, Conns: 8, KeepPolicy: true, IndexPeers: len(dumps) > 0})
 	if err != nil {
@@ -112,9 +128,9 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	w := newWriter(stdout, *asJSON)
 	src := resolve.NewCache(b.Src, 0)
 	if *sweep {
-		return runSweep(ctx, src, afs, *sample, *seed, *conc, *checkTimeout, *setPeers, w, stderr)
+		return runSweep(ctx, src, afs, *sample, *seed, *conc, *checkTimeout, *setPeers, aspas, w, stderr)
 	}
-	c := &consist.Checker{Eval: peval.Evaluator{Src: src}, SetPeers: *setPeers}
+	c := &consist.Checker{Eval: peval.Evaluator{Src: src}, SetPeers: *setPeers, ASPAs: aspas}
 	r := &runner{ctx: ctx, c: c, src: src, w: w, stderr: stderr, afs: afs}
 	if len(ases) == 1 {
 		return r.one(ases[0], afs)
