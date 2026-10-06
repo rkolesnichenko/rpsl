@@ -2,6 +2,7 @@ package rpki
 
 import (
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 
@@ -80,6 +81,39 @@ func FuzzApplySLURM(f *testing.F) {
 		}
 		if !sawBase2 {
 			t.Fatal("a filter dropped an asserted VRP")
+		}
+	})
+}
+
+// FuzzReadASPAs: no input panics, and what is accepted holds the profile's
+// §3.3 and reads back equal through NewASPAs.
+func FuzzReadASPAs(f *testing.F) {
+	f.Add(rpkiClientASPAs)
+	f.Add(routinatorASPAs)
+	f.Add(`{"aspas": [{"customer_asid": 1, "providers": [0]}, {"customer": "AS1", "providers": ["AS2"]}]}`)
+	f.Add(`{"provider_authorizations": {"ipv4": [{"customer_asid": 1, "providers": [2]}]}}`)
+	f.Fuzz(func(t *testing.T, in string) {
+		s, err := ReadASPAs(strings.NewReader(in))
+		if err != nil {
+			return
+		}
+		var all []ASPA
+		for a := range s.All() {
+			if err := checkASPA(a); err != nil {
+				t.Fatalf("accepted %+v: %v", a, err)
+			}
+			all = append(all, a)
+		}
+		again, err := NewASPAs(all)
+		if err != nil || again.Len() != s.Len() {
+			t.Fatalf("All() read back: %v, %d customers, want %d", err, again.Len(), s.Len())
+		}
+		for _, a := range all {
+			p1, _ := s.Providers(a.Customer)
+			p2, _ := again.Providers(a.Customer)
+			if !slices.Equal(p1, p2) {
+				t.Fatalf("AS%d: %v, read back %v", a.Customer, p1, p2)
+			}
 		}
 	})
 }

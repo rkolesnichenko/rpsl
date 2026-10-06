@@ -1,6 +1,9 @@
 package rpki
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -121,5 +124,132 @@ func TestASPAsZeroAndCopy(t *testing.T) {
 	got[1] = 98 // Providers returned a copy
 	if again, _ := s.Providers(1); !slices.Equal(again, asns(2, 3)) {
 		t.Errorf("Providers %v after mutations, want [AS2 AS3]", again)
+	}
+}
+
+// Verbatim records: rpki-client's from https://console.rpki-client.org/vrps.json
+// (2026-10-06; output-json.c, 8.5 and later), Routinator's as src/output.rs
+// writes them (json; jsonext adds "source").
+const (
+	rpkiClientASPAs = `{"metadata": {"aspas": 3}, "roas": [], "aspas": [
+		{ "customer_asid": 43, "expires": 1791385200, "providers": [ 293 ] },
+		{ "customer_asid": 80, "expires": 1791417600, "providers": [ 3356, 6461 ] },
+		{ "customer_asid": 174, "expires": 1791385200, "providers": [ 0 ] }
+	]}`
+	routinatorASPAs = `{"metadata": {"generated": 1, "generatedTime": "2026-10-06T00:00:00Z"}, "roas": [], "aspas": [
+		{ "customer": "AS64496", "providers": ["AS64497", "AS64498"], "ta": "ripe" },
+		{ "customer": "AS64499", "providers": ["AS64500"], "ta": "arin", "source": [{"type": "aspa", "uri": "rsync://x/y.asa", "tal": "arin", "validity": {}, "chainValidity": {}, "stale": 0}] }
+	]}`
+)
+
+func TestReadASPAsShapes(t *testing.T) {
+	for name, c := range map[string]struct {
+		in   string
+		want []ASPA
+	}{
+		"rpki-client": {rpkiClientASPAs, []ASPA{{43, asns(293)}, {80, asns(3356, 6461)}, {174, asns(0)}}},
+		"routinator":  {routinatorASPAs, []ASPA{{64496, asns(64497, 64498)}, {64499, asns(64500)}}},
+		// Review Focus 2: both shapes in one array.
+		"mixed": {`{"aspas": [{"customer_asid": 1, "providers": [2]}, {"customer": "AS3", "providers": ["4", 5]}]}`,
+			[]ASPA{{1, asns(2)}, {3, asns(4, 5)}}},
+		// Two records of one customer merge (profile §5.2).
+		"merged": {`{"aspas": [{"customer_asid": 1, "providers": [3]}, {"customer_asid": 1, "providers": [2]}]}`,
+			[]ASPA{{1, asns(2, 3)}}},
+	} {
+		s, err := ReadASPAs(strings.NewReader(c.in))
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		var got []ASPA
+		for a := range s.All() {
+			got = append(got, a)
+		}
+		if !slices.EqualFunc(got, c.want, func(a, b ASPA) bool { return a.Customer == b.Customer && slices.Equal(a.Providers, b.Providers) }) {
+			t.Errorf("%s: %v, want %v", name, got, c.want)
+		}
+	}
+}
+
+// Review Focus 1: an empty array is an export with no ASPAs; null is not an array.
+func TestReadASPAsEmptyAndNull(t *testing.T) {
+	s, err := ReadASPAs(strings.NewReader(`{"roas": [], "aspas": []}`))
+	if err != nil || s.Len() != 0 {
+		t.Errorf(`"aspas": []: %v, %v; want an empty set`, s, err)
+	}
+	if _, err := ReadASPAs(strings.NewReader(`{"aspas": null}`)); err == nil {
+		t.Error(`"aspas": null accepted`)
+	}
+}
+
+func TestReadASPAsErrors(t *testing.T) {
+	for name, c := range map[string]struct{ in, want string }{
+		"no aspas":         {`{"roas": []}`, `no "aspas" member`},
+		"per-AFI form":     {`{"provider_authorizations": {"ipv4": [], "ipv6": []}}`, "rpki-client 8.0-8.4"},
+		"aspas twice":      {`{"aspas": [], "aspas": []}`, `"aspas" twice`},
+		"not an object":    {`[]`, "not a JSON object"},
+		"record not obj":   {`{"aspas": [1]}`, "record 0: not an object"},
+		"both customers":   {`{"aspas": [{"customer_asid": 1, "customer": "AS1", "providers": [2]}]}`, "both"},
+		"no customer":      {`{"aspas": [{"providers": [2]}]}`, `missing "customer_asid"`},
+		"no providers key": {`{"aspas": [{"customer_asid": 1}]}`, `missing "providers"`},
+		"providers null":   {`{"aspas": [{"customer_asid": 1, "providers": null}]}`, "not an array"},
+		"empty providers":  {`{"aspas": [{"customer_asid": 1, "providers": []}]}`, "no providers"},
+		"bad customer":     {`{"aspas": [{"customer_asid": "ASX", "providers": [2]}]}`, "customer"},
+		"bad provider":     {`{"aspas": [{"customer_asid": 1, "providers": [2, -3]}]}`, "provider 1"},
+		"unsorted":         {`{"aspas": [{"customer_asid": 1, "providers": [3, 2]}]}`, "not ascending"},
+		"second record":    {`{"aspas": [{"customer_asid": 1, "providers": [2]}, {"customer_asid": 0, "providers": [2]}]}`, "record 1"},
+		"trailing data":    {`{"aspas": []} x`, "data after the document"},
+	} {
+		if _, err := ReadASPAs(strings.NewReader(c.in)); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err %v, want one containing %q", name, err, c.want)
+		}
+	}
+}
+
+// TestRealDataASPAs (opt-in: RPSL_REALDATA, filled by scripts/fetch-irr-dumps.sh
+// rpki) reads NTT's export, which is rpki-client's: one record per unique VAP,
+// so the set holds metadata.uniquevaps customers (3,269 of them on
+// 2026-09-27, measured with jq: one record per customer, 63 AS0-only, at most
+// 228 providers).
+func TestRealDataASPAs(t *testing.T) {
+	dir := os.Getenv("RPSL_REALDATA")
+	if dir == "" {
+		t.Skip("set RPSL_REALDATA to the directory scripts/fetch-irr-dumps.sh fills")
+	}
+	path := filepath.Join(dir, "rpki", "vrps.json")
+	f, err := os.Open(path)
+	if err != nil {
+		t.Skipf("no VRPs (scripts/fetch-irr-dumps.sh rpki): %v", err)
+	}
+	defer f.Close()
+	s, err := ReadASPAs(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Metadata struct {
+			UniqueVAPs int `json:"uniquevaps"`
+		} `json:"metadata"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if s.Len() != doc.Metadata.UniqueVAPs {
+		t.Errorf("%d customers, want metadata.uniquevaps %d", s.Len(), doc.Metadata.UniqueVAPs)
+	}
+	as0, most := 0, 0
+	for a := range s.All() {
+		if a.Providers[0] == 0 {
+			as0++
+		}
+		most = max(most, len(a.Providers))
+	}
+	t.Logf("%d customers, %d AS0-only, at most %d providers", s.Len(), as0, most)
+	if p, ok := s.Providers(43); !ok || !slices.Contains(p, 293) {
+		t.Errorf("AS43's providers %v, %v; the console lists AS293", p, ok)
 	}
 }

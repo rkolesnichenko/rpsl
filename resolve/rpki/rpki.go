@@ -12,6 +12,11 @@
 // WriteRPSL writes IRRd's pseudo objects as a dump, for resolve.DumpLoader to
 // read as the registry RPKI.
 //
+// ASPAs holds validated ASPA payloads (draft-ietf-sidrops-aspa-profile-29),
+// read from the same export (ReadASPAs). IRRd's RPKI-aware mode has no use
+// for them; the consistency checks (resolve/consist) compare them with an
+// aut-num's policy and the as-sets it announces.
+//
 // Like the rest of the resolve module this package opens no sockets: fetching
 // the VRPs, and deciding how fresh they must be, is the caller's business.
 package rpki

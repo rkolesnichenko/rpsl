@@ -1,8 +1,10 @@
 package rpki
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"iter"
 	"slices"
 
@@ -152,4 +154,97 @@ func (s *ASPAs) All() iter.Seq[ASPA] {
 			}
 		}
 	}
+}
+
+// ReadASPAs reads the ASPAs of a relying-party validator's JSON export: the
+// object's top-level "aspas" array, one record at a time, so memory follows
+// the ASPAs, not the file; other members ("roas", "metadata", …) are
+// skipped. A record names its customer as "customer_asid" (rpki-client 8.5
+// and later) or "customer" (Routinator) — exactly one of them — and its
+// "providers" as an array; other keys ("expires", "ta", "source") are
+// ignored. An AS number may be a JSON number, a numeric string, or "AS"
+// followed by one, as ReadJSON reads "asn". Records go through NewASPAs: one
+// bad record fails the whole read.
+//
+// An export without "aspas" is an error, not an empty set — the validator
+// was not asked to export ASPAs, and reading none would make every check
+// that uses them silently report nothing. So is rpki-client 8.0–8.4's
+// per-AFI "provider_authorizations" form, superseded in 8.5.
+func ReadASPAs(r io.Reader) (*ASPAs, error) {
+	var as []ASPA
+	seen, perAFI := false, false
+	err := walkObject(json.NewDecoder(r), func(d *json.Decoder, key string) error {
+		switch key {
+		case "aspas":
+			if seen {
+				return errors.New(`"aspas" twice`)
+			}
+			seen = true
+			return walkArray(d, "aspas", func(i int, raw json.RawMessage) error {
+				a, err := decodeASPA(raw)
+				if err == nil {
+					err = checkASPA(a)
+				}
+				if err != nil {
+					return fmt.Errorf("record %d: %w", i, err)
+				}
+				as = append(as, a)
+				return nil
+			})
+		case "provider_authorizations":
+			perAFI = true
+		}
+		return skip(d)
+	})
+	if err == nil && !seen {
+		if perAFI {
+			err = errors.New(`"provider_authorizations" is rpki-client 8.0-8.4's per-AFI ASPA form, superseded in 8.5 by "aspas"`)
+		} else {
+			err = errors.New(`no "aspas" member: the export has no ASPAs (rpki-client writes them unless run with -A; Routinator only with enable-aspa)`)
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("rpki: reading ASPAs: %w", err)
+	}
+	return NewASPAs(as)
+}
+
+func decodeASPA(raw json.RawMessage) (ASPA, error) {
+	// A map, not a struct: encoding/json matches struct fields without regard
+	// to case, and the validators write exactly these keys.
+	var rec map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &rec); err != nil || rec == nil {
+		return ASPA{}, fmt.Errorf("not an object: %s", raw)
+	}
+	asid, hasASID := rec["customer_asid"]
+	cust, hasCust := rec["customer"]
+	switch {
+	case hasASID && hasCust:
+		return ASPA{}, errors.New(`both "customer_asid" and "customer"`)
+	case hasCust:
+		asid = cust
+	case !hasASID:
+		return ASPA{}, errors.New(`missing "customer_asid" (rpki-client) or "customer" (Routinator)`)
+	}
+	if err := require(rec, "providers"); err != nil {
+		return ASPA{}, err
+	}
+	c, err := decodeASN(asid)
+	if err != nil {
+		return ASPA{}, fmt.Errorf("customer: %w", err)
+	}
+	var ps []json.RawMessage
+	if err := json.Unmarshal(rec["providers"], &ps); err != nil || ps == nil {
+		return ASPA{}, fmt.Errorf("providers %s: not an array", rec["providers"])
+	}
+	if len(ps) > MaxProviders {
+		return ASPA{}, fmt.Errorf("%s: %d providers, more than %d", c, len(ps), MaxProviders)
+	}
+	a := ASPA{Customer: c, Providers: make([]types.ASN, len(ps))}
+	for i, p := range ps {
+		if a.Providers[i], err = decodeASN(p); err != nil {
+			return ASPA{}, fmt.Errorf("provider %d: %w", i, err)
+		}
+	}
+	return a, nil
 }
