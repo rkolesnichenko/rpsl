@@ -106,7 +106,7 @@ if [ -n "${FUZZTIME:-}" ]; then
 		". ./policy FuzzParseRPAttribute" ". ./policy FuzzParseTypedef" ". ./policy FuzzParseProtocol" \
 		"resolve ./irrd FuzzReadFrame" "resolve ./irrd FuzzParseMembers" "resolve ./irrd FuzzParseRegistries" "resolve ./whois FuzzScanResponse" \
 		"resolve ./internal/filtergen FuzzAggregate" "resolve ./rpki FuzzReadJSON" "resolve ./rpki FuzzApplySLURM" "resolve ./rpki FuzzReadASPAs" \
-		"resolve ./nrtm4 FuzzParseNotification" "resolve ./nrtm4 FuzzReadDelta" "resolve . FuzzCorpusDelete" "resolve . FuzzNormalizeFilter" \
+		"resolve ./nrtm4 FuzzParseNotification" "resolve ./nrtm4 FuzzReadDelta" "resolve ./nrtm4 FuzzVerifyJWS" "resolve . FuzzCorpusDelete" "resolve . FuzzNormalizeFilter" \
 		"resolve ./rtconfig FuzzTranslateRegexp" "resolve ./internal/rpslconf FuzzParseTemplate" "resolve ./irrdq FuzzSession" "resolve ./internal/rpsld FuzzSourceSpec"; do
 		set -- $t
 		step "fuzz $3 ($FUZZTIME)"

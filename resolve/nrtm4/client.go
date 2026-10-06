@@ -19,7 +19,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/ecdsa"
+	"crypto"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -55,7 +55,7 @@ const (
 type Client struct {
 	URL       string // the Update Notification File (…/update-notification-file.jose): https://, or file:// (§9.4)
 	Database  string // the IRR database's name, e.g. "RIPE": the notification file's source must be it
-	PublicKey string // PEM of the key the server signs with now (ES256); Status().CurrentKey after a rotation
+	PublicKey string // PEM of the key the server signs with now (ES256, or another algorithm ParsePublicKey's key type allows); Status().CurrentKey after a rotation
 
 	HTTP         *http.Client // nil: http.DefaultClient with a 10-minute timeout per file
 	MaxFileBytes int64        // cap on a snapshot or delta after decompression; 0: DefaultMaxFileBytes
@@ -97,9 +97,9 @@ type Client struct {
 type state struct {
 	session string
 	version int64 // 0: nothing loaded
-	cur     *ecdsa.PublicKey
+	cur     crypto.PublicKey
 	curPEM  string
-	next    *ecdsa.PublicKey
+	next    crypto.PublicKey
 	nextPEM string
 	seen    map[fileID]fileRef // snapshot or delta -> the reference a valid notification file gave
 	corpus  *resolve.Corpus

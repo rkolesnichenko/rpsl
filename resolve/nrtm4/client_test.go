@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/ecdsa"
+	"crypto"
 	"errors"
 	"fmt"
 	"net/http"
@@ -471,7 +471,7 @@ func TestClientLocalFiles(t *testing.T) {
 	}
 }
 
-func mustKey(t *testing.T, s string) *ecdsa.PublicKey {
+func mustKey(t *testing.T, s string) crypto.PublicKey {
 	t.Helper()
 	k, err := ParsePublicKey(s)
 	if err != nil {
