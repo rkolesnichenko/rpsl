@@ -214,13 +214,7 @@ func Run(ctx context.Context, r io.Reader, opts Options) (*Report, error) {
 		}
 	}
 
-	var (
-		autNums   []object.AutNum
-		asSets    []object.AsSet
-		routeSets []object.RouteSet
-		routes    []object.Object // heterogeneous: Route + Route6
-		truncated = map[string]int64{}
-	)
+	ret := retainer{put: map[string]int{}, truncated: map[string]int64{}}
 
 	validateProfile := rpsl.RIPE
 	switch opts.Validate {
@@ -264,50 +258,21 @@ func Run(ctx context.Context, r io.Reader, opts Options) (*Report, error) {
 		}
 
 		if opts.Expand {
-			switch t := typed.(type) {
-			case object.AutNum:
-				if len(autNums) < opts.MaxRetainAutNums {
-					autNums = append(autNums, t)
-				} else {
-					truncated["aut-num"]++
-				}
-			case object.AsSet:
-				if len(asSets) < opts.MaxRetainAsSets {
-					asSets = append(asSets, t)
-				} else {
-					truncated["as-set"]++
-				}
-			case object.RouteSet:
-				if len(routeSets) < opts.MaxRetainRouteSets {
-					routeSets = append(routeSets, t)
-				} else {
-					truncated["route-set"]++
-				}
-			case object.Route:
-				if len(routes) < opts.MaxRetainRoutes {
-					routes = append(routes, t)
-				} else {
-					truncated["route"]++
-				}
-			case object.Route6:
-				if len(routes) < opts.MaxRetainRoutes {
-					routes = append(routes, t)
-				} else {
-					truncated["route6"]++
-				}
-			}
+			ret.add(opts, class, typed)
 		}
 	}
 
 	report.Bytes = cr.n
 	report.ParsedBytes = parsed.n
 	report.ByRule = sortedRuleStats(ruleCounts, ruleSpans)
-	if len(truncated) > 0 {
-		report.Truncated = truncated
+	if len(ret.truncated) > 0 {
+		report.Truncated = ret.truncated
 	}
 
 	if opts.Expand {
-		report.ResolveSamples = runResolvePass(ctx, opts, autNums, asSets, routeSets, routes)
+		src := ret.corpus.Source()
+		ret.corpus = resolve.Corpus{} // the MemSource is built; let the corpus's maps go
+		report.ResolveSamples = runResolvePass(ctx, opts, src, ret.asSets, ret.routeSets)
 	}
 
 	report.Elapsed = time.Since(start)
@@ -319,6 +284,56 @@ func Run(ctx context.Context, r io.Reader, opts Options) (*Report, error) {
 		return report, iterErr
 	}
 	return report, nil
+}
+
+// retainer keeps what the resolve pass needs of the streamed objects, under
+// the Options' retention caps. Its corpus holds them in the reduced form the
+// engine's loaders use — sets and member-of claimants whole, other routes as
+// (prefix, origin, source), other aut-nums not at all — rather than decoded:
+// a decoded route is about 4.7 KB, and holding RIPE's or APNIC's that way
+// took TestRealData to 6-7 GB, against about 1 GB now. One object per class,
+// primary key and source is kept, as a registry has.
+type retainer struct {
+	corpus    resolve.Corpus
+	put       map[string]int   // cap ("route" for route and route6) -> objects put
+	truncated map[string]int64 // object class -> objects over its cap
+	// The resolve pass's sampling candidates, in input order.
+	asSets, routeSets []setSize
+}
+
+// setSize is a set and how many members it lists, for sampling the largest.
+type setSize struct {
+	name types.SetName
+	size int
+}
+
+// add keeps typed, an object of class class, unless its cap is reached.
+func (r *retainer) add(opts Options, class string, typed object.Object) {
+	limit, key := 0, class
+	switch typed.(type) {
+	case object.AutNum:
+		limit = opts.MaxRetainAutNums
+	case object.AsSet:
+		limit = opts.MaxRetainAsSets
+	case object.RouteSet:
+		limit = opts.MaxRetainRouteSets
+	case object.Route, object.Route6:
+		limit, key = opts.MaxRetainRoutes, "route"
+	default:
+		return
+	}
+	if r.put[key] >= limit {
+		r.truncated[class]++
+		return
+	}
+	r.put[key]++
+	r.corpus.Put(typed)
+	switch t := typed.(type) {
+	case object.AsSet:
+		r.asSets = append(r.asSets, setSize{t.Name, len(t.Members) + len(t.MbrsByRef)})
+	case object.RouteSet:
+		r.routeSets = append(r.routeSets, setSize{t.Name, len(t.Members) + len(t.MpMembers) + len(t.MbrsByRef)})
+	}
 }
 
 func severityString(s ast.Severity) string {
@@ -359,26 +374,14 @@ func sortedRuleStats(counts map[ruleKey]int64, spans map[ruleKey]string) []RuleS
 	return out
 }
 
-// runResolvePass builds a MemSource over the retained corpus and expands either
-// the explicit ExpandSets, or the largest-by-membership sample. "Largest" is
+// runResolvePass expands either the explicit ExpandSets or the
+// largest-by-membership sample over src, the retained corpus. "Largest" is
 // the right sampler: first-N is biased toward alphabetical garbage, random is
 // non-reproducible, and large sets are what actually exercise nested expansion,
 // fan-out caps, and mbrs-by-ref joins.
-func runResolvePass(ctx context.Context, opts Options, autNums []object.AutNum, asSets []object.AsSet, routeSets []object.RouteSet, routes []object.Object) []ResolveSample {
-	corpus := make([]object.Object, 0, len(autNums)+len(asSets)+len(routeSets)+len(routes))
-	for _, o := range autNums {
-		corpus = append(corpus, o)
-	}
-	for _, o := range asSets {
-		corpus = append(corpus, o)
-	}
-	for _, o := range routeSets {
-		corpus = append(corpus, o)
-	}
-	corpus = append(corpus, routes...)
-
+func runResolvePass(ctx context.Context, opts Options, src *resolve.MemSource, asSets, routeSets []setSize) []ResolveSample {
 	exp := &resolve.Expander{
-		Src:         resolve.NewMemSource(corpus),
+		Src:         src,
 		MaxDepth:    32,
 		MaxPrefixes: 1_000_000,
 		AFI:         types.AFIAny,
@@ -405,20 +408,13 @@ func runResolvePass(ctx context.Context, opts Options, autNums []object.AutNum, 
 		targets = append(targets, target{name: sn, class: sn.Class().String()})
 	}
 	if len(opts.ExpandSets) == 0 && opts.ExpandSample > 0 {
-		sort.SliceStable(asSets, func(i, j int) bool {
-			a, b := asSets[i], asSets[j]
-			return len(a.Members)+len(a.MbrsByRef) > len(b.Members)+len(b.MbrsByRef)
-		})
-		sort.SliceStable(routeSets, func(i, j int) bool {
-			a, b := routeSets[i], routeSets[j]
-			return len(a.Members)+len(a.MpMembers)+len(a.MbrsByRef) >
-				len(b.Members)+len(b.MpMembers)+len(b.MbrsByRef)
-		})
+		sort.SliceStable(asSets, func(i, j int) bool { return asSets[i].size > asSets[j].size })
+		sort.SliceStable(routeSets, func(i, j int) bool { return routeSets[i].size > routeSets[j].size })
 		for i := 0; i < opts.ExpandSample && i < len(asSets); i++ {
-			targets = append(targets, target{name: asSets[i].Name, class: types.ClassAsSet.String()})
+			targets = append(targets, target{name: asSets[i].name, class: types.ClassAsSet.String()})
 		}
 		for i := 0; i < opts.ExpandSample && i < len(routeSets); i++ {
-			targets = append(targets, target{name: routeSets[i].Name, class: types.ClassRouteSet.String()})
+			targets = append(targets, target{name: routeSets[i].name, class: types.ClassRouteSet.String()})
 		}
 	}
 
