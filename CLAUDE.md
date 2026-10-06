@@ -1,7 +1,8 @@
 # rpsl — RPSL parser, type system, and set-expansion engine for Go
 
-Full design and rationale: @docs/rpsl-go-design.md
-Read it before making architectural decisions. It is the source of truth; this file is the operating contract.
+Full design and rationale: `docs/rpsl-go-design.md` (not imported here: at ~125k chars it would
+exceed the instruction-file budget). Read the relevant section before making architectural
+decisions. It is the source of truth; this file is the operating contract.
 
 ## What we're building
 
