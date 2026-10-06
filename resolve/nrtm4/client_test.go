@@ -673,3 +673,26 @@ func TestClientKeepsRouteText(t *testing.T) {
 		t.Errorf("the delta's route: %q", texts[2])
 	}
 }
+
+// A rotation may change the key type (§9.6): ES256 announced Ed25519, the
+// server switched, and the client follows; the old key is not used again.
+func TestRotationToEd25519(t *testing.T) {
+	s := nrtmtest.New(t, "TEST")
+	c := newClient(s, "TEST")
+	if _, err := c.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	next := s.AnnounceKeyOf("Ed25519")
+	if _, err := c.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	s.RotateKey()
+	s.Publish(nrtmtest.Change{Class: "as-set", PK: "AS-ED", Text: "as-set: AS-ED\nmembers: AS1\nmnt-by: MNT-A\nsource: TEST\n"})
+	if _, err := c.Sync(context.Background()); err != nil {
+		t.Fatalf("after rotating to Ed25519: %v", err)
+	}
+	if got := c.Status().CurrentKey; got != next {
+		t.Errorf("CurrentKey is not the Ed25519 key")
+	}
+	checkMirror(t, "after the rotation", c, s)
+}
