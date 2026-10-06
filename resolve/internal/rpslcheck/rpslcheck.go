@@ -105,13 +105,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		ctx, cancel = context.WithTimeout(ctx, d)
 		defer cancel()
 	}
-	b, err := backend.Open(backend.Options{Host: hostPort(*host, *port), Sources: *sources, Whois: *useWhois,
-		Dumps: dumps, Conns: 8, KeepPolicy: true, IndexPeers: len(dumps) > 0})
-	if err != nil {
-		fmt.Fprintf(stderr, "rpslcheck: %v\n", err)
-		return exitFailed
-	}
-	defer b.Close()
+	// The ASPAs are read first: a bad export fails before a long dump load.
 	var aspas *rpki.ASPAs
 	if *rpkiFile != "" {
 		f, err := os.Open(*rpkiFile)
@@ -124,6 +118,13 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return exitFailed
 		}
 	}
+	b, err := backend.Open(backend.Options{Host: hostPort(*host, *port), Sources: *sources, Whois: *useWhois,
+		Dumps: dumps, Conns: 8, KeepPolicy: true, IndexPeers: len(dumps) > 0})
+	if err != nil {
+		fmt.Fprintf(stderr, "rpslcheck: %v\n", err)
+		return exitFailed
+	}
+	defer b.Close()
 	w := newWriter(stdout, *asJSON)
 	src := resolve.NewCache(b.Src, 0)
 	if *sweep {

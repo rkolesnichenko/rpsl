@@ -429,11 +429,13 @@ func TestRPKIFlagErrors(t *testing.T) {
 	if err := os.WriteFile(roasOnly, []byte(`{"roas": []}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for name, c := range map[string]struct{ file, want string }{
-		"ROA-only export": {roasOnly, `no "aspas" member`},
-		"no such file":    {filepath.Join(dir, "missing.json"), "-rpki"},
+	for name, c := range map[string]struct{ dump, file, want string }{
+		"ROA-only export": {aspaFixture, roasOnly, `no "aspas" member`},
+		"no such file":    {aspaFixture, filepath.Join(dir, "missing.json"), "-rpki"},
+		// The export is read before the dump: a bad one fails first.
+		"before the dump": {filepath.Join(dir, "missing.db"), roasOnly, `-rpki: `},
 	} {
-		_, errw, code := run(t, "-dump", aspaFixture, "-rpki", c.file, "AS65101")
+		_, errw, code := run(t, "-dump", c.dump, "-rpki", c.file, "AS65101")
 		if code != 3 || !strings.Contains(errw, c.want) {
 			t.Errorf("%s: exit %d, stderr %q; want 3 and %q", name, code, errw, c.want)
 		}
