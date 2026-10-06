@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rkolesnichenko/rpsl/policy"
 	"github.com/rkolesnichenko/rpsl/resolve/rpki"
 	"github.com/rkolesnichenko/rpsl/types"
 )
@@ -235,6 +236,7 @@ func TestASPACustomerSet(t *testing.T) {
 		{"announced", "export: to AS2 announce AS-CUST", both},
 		{"in an OR", "export: to AS2 announce AS1 OR AS-CUST", both},
 		{"mp-export", "mp-export: to AS2 announce AS-CUST", []string{finding("mp-export", 11, false), finding("mp-export", 13, true)}},
+		{"announcer's own ASPA", "export: to AS2 announce AS-CUST", both},
 		{"under NOT", "export: to AS2 announce ANY AND NOT AS-CUST", nil},
 		{"inside a regexp", "export: to AS2 announce <AS-CUST>", nil},
 		{"missing set", "export: to AS2 announce AS-MISSING", nil},
@@ -243,10 +245,31 @@ func TestASPACustomerSet(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ch := checker(t, append([]string{autNum(1, c.line), autNum(2)}, customerObjects...)...)
-			got := lintASPA(t, ch, 1, newASPAs(t, customerASPAs...), RuleASPACustomerSet)
+			aspas := customerASPAs
+			if c.name == "announcer's own ASPA" {
+				aspas = append([]rpki.ASPA{aspa(1, 99)}, aspas...)
+			}
+			got := lintASPA(t, ch, 1, newASPAs(t, aspas...), RuleASPACustomerSet)
 			if strings.Join(got, "\n") != strings.Join(c.want, "\n") {
 				t.Errorf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(c.want, "\n"))
 			}
 		})
+	}
+}
+
+// The filter parser builds no AS expression with an operator, so EXCEPT's
+// right side is tested on a constructed filter.
+func TestPositiveASSetsExcept(t *testing.T) {
+	mk := func(s string) policy.ASSetRef {
+		n, err := types.ParseSetName(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return policy.ASSetRef{Name: n}
+	}
+	f := policy.FilterASExpr{AS: policy.ASExprBinary{Op: policy.ASExcept, L: mk("AS-NESTED"), R: mk("AS-CUST")}}
+	got := positiveASSets(nil, f)
+	if len(got) != 1 || got[0].String() != "AS-NESTED" {
+		t.Errorf("got %v, want [AS-NESTED]", got)
 	}
 }

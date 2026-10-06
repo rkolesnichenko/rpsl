@@ -202,46 +202,22 @@ func positiveASExprSets(out []types.SetName, e policy.ASExpr) []types.SetName {
 	return out
 }
 
-// exprFilters returns the filters of one policy expression, in order.
-func exprFilters(e policy.Expr) []policy.Filter {
-	var out []policy.Filter
-	var walk func(policy.Expr)
-	walk = func(e policy.Expr) {
-		switch x := e.(type) {
-		case policy.Factor:
-			out = append(out, x.Filter)
-		case policy.ExprList:
-			for _, s := range x.Exprs {
-				walk(s)
-			}
-		case policy.Except:
-			walk(x.Left)
-			walk(x.Right)
-		case policy.Refine:
-			walk(x.Left)
-			walk(x.Right)
-		}
-	}
-	walk(e)
-	return out
-}
-
 // directASNs returns the AS numbers a set's direct members hold, ascending:
 // the ASNs object.DirectMembers lists, and the aut-nums claiming membership
 // that resolve.ClaimAllowed admits. Nested sets are not followed. A set the
 // source does not have, or whose class is not its name's, has none (ok
 // false): lint/missing-set reports it.
-func directASNs(ctx context.Context, src resolve.Source, n types.SetName) (asns []types.ASN, ok bool, err error) {
+func directASNs(ctx context.Context, src resolve.Source, n types.SetName) (asns []types.ASN, err error) {
 	set, err := src.GetSet(ctx, types.Ref(n))
 	switch {
 	case errors.Is(err, resolve.ErrNotFound):
-		return nil, false, nil
+		return nil, nil
 	case err != nil:
-		return nil, false, err
+		return nil, err
 	case set == nil || set.Class() != n.Class().String():
-		return nil, false, nil
+		return nil, nil
 	}
-	if s, ok := set.(object.Set); ok {
+	if s, isSet := set.(object.Set); isSet {
 		for _, m := range object.DirectMembers(s) {
 			if m.Kind == object.MemberAS && !slices.Contains(asns, m.AS) {
 				asns = append(asns, m.AS)
@@ -250,7 +226,7 @@ func directASNs(ctx context.Context, src resolve.Source, n types.SetName) (asns 
 	}
 	claimants, err := src.MembersByRef(ctx, set)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	for _, o := range claimants {
 		if !resolve.ClaimAllowed(o, set) {
@@ -270,7 +246,7 @@ func directASNs(ctx context.Context, src resolve.Source, n types.SetName) (asns 
 		}
 	}
 	slices.Sort(asns)
-	return asns, true, nil
+	return asns, nil
 }
 
 // customerSets reports, for each as-set as's export filters announce, each
@@ -280,14 +256,14 @@ func (l *linter) customerSets(ctx context.Context, src resolve.Source, as types.
 	members := map[types.SetName][]types.ASN{}
 	for i, ex := range exportExprs(l.an) {
 		var names []types.SetName
-		for _, f := range exprFilters(ex) {
-			names = positiveASSets(names, f)
-		}
+		eachFactor(ex, func(x policy.Factor) {
+			names = positiveASSets(names, x.Filter)
+		})
 		for _, n := range names {
 			ms, seen := members[n]
 			if !seen {
 				var err error
-				if ms, _, err = directASNs(ctx, src, n); err != nil {
+				if ms, err = directASNs(ctx, src, n); err != nil {
 					return err
 				}
 				members[n] = ms

@@ -272,28 +272,32 @@ func exportExprs(an object.AutNum) []policy.Expr {
 	return out
 }
 
+// eachFactor calls f for each factor of a policy expression, in document
+// order: through lists, and both sides of EXCEPT and REFINE.
+func eachFactor(e policy.Expr, f func(policy.Factor)) {
+	switch x := e.(type) {
+	case policy.Factor:
+		f(x)
+	case policy.ExprList:
+		for _, s := range x.Exprs {
+			eachFactor(s, f)
+		}
+	case policy.Except:
+		eachFactor(x.Left, f)
+		eachFactor(x.Right, f)
+	case policy.Refine:
+		eachFactor(x.Left, f)
+		eachFactor(x.Right, f)
+	}
+}
+
 // exprPeerings returns the peerings of one policy expression, in order.
 func exprPeerings(e policy.Expr) []policy.Peering {
 	var out []policy.Peering
-	var walk func(policy.Expr)
-	walk = func(e policy.Expr) {
-		switch x := e.(type) {
-		case policy.Factor:
-			for _, pa := range x.Peers {
-				out = append(out, pa.Peering)
-			}
-		case policy.ExprList:
-			for _, s := range x.Exprs {
-				walk(s)
-			}
-		case policy.Except:
-			walk(x.Left)
-			walk(x.Right)
-		case policy.Refine:
-			walk(x.Left)
-			walk(x.Right)
+	eachFactor(e, func(x policy.Factor) {
+		for _, pa := range x.Peers {
+			out = append(out, pa.Peering)
 		}
-	}
-	walk(e)
+	})
 	return out
 }

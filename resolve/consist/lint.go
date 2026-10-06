@@ -742,27 +742,12 @@ func (l *linter) sets(ctx context.Context, c *Checker) error {
 	for kind, exprs := range map[string][]policy.Expr{"import": importExprs(l.an), "export": exportExprs(l.an)} {
 		for i, ex := range exprs {
 			var names []types.SetName
-			var walk func(policy.Expr)
-			walk = func(e policy.Expr) {
-				switch x := e.(type) {
-				case policy.Factor:
-					for _, pa := range x.Peers {
-						names = peeringSets(names, pa.Peering)
-					}
-					names = filterSets(names, x.Filter)
-				case policy.ExprList:
-					for _, s := range x.Exprs {
-						walk(s)
-					}
-				case policy.Except:
-					walk(x.Left)
-					walk(x.Right)
-				case policy.Refine:
-					walk(x.Left)
-					walk(x.Right)
+			eachFactor(ex, func(x policy.Factor) {
+				for _, pa := range x.Peers {
+					names = peeringSets(names, pa.Peering)
 				}
-			}
-			walk(ex)
+				names = filterSets(names, x.Filter)
+			})
 			if err := check(kind, i, names); err != nil {
 				return err
 			}
