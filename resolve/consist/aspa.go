@@ -140,3 +140,25 @@ func (l *linter) missingProviders(as types.ASN, aspas *rpki.ASPAs) {
 		l.add(RuleASPAMissingProvider, "import", f.index, msg, f.peer, &af)
 	}
 }
+
+// staleProviders reports each provider as's ASPA lists that none of its
+// peerings names, directly or through a set (lint/aspa-stale-provider) —
+// unless a peering could name any AS (AS-ANY, a regexp, a set template:
+// pl.Skipped other than "AS0").
+func (l *linter) staleProviders(as types.ASN, pl PeerList, aspas *rpki.ASPAs) {
+	ps, ok := aspas.Providers(as)
+	if !ok || len(ps) == 0 {
+		return
+	}
+	for _, s := range pl.Skipped {
+		if s != "AS0" {
+			return
+		}
+	}
+	for _, p := range ps {
+		if slices.Contains(pl.Forward, p) || slices.Contains(pl.ViaSets, p) {
+			continue
+		}
+		l.add(RuleASPAStaleProvider, "", -1, fmt.Sprintf("%s's ASPA lists %s as a provider, but no peering of %s names it", as, p, as), p, nil)
+	}
+}

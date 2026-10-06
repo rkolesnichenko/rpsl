@@ -125,3 +125,77 @@ func TestASPARulesOffWithoutASPAs(t *testing.T) {
 		t.Errorf("issues without ASPAs: %v", got)
 	}
 }
+
+func TestASPAStaleProvider(t *testing.T) {
+	stale := func(p int) string {
+		return fmt.Sprintf("lint/aspa-stale-provider  -1 [AS%d] []: AS1's ASPA lists AS%d as a provider, but no peering of AS1 names it", p, p)
+	}
+	for _, c := range []struct {
+		name  string
+		lines []string
+		aspa  rpki.ASPA
+		want  []string
+	}{
+		{"named", []string{"import: from AS2 accept ANY"}, aspa(1, 2), nil},
+		{"one not named", []string{"import: from AS2 accept ANY"}, aspa(1, 2, 3), []string{stale(3)}},
+		{"named in an export", []string{"export: to AS3 announce AS1"}, aspa(1, 3), nil},
+		{"through a set", []string{"import: from AS-PEERS accept {10.0.0.0/8^+}"}, aspa(1, 3), nil},
+		{"AS-ANY could name it", []string{"import: from AS-ANY accept ANY"}, aspa(1, 3), nil},
+		{"AS0 ASPA", []string{"import: from AS2 accept ANY"}, aspa(1, 0), nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ch := checker(t, autNum(1, c.lines...), autNum(2), autNum(3))
+			got := lintASPA(t, ch, 1, newASPAs(t, c.aspa), RuleASPAStaleProvider)
+			if strings.Join(got, "\n") != strings.Join(c.want, "\n") {
+				t.Errorf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(c.want, "\n"))
+			}
+		})
+	}
+}
+
+// Review Focus 5: hundreds of providers no peering names give one Info
+// issue each, in Lint's own order (issues sort by line, index, rule and
+// message), the same on every run.
+func TestASPAStaleManyProviders(t *testing.T) {
+	providers := []uint32{2}
+	for p := uint32(100); p < 400; p++ {
+		providers = append(providers, p)
+	}
+	ch := checker(t, autNum(1, "import: from AS2 accept ANY"), autNum(2))
+	ch.ASPAs = newASPAs(t, aspa(1, providers...))
+	run := func() []Issue {
+		issues, err := ch.Lint(context.Background(), 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []Issue
+		for _, is := range issues {
+			if is.Rule == RuleASPAStaleProvider {
+				out = append(out, is)
+			}
+		}
+		return out
+	}
+	first := run()
+	if len(first) != 300 {
+		t.Fatalf("%d issues, want 300", len(first))
+	}
+	seen := map[types.ASN]bool{}
+	for _, is := range first {
+		if len(is.Peers) != 1 || is.Severity.String() != "info" {
+			t.Fatalf("issue %+v: want one peer, info", is)
+		}
+		seen[is.Peers[0]] = true
+	}
+	for p := types.ASN(100); p < 400; p++ {
+		if !seen[p] {
+			t.Errorf("no issue for AS%d", p)
+		}
+	}
+	second := run()
+	for i := range first {
+		if first[i].Message != second[i].Message {
+			t.Fatalf("issue %d differs between runs: %q, %q", i, first[i].Message, second[i].Message)
+		}
+	}
+}
