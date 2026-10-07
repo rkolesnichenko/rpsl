@@ -25,23 +25,16 @@ func ParseASPathRegexp(body string) (*ASPathRE, error)
 func ParseAggrMtd(s string) (AggrMtd, []ast.Diagnostic)
 func ParseComponents(s string) (Components, []ast.Diagnostic)
 func ParseDefault(s string) (Default, []ast.Diagnostic)
-func ParseDefaultWith(s string, mp bool, o Options) (Default, []ast.Diagnostic)
+func ParseDefaultWith(s string, o Options) (Default, []ast.Diagnostic)
 func ParseExport(s string) (Export, []ast.Diagnostic)
-func ParseExportVia(s string) (Export, []ast.Diagnostic)
-func ParseExportViaWith(s string, o Options) (Export, []ast.Diagnostic)
-func ParseExportWith(s string, mp bool, o Options) (Export, []ast.Diagnostic)
+func ParseExportWith(s string, o Options) (Export, []ast.Diagnostic)
 func ParseFilter(s string) (Filter, []ast.Diagnostic)
 func ParseIfaddr(s string) (Ifaddr, []ast.Diagnostic)
 func ParseImport(s string) (Import, []ast.Diagnostic)
-func ParseImportVia(s string) (Import, []ast.Diagnostic)
-func ParseImportViaWith(s string, o Options) (Import, []ast.Diagnostic)
-func ParseImportWith(s string, mp bool, o Options) (Import, []ast.Diagnostic)
+func ParseImportWith(s string, o Options) (Import, []ast.Diagnostic)
 func ParseInject(s string) (Inject, []ast.Diagnostic)
 func ParseInterface(s string) (Interface, []ast.Diagnostic)
-func ParseMPDefault(s string) (Default, []ast.Diagnostic)
-func ParseMPExport(s string) (Export, []ast.Diagnostic)
 func ParseMPFilter(s string) ([]types.AddrFamily, Filter, []ast.Diagnostic)
-func ParseMPImport(s string) (Import, []ast.Diagnostic)
 func ParseMntRoutes(s string) (MntRoutes, []ast.Diagnostic)
 func ParsePeer(s string) (Peer, []ast.Diagnostic)
 func ParsePeering(s string) (Peering, []ast.Diagnostic)
@@ -261,6 +254,8 @@ type MntRoutes struct
 	Raw string
 func (MntRoutes) String() string
 type Options struct
+	MP bool
+	Via bool
 	Dict *Dictionary
 type Peer struct
 	Protocol string

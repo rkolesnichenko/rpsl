@@ -224,7 +224,7 @@ func TestRecovery(t *testing.T) {
 }
 
 func TestParseMpImportAFI(t *testing.T) {
-	imp, diags := ParseMPImport("afi ipv6.unicast from AS1 accept ANY")
+	imp, diags := mpImport("afi ipv6.unicast from AS1 accept ANY")
 	if len(diags) != 0 {
 		t.Fatalf("diags = %+v", diags)
 	}
@@ -238,7 +238,7 @@ func TestParseMpImportAFI(t *testing.T) {
 }
 
 func TestParseAFIList(t *testing.T) {
-	imp, diags := ParseMPImport("afi ipv4.unicast, ipv6.unicast from AS1 accept ANY")
+	imp, diags := mpImport("afi ipv4.unicast, ipv6.unicast from AS1 accept ANY")
 	if len(diags) != 0 {
 		t.Fatalf("diags = %+v", diags)
 	}
@@ -298,7 +298,7 @@ func TestParseBraceList(t *testing.T) {
 }
 
 func TestParseMpFilterIPv6(t *testing.T) {
-	imp, diags := ParseMPImport("afi ipv6.unicast from AS1 accept {2001:db8::/32^+}")
+	imp, diags := mpImport("afi ipv6.unicast from AS1 accept {2001:db8::/32^+}")
 	if len(diags) != 0 {
 		t.Fatalf("diags = %+v", diags)
 	}
@@ -312,62 +312,66 @@ func TestParseMpFilterIPv6(t *testing.T) {
 	}
 }
 
+// importSeeds are FuzzParseImport's seeds, also read by policyInputs.
+var importSeeds = []string{
+	"from AS1 accept ANY",
+	"from AS1 action pref=100; from AS2 accept AS-FOO",
+	"to AS1 announce {1.0.0.0/8^+}",
+	"from AS1 accept <^AS1+$>",
+	"protocol BGP4 from AS1 accept (AS1 AND NOT AS2) OR PeerAS",
+	"afi ipv6.unicast from AS1 accept {2001:db8::/32^+}",
+	"afi ipv4.unicast, ipv6.unicast from AS1 accept ANY",
+	"from AS1 accept ANY except {from AS2 accept AS2}",
+	"from AS1 accept AS1 (AS2 OR AS3) AND community(1:2)",
+	"{ from AS1 accept AS1; from AS2 accept AS2 }",
+	"",
+	"{{{",
+	"from action accept",
+	"<unterminated",
+	"afi refine except {}",
+	"from AS1 accept " + strings.Repeat("(", 2000) + "ANY" + strings.Repeat(")", 2000),
+	"from AS1 accept " + strings.Repeat("not ", 2000) + "ANY",
+	strings.Repeat("{", 2000) + "from AS1 accept ANY",
+	// import-via: and export-via: (draft-ietf-grow-rpsl-via)
+	"AS6777 from AS15562 action pref = 2; accept AS-SNIJDERS",
+	"AS6777 195.69.144.255 to AS-AMS-IX-RS announce AS-SNIJDERS",
+	"afi ipv4.unicast, ipv6.unicast AS8631 from AS-MSKROUTESERVER action pref=100; accept AS-MSKROUTESERVER",
+	"afi ipv6.unicast AS47498 at ( 2001:7f8:ca:1::111 OR 2001:7f8:ca:1::222 ) to AS-FOGIXP announce { 2001:67c:2ea8::/48 }",
+	"AS6777 from AS-ANY accept ANY refine AS8631 from AS1 accept AS1",
+	"{ AS6777 from AS1 accept AS1; from AS2 accept AS2 }",
+}
+
 // FuzzParseImport asserts the parser never panics on arbitrary input, read as
 // every policy attribute: import:, mp-export:, default:, import-via: and
 // export-via:.
 func FuzzParseImport(f *testing.F) {
-	for _, s := range []string{
-		"from AS1 accept ANY",
-		"from AS1 action pref=100; from AS2 accept AS-FOO",
-		"to AS1 announce {1.0.0.0/8^+}",
-		"from AS1 accept <^AS1+$>",
-		"protocol BGP4 from AS1 accept (AS1 AND NOT AS2) OR PeerAS",
-		"afi ipv6.unicast from AS1 accept {2001:db8::/32^+}",
-		"afi ipv4.unicast, ipv6.unicast from AS1 accept ANY",
-		"from AS1 accept ANY except {from AS2 accept AS2}",
-		"from AS1 accept AS1 (AS2 OR AS3) AND community(1:2)",
-		"{ from AS1 accept AS1; from AS2 accept AS2 }",
-		"",
-		"{{{",
-		"from action accept",
-		"<unterminated",
-		"afi refine except {}",
-		"from AS1 accept " + strings.Repeat("(", 2000) + "ANY" + strings.Repeat(")", 2000),
-		"from AS1 accept " + strings.Repeat("not ", 2000) + "ANY",
-		strings.Repeat("{", 2000) + "from AS1 accept ANY",
-		// import-via: and export-via: (draft-ietf-grow-rpsl-via)
-		"AS6777 from AS15562 action pref = 2; accept AS-SNIJDERS",
-		"AS6777 195.69.144.255 to AS-AMS-IX-RS announce AS-SNIJDERS",
-		"afi ipv4.unicast, ipv6.unicast AS8631 from AS-MSKROUTESERVER action pref=100; accept AS-MSKROUTESERVER",
-		"afi ipv6.unicast AS47498 at ( 2001:7f8:ca:1::111 OR 2001:7f8:ca:1::222 ) to AS-FOGIXP announce { 2001:67c:2ea8::/48 }",
-		"AS6777 from AS-ANY accept ANY refine AS8631 from AS1 accept AS1",
-		"{ AS6777 from AS1 accept AS1; from AS2 accept AS2 }",
-	} {
+	for _, s := range importSeeds {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
-		imp, pi := parseImport(s, false)
-		exp, pe := parseExport(s, true)
-		def, pd := parseDefault(s, false)
-		iv, piv := parseImportVia(s, Options{})
-		ev, pev := parseExportVia(s, Options{})
-		for _, p := range []*parser{pi, pe, pd, piv, pev} {
-			assertNothingDropped(t, s, p)
-		}
-		checkParse(t, s, imp, pi.diags, func(v string) (any, []ast.Diagnostic) { return ParseImport(v) })
-		checkParse(t, s, exp, pe.diags, func(v string) (any, []ast.Diagnostic) { return ParseMPExport(v) })
-		checkParse(t, s, def, pd.diags, func(v string) (any, []ast.Diagnostic) { return ParseDefault(v) })
-		checkParse(t, s, iv, piv.diags, func(v string) (any, []ast.Diagnostic) { return ParseImportVia(v) })
-		checkParse(t, s, ev, pev.diags, func(v string) (any, []ast.Diagnostic) { return ParseExportVia(v) })
-		// A clean via policy renders to text that parses back to the same policy.
-		if len(piv.diags) == 0 {
-			if again, ds := ParseImportVia(iv.String()); len(ds) != 0 || again.String() != iv.String() {
-				t.Fatalf("%q renders as %q, which parses back as %q %v", s, iv.String(), again.String(), diagRules(ds))
+		for _, o := range []Options{{}, {MP: true}, {Via: true}} {
+			imp, pi := parseImport(s, o)
+			exp, pe := parseExport(s, o)
+			def, pd := parseDefault(s, o)
+			for _, p := range []*parser{pi, pe, pd} {
+				assertNothingDropped(t, s, p)
 			}
-		}
-		if len(pev.diags) == 0 {
-			if again, ds := ParseExportVia(ev.String()); len(ds) != 0 || again.String() != ev.String() {
-				t.Fatalf("%q renders as %q, which parses back as %q %v", s, ev.String(), again.String(), diagRules(ds))
+			checkParse(t, s, imp, pi.diags, func(v string) (any, []ast.Diagnostic) { return ParseImportWith(v, o) })
+			checkParse(t, s, exp, pe.diags, func(v string) (any, []ast.Diagnostic) { return ParseExportWith(v, o) })
+			checkParse(t, s, def, pd.diags, func(v string) (any, []ast.Diagnostic) { return ParseDefaultWith(v, o) })
+			if !o.Via {
+				continue
+			}
+			// A clean via policy renders to text that parses back to the same policy.
+			if len(pi.diags) == 0 {
+				if again, ds := ParseImportWith(imp.String(), o); len(ds) != 0 || again.String() != imp.String() {
+					t.Fatalf("%q renders as %q, which parses back as %q %v", s, imp.String(), again.String(), diagRules(ds))
+				}
+			}
+			if len(pe.diags) == 0 {
+				if again, ds := ParseExportWith(exp.String(), o); len(ds) != 0 || again.String() != exp.String() {
+					t.Fatalf("%q renders as %q, which parses back as %q %v", s, exp.String(), again.String(), diagRules(ds))
+				}
 			}
 		}
 	})

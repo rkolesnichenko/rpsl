@@ -19,6 +19,8 @@ func TestConventions(t *testing.T) {
 			"bad.go:12: C3: ErrFormatted is not declared with errors.New",
 			"bad.go:16: C2: ParseThing returns bool as its last result; malformed input is an error",
 			"bad.go:18: C2: ParseField returns bool as its last result; malformed input is an error",
+			"bad.go:26: C1: LoadWith has no Load",
+			"bad.go:30: C1: MergeWith's parameters are not Merge's plus one options parameter",
 		}},
 	} {
 		pkgs, err := discover(c.dir)

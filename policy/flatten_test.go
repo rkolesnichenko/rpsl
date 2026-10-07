@@ -167,7 +167,7 @@ func TestAndOrFilterHelpers(t *testing.T) {
 // Except and Refine carry their own afi scope, inheriting the enclosing
 // policy's when they have none (RFC 4012 §2.5).
 func TestExceptRefineAFIScope(t *testing.T) {
-	imp, ds := ParseMPImport("afi any from AS1 accept ANY; except afi ipv6.unicast { from AS2 accept ANY; }")
+	imp, ds := mpImport("afi any from AS1 accept ANY; except afi ipv6.unicast { from AS2 accept ANY; }")
 	clean(t, "mp-import", ds)
 	ex, ok := imp.Expr.(Except)
 	if !ok {
@@ -185,7 +185,7 @@ func TestExceptRefineAFIScope(t *testing.T) {
 		t.Error("the ipv6.unicast exception applies to ipv4.unicast")
 	}
 	// With no afi clause of its own, an mp- exception applies everywhere.
-	imp, ds = ParseMPImport("from AS1 accept ANY; except { from AS2 accept ANY; }")
+	imp, ds = mpImport("from AS1 accept ANY; except { from AS2 accept ANY; }")
 	clean(t, "mp-import", ds)
 	ex = imp.Expr.(Except)
 	if !ex.Unscoped() || !ex.AppliesTo(v4) || !ex.AppliesTo(v6) {
@@ -199,7 +199,7 @@ func TestExceptRefineAFIScope(t *testing.T) {
 		t.Error("a legacy exception is not ipv4.unicast only")
 	}
 	// Refine takes the same scope.
-	imp, ds = ParseMPImport("afi any from AS1 accept ANY; refine afi ipv6.unicast { from AS1 accept ANY; }")
+	imp, ds = mpImport("afi any from AS1 accept ANY; refine afi ipv6.unicast { from AS1 accept ANY; }")
 	clean(t, "mp-import", ds)
 	rf := imp.Expr.(Refine)
 	if rf.Unscoped() || !rf.AppliesTo(v6) || rf.AppliesTo(v4) {
@@ -252,7 +252,7 @@ func TestFlattenAFIScope(t *testing.T) {
 		v6:    []string{"AS2 | ANY AND AS2", "AS1 | ANY AND NOT AS2"},
 	}}
 	for _, c := range cases {
-		imp, ds := ParseMPImport(c.value)
+		imp, ds := mpImport(c.value)
 		clean(t, c.value, ds)
 		for _, fam := range []struct {
 			af   types.AddrFamily

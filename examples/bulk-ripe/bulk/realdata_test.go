@@ -238,9 +238,15 @@ func checkDump(t *testing.T, reg registry, path string) {
 				if !reg.strictVia {
 					continue
 				}
-				parse := func(v string) []rpsl.Diagnostic { _, d := policy.ParseImportVia(v); return d }
+				parse := func(v string) []rpsl.Diagnostic {
+					_, d := policy.ParseImportWith(v, policy.Options{Via: true})
+					return d
+				}
 				if a.Name == "export-via" {
-					parse = func(v string) []rpsl.Diagnostic { _, d := policy.ParseExportVia(v); return d }
+					parse = func(v string) []rpsl.Diagnostic {
+						_, d := policy.ParseExportWith(v, policy.Options{Via: true})
+						return d
+					}
 				}
 				for _, d := range parse(a.Value) {
 					if d.Severity == rpsl.Error {

@@ -176,7 +176,7 @@ func TestPolicyLeftovers(t *testing.T) {
 		return func() []ast.Diagnostic { _, d := ParseDefault(s); return d }
 	}
 	mpImp := func(s string) func() []ast.Diagnostic {
-		return func() []ast.Diagnostic { _, d := ParseMPImport(s); return d }
+		return func() []ast.Diagnostic { _, d := mpImport(s); return d }
 	}
 	for _, c := range []struct {
 		name  string

@@ -19,7 +19,7 @@ import (
 
 // Import is a parsed import: or mp-import: value. Protocol/IntoProtocol hold the
 // optional "protocol X"/"into Y" prefixes ("" when absent). MP marks an
-// mp-import: (ParseMPImport). AFIs holds the RFC 4012 "afi <afi-list>" clause as
+// mp-import: (Options.MP). AFIs holds the RFC 4012 "afi <afi-list>" clause as
 // written; when it is empty the policy applies to ipv4.unicast for a legacy
 // import: and to every family for an mp-import: (RFC 4012 §2.5).
 type Import struct {

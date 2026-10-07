@@ -148,9 +148,9 @@ func TestStringRoundTripsOverRFCExamples(t *testing.T) {
 		"import":     func(v string) parsed { x, d := ParseImport(v); return parsed{x, d} },
 		"export":     func(v string) parsed { x, d := ParseExport(v); return parsed{x, d} },
 		"default":    func(v string) parsed { x, d := ParseDefault(v); return parsed{x, d} },
-		"mp-import":  func(v string) parsed { x, d := ParseMPImport(v); return parsed{x, d} },
-		"mp-export":  func(v string) parsed { x, d := ParseMPExport(v); return parsed{x, d} },
-		"mp-default": func(v string) parsed { x, d := ParseMPDefault(v); return parsed{x, d} },
+		"mp-import":  func(v string) parsed { x, d := mpImport(v); return parsed{x, d} },
+		"mp-export":  func(v string) parsed { x, d := mpExport(v); return parsed{x, d} },
+		"mp-default": func(v string) parsed { x, d := mpDefault(v); return parsed{x, d} },
 	}
 	n := 0
 	sc := bufio.NewScanner(f)

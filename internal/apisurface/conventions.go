@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
+	"maps"
 	"path/filepath"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -23,17 +25,70 @@ func conventions(root string, pkgs []*pkg) []string {
 			}
 			out = append(out, fmt.Sprintf("%s:%d: %s", filepath.ToSlash(name), at.Line, msg))
 		}
+		funcs := map[string]*ast.FuncDecl{} // by receiver type and name: "Thing.Parse", ".Parse"
 		for _, f := range p.files {
 			for _, d := range f.Decls {
 				switch d := d.(type) {
 				case *ast.FuncDecl:
 					checkParseBool(d, report)
+					funcs[recvKey(d)+d.Name.Name] = d
 				case *ast.GenDecl:
 					if d.Tok == token.VAR {
 						checkSentinels(d, report)
 					}
 				}
 			}
+		}
+		checkWith(p.fset, funcs, report)
+	}
+	return out
+}
+
+// recvKey is the receiver part of a function's key in conventions' map: the
+// receiver's type name and a dot, or a dot alone for a function.
+func recvKey(d *ast.FuncDecl) string {
+	if d.Recv == nil {
+		return "."
+	}
+	return baseName(d.Recv.List[0].Type) + "."
+}
+
+// checkWith is C1: an exported XWith has a sibling X with the same receiver,
+// whose parameters are XWith's less the last (the options) and whose results
+// are XWith's. A bare With is not an XWith.
+func checkWith(fset *token.FileSet, funcs map[string]*ast.FuncDecl, report func(token.Pos, string)) {
+	for _, key := range slices.Sorted(maps.Keys(funcs)) {
+		d := funcs[key]
+		name := d.Name.Name
+		if !d.Name.IsExported() || name == "With" || !strings.HasSuffix(name, "With") {
+			continue
+		}
+		plainName := strings.TrimSuffix(name, "With")
+		plain, ok := funcs[strings.TrimSuffix(key, "With")]
+		if !ok {
+			report(d.Pos(), "C1: "+name+" has no "+plainName)
+			continue
+		}
+		wp, pp := fieldTypes(fset, d.Type.Params), fieldTypes(fset, plain.Type.Params)
+		if len(wp) == 0 || !slices.Equal(wp[:len(wp)-1], pp) {
+			report(d.Pos(), "C1: "+name+"'s parameters are not "+plainName+"'s plus one options parameter")
+		}
+		if !slices.Equal(fieldTypes(fset, d.Type.Results), fieldTypes(fset, plain.Type.Results)) {
+			report(d.Pos(), "C1: "+name+"'s results are not "+plainName+"'s")
+		}
+	}
+}
+
+// fieldTypes lists a parameter or result list's types, one per name.
+func fieldTypes(fset *token.FileSet, fl *ast.FieldList) []string {
+	if fl == nil {
+		return nil
+	}
+	var out []string
+	for _, f := range fl.List {
+		t := text(fset, f.Type)
+		for range max(len(f.Names), 1) {
+			out = append(out, t)
 		}
 	}
 	return out

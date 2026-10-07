@@ -54,37 +54,25 @@ func decodeAutNum(d *decoder) AutNum {
 	for _, a := range d.o.Attributes() {
 		var ds []ast.Diagnostic
 		switch a.Name {
-		case "import", "mp-import":
-			parse := policy.ParseImport
-			if a.Name == "mp-import" {
-				parse = policy.ParseMPImport
-			}
+		case "import", "mp-import", "import-via":
 			var imp policy.Import
-			imp, ds = parse(a.Value)
-			an.Imports = append(an.Imports, imp)
-		case "export", "mp-export":
-			parse := policy.ParseExport
-			if a.Name == "mp-export" {
-				parse = policy.ParseMPExport
+			imp, ds = policy.ParseImportWith(a.Value, policy.Options{MP: a.Name == "mp-import", Via: a.Name == "import-via"})
+			if a.Name == "import-via" {
+				an.ImportVia = append(an.ImportVia, imp)
+			} else {
+				an.Imports = append(an.Imports, imp)
 			}
+		case "export", "mp-export", "export-via":
 			var exp policy.Export
-			exp, ds = parse(a.Value)
-			an.Exports = append(an.Exports, exp)
-		case "import-via":
-			var imp policy.Import
-			imp, ds = policy.ParseImportVia(a.Value)
-			an.ImportVia = append(an.ImportVia, imp)
-		case "export-via":
-			var exp policy.Export
-			exp, ds = policy.ParseExportVia(a.Value)
-			an.ExportVia = append(an.ExportVia, exp)
+			exp, ds = policy.ParseExportWith(a.Value, policy.Options{MP: a.Name == "mp-export", Via: a.Name == "export-via"})
+			if a.Name == "export-via" {
+				an.ExportVia = append(an.ExportVia, exp)
+			} else {
+				an.Exports = append(an.Exports, exp)
+			}
 		case "default", "mp-default":
-			parse := policy.ParseDefault
-			if a.Name == "mp-default" {
-				parse = policy.ParseMPDefault
-			}
 			var def policy.Default
-			def, ds = parse(a.Value)
+			def, ds = policy.ParseDefaultWith(a.Value, policy.Options{MP: a.Name == "mp-default"})
 			an.Defaults = append(an.Defaults, def)
 		default:
 			continue

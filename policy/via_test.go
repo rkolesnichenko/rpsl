@@ -28,8 +28,8 @@ func viaExpr(v viaPolicy) Expr {
 }
 
 var viaParsers = map[string]func(string) (viaPolicy, []ast.Diagnostic){
-	"import-via": func(v string) (viaPolicy, []ast.Diagnostic) { x, d := ParseImportVia(v); return x, d },
-	"export-via": func(v string) (viaPolicy, []ast.Diagnostic) { x, d := ParseExportVia(v); return x, d },
+	"import-via": func(v string) (viaPolicy, []ast.Diagnostic) { x, d := viaImport(v); return x, d },
+	"export-via": func(v string) (viaPolicy, []ast.Diagnostic) { x, d := viaExport(v); return x, d },
 	"export":     func(v string) (viaPolicy, []ast.Diagnostic) { x, d := ParseExport(v); return x, d },
 }
 
@@ -88,7 +88,7 @@ func TestViaExamples(t *testing.T) {
 
 // The draft's first example, field by field.
 func TestParseImportViaFields(t *testing.T) {
-	imp, ds := ParseImportVia("AS6777 from AS15562 action pref = 2; accept AS-SNIJDERS")
+	imp, ds := viaImport("AS6777 from AS15562 action pref = 2; accept AS-SNIJDERS")
 	if len(ds) != 0 {
 		t.Fatalf("diagnostics %v", diagRules(ds))
 	}
@@ -116,7 +116,7 @@ func TestParseImportViaFields(t *testing.T) {
 
 // A via peering can be any peering specification, router expressions included.
 func TestParseExportViaRouters(t *testing.T) {
-	exp, ds := ParseExportVia("afi ipv6.unicast AS47498 at ( 2001:7f8:ca:1::111 OR 2001:7f8:ca:1::222 ) to AS-FOGIXP announce { 2001:67c:2ea8::/48, 2001:67c:e7c::/48 }")
+	exp, ds := viaExport("afi ipv6.unicast AS47498 at ( 2001:7f8:ca:1::111 OR 2001:7f8:ca:1::222 ) to AS-FOGIXP announce { 2001:67c:2ea8::/48, 2001:67c:e7c::/48 }")
 	if len(ds) != 0 {
 		t.Fatalf("diagnostics %v", diagRules(ds))
 	}
@@ -124,7 +124,7 @@ func TestParseExportViaRouters(t *testing.T) {
 	if !ok || via.AtRouter == nil || exprText(via.AS) != "AS47498" {
 		t.Fatalf("Via = %#v, want AS47498 at <router expression>", exp.Expr.(Factor).Peers[0].Via)
 	}
-	exp, ds = ParseExportVia("AS6777 195.69.144.255 to AS-AMS-IX-RS announce AS-SNIJDERS")
+	exp, ds = viaExport("AS6777 195.69.144.255 to AS-AMS-IX-RS announce AS-SNIJDERS")
 	if len(ds) != 0 {
 		t.Fatalf("diagnostics %v", diagRules(ds))
 	}
@@ -160,11 +160,11 @@ func TestViaStrings(t *testing.T) {
 		}
 	}
 	// A brace list of via policies round-trips, and every clause keeps its via.
-	imp, ds := ParseImportVia("{ AS6777 from AS1 accept AS1; AS8631 from AS2 accept AS2; }")
+	imp, ds := viaImport("{ AS6777 from AS1 accept AS1; AS8631 from AS2 accept AS2; }")
 	if len(ds) != 0 {
 		t.Fatalf("diagnostics %v", diagRules(ds))
 	}
-	again, ds := ParseImportVia(imp.String())
+	again, ds := viaImport(imp.String())
 	if len(ds) != 0 || again.String() != imp.String() {
 		t.Fatalf("%q parses back as %q %v", imp.String(), again.String(), diagRules(ds))
 	}
@@ -197,12 +197,12 @@ func TestViaErrors(t *testing.T) {
 		}
 	}
 	// A clause without its via peering is dropped; the rest of the policy is kept.
-	imp, _ := ParseImportVia("from AS1 accept AS1")
+	imp, _ := viaImport("from AS1 accept AS1")
 	if f, ok := imp.Expr.(Factor); !ok || len(f.Peers) != 0 {
 		t.Errorf("Expr = %#v, want the clause without a via peering dropped", imp.Expr)
 	}
 	// import-via takes "from", not "to".
-	if _, ds := ParseImportVia("AS6777 to AS1 accept ANY"); len(ds) == 0 || ds[0].Rule != "policy/expect-peering" {
+	if _, ds := viaImport("AS6777 to AS1 accept ANY"); len(ds) == 0 || ds[0].Rule != "policy/expect-peering" {
 		t.Errorf("import-via with 'to': diagnostics %v, want policy/expect-peering first", diagRules(ds))
 	}
 }
@@ -234,11 +234,11 @@ func TestViaAppliesTo(t *testing.T) {
 // The afi list of a via policy ends at the first family not followed by a
 // comma, since a peering follows it; other policies keep reading families.
 func TestViaAFIListEnd(t *testing.T) {
-	imp, ds := ParseImportVia("afi ipv4.unicast, ipv6.unicast AS8631 from AS1 accept ANY")
+	imp, ds := viaImport("afi ipv4.unicast, ipv6.unicast AS8631 from AS1 accept ANY")
 	if len(ds) != 0 || len(imp.AFIs) != 2 {
 		t.Fatalf("AFIs %v, diagnostics %v; want two families and no diagnostic", imp.AFIs, diagRules(ds))
 	}
-	if _, ds := ParseMPImport("afi ipv4.unicast ipv6.unicast from AS1 accept ANY"); len(ds) != 0 {
+	if _, ds := mpImport("afi ipv4.unicast ipv6.unicast from AS1 accept ANY"); len(ds) != 0 {
 		t.Errorf("mp-import without a comma between families: diagnostics %v, want none (unchanged)", diagRules(ds))
 	}
 }
@@ -246,7 +246,7 @@ func TestViaAFIListEnd(t *testing.T) {
 // Refine and except combine two via terms only where both their via peerings
 // and their peerings meet.
 func TestViaFlatten(t *testing.T) {
-	imp, ds := ParseImportVia("AS6777 from AS-ANY accept ANY refine AS6777 from AS1 accept AS1")
+	imp, ds := viaImport("AS6777 from AS-ANY accept ANY refine AS6777 from AS1 accept AS1")
 	if len(ds) != 0 {
 		t.Fatalf("diagnostics %v", diagRules(ds))
 	}
@@ -257,11 +257,11 @@ func TestViaFlatten(t *testing.T) {
 	if got := terms[0].String(); got != "AS1 via AS6777 | ANY AND AS1" {
 		t.Errorf("term renders %q", got)
 	}
-	imp, _ = ParseImportVia("AS6777 from AS-ANY accept ANY refine AS8631 from AS1 accept AS1")
+	imp, _ = viaImport("AS6777 from AS-ANY accept ANY refine AS8631 from AS1 accept AS1")
 	if terms := mustFlatten(t, imp.Expr); len(terms) != 0 {
 		t.Errorf("refine across different via peerings gave %v, want no terms", terms)
 	}
-	imp, _ = ParseImportVia("AS6777 from AS-ANY accept ANY except AS6777 from AS1 accept AS1")
+	imp, _ = viaImport("AS6777 from AS-ANY accept ANY except AS6777 from AS1 accept AS1")
 	terms = mustFlatten(t, imp.Expr)
 	if len(terms) != 2 {
 		t.Fatalf("except terms %v, want two", terms)
@@ -276,11 +276,11 @@ func TestViaFlatten(t *testing.T) {
 // The With variants check actions against a dictionary.
 func TestViaWithDictionary(t *testing.T) {
 	dict := RFCDictionary
-	o := Options{Dict: &dict}
-	if _, ds := ParseImportViaWith("AS6777 from AS1 action nonsense = 1; accept ANY", o); len(ds) == 0 || ds[0].Rule != "policy/rp-attribute" {
+	o := Options{Via: true, Dict: &dict}
+	if _, ds := ParseImportWith("AS6777 from AS1 action nonsense = 1; accept ANY", o); len(ds) == 0 || ds[0].Rule != "policy/rp-attribute" {
 		t.Errorf("import-via: diagnostics %v, want policy/rp-attribute", diagRules(ds))
 	}
-	if _, ds := ParseExportViaWith("AS6777 to AS1 action pref = 1; announce ANY", o); len(ds) != 0 {
+	if _, ds := ParseExportWith("AS6777 to AS1 action pref = 1; announce ANY", o); len(ds) != 0 {
 		t.Errorf("export-via with a known attribute: diagnostics %v, want none", diagRules(ds))
 	}
 }

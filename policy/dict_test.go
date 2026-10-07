@@ -190,7 +190,7 @@ func TestDictionaryChecking(t *testing.T) {
 		if _, ds := ParseImport(c.in); len(ds) != 0 {
 			t.Errorf("ParseImport(%q) without a dictionary: %v", c.in, ds)
 		}
-		_, ds := ParseImportWith(c.in, false, Options{Dict: &d})
+		_, ds := ParseImportWith(c.in, Options{Dict: &d})
 		if c.rule == "" {
 			if len(ds) != 0 {
 				t.Errorf("ParseImportWith(%q): %v, want clean", c.in, ds)
@@ -209,15 +209,15 @@ func TestDictionaryChecking(t *testing.T) {
 		}
 	}
 	// Export and default take the same option.
-	if _, ds := ParseExportWith("to AS1 action nonsense = 1; announce ANY", false, Options{Dict: &d}); len(ds) == 0 {
+	if _, ds := ParseExportWith("to AS1 action nonsense = 1; announce ANY", Options{Dict: &d}); len(ds) == 0 {
 		t.Error("ParseExportWith did not check the action")
 	}
-	if _, ds := ParseDefaultWith("to AS1 action nonsense = 1;", false, Options{Dict: &d}); len(ds) == 0 {
+	if _, ds := ParseDefaultWith("to AS1 action nonsense = 1;", Options{Dict: &d}); len(ds) == 0 {
 		t.Error("ParseDefaultWith did not check the action")
 	}
 	// An empty dictionary is not a filter that rejects everything by accident:
 	// passing none is what turns checking off.
-	if _, ds := ParseImportWith("from AS1 action pref = 10; accept ANY", false, Options{}); len(ds) != 0 {
+	if _, ds := ParseImportWith("from AS1 action pref = 10; accept ANY", Options{}); len(ds) != 0 {
 		t.Errorf("Options{} checked anyway: %v", ds)
 	}
 }

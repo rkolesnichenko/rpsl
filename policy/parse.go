@@ -12,28 +12,55 @@ import (
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
+// Options configures a policy parse. The zero Options — what ParseImport,
+// ParseExport and ParseDefault use — reads the RFC 2622 attribute and checks
+// actions and protocol names for syntax only, as the RP-attribute set is
+// open-ended by design.
+type Options struct {
+	// MP reads the RFC 4012 form (mp-import:, mp-export:, mp-default:): the
+	// result is marked MP, which makes an absent afi clause mean every family.
+	MP bool
+
+	// Via reads import-via: or export-via: (draft-ietf-grow-rpsl-via): every
+	// clause names, before "from" or "to", the peering its routes pass
+	// through. It implies MP. There is no default-via:, so ParseDefaultWith
+	// reports one Error ("policy/no-default-via") and reads the value as
+	// mp-default:.
+	Via bool
+
+	// Dict, when set, checks actions and protocols against a dictionary;
+	// both diagnostics are warnings.
+	Dict *Dictionary
+}
+
+// parser returns a parser for s set up by o; viaKw is the keyword a via
+// clause's peering comes before ("from" or "to").
+func (o Options) parser(s, viaKw string) *parser {
+	p := newParser(s)
+	p.mp, p.dict = o.MP || o.Via, o.Dict
+	if o.Via {
+		p.via = viaKw
+	}
+	return p
+}
+
 // ParseImport parses an import: value ("[protocol …] [into …] from <peering>
 // [action …] … accept <filter>", optionally structured with {…}, except and
 // refine). It returns a best-effort Import plus diagnostics whose byte offsets
 // are relative to s (the caller re-bases them onto the owning attribute).
 // Every token is either parsed or diagnosed; it never panics.
-func ParseImport(s string) (Import, []ast.Diagnostic) {
-	imp, p := parseImport(s, false)
+func ParseImport(s string) (Import, []ast.Diagnostic) { return ParseImportWith(s, Options{}) }
+
+// ParseImportWith is ParseImport with options: mp-import: and import-via:
+// syntax, and a dictionary.
+func ParseImportWith(s string, o Options) (Import, []ast.Diagnostic) {
+	imp, p := parseImport(s, o)
 	return imp, p.diags
 }
 
-// ParseMPImport parses an mp-import: value (RFC 4012). It differs from
-// ParseImport only in marking the result MP, which makes an absent afi clause
-// mean every address family.
-func ParseMPImport(s string) (Import, []ast.Diagnostic) {
-	imp, p := parseImport(s, true)
-	return imp, p.diags
-}
-
-func parseImport(s string, mp bool) (Import, *parser) {
-	p := newParser(s)
-	p.mp = mp
-	imp := Import{MP: mp}
+func parseImport(s string, o Options) (Import, *parser) {
+	p := o.parser(s, "from")
+	imp := Import{MP: p.mp}
 	if p.empty() {
 		return imp, p
 	}
@@ -46,21 +73,18 @@ func parseImport(s string, mp bool) (Import, *parser) {
 
 // ParseExport parses an export: value ("… to <peering> [action …] … announce
 // <filter>"). Structurally identical to ParseImport but with to/announce.
-func ParseExport(s string) (Export, []ast.Diagnostic) {
-	exp, p := parseExport(s, false)
+func ParseExport(s string) (Export, []ast.Diagnostic) { return ParseExportWith(s, Options{}) }
+
+// ParseExportWith is ParseExport with options: mp-export: and export-via:
+// syntax, and a dictionary.
+func ParseExportWith(s string, o Options) (Export, []ast.Diagnostic) {
+	exp, p := parseExport(s, o)
 	return exp, p.diags
 }
 
-// ParseMPExport parses an mp-export: value (RFC 4012); see ParseMPImport.
-func ParseMPExport(s string) (Export, []ast.Diagnostic) {
-	exp, p := parseExport(s, true)
-	return exp, p.diags
-}
-
-func parseExport(s string, mp bool) (Export, *parser) {
-	p := newParser(s)
-	p.mp = mp
-	exp := Export{MP: mp}
+func parseExport(s string, o Options) (Export, *parser) {
+	p := o.parser(s, "to")
+	exp := Export{MP: p.mp}
 	if p.empty() {
 		return exp, p
 	}
@@ -73,21 +97,23 @@ func parseExport(s string, mp bool) (Export, *parser) {
 
 // ParseDefault parses a default: value ("to <peering> [action …] [networks
 // <filter>]"). Networks is nil when no networks clause is present.
-func ParseDefault(s string) (Default, []ast.Diagnostic) {
-	d, p := parseDefault(s, false)
+func ParseDefault(s string) (Default, []ast.Diagnostic) { return ParseDefaultWith(s, Options{}) }
+
+// ParseDefaultWith is ParseDefault with options: mp-default: syntax and a
+// dictionary. RFC 2622 has no default-via:; with Via set it reports one Error
+// over the whole value and reads it as mp-default:.
+func ParseDefaultWith(s string, o Options) (Default, []ast.Diagnostic) {
+	d, p := parseDefault(s, o)
 	return d, p.diags
 }
 
-// ParseMPDefault parses an mp-default: value (RFC 4012); see ParseMPImport.
-func ParseMPDefault(s string) (Default, []ast.Diagnostic) {
-	d, p := parseDefault(s, true)
-	return d, p.diags
-}
-
-func parseDefault(s string, mp bool) (Default, *parser) {
-	p := newParser(s)
-	p.mp = mp
-	d := Default{MP: mp}
+func parseDefault(s string, o Options) (Default, *parser) {
+	p := Options{MP: o.MP || o.Via, Dict: o.Dict}.parser(s, "")
+	if o.Via {
+		p.errf(token{tEOF, "", 0, len(s)}, "policy/no-default-via",
+			"there is no default-via: attribute; the value is read as mp-default:")
+	}
+	d := Default{MP: p.mp}
 	if p.empty() {
 		return d, p
 	}

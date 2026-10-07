@@ -406,7 +406,7 @@ package policy
 
 type Import struct {
     Protocol, IntoProtocol string
-    MP   bool               // mp-import: (ParseMPImport) — decides the no-afi default
+    MP   bool               // mp-import: (Options.MP) — decides the no-afi default
     AFIs []types.AddrFamily // afi clause as written
     Expr Expr
 }
