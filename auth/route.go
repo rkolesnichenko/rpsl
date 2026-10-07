@@ -243,19 +243,30 @@ func scopedMntners(entries []policy.MntRoutes, prefix netip.Prefix) []string {
 }
 
 // authorities reads the three maintainer attributes that decide routing
-// authority. ok is false for a class that has none of them.
+// authority. ok is false for a class that has none of them, and for a nil
+// object (a lookup that missed).
 func authorities(o object.Object) (mntRoutes []policy.MntRoutes, mntLower, mntBy []string, ok bool) {
 	switch t := o.(type) {
 	case *object.AutNum:
-		return t.MntRoutes, t.MntLower, t.MntBy, true
+		if t != nil {
+			return t.MntRoutes, t.MntLower, t.MntBy, true
+		}
 	case *object.Route:
-		return t.MntRoutes, t.MntLower, t.MntBy, true
+		if t != nil {
+			return t.MntRoutes, t.MntLower, t.MntBy, true
+		}
 	case *object.Route6:
-		return t.MntRoutes, t.MntLower, t.MntBy, true
+		if t != nil {
+			return t.MntRoutes, t.MntLower, t.MntBy, true
+		}
 	case *object.Inetnum:
-		return t.MntRoutes, t.MntLower, t.MntBy, true
+		if t != nil {
+			return t.MntRoutes, t.MntLower, t.MntBy, true
+		}
 	case *object.Inet6num:
-		return t.MntRoutes, t.MntLower, t.MntBy, true
+		if t != nil {
+			return t.MntRoutes, t.MntLower, t.MntBy, true
+		}
 	}
 	return nil, nil, nil, false
 }

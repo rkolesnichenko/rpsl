@@ -86,6 +86,28 @@ func TestRouteCreationChecksOriginAndSpace(t *testing.T) {
 	}
 }
 
+// A lookup that misses returns a nil pointer, so a typed nil can reach a
+// RouteRequest's Origin or Space: it authorises nothing and is refused, never
+// a panic.
+func TestRouteCreationTypedNilOriginAndSpace(t *testing.T) {
+	ctx, v := context.Background(), verifier()
+	reg := newRegistry(t, mntner("MNT-OWN", "MD5-PW $1$abc$xyz"))
+	route := decode(t, "route: 192.0.2.0/24\norigin: AS64500\nmnt-by: MNT-OWN\nsource: RIPE\n").(*object.Route)
+	d, err := RouteCreation(ctx, reg, RouteRequestFor(route, (*object.AutNum)(nil), (*object.Inetnum)(nil)), goodCred(), v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "the origin AS: the object given is not the aut-num of AS64500"; d.OK || !strings.Contains(strings.Join(d.Reasons, " "), want) {
+		t.Errorf("typed-nil origin and space: %v; want a refusal: %s", d, want)
+	}
+	p := route.Prefix
+	for _, o := range []object.Object{(*object.AutNum)(nil), (*object.Route)(nil), (*object.Route6)(nil), (*object.Inetnum)(nil), (*object.Inet6num)(nil)} {
+		if got := RouteAuthority(o, p); len(got) != 0 {
+			t.Errorf("RouteAuthority(%T nil) = %v, want none", o, got)
+		}
+	}
+}
+
 // mnt-lower: guards what is more specific than its object (RFC 2725 §4), not
 // the object's own prefix, and an aut-num has no more specifics: its routing
 // authority is mnt-routes:, then mnt-by:, as in the RIPE Database.
