@@ -212,7 +212,7 @@ func (snap *Snapshot) lookup(ctx context.Context, regs []*Registry, class, key s
 				return nil, err
 			}
 			an, err := r.src.AutNum(ctx, as, "")
-			if errors.Is(err, resolve.ErrNotFound) {
+			if errors.Is(err, resolve.ErrNotFound) || err == nil && an == nil { // nil is not found (resolve.PolicySource)
 				continue
 			}
 			if err != nil {
@@ -235,7 +235,7 @@ func (snap *Snapshot) lookup(ctx context.Context, regs []*Registry, class, key s
 				return nil, err
 			}
 			rtr, err := r.src.InetRtr(ctx, pk, "")
-			if errors.Is(err, resolve.ErrNotFound) {
+			if errors.Is(err, resolve.ErrNotFound) || err == nil && rtr == nil { // nil is not found (resolve.PolicySource)
 				continue
 			}
 			if err != nil {

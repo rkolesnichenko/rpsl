@@ -23,12 +23,15 @@ import (
 type Database interface {
 	Registry // Mntner(ctx, name)
 
-	// Current returns the stored object of o's class with o's primary key, or
-	// an error wrapping ErrNotFound.
+	// Current returns the stored object of o's class with o's primary key,
+	// non-nil, or nil and an error wrapping ErrNotFound. A nil object, or a
+	// typed nil, with a nil error is treated as ErrNotFound.
 	Current(ctx context.Context, o object.Object) (object.Object, error)
 
 	// Object returns the object of class with primary key key, compared as
-	// RPSL compares keys, or an error wrapping ErrNotFound.
+	// RPSL compares keys, non-nil, or nil and an error wrapping ErrNotFound.
+	// A nil object, or a typed nil, with a nil error is treated as
+	// ErrNotFound.
 	Object(ctx context.Context, class, key string) (object.Object, error)
 
 	// Covering returns the objects of class — inetnum, inet6num, route or

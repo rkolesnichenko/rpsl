@@ -122,6 +122,30 @@ func TestCheckIrts(t *testing.T) {
 	}
 }
 
+// nilIrts answers an irt it lacks with no object and no error, which
+// IrtRegistry's contract treats as not found.
+type nilIrts map[string]*object.Irt
+
+func (r nilIrts) Irt(_ context.Context, name string) (*object.Irt, error) {
+	return r[strings.ToUpper(strings.TrimSpace(name))], nil
+}
+
+// A nil irt with a nil error is ErrNoIrt: skipped with a reason, never a panic.
+func TestNilIrtIsNotFound(t *testing.T) {
+	reg := nilIrts(newIrtRegistry(t, irt("IRT-A", "MD5-PW $1$abc$xyz")))
+	ctx, v := context.Background(), verifier()
+	d, err := CheckIrts(ctx, reg, []string{"IRT-GONE", "IRT-A"}, goodCred(), v)
+	if err != nil || !d.OK || !strings.Contains(d.String(), "IRT-GONE: no such irt") {
+		t.Errorf("CheckIrts = %v, %v; want authorised by IRT-A, IRT-GONE no such irt", d, err)
+	}
+	if d, err := CheckIrts(ctx, reg, []string{"IRT-GONE"}, goodCred(), v); err != nil || d.OK {
+		t.Errorf("CheckIrts = %v, %v; want a refusal", d, err)
+	}
+	if ok, unsup, err := CheckIrt(ctx, nil, goodCred(), v); ok || unsup || err != nil {
+		t.Errorf("CheckIrt(nil) = %v, %v, %v; want false, false, nil", ok, unsup, err)
+	}
+}
+
 // MntIrtChange follows RIPE's MntIrtAuthentication (whois-update, strategy
 // package): only added references need an irt's authorisation, and the
 // credential of any one added irt is enough.

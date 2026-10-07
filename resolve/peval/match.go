@@ -240,7 +240,7 @@ func (c *call) rtrHas(name string, a netip.Addr) (bool, error) {
 	if !ok {
 		ir, err := c.src.InetRtr(c.ctx, name, "")
 		switch {
-		case errors.Is(err, resolve.ErrNotFound):
+		case errors.Is(err, resolve.ErrNotFound), err == nil && ir == nil: // nil is not found, as the PolicySource contract says
 			c.noRtr[strings.ToLower(key)] = true
 		case err != nil:
 			return false, err

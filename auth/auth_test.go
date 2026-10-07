@@ -187,6 +187,42 @@ func TestReferralChain(t *testing.T) {
 	}
 }
 
+// nilRegistry answers a maintainer it lacks with no object and no error, as a
+// map-backed Registry written the natural way does. Registry's contract
+// treats that answer as not found.
+type nilRegistry map[string]*object.Mntner
+
+func (r nilRegistry) Mntner(_ context.Context, name string) (*object.Mntner, error) {
+	return r[strings.ToUpper(strings.TrimSpace(name))], nil
+}
+
+// A nil maintainer with a nil error is ErrNoMntner, never a panic: in
+// CheckMntners a dangling name, in ReferralChain the end of the walk.
+func TestNilMntnerIsNotFound(t *testing.T) {
+	reg := nilRegistry(newRegistry(t,
+		mntner("MNT-A", "MD5-PW $1$abc$xyz"),
+		mntner("MNT-LEAF", "NONE", "MNT-GONE"),
+	))
+	ctx, v := context.Background(), verifier()
+	d, err := CheckMntners(ctx, reg, []string{"MNT-GONE", "MNT-A"}, goodCred(), v)
+	if err != nil || !d.OK || !strings.Contains(d.String(), "MNT-GONE: no such maintainer") {
+		t.Errorf("CheckMntners = %v, %v; want authorised by MNT-A, MNT-GONE no such maintainer", d, err)
+	}
+	if d, err := CheckMntners(ctx, reg, []string{"MNT-GONE"}, goodCred(), v); err != nil || d.OK {
+		t.Errorf("CheckMntners = %v, %v; want a refusal", d, err)
+	}
+	chain, err := ReferralChain(ctx, reg, "MNT-LEAF", 0)
+	if !errors.Is(err, ErrNoMntner) || len(chain) != 1 {
+		t.Errorf("ReferralChain to a missing maintainer = %v, %v; want MNT-LEAF and ErrNoMntner", chain, err)
+	}
+	if chain, err := ReferralChain(ctx, reg, "MNT-GONE", 0); !errors.Is(err, ErrNoMntner) || len(chain) != 0 {
+		t.Errorf("ReferralChain from a missing maintainer = %v, %v; want ErrNoMntner", chain, err)
+	}
+	if ok, unsup, err := CheckMntner(ctx, nil, goodCred(), v); ok || unsup || err != nil {
+		t.Errorf("CheckMntner(nil) = %v, %v, %v; want false, false, nil", ok, unsup, err)
+	}
+}
+
 func mustPrefix(t *testing.T, s string) netip.Prefix {
 	t.Helper()
 	p, err := netip.ParsePrefix(s)

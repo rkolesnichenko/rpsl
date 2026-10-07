@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -87,6 +88,9 @@ var lintFamilies = []types.AddrFamily{{AFI: types.AFIv4, SAFI: types.SAFIUnicast
 func (c *Checker) Lint(ctx context.Context, as types.ASN) ([]Issue, error) {
 	ev := c.eval()
 	an, err := ev.Src.AutNum(ctx, as, ev.Source)
+	if err == nil && an == nil { // the PolicySource contract: nil is not found
+		err = fmt.Errorf("resolve: aut-num %s: %w", as, resolve.ErrNotFound)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("consist: %w", err)
 	}
@@ -121,7 +125,7 @@ func (c *Checker) Lint(ctx context.Context, as types.ASN) ([]Issue, error) {
 		return nil, err
 	}
 	for _, peer := range c.sessionPeers(as, peers, info.groups) {
-		if _, err := ev.Src.AutNum(ctx, peer, ev.Source); errors.Is(err, resolve.ErrNotFound) {
+		if pan, err := ev.Src.AutNum(ctx, peer, ev.Source); errors.Is(err, resolve.ErrNotFound) || err == nil && pan == nil {
 			l.add(RuleNoAutNum, "", -1, fmt.Sprintf("%s's aut-num is not in the source", peer), peer, nil)
 		} else if err != nil {
 			return nil, err
@@ -632,13 +636,23 @@ func (l *linter) filterSetObject(n types.SetName) (fs *object.FilterSet, ok bool
 	case ferr != nil:
 		e.err = ferr
 	default:
-		switch x := set.(type) {
-		case *object.FilterSet:
+		// a typed nil is not found, as resolve.Source's contract says
+		if x, isFS := set.(*object.FilterSet); isFS && x != nil {
 			e.fs, e.ok = x, true
 		}
 	}
 	l.fltrObj[k] = e
 	return e.fs, e.ok, e.err
+}
+
+// absent reports whether a Source's answer holds no set: nil, or a typed nil
+// (a nil *object.AsSet), which resolve.Source's contract treats as not found.
+func absent(set object.NamedSet) bool {
+	if set == nil {
+		return true
+	}
+	v := reflect.ValueOf(set)
+	return v.Kind() == reflect.Pointer && v.IsNil()
 }
 
 // filterSetDependent reports whether the filter-set n's filters depend on
@@ -730,7 +744,7 @@ func (l *linter) sets(ctx context.Context, c *Checker) error {
 				default:
 					// A set whose class is not its name's is missing, as the
 					// engine treats it (route-set: AS-EVIL answering AS-EVIL).
-					miss = set == nil || set.Class() != n.Class().String()
+					miss = absent(set) || set.Class() != n.Class().String()
 				}
 				missing[n] = miss
 			}
@@ -824,9 +838,9 @@ func (l *linter) routers(ctx context.Context, c *Checker) error {
 	walk = func(kind string, i int, r policy.RouterExpr) error {
 		switch x := r.(type) {
 		case policy.RouterName:
-			_, err := ev.Src.InetRtr(ctx, x.Name, "")
+			ir, err := ev.Src.InetRtr(ctx, x.Name, "")
 			switch {
-			case errors.Is(err, resolve.ErrNotFound):
+			case errors.Is(err, resolve.ErrNotFound), err == nil && ir == nil: // nil is not found, as the PolicySource contract says
 				l.add(RuleMissingRouter, kind, i, fmt.Sprintf("the peering names inet-rtr %s, which is not in the source", x.Name), 0, nil)
 			case err != nil:
 				return err

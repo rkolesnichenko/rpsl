@@ -250,7 +250,7 @@ func directASNs(ctx context.Context, src resolve.Source, n types.SetName) (asns 
 		return nil, nil
 	case err != nil:
 		return nil, err
-	case set == nil || set.Class() != n.Class().String():
+	case absent(set) || set.Class() != n.Class().String():
 		return nil, nil
 	}
 	if s, isSet := set.(object.Set); isSet {

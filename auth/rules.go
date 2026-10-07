@@ -113,6 +113,26 @@ type check struct {
 	d    Decision
 }
 
+// current is Database.Current, with a nil object and a nil error read as
+// ErrNotFound, as Database's contract says.
+func (c *check) current(o object.Object) (object.Object, error) {
+	cur, err := c.db.Current(c.ctx, o)
+	if err == nil && isNilObject(cur) {
+		return nil, fmt.Errorf("%w: the stored %s", ErrNotFound, o.Class())
+	}
+	return cur, err
+}
+
+// lookup is Database.Object, with a nil object and a nil error read as
+// ErrNotFound, as Database's contract says.
+func lookup(ctx context.Context, db Database, class, key string) (object.Object, error) {
+	o, err := db.Object(ctx, class, key)
+	if err == nil && isNilObject(o) {
+		return nil, fmt.Errorf("%w: %s %s", ErrNotFound, class, key)
+	}
+	return o, err
+}
+
 // refuse ends the check with a final reason.
 func (c *check) refuse(reason string) (Decision, error) {
 	c.d.OK = false
@@ -163,7 +183,7 @@ func (c *check) ripe(u Update) (Decision, error) {
 	o := u.Object
 	var stored object.Object
 	if u.Action != Create {
-		cur, err := c.db.Current(c.ctx, o)
+		cur, err := c.current(o)
 		if errors.Is(err, ErrNotFound) {
 			return c.refuse("there is no stored " + o.Class() + " to " + u.Action.String())
 		}
@@ -387,7 +407,7 @@ func (c *check) namedParent(s object.NamedSet) (bool, error) {
 	} else if n, err := types.ParseSetName(parentKey); err == nil && n.Class() == types.ClassAsSet {
 		class = "as-set"
 	}
-	parent, err := c.db.Object(c.ctx, class, parentKey)
+	parent, err := lookup(c.ctx, c.db, class, parentKey)
 	if errors.Is(err, ErrNotFound) {
 		return c.fail("the parent " + class + " " + parentKey + " does not exist")
 	}
@@ -466,7 +486,7 @@ func (c *check) ripeReferences(stored, o object.Object) (bool, error) {
 // referenced looks name up in the first of classes that has it.
 func (c *check) referenced(name string, classes []string) (object.Object, string, error) {
 	for _, class := range classes {
-		o, err := c.db.Object(c.ctx, class, name)
+		o, err := lookup(c.ctx, c.db, class, name)
 		if err == nil {
 			return o, class, nil
 		}
@@ -481,7 +501,7 @@ func (c *check) referenced(name string, classes []string) (object.Object, string
 type irtLookup struct{ db Database }
 
 func (l irtLookup) Irt(ctx context.Context, name string) (*object.Irt, error) {
-	o, err := l.db.Object(ctx, "irt", name)
+	o, err := lookup(ctx, l.db, "irt", name)
 	if errors.Is(err, ErrNotFound) {
 		return nil, fmt.Errorf("%w: %s", ErrNoIrt, name)
 	}
@@ -509,7 +529,7 @@ func (c *check) irrd(u Update) (Decision, error) {
 	}
 	switch u.Action {
 	case Modify, Delete:
-		stored, err := c.db.Current(c.ctx, o)
+		stored, err := c.current(o)
 		if errors.Is(err, ErrNotFound) {
 			return c.refuse("there is no stored " + o.Class() + " to " + u.Action.String())
 		}
@@ -555,7 +575,7 @@ func (c *check) irrdRelated(o object.Object) (bool, error) {
 		if err != nil {
 			return true, nil
 		}
-		autnum, err := c.db.Object(c.ctx, "aut-num", as.String())
+		autnum, err := lookup(c.ctx, c.db, "aut-num", as.String())
 		if errors.Is(err, ErrNotFound) {
 			return true, nil // opportunistic: only an aut-num that exists is asked
 		}

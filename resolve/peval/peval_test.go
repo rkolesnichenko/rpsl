@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/rkolesnichenko/rpsl/ast"
+	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/policy"
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/types"
@@ -95,6 +96,60 @@ func TestExportAndDefault(t *testing.T) {
 
 func TestMissing(t *testing.T) {
 	v := &Evaluator{Src: fixtureSource(t)}
+	p, err := v.Import(context.Background(), Session{Local: 9, Peer: 2, PeerRtr: addr("10.0.0.2"), AF: v4})
+	if err != nil || len(p.Clauses) != 0 {
+		t.Fatalf("Import for AS9 = %s, %v; want no clauses", summary(p), err)
+	}
+	if m := p.Missing(); len(m) != 1 || m[0].String() != "AS-GONE" {
+		t.Errorf("Missing() = %v, want [AS-GONE]", m)
+	}
+	if r := p.MissingRouters(); !reflect.DeepEqual(r, []string{"rtr-gone.example.net"}) {
+		t.Errorf("MissingRouters() = %v", r)
+	}
+}
+
+// nilMisses is a PolicySource that answers what it lacks with no object and
+// no error — AutNum and InetRtr with nil, GetSet with a typed nil — as a
+// map-backed source written the natural way does. The contracts of
+// resolve.PolicySource and resolve.Source treat each as not found.
+type nilMisses struct{ resolve.PolicySource }
+
+func (s nilMisses) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error) {
+	set, err := s.PolicySource.GetSet(ctx, ref)
+	if errors.Is(err, resolve.ErrNotFound) {
+		return (*object.AsSet)(nil), nil
+	}
+	return set, err
+}
+
+func (s nilMisses) AutNum(ctx context.Context, as types.ASN, source string) (*object.AutNum, error) {
+	an, err := s.PolicySource.AutNum(ctx, as, source)
+	if errors.Is(err, resolve.ErrNotFound) {
+		return nil, nil
+	}
+	return an, err
+}
+
+func (s nilMisses) InetRtr(ctx context.Context, name, source string) (*object.InetRtr, error) {
+	ir, err := s.PolicySource.InetRtr(ctx, name, source)
+	if errors.Is(err, resolve.ErrNotFound) {
+		return nil, nil
+	}
+	return ir, err
+}
+
+// A nil answer with a nil error is not found, as an error wrapping
+// resolve.ErrNotFound is, never a panic: a missing aut-num, set and router.
+func TestNilAnswerIsNotFound(t *testing.T) {
+	v := &Evaluator{Src: nilMisses{fixtureSource(t)}}
+	for _, call := range []func(context.Context, Session) (Policy, error){v.Import, v.Export, v.ImportVia, v.ExportVia} {
+		if _, err := call(context.Background(), Session{Local: 77, Peer: 2, AF: v4}); !errors.Is(err, resolve.ErrNotFound) {
+			t.Errorf("a missing aut-num: err %v, want ErrNotFound", err)
+		}
+	}
+	if _, err := v.Default(context.Background(), Session{Local: 77, Peer: 2, AF: v4}); !errors.Is(err, resolve.ErrNotFound) {
+		t.Errorf("Default for a missing aut-num: err %v, want ErrNotFound", err)
+	}
 	p, err := v.Import(context.Background(), Session{Local: 9, Peer: 2, PeerRtr: addr("10.0.0.2"), AF: v4})
 	if err != nil || len(p.Clauses) != 0 {
 		t.Fatalf("Import for AS9 = %s, %v; want no clauses", summary(p), err)

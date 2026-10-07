@@ -19,7 +19,15 @@ import (
 // peering-sets keep coming from GetSet.
 type PolicySource interface {
 	Source
+
+	// AutNum returns the aut-num of as, non-nil, or nil and an error wrapping
+	// ErrNotFound when source has none. A nil aut-num with a nil error is
+	// treated as ErrNotFound.
 	AutNum(ctx context.Context, as types.ASN, source string) (*object.AutNum, error)
+
+	// InetRtr returns the inet-rtr named name, non-nil, or nil and an error
+	// wrapping ErrNotFound when source has none. A nil inet-rtr with a nil
+	// error is treated as ErrNotFound.
 	InetRtr(ctx context.Context, name, source string) (*object.InetRtr, error)
 }
 

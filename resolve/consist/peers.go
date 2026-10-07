@@ -199,6 +199,9 @@ type peerInfo struct {
 func (c *Checker) peers(ctx context.Context, as types.ASN) (PeerList, peerInfo, error) {
 	ev := c.eval()
 	an, err := ev.Src.AutNum(ctx, as, ev.Source)
+	if err == nil && an == nil { // the PolicySource contract: nil is not found
+		err = fmt.Errorf("resolve: aut-num %s: %w", as, resolve.ErrNotFound)
+	}
 	if err != nil {
 		return PeerList{}, peerInfo{}, fmt.Errorf("consist: %w", err)
 	}

@@ -153,6 +153,9 @@ func (v *Evaluator) begin(ctx context.Context, s Session) (*object.AutNum, *call
 		return nil, nil, errors.New("peval: Session.AF must be set")
 	}
 	an, err := v.Src.AutNum(ctx, s.Local, v.Source)
+	if err == nil && an == nil { // the PolicySource contract: nil is not found
+		err = fmt.Errorf("resolve: aut-num %s: %w", s.Local, resolve.ErrNotFound)
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("peval: %w", err)
 	}

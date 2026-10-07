@@ -403,8 +403,8 @@ func (e *Expander) fetchOne(ctx context.Context, ref types.SetRef) fetchResult {
 // as not found: expanded under its name's rules it would let an as-set pull in
 // prefixes, or claims, that its class does not allow.
 func checkSet(ref types.SetRef, set object.NamedSet) (object.NamedSet, error) {
-	if set == nil {
-		return nil, ErrNotFound // a Source that returns neither a set nor an error
+	if isNil(set) {
+		return nil, ErrNotFound // a Source that returns neither a set (nil or a typed nil) nor an error
 	}
 	name := ref.Name()
 	if got := set.SetName(); got != name {

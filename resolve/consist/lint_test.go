@@ -602,6 +602,88 @@ func TestLintSetOfAnotherClass(t *testing.T) {
 	}
 }
 
+// nilMisses is a PolicySource that answers what it lacks with no object and
+// no error — AutNum and InetRtr with nil, GetSet with a typed nil of the
+// name's class — as a map-backed source written the natural way does. The
+// contracts of resolve.PolicySource and resolve.Source treat each as not found.
+type nilMisses struct{ resolve.PolicySource }
+
+func (s nilMisses) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error) {
+	set, err := s.PolicySource.GetSet(ctx, ref)
+	if errors.Is(err, resolve.ErrNotFound) {
+		if ref.Name().Class() == types.ClassFilterSet {
+			return (*object.FilterSet)(nil), nil
+		}
+		return (*object.AsSet)(nil), nil
+	}
+	return set, err
+}
+
+func (s nilMisses) AutNum(ctx context.Context, as types.ASN, source string) (*object.AutNum, error) {
+	an, err := s.PolicySource.AutNum(ctx, as, source)
+	if errors.Is(err, resolve.ErrNotFound) {
+		return nil, nil
+	}
+	return an, err
+}
+
+func (s nilMisses) InetRtr(ctx context.Context, name, source string) (*object.InetRtr, error) {
+	ir, err := s.PolicySource.InetRtr(ctx, name, source)
+	if errors.Is(err, resolve.ErrNotFound) {
+		return nil, nil
+	}
+	return ir, err
+}
+
+// A nil answer with a nil error is not found, as an error wrapping
+// resolve.ErrNotFound is, never a panic: Lint, Peers and Check give what they
+// give over the source that says ErrNotFound.
+func TestNilAnswerIsNotFound(t *testing.T) {
+	objs := []string{
+		autNum(1,
+			"import: from AS2 accept AS-GONE",
+			"import: from AS3 accept FLTR-GONE",
+			"import: from AS2 rtr-gone.example.net accept ANY",
+			"import: from AS-ANY accept FLTR-GONE",
+			"export: to AS2 announce AS-GONE"),
+		autNum(2, "export: to AS1 announce ANY"),
+	}
+	plain, nils := checker(t, objs...), checker(t, objs...)
+	nils.Eval.Src = nilMisses{nils.Eval.Src}
+	for _, c := range []*Checker{plain, nils} {
+		c.ASPAs = newASPAs(t, aspa(1, 2))
+	}
+	texts := func(c *Checker) []string {
+		var out []string
+		for _, i := range lint(t, c, 1) {
+			out = append(out, issueText(i))
+		}
+		return out
+	}
+	want, got := texts(plain), texts(nils)
+	if !slices.Equal(got, want) {
+		t.Errorf("Lint over nil answers:\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	for _, rule := range []string{RuleMissingSet, RuleNoAutNum, RuleMissingRouter} {
+		if !slices.ContainsFunc(want, func(s string) bool { return strings.HasPrefix(s, rule+" ") }) {
+			t.Errorf("Lint gave no %s: %v", rule, want)
+		}
+	}
+	ctx := context.Background()
+	if _, err := nils.Lint(ctx, 77); !errors.Is(err, resolve.ErrNotFound) {
+		t.Errorf("Lint of a missing aut-num: err %v, want ErrNotFound", err)
+	}
+	if _, err := nils.Peers(ctx, 77); !errors.Is(err, resolve.ErrNotFound) {
+		t.Errorf("Peers of a missing aut-num: err %v, want ErrNotFound", err)
+	}
+	for _, p := range []Pair{{A: 1, B: 2, AF: v4}, {A: 1, B: 77, AF: v4}} {
+		w, g := check(t, plain, p), check(t, nils, p)
+		if !slices.Equal(kinds(g.AtoB), kinds(w.AtoB)) || !slices.Equal(kinds(g.BtoA), kinds(w.BtoA)) {
+			t.Errorf("Check %v over nil answers: %v %v, want %v %v", p, kinds(g.AtoB), kinds(g.BtoA), kinds(w.AtoB), kinds(w.BtoA))
+		}
+	}
+}
+
 // A peer's aut-num is looked up in the Evaluator's registry, as Check looks
 // it up: one only another registry holds is lint/no-aut-num.
 func TestLintPeerAutNumSource(t *testing.T) {

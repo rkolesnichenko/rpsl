@@ -99,9 +99,10 @@ type Source interface {
 	// any registry the Source holds, even one its default list leaves out —
 	// and a registry it does not know is ErrNotFound
 	// (draft-ietf-grow-rpsl-registry-scoped-members §2.3 step 1). For a scoped
-	// ref the returned set's SetSource() must be ref.Source(). It returns
-	// ErrNotFound (wrapped is fine) when the set does not exist; a nil set with
-	// a nil error is treated the same way.
+	// ref the returned set's SetSource() must be ref.Source(). It returns a
+	// non-nil set, or nil and an error wrapping ErrNotFound when the set does
+	// not exist. A nil set, or a typed nil (a nil *object.AsSet), with a nil
+	// error is treated as ErrNotFound.
 	GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error)
 
 	// OriginatedRoutes returns the prefixes a given AS originates, filtered to

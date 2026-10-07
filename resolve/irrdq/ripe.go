@@ -319,7 +319,7 @@ func (snap *Snapshot) textSearch(ctx context.Context, regs []*Registry, key stri
 				return nil, err
 			}
 			an, err := r.src.AutNum(ctx, as, "")
-			if errors.Is(err, resolve.ErrNotFound) {
+			if errors.Is(err, resolve.ErrNotFound) || err == nil && an == nil { // nil is not found (resolve.PolicySource)
 				continue
 			}
 			if err != nil {
