@@ -2,4 +2,4 @@ module github.com/rkolesnichenko/rpsl/ast
 
 go 1.23
 
-require github.com/rkolesnichenko/rpsl/lexer v0.25.0
+require github.com/rkolesnichenko/rpsl/lexer v0.26.0
