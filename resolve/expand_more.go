@@ -26,20 +26,20 @@ import (
 // of every rtr-set reachable from it, plus the inet-rtr objects that claim
 // membership through mbrs-by-ref. A set of another class returns an error
 // wrapping ErrSetClass; a missing top-level set one wrapping ErrNotFound.
-// Missing nested sets expand to nothing and are listed by RouterSet.Missing.
+// Missing nested sets expand to nothing and are listed by Routers.Missing.
 // A scoped ref (RIPE::AS-FOO) looks the named set up in that registry only; the
 // scope does not cascade to what it lists.
-func (e *Expander) ExpandRouters(ctx context.Context, ref types.SetRef) (RouterSet, error) {
+func (e *Expander) ExpandRouters(ctx context.Context, ref types.SetRef) (Routers, error) {
 	if ref.Name().Class() != types.ClassRtrSet {
-		return RouterSet{}, fmt.Errorf("resolve: ExpandRouters %s: %w", ref, ErrSetClass)
+		return Routers{}, fmt.Errorf("resolve: ExpandRouters %s: %w", ref, ErrSetClass)
 	}
 	g, err := e.discover(ctx, ref)
 	if err != nil {
-		return RouterSet{}, err
+		return Routers{}, err
 	}
 	out := newRouterSet()
 	for _, nd := range g.nodes {
-		rs, ok := nd.set.(object.RouterSet)
+		rs, ok := nd.set.(object.RouterGroup)
 		if !ok {
 			continue
 		}
@@ -50,7 +50,7 @@ func (e *Expander) ExpandRouters(ctx context.Context, ref types.SetRef) (RouterS
 		}
 		// An inet-rtr that claims membership joins under its own name.
 		for _, o := range nd.claims {
-			ir, ok := o.(object.InetRtr)
+			ir, ok := o.(*object.InetRtr)
 			if !ok {
 				continue
 			}
@@ -69,13 +69,13 @@ func (e *Expander) ExpandRouters(ctx context.Context, ref types.SetRef) (RouterS
 // A set of another class returns an error wrapping ErrSetClass.
 // A scoped ref (RIPE::AS-FOO) looks the named set up in that registry only; the
 // scope does not cascade to what it lists.
-func (e *Expander) ExpandPeerings(ctx context.Context, ref types.SetRef) (PeeringSet, error) {
+func (e *Expander) ExpandPeerings(ctx context.Context, ref types.SetRef) (Peerings, error) {
 	if ref.Name().Class() != types.ClassPeeringSet {
-		return PeeringSet{}, fmt.Errorf("resolve: ExpandPeerings %s: %w", ref, ErrSetClass)
+		return Peerings{}, fmt.Errorf("resolve: ExpandPeerings %s: %w", ref, ErrSetClass)
 	}
 	g, err := e.discover(ctx, ref)
 	if err != nil {
-		return PeeringSet{}, err
+		return Peerings{}, err
 	}
 	out := newPeeringSet()
 	// Walk in the graph's discovery order so the result does not depend on map

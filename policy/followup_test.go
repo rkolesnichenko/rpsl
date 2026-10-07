@@ -72,7 +72,7 @@ func TestExceptBeforeFilterHint(t *testing.T) {
 	}{
 		{"from AS1 accept ANY except FLTR-BOGONS", func(s string) []ast.Diagnostic { _, d := ParseImport(s); return d }},
 		{"to AS1 announce AS1 except FLTR-BOGONS", func(s string) []ast.Diagnostic { _, d := ParseExport(s); return d }},
-		{"AS6777 from AS1 accept ANY except FLTR-BOGONS", func(s string) []ast.Diagnostic { _, d := ParseImportVia(s); return d }},
+		{"AS6777 from AS1 accept ANY except FLTR-BOGONS", func(s string) []ast.Diagnostic { _, d := viaImport(s); return d }},
 	} {
 		ds := c.parse(c.in)
 		if len(ds) == 0 || ds[0].Rule != "policy/expect-peering" || ds[0].Severity != ast.Error ||

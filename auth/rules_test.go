@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -35,16 +36,48 @@ func runRules(t *testing.T, rules Rules, cases []ruleCase) {
 			}
 			srcs = append(srcs, mntner(m, auth))
 		}
-		db := memDB(t, srcs...)
-		d, err := rules.Authorise(context.Background(), db, Update{Action: c.action, Object: decode(t, c.obj)}, goodCred(), verifier())
-		if err != nil {
-			t.Errorf("%s %s: %v", rules, c.name, err)
-			continue
-		}
-		if d.OK != c.ok || !strings.Contains(d.String(), c.reason) {
-			t.Errorf("%s %s: %s\n  want ok=%v with %q", rules, c.name, d, c.ok, c.reason)
+		// The same registry answering a miss with no object and no error
+		// decides every case alike.
+		for _, db := range []Database{memDB(t, srcs...), nilMissDB{memDB(t, srcs...)}} {
+			d, err := rules.Authorise(context.Background(), db, Update{Action: c.action, Object: decode(t, c.obj)}, goodCred(), verifier())
+			if err != nil {
+				t.Errorf("%s %s (%T): %v", rules, c.name, db, err)
+				continue
+			}
+			if d.OK != c.ok || !strings.Contains(d.String(), c.reason) {
+				t.Errorf("%s %s (%T): %s\n  want ok=%v with %q", rules, c.name, db, d, c.ok, c.reason)
+			}
 		}
 	}
+}
+
+// nilMissDB is a Database that answers a miss with no object and no error —
+// Mntner with a nil maintainer, Current with a nil object, Object with a
+// typed nil — which Database's contract treats as not found.
+type nilMissDB struct{ *MemDatabase }
+
+func (db nilMissDB) Mntner(ctx context.Context, name string) (*object.Mntner, error) {
+	m, err := db.MemDatabase.Mntner(ctx, name)
+	if errors.Is(err, ErrNoMntner) {
+		return nil, nil
+	}
+	return m, err
+}
+
+func (db nilMissDB) Current(ctx context.Context, o object.Object) (object.Object, error) {
+	cur, err := db.MemDatabase.Current(ctx, o)
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	return cur, err
+}
+
+func (db nilMissDB) Object(ctx context.Context, class, key string) (object.Object, error) {
+	o, err := db.MemDatabase.Object(ctx, class, key)
+	if errors.Is(err, ErrNotFound) {
+		return (*object.Generic)(nil), nil
+	}
+	return o, err
 }
 
 const (

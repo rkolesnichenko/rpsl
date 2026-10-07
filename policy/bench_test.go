@@ -42,7 +42,7 @@ func BenchmarkParseImport(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		for j, v := range values {
 			if mp[j] {
-				ParseMPImport(v)
+				mpImport(v)
 			} else {
 				ParseImport(v)
 			}
@@ -85,7 +85,7 @@ func BenchmarkParseASPathRegexp(b *testing.B) {
 
 // BenchmarkFlatten resolves a policy that nests REFINE and EXCEPT over lists.
 func BenchmarkFlatten(b *testing.B) {
-	imp, ds := ParseMPImport("afi any { from AS-ANY action pref=10; accept ANY; } " +
+	imp, ds := mpImport("afi any { from AS-ANY action pref=10; accept ANY; } " +
 		"refine { from AS1 accept AS1; from AS2 accept AS2; from AS3 accept AS3; } " +
 		"except { from AS1 accept {192.0.2.0/24^+}; from AS4 accept AS4; }")
 	if len(ds) != 0 {
@@ -108,7 +108,7 @@ func BenchmarkImportString(b *testing.B) {
 	imports := make([]Import, len(values))
 	for j, v := range values {
 		if mp[j] {
-			imports[j], _ = ParseMPImport(v)
+			imports[j], _ = mpImport(v)
 		} else {
 			imports[j], _ = ParseImport(v)
 		}

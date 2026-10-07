@@ -98,7 +98,7 @@ func TestRetiringPipeDeliversQueuedAnswers(t *testing.T) {
 		go func(i int) {
 			set, err := getSet(fmt.Sprintf("AS-Q%d", i))
 			if err == nil {
-				if m := set.(object.AsSet).Members; len(m) != 1 || m[0].AS != types.ASN(100+i) {
+				if m := set.(*object.AsSet).Members; len(m) != 1 || m[0].AS != types.ASN(100+i) {
 					err = fmt.Errorf("AS-Q%d answered with %v", i, m)
 				}
 			}

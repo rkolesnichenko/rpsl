@@ -91,6 +91,7 @@ attribute of it.
 | `policy/rp-protocol` | Error or Warning | A malformed `protocol:` declaration, or an option group without `MANDATORY`/`OPTIONAL` (Error); a protocol name the dictionary does not declare (Warning, only when one is supplied). |
 | `policy/afi` | Error | An empty or invalid `afi` list, or an `afi` clause in a legacy `import:`, `export:` or `default:`, where RFC 4012 does not allow one (it is ignored). |
 | `policy/default-to` | Error | A `default` without its `to` peering. |
+| `policy/no-default-via` | Error | `ParseDefaultWith` with `Options.Via`: RFC 2622 has no `default-via:`; the value is read as `mp-default:`. |
 | `policy/expr-brace`, `policy/missing-semicolon` | Error, Warning | A structured policy's `{…}` unbalanced, or two factors with no `;` between them. |
 | `policy/trailing` | Error | Input left after a complete value. |
 | `policy/nesting` | Error | Nesting (parentheses, braces, `NOT`, operator chains, regexp quantifiers) deeper than 1,000; the value is abandoned. |

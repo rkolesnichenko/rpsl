@@ -1,0 +1,32 @@
+package lexer
+const KindAttribute Kind = iota
+const KindBlank Kind
+const KindComment Kind
+const KindMalformed Kind
+func CanonicalName(name string) string
+func IsBlankLine[T ~string | ~[]byte](line T) bool
+func StartsAttribute[T ~string | ~[]byte](line T) bool
+func Tokenize(src string) []Token
+func TokenizeAt(src string, line, byteOffset int) []Token
+type Kind uint8
+type Segment struct
+	ValStart int
+	ValEnd int
+	SrcLine int
+	SrcCol int
+	SrcByte int
+type Span struct
+	StartLine int
+	StartCol int
+	EndLine int
+	EndCol int
+	StartByte int
+	EndByte int
+type Token struct
+	Kind Kind
+	Name string
+	Value string
+	Raw string
+	Span Span
+	Segments []Segment
+func (Token) SourceAt(valOffset int) (line, col, byteoff int)

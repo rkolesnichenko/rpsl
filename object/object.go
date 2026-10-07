@@ -6,7 +6,8 @@
 // the embedded Common, RIPE's cross-class ones via the embedded Registry).
 // Decoding is fallible per-attribute: a malformed value is skipped with a
 // Diagnostic, never aborting the whole object, and Raw always drops back to the
-// lossless ast.Object. Other classes decode to Generic.
+// lossless ast.Object. Decode returns each class as a non-nil pointer to its
+// struct (*AutNum, *Route, …); any other class decodes to a *Generic.
 package object
 
 import (
@@ -33,10 +34,10 @@ type Object interface {
 type Generic struct{ raw *ast.Object }
 
 // Class returns the class name of the underlying object.
-func (g Generic) Class() string { return g.raw.Class() }
+func (g *Generic) Class() string { return g.raw.Class() }
 
 // Raw returns the object's lossless source, or nil for one built without it.
-func (g Generic) Raw() *ast.Object { return g.raw }
+func (g *Generic) Raw() *ast.Object { return g.raw }
 
 // decoder removes per-attribute boilerplate and centralizes diagnostics. Each
 // failed parse appends an Error diagnostic keyed to the offending attribute's

@@ -133,8 +133,8 @@ func (v *Evaluator) newCall(ctx context.Context, s Session) *call {
 	return &call{
 		ctx: ctx, src: v.Src, e: e, m: m, s: s,
 		asns:    map[types.SetName]asMembers{},
-		prngs:   map[types.SetName]*resolve.PeeringSet{},
-		rtrSets: map[types.SetName]*resolve.RouterSet{},
+		prngs:   map[types.SetName]*resolve.Peerings{},
+		rtrSets: map[types.SetName]*resolve.Routers{},
 		rtrs:    map[string][]netip.Addr{},
 		missing: map[types.SetRef]bool{},
 		noRtr:   map[string]bool{},
@@ -142,19 +142,22 @@ func (v *Evaluator) newCall(ctx context.Context, s Session) *call {
 }
 
 // begin checks a call's arguments and reads Local's aut-num.
-func (v *Evaluator) begin(ctx context.Context, s Session) (object.AutNum, *call, error) {
+func (v *Evaluator) begin(ctx context.Context, s Session) (*object.AutNum, *call, error) {
 	if v.Src == nil {
-		return object.AutNum{}, nil, errNoSource
+		return nil, nil, errNoSource
 	}
 	if s.Local == 0 || s.Peer == 0 {
-		return object.AutNum{}, nil, errors.New("peval: Session.Local and Session.Peer must be set")
+		return nil, nil, errors.New("peval: Session.Local and Session.Peer must be set")
 	}
 	if s.AF == (types.AddrFamily{}) {
-		return object.AutNum{}, nil, errors.New("peval: Session.AF must be set")
+		return nil, nil, errors.New("peval: Session.AF must be set")
 	}
 	an, err := v.Src.AutNum(ctx, s.Local, v.Source)
+	if err == nil && an == nil { // the PolicySource contract: nil is not found
+		err = fmt.Errorf("resolve: aut-num %s: %w", s.Local, resolve.ErrNotFound)
+	}
 	if err != nil {
-		return object.AutNum{}, nil, fmt.Errorf("peval: %w", err)
+		return nil, nil, fmt.Errorf("peval: %w", err)
 	}
 	return an, v.newCall(ctx, s), nil
 }

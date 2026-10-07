@@ -1,0 +1,70 @@
+package rtconfig
+const BIRD2 Vendor
+const CauseAction = "an action other than pref, med, community, aspath.prepend and next-hop"
+const CauseActionValue = "an action value the vendor cannot set"
+const CauseCommunityEquals = "an exact community match (community == {…})"
+const CauseCommunityForm = "a community that is neither a:b nor a well-known one"
+const CauseDefault = "a default: the vendor has no configuration for"
+const CauseListShape = "a filter that is not a single list of that kind"
+const CauseNegatedClass = "a negated AS-path class [^…]"
+const CauseNetworks = "networks the vendor has no configuration for"
+const CausePathShape = "an AS-path regexp shape the vendor's path syntax lacks"
+const CausePref = "a pref above MaxPreference"
+const CauseSAFI = "a SAFI other than unicast"
+const CauseSameAS = "same-AS repetition (~*, ~+, ~{m,n}) over more than one AS"
+const CauseTwoPaths = "two AS-path regexps that must both match"
+const CauseVia = "a via clause (import-via:, export-via:)"
+const FeatureAlternation Feature = "alternation, or repetition of an AS, in an AS-path regexp"
+const FeatureCommunityEquals Feature = "community == {…} as a clause's only community test"
+const FeatureCommunityEqualsMixed Feature = "community == {…} negated, or beside other community tests"
+const FeatureDefault Feature = "default: (rtconfig's default command)"
+const FeatureInnerAnchor Feature = "^ or $ inside an AS-path regexp"
+const FeatureMEDIGP Feature = "med = igp_cost"
+const FeatureMulticast Feature = "a multicast SAFI"
+const FeatureNegatedClass Feature = "a negated AS-path class [^…]"
+const FeatureNetworks Feature = "networks, v6networks"
+const FeatureNextHopSelf Feature = "next-hop = self"
+const FeatureTwoPaths Feature = "two AS-path regexps in one clause, both to match"
+const FeatureVia Feature = "import-via:, export-via:"
+const IOS Vendor = iota + 1
+const IOSXR Vendor
+const Junos Vendor
+var ErrUnsupported = errors.New(…)
+func Capabilities() []Capability
+func Causes() []string
+func DefaultNaming() Naming
+func ParseVendor(s string) (Vendor, error)
+func Vendors() []Vendor
+type Capability struct
+	Feature Feature
+	Cause string
+	Vendors []Vendor
+type Feature string
+type Generator struct
+	Vendor Vendor
+	MaxPreference int
+	Names Naming
+func (*Generator) WriteASPathList(w io.Writer, m resolve.PathMatch) error
+func (*Generator) WriteDefault(w io.Writer, s peval.Session, d peval.Defaults) error
+func (*Generator) WriteExport(w io.Writer, s peval.Session, p peval.Policy) error
+func (*Generator) WriteImport(w io.Writer, s peval.Session, p peval.Policy) error
+func (*Generator) WriteNetworks(w io.Writer, prefixes []netip.Prefix) error
+func (*Generator) WritePrefixList(w io.Writer, f resolve.NormalFilter, afi types.AFI) error
+func (*Generator) WriteSessions(w io.Writer) error
+type Naming struct
+	MapName string
+	MapFirstNo int
+	MapIncrementBy int
+	PrefixACLNo int
+	ASPathACLNo int
+	CommunityACLNo int
+	AccessListNo int
+	JunosPolicyName string
+type UnsupportedError struct
+	Vendor Vendor
+	Cause string
+	Term string
+func (*UnsupportedError) Error() string
+func (*UnsupportedError) Unwrap() error
+type Vendor uint8
+func (Vendor) String() string

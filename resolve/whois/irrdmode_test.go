@@ -162,7 +162,7 @@ func TestWhoisMembersByRefSameSource(t *testing.T) {
 	if err != nil || len(got) != 1 {
 		t.Fatalf("MembersByRef = %d objects, %v; want the RIPE route only", len(got), err)
 	}
-	if r, ok := got[0].(object.Route); !ok || r.Prefix.String() != "198.51.100.0/24" {
+	if r, ok := got[0].(*object.Route); !ok || r.Prefix.String() != "198.51.100.0/24" {
 		t.Errorf("member = %+v, want 198.51.100.0/24", got[0])
 	}
 }

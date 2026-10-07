@@ -20,7 +20,7 @@ func TestCorpusListDecoding(t *testing.T) {
 	if len(diags)+len(ddiags) != 0 {
 		t.Fatalf("diagnostics: %+v %+v", diags, ddiags)
 	}
-	s := typed.(object.AsSet)
+	s := typed.(*object.AsSet)
 	var members []string
 	for _, m := range s.Members {
 		members = append(members, m.Raw)

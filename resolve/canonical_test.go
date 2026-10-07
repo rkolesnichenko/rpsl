@@ -30,7 +30,7 @@ func TestRangeSetCanonicalizesSourceRanges(t *testing.T) {
 	name := mustSet(t, "RS-LIT")
 	withHostBits, _ := types.NewPrefixRange(netip.MustParsePrefix("10.0.0.1/8"), 8, 32)
 	plain, _ := types.NewPrefixRange(netip.MustParsePrefix("10.0.0.0/8"), 8, 32)
-	src := staticSource{name.String(): object.RouteSet{Name: name, Members: []object.SetMember{
+	src := staticSource{name.String(): &object.RouteSet{Name: name, Members: []object.SetMember{
 		{Kind: object.MemberPrefixRange, Range: withHostBits, Raw: "10.0.0.1/8^8-32"},
 		{Kind: object.MemberPrefixRange, Range: plain, Raw: "10.0.0.0/8^+"},
 	}}}

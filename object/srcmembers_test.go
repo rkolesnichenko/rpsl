@@ -153,7 +153,7 @@ func TestDirectMembersConflictOnHandBuiltSet(t *testing.T) {
 	o, _ := ParseSetMember("AS-O", types.ClassAsSet)
 	a, _ := ParseSrcMember("RIPE::AS-O", types.ClassAsSet)
 	b, _ := ParseSrcMember("ARIN::AS-O", types.ClassAsSet)
-	set := AsSet{Members: []SetMember{o}, SrcMembers: []SetMember{a, b}}
+	set := &AsSet{Members: []SetMember{o}, SrcMembers: []SetMember{a, b}}
 	if got := refsOf(DirectMembers(set)); strings.Join(got, " ") != "AS-O" {
 		t.Errorf("DirectMembers = %v, want [AS-O]", got)
 	}

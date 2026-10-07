@@ -15,7 +15,7 @@ func TestAutNumVia(t *testing.T) {
 		"import-via: from AS1 accept ANY\n" +
 		"source:     RIPE\n")
 	obj, diags := Decode(o)
-	a, ok := obj.(AutNum)
+	a, ok := obj.(*AutNum)
 	if !ok {
 		t.Fatalf("decoded %T, want AutNum", obj)
 	}

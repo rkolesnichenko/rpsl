@@ -1,0 +1,37 @@
+package nrtm4
+const DefaultMaxFileBytes = 16 << 30
+func ParsePublicKey(text string) (crypto.PublicKey, error)
+type Client struct
+	URL string
+	Database string
+	PublicKey string
+	HTTP *http.Client
+	MaxFileBytes int64
+	MaxAge time.Duration
+	OnDiagnostics func(o *ast.Object, ds []ast.Diagnostic)
+	Now func() time.Time
+	KeepPolicy bool
+	KeepRouteText bool
+func (*Client) CopyTo(dst *resolve.Corpus)
+func (*Client) Run(ctx context.Context, interval time.Duration, onError func(error)) error
+func (*Client) Source() *resolve.MemSource
+func (*Client) Status() Status
+func (*Client) Sync(ctx context.Context) (Update, error)
+type Status struct
+	SessionID string
+	Version int64
+	Timestamp time.Time
+	Stale bool
+	Objects int
+	CurrentKey string
+	NextKey string
+type Update struct
+	Snapshot bool
+	Reason string
+	From int64
+	To int64
+	Deltas int
+	Added int
+	Deleted int
+	Discarded int
+	Stale bool

@@ -45,11 +45,11 @@ func knownClass(class string) bool {
 	return ripe || irrd
 }
 
-// objectText is raw's text as its registry published it (resolve.ObjectText:
+// objectText is raw's text as its registry published it (ast.Object.Text:
 // without the blank and comment lines a dump stream attached around it),
 // ending in a newline.
 func objectText(raw *ast.Object) string {
-	text := resolve.ObjectText(raw)
+	text := raw.Text()
 	if !strings.HasSuffix(text, "\n") {
 		text += "\n"
 	}
@@ -99,9 +99,9 @@ func objectEntry(r *Registry, o object.Object) entry {
 	var p netip.Prefix
 	var origin types.ASN
 	switch t := o.(type) {
-	case object.Route:
+	case *object.Route:
 		p, origin = t.Prefix, t.Origin
-	case object.Route6:
+	case *object.Route6:
 		p, origin = t.Prefix, t.Origin
 	default:
 		return entry{reg: r, obj: o.Raw()}
@@ -212,7 +212,7 @@ func (snap *Snapshot) lookup(ctx context.Context, regs []*Registry, class, key s
 				return nil, err
 			}
 			an, err := r.src.AutNum(ctx, as, "")
-			if errors.Is(err, resolve.ErrNotFound) {
+			if errors.Is(err, resolve.ErrNotFound) || err == nil && an == nil { // nil is not found (resolve.PolicySource)
 				continue
 			}
 			if err != nil {
@@ -235,7 +235,7 @@ func (snap *Snapshot) lookup(ctx context.Context, regs []*Registry, class, key s
 				return nil, err
 			}
 			rtr, err := r.src.InetRtr(ctx, pk, "")
-			if errors.Is(err, resolve.ErrNotFound) {
+			if errors.Is(err, resolve.ErrNotFound) || err == nil && rtr == nil { // nil is not found (resolve.PolicySource)
 				continue
 			}
 			if err != nil {

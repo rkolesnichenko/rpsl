@@ -51,15 +51,15 @@ func lastOfEachIndex(texts []string) []int {
 		obj, _ := object.Decode(o)
 		var pk string
 		switch t := obj.(type) {
-		case object.AsSet:
+		case *object.AsSet:
 			pk = t.Name.String()
-		case object.RouteSet:
+		case *object.RouteSet:
 			pk = t.Name.String()
-		case object.AutNum:
+		case *object.AutNum:
 			pk = t.AS.String()
-		case object.Route:
+		case *object.Route:
 			pk = t.Prefix.Masked().String() + t.Origin.String()
-		case object.Route6:
+		case *object.Route6:
 			pk = t.Prefix.Masked().String() + t.Origin.String()
 		default:
 			pk = strings.ToUpper(strings.TrimSpace(o.Key()))
@@ -173,20 +173,20 @@ func namesOf(texts []string) irrNames {
 		obj, _ := object.Decode(o)
 		key := strings.TrimSpace(o.Key())
 		switch t := obj.(type) {
-		case object.AsSet:
+		case *object.AsSet:
 			n.sets, n.asSets = append(n.sets, key), append(n.asSets, key)
-		case object.RouteSet:
+		case *object.RouteSet:
 			n.sets, n.routeSets = append(n.sets, key), append(n.routeSets, key)
-		case object.AutNum:
+		case *object.AutNum:
 			asns[t.AS], autNums[t.AS] = true, true
-		case object.Route:
+		case *object.Route:
 			asns[t.Origin] = true
 			if p := t.Prefix.Masked().String(); !prefixes[p] {
 				prefixes[p] = true
 				n.routes = append(n.routes, p)
 			}
 			n.routeKeys = append(n.routeKeys, t.Prefix.Masked().String()+t.Origin.String())
-		case object.Route6:
+		case *object.Route6:
 			asns[t.Origin] = true
 			if p := t.Prefix.Masked().String(); !prefixes[p] {
 				prefixes[p] = true

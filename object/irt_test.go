@@ -21,7 +21,7 @@ func TestIrtAuth(t *testing.T) {
 		"auth:    WEIRD-PW secret\n" +
 		"source:  RIPE\n")
 	obj, diags := Decode(o)
-	irt, ok := obj.(Irt)
+	irt, ok := obj.(*Irt)
 	if !ok {
 		t.Fatalf("decoded %T, want Irt", obj)
 	}
@@ -48,8 +48,8 @@ func TestIrtAuth(t *testing.T) {
 	}
 	m, _ := Decode(parse("mntner: MNT-EXAMPLE\n" + "auth: MD5-PW $1$salt$hash\nauth: PGPKEY-1234ABCD\n" +
 		"auth: X509-7\nauth: SSO noreply@ripe.net\nauth: WEIRD-PW secret\n"))
-	if !reflect.DeepEqual(m.(Mntner).Auth, irt.Auth) {
-		t.Errorf("mntner and irt decode the same auth: lines differently:\n%+v\n%+v", m.(Mntner).Auth, irt.Auth)
+	if !reflect.DeepEqual(m.(*Mntner).Auth, irt.Auth) {
+		t.Errorf("mntner and irt decode the same auth: lines differently:\n%+v\n%+v", m.(*Mntner).Auth, irt.Auth)
 	}
 }
 
@@ -68,7 +68,7 @@ func TestAttributeTypesAgreeAcrossClasses(t *testing.T) {
 	uses := map[string]map[string][]string{} // attribute -> element type -> classes
 	for class, key := range classKey {
 		obj, _ := Decode(parse(class + ": " + key[0] + "\n"))
-		typ := reflect.TypeOf(obj)
+		typ := reflect.TypeOf(obj).Elem()
 		for _, p := range []Profile{RIPE, RFCStrict, IRRd, ARIN, WithSrcMembers(RFCStrict)} {
 			spec, ok := p.Class(class)
 			if !ok {

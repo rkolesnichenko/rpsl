@@ -54,9 +54,9 @@ func TestBgpq4RealData(t *testing.T) {
 			o, _ := rpsl.Decode(raw)
 			objs = append(objs, o)
 			switch s := o.(type) {
-			case object.AsSet:
+			case *object.AsSet:
 				asSets = append(asSets, s)
-			case object.RouteSet:
+			case *object.RouteSet:
 				routeSets = append(routeSets, s)
 			}
 		}

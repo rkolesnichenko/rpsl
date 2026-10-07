@@ -159,6 +159,48 @@ func (o *Object) String() string {
 	return b.String()
 }
 
+// Text returns the object's text from its first attribute line to its last
+// attribute or continuation line, without the blank, comment and malformed
+// lines a stream attached before or after it (String keeps them, so the
+// stream's round-trip stays byte-exact). A line between the first and the last
+// attribute line stays. Lines are classified as the lexer classifies them
+// (lexer.StartsAttribute), not by searching for the first attribute's text: a
+// leading comment may quote it verbatim. An object with no attribute line
+// returns String.
+func (o *Object) Text() string {
+	text := o.String()
+	start, end := -1, 0
+	inAttr := false // the previous line was an attribute or continuation line
+	for rest, off := text, 0; len(rest) > 0; {
+		line, eol := rest, len(rest)
+		if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
+			line, eol = rest[:nl], nl+1
+		}
+		line = strings.TrimSuffix(line, "\r")
+		switch {
+		case lexer.IsBlankLine(line):
+			inAttr = false // kept only if an attribute line follows
+		case line[0] == ' ' || line[0] == '\t' || line[0] == '+':
+			if inAttr { // a continuation; otherwise malformed (the lexer's classify)
+				end = off + eol
+			}
+		case lexer.StartsAttribute(line):
+			if start < 0 {
+				start = off
+			}
+			end, inAttr = off+eol, true
+		default: // a comment or a malformed line
+			inAttr = false
+		}
+		off += eol
+		rest = rest[eol:]
+	}
+	if start < 0 {
+		return text
+	}
+	return text[start:end]
+}
+
 // ErrInvalidAttribute is wrapped by the errors Append and Set return for a name
 // or value that RPSL cannot represent.
 var ErrInvalidAttribute = errors.New("ast: invalid attribute")

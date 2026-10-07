@@ -100,7 +100,7 @@ func TestDiagnosticRulesAreDocumented(t *testing.T) {
 	pol := func(parse func(string) []Diagnostic, v string) func() []Diagnostic {
 		return func() []Diagnostic { return parse(v) }
 	}
-	mpImport := func(v string) []Diagnostic { _, d := policy.ParseMPImport(v); return d }
+	mpImport := func(v string) []Diagnostic { _, d := policy.ParseImportWith(v, policy.Options{MP: true}); return d }
 	parseImport := func(v string) []Diagnostic { _, d := policy.ParseImport(v); return d }
 	parseInject := func(v string) []Diagnostic { _, d := policy.ParseInject(v); return d }
 	parseAggrMtd := func(v string) []Diagnostic { _, d := policy.ParseAggrMtd(v); return d }
@@ -114,7 +114,7 @@ func TestDiagnosticRulesAreDocumented(t *testing.T) {
 	// The dictionary checks only run when one is supplied.
 	dict := policy.RFCDictionary
 	withDict := func(v string) []Diagnostic {
-		_, d := policy.ParseImportWith(v, false, policy.Options{Dict: &dict})
+		_, d := policy.ParseImportWith(v, policy.Options{Dict: &dict})
 		return d
 	}
 	long := "#" + strings.Repeat("x", 64) + "\n"
@@ -188,6 +188,7 @@ func TestDiagnosticRulesAreDocumented(t *testing.T) {
 		{"policy/as-path-regexp", imp("from AS1 accept <3333>")},
 		{"policy/afi", pol(mpImport, "afi bogus from AS1 accept ANY")},
 		{"policy/default-to", obj("aut-num: AS1\ndefault: AS2\n")},
+		{"policy/no-default-via", func() []Diagnostic { _, d := policy.ParseDefaultWith("to AS1", policy.Options{Via: true}); return d }},
 		{"policy/expr-brace", imp("{ from AS1 accept ANY")},
 		{"policy/missing-semicolon", imp("{ from AS1 accept AS1 from AS2 accept AS2 }")},
 		{"policy/trailing", imp("from AS1 accept ANY; from AS2 accept ANY")},

@@ -34,6 +34,11 @@ const DefaultCacheEntries = 1 << 16
 // the underlying Source, so a burst of goroutines expanding overlapping sets
 // does not multiply the load on the registry.
 //
+// A cached set, aut-num or inet-rtr is one object, shared by every caller
+// the entry answers, not a copy: callers must not modify it. Route and claim
+// lists are copied for each caller, but the claim objects in them are shared
+// in the same way.
+//
 // The zero value is not usable: build one with NewCache.
 type Cache struct {
 	// Src is the Source being cached.
@@ -147,29 +152,29 @@ func (c *Cache) MembersByRef(ctx context.Context, set object.NamedSet) ([]object
 }
 
 // AutNum returns the aut-num of as, from the cache when it is there and fresh.
-func (c *Cache) AutNum(ctx context.Context, as types.ASN, source string) (object.AutNum, error) {
+func (c *Cache) AutNum(ctx context.Context, as types.ASN, source string) (*object.AutNum, error) {
 	ps, ok := c.Src.(PolicySource)
 	if !ok {
-		return object.AutNum{}, ErrNoPolicy
+		return nil, ErrNoPolicy
 	}
 	e, err := c.lookup(ctx, cacheKey{kind: kindAutNum, as: as, src: policySourceKey(source)}, func(ctx context.Context, e *cacheEntry) {
 		an, err := ps.AutNum(ctx, as, source)
 		e.obj, e.err = an, err
 	})
 	if err != nil {
-		return object.AutNum{}, err
+		return nil, err
 	}
 	if e.err != nil {
-		return object.AutNum{}, e.err
+		return nil, e.err
 	}
-	return e.obj.(object.AutNum), nil
+	return e.obj.(*object.AutNum), nil
 }
 
 // InetRtr returns the inet-rtr named name, from the cache when it is there and fresh.
-func (c *Cache) InetRtr(ctx context.Context, name, source string) (object.InetRtr, error) {
+func (c *Cache) InetRtr(ctx context.Context, name, source string) (*object.InetRtr, error) {
 	ps, ok := c.Src.(PolicySource)
 	if !ok {
-		return object.InetRtr{}, ErrNoPolicy
+		return nil, ErrNoPolicy
 	}
 	key := cacheKey{kind: kindInetRtr, name: rtrKey(name), src: policySourceKey(source)}
 	e, err := c.lookup(ctx, key, func(ctx context.Context, e *cacheEntry) {
@@ -177,12 +182,12 @@ func (c *Cache) InetRtr(ctx context.Context, name, source string) (object.InetRt
 		e.obj, e.err = ir, err
 	})
 	if err != nil {
-		return object.InetRtr{}, err
+		return nil, err
 	}
 	if e.err != nil {
-		return object.InetRtr{}, e.err
+		return nil, e.err
 	}
-	return e.obj.(object.InetRtr), nil
+	return e.obj.(*object.InetRtr), nil
 }
 
 var _ PolicySource = (*Cache)(nil)

@@ -36,9 +36,9 @@ type memSet struct {
 	source string
 }
 
-// NewMemSource indexes a corpus of objects — decoded, or built by the caller,
-// as values or pointers. Sets are indexed by name, route/route6 prefixes by
-// origin AS, and aut-num/route/route6 member-of claims by each named set.
+// NewMemSource indexes a corpus of objects — decoded, or built by the caller.
+// Sets are indexed by name, route/route6 prefixes by origin AS, and
+// aut-num/route/route6 member-of claims by each named set.
 //
 // When the same set name appears more than once (e.g. dumps from several IRRs),
 // sourcePrecedence decides which object an unscoped lookup returns, like
@@ -49,6 +49,12 @@ type memSet struct {
 // precedence; one no object's source: names is ErrNotFound.
 //
 // It is a PolicySource that serves every aut-num and inet-rtr in objs.
+//
+// The MemSource keeps the objects of objs themselves, not copies, and returns
+// them as they are: every caller of GetSet, AutNum, InetRtr or MembersByRef
+// receives the same pointers. It never changes them; the caller must not
+// modify an object after passing it here, and no one may modify an object a
+// lookup returns.
 //
 // Corpus.Source builds with it too, so that the two cannot answer differently.
 func NewMemSource(objs []object.Object, sourcePrecedence ...string) *MemSource {
@@ -77,7 +83,7 @@ func newMemSource(objs []object.Object, sourcePrecedence []string, dflt func(str
 		return len(sourcePrecedence)
 	}
 	for _, o := range objs {
-		if o = value(o); o == nil {
+		if isNil(o) {
 			continue
 		}
 		if set, ok := o.(object.NamedSet); ok {
@@ -89,13 +95,13 @@ func newMemSource(objs []object.Object, sourcePrecedence []string, dflt func(str
 		}
 		s.indexClaims(o)
 		switch t := o.(type) {
-		case object.AutNum:
+		case *object.AutNum:
 			// An aut-num whose key did not decode is no AS (claimant agrees):
 			// addPolicy would otherwise index it under the AS0 it defaults to.
 			if _, _, _, ok := claimant(t); ok {
 				s.addPolicy("aut-num", t.AS.String(), t.Source, t, "", nil)
 			}
-		case object.InetRtr:
+		case *object.InetRtr:
 			if rtrKey(t.Name) != "" {
 				s.addPolicy("inet-rtr", t.Name, t.Source, t, "", nil)
 			}

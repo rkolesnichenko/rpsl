@@ -153,30 +153,30 @@ func unknownSource(err error) bool {
 // AutNum fetches the aut-num of as, from Sources' priority or, when source is
 // set, from that registry alone; a registry the server does not know is
 // resolve.ErrNotFound.
-func (s *Source) AutNum(ctx context.Context, as types.ASN, source string) (object.AutNum, error) {
+func (s *Source) AutNum(ctx context.Context, as types.ASN, source string) (*object.AutNum, error) {
 	o, err := s.fetchOne(ctx, "aut-num", as.String(), source, func(o object.Object) bool {
-		an, ok := o.(object.AutNum)
+		an, ok := o.(*object.AutNum)
 		return ok && an.AS == as
 	})
 	if err != nil {
-		return object.AutNum{}, err
+		return nil, err
 	}
-	return o.(object.AutNum), nil
+	return o.(*object.AutNum), nil
 }
 
 // InetRtr fetches the inet-rtr named name, as AutNum does.
-func (s *Source) InetRtr(ctx context.Context, name, source string) (object.InetRtr, error) {
+func (s *Source) InetRtr(ctx context.Context, name, source string) (*object.InetRtr, error) {
 	if !dnsName(name) {
-		return object.InetRtr{}, fmt.Errorf("whois: invalid inet-rtr name %q", name)
+		return nil, fmt.Errorf("whois: invalid inet-rtr name %q", name)
 	}
 	o, err := s.fetchOne(ctx, "inet-rtr", name, source, func(o object.Object) bool {
-		ir, ok := o.(object.InetRtr)
+		ir, ok := o.(*object.InetRtr)
 		return ok && strings.EqualFold(strings.TrimSpace(ir.Name), name)
 	})
 	if err != nil {
-		return object.InetRtr{}, err
+		return nil, err
 	}
-	return o.(object.InetRtr), nil
+	return o.(*object.InetRtr), nil
 }
 
 // fetchOne queries "-r -T class key" and returns the object match accepts from
@@ -223,9 +223,9 @@ func (s *Source) fetchOne(ctx context.Context, class, key, source string, match 
 // objectSource is an aut-num's or inet-rtr's source: attribute.
 func objectSource(o object.Object) string {
 	switch t := o.(type) {
-	case object.AutNum:
+	case *object.AutNum:
 		return strings.TrimSpace(t.Source)
-	case object.InetRtr:
+	case *object.InetRtr:
 		return strings.TrimSpace(t.Source)
 	}
 	return ""
@@ -259,9 +259,9 @@ func (s *Source) OriginatedRoutes(ctx context.Context, as types.ASN, afi types.A
 	for _, o := range objs {
 		var p netip.Prefix
 		switch t := o.(type) {
-		case object.Route:
+		case *object.Route:
 			p = t.Prefix
-		case object.Route6:
+		case *object.Route6:
 			p = t.Prefix
 		default:
 			continue

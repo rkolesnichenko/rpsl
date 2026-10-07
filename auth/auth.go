@@ -74,9 +74,10 @@ type Verifier interface {
 // Registry looks maintainers up by name. It is the authorisation model's one
 // piece of I/O, injected for the same reason resolve.Source is.
 type Registry interface {
-	// Mntner returns the named maintainer, or an error wrapping ErrNoMntner
-	// when the registry has none by that name.
-	Mntner(ctx context.Context, name string) (object.Mntner, error)
+	// Mntner returns the named maintainer, non-nil, or nil and an error
+	// wrapping ErrNoMntner when the registry has none by that name. A nil
+	// maintainer with a nil error is treated as ErrNoMntner.
+	Mntner(ctx context.Context, name string) (*object.Mntner, error)
 }
 
 // ErrNoMntner reports a maintainer the registry does not have.
@@ -106,8 +107,12 @@ func (d Decision) String() string {
 // verifier does not handle is skipped, and reported through unsupported, so a
 // caller can distinguish "no line matched" from "no line could be checked".
 //
-// A nil Verifier checks nothing and reports every line as unsupported.
-func CheckMntner(ctx context.Context, m object.Mntner, cred Credential, v Verifier) (ok, unsupported bool, err error) {
+// A nil Verifier checks nothing and reports every line as unsupported. A nil
+// maintainer has no auth: lines, so accepts nothing: (false, false, nil).
+func CheckMntner(ctx context.Context, m *object.Mntner, cred Credential, v Verifier) (ok, unsupported bool, err error) {
+	if m == nil {
+		return false, false, nil
+	}
 	return checkAuth(ctx, m.Auth, cred, v)
 }
 
@@ -142,6 +147,9 @@ func CheckMntners(ctx context.Context, reg Registry, names []string, cred Creden
 	var d Decision
 	for _, name := range names {
 		m, err := reg.Mntner(ctx, name)
+		if err == nil && m == nil {
+			err = fmt.Errorf("%w: %s", ErrNoMntner, name) // the Registry contract: nil is not found
+		}
 		if err != nil {
 			if !errors.Is(err, ErrNoMntner) {
 				return Decision{}, err
@@ -177,11 +185,11 @@ func CheckMntners(ctx context.Context, reg Registry, names []string, cred Creden
 // It returns the chain, starting with name's own maintainer. A cycle that does
 // not close on itself returns ErrReferralCycle along with the chain walked so
 // far, so a caller can show where it looped.
-func ReferralChain(ctx context.Context, reg Registry, name string, maxDepth int) ([]object.Mntner, error) {
+func ReferralChain(ctx context.Context, reg Registry, name string, maxDepth int) ([]*object.Mntner, error) {
 	if maxDepth <= 0 {
 		maxDepth = 32
 	}
-	var chain []object.Mntner
+	var chain []*object.Mntner
 	seen := map[string]bool{}
 	for at := name; ; {
 		key := strings.ToUpper(strings.TrimSpace(at))
@@ -190,6 +198,9 @@ func ReferralChain(ctx context.Context, reg Registry, name string, maxDepth int)
 		}
 		seen[key] = true
 		m, err := reg.Mntner(ctx, at)
+		if err == nil && m == nil {
+			err = fmt.Errorf("%w: %s", ErrNoMntner, at) // the Registry contract: nil is not found
+		}
 		if err != nil {
 			return chain, err
 		}

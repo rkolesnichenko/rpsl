@@ -23,18 +23,17 @@ func (r rawOnly) Raw() *ast.Object { return r.raw }
 func TestMntIrtPointerAndUnknownShapes(t *testing.T) {
 	ctx, v := context.Background(), verifier()
 	reg := newIrtRegistry(t, irt("IRT-VICTIM", "MD5-PW $1$other$pw"))
-	before := decode(t, inetnum()).(object.Inetnum)
-	after := decode(t, inetnum("IRT-VICTIM")).(object.Inetnum)
-	before6 := decode(t, "inet6num: 2001:db8::/32\nnetname: X\nsource: RIPE\n").(object.Inet6num)
-	after6 := decode(t, "inet6num: 2001:db8::/32\nnetname: X\nmnt-irt: IRT-VICTIM\nsource: RIPE\n").(object.Inet6num)
+	before := decode(t, inetnum()).(*object.Inetnum)
+	after := decode(t, inetnum("IRT-VICTIM")).(*object.Inetnum)
+	before6 := decode(t, "inet6num: 2001:db8::/32\nnetname: X\nsource: RIPE\n").(*object.Inet6num)
+	after6 := decode(t, "inet6num: 2001:db8::/32\nnetname: X\nmnt-irt: IRT-VICTIM\nsource: RIPE\n").(*object.Inet6num)
 	for _, c := range []struct {
 		name          string
 		before, after object.Object
 	}{
-		{"values", before, after},
-		{"pointers", &before, &after},
-		{"inet6num pointers", &before6, &after6},
-		{"a creation from a pointer", nil, &after},
+		{"pointers", before, after},
+		{"inet6num pointers", before6, after6},
+		{"a creation from a pointer", nil, after},
 		{"an object known only by its text", nil, rawOnly{after.Raw()}},
 	} {
 		d, err := MntIrtChange(ctx, reg, c.before, c.after, goodCred(), v)
@@ -56,7 +55,7 @@ func TestRouteCreationChecksOriginAndSpace(t *testing.T) {
 		mntner("MNT-OWN", "MD5-PW $1$abc$xyz"),
 		mntner("MNT-EVIL", "MD5-PW $1$abc$xyz"),
 	)
-	route := decode(t, "route: 192.0.2.0/24\norigin: AS64500\nmnt-by: MNT-OWN\nsource: RIPE\n").(object.Route)
+	route := decode(t, "route: 192.0.2.0/24\norigin: AS64500\nmnt-by: MNT-OWN\nsource: RIPE\n").(*object.Route)
 	evilAS := decode(t, "aut-num: AS64999\nas-name: EVIL\nmnt-by: MNT-EVIL\nsource: RIPE\n")
 	evilSpace := decode(t, "inetnum: 198.51.100.0 - 198.51.100.255\nnetname: EVIL\nmnt-by: MNT-EVIL\nsource: RIPE\n")
 	moreSpecific := decode(t, "route: 192.0.2.0/25\norigin: AS64999\nmnt-by: MNT-EVIL\nsource: RIPE\n")
@@ -84,6 +83,28 @@ func TestRouteCreationChecksOriginAndSpace(t *testing.T) {
 	// The same request with the route's own aut-num and a covering inetnum passes.
 	if d, err := RouteCreation(ctx, reg, RouteRequestFor(route, goodAS, goodSpace), goodCred(), v); err != nil || !d.OK {
 		t.Errorf("the route's own aut-num and a covering inetnum: %v, %v", d, err)
+	}
+}
+
+// A lookup that misses returns a nil pointer, so a typed nil can reach a
+// RouteRequest's Origin or Space: it authorises nothing and is refused, never
+// a panic.
+func TestRouteCreationTypedNilOriginAndSpace(t *testing.T) {
+	ctx, v := context.Background(), verifier()
+	reg := newRegistry(t, mntner("MNT-OWN", "MD5-PW $1$abc$xyz"))
+	route := decode(t, "route: 192.0.2.0/24\norigin: AS64500\nmnt-by: MNT-OWN\nsource: RIPE\n").(*object.Route)
+	d, err := RouteCreation(ctx, reg, RouteRequestFor(route, (*object.AutNum)(nil), (*object.Inetnum)(nil)), goodCred(), v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "the origin AS: the object given is not the aut-num of AS64500"; d.OK || !strings.Contains(strings.Join(d.Reasons, " "), want) {
+		t.Errorf("typed-nil origin and space: %v; want a refusal: %s", d, want)
+	}
+	p := route.Prefix
+	for _, o := range []object.Object{(*object.AutNum)(nil), (*object.Route)(nil), (*object.Route6)(nil), (*object.Inetnum)(nil), (*object.Inet6num)(nil)} {
+		if got := RouteAuthority(o, p); len(got) != 0 {
+			t.Errorf("RouteAuthority(%T nil) = %v, want none", o, got)
+		}
 	}
 }
 

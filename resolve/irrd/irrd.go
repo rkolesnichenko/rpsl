@@ -124,13 +124,10 @@ type pconn struct {
 // errNotFound is the internal sentinel for a 'D' (key not found) response.
 var errNotFound = errors.New("irrd: key not found")
 
-// errQuery wraps an 'F' response: the server refused the query itself, and the
-// connection is still in step.
-var errQuery = errors.New("irrd: query error")
-
 // ErrQueryRefused is returned when the server refuses a query outright ('F'),
-// as a server without IRRd 4's "!a" does for ASSetPrefixes.
-var ErrQueryRefused = errQuery
+// as a server without IRRd 4's "!a" does for ASSetPrefixes. The connection is
+// still in step.
+var ErrQueryRefused = errors.New("irrd: query error")
 
 // errUnknownSource marks a server's refusal of a "!s" source list: IRRd
 // answers "F One or more selected sources are unavailable."
@@ -321,7 +318,7 @@ func (s *Source) learnRegistries(ctx context.Context) (map[string]bool, error) {
 	switch {
 	case err == nil:
 		return parseRegistries(payload), nil
-	case errors.Is(err, errQuery), errors.Is(err, errNotFound):
+	case errors.Is(err, ErrQueryRefused), errors.Is(err, errNotFound):
 		return nil, nil
 	}
 	return nil, err
@@ -495,9 +492,9 @@ func (s *Source) getSet(ctx context.Context, name types.SetName, source string) 
 	}
 	common := object.Common{Source: source}
 	if name.Class() == types.ClassAsSet {
-		return object.AsSet{Common: common, Name: name, Members: members, SrcMembers: src}, nil
+		return &object.AsSet{Common: common, Name: name, Members: members, SrcMembers: src}, nil
 	}
-	return object.RouteSet{Common: common, Name: name, Members: members, SrcMembers: src}, nil
+	return &object.RouteSet{Common: common, Name: name, Members: members, SrcMembers: src}, nil
 }
 
 // selfReference restores a set's reference to its own name, which IRRd's
@@ -543,31 +540,31 @@ func (s *Source) fetchSet(ctx context.Context, name types.SetName) (object.Named
 // AutNum fetches the aut-num of as ("!maut-num,AS1"), in source alone when it
 // is set; a registry the server does not have is resolve.ErrNotFound, known
 // as GetSet knows it (from "!j-*", without a query of its own).
-func (s *Source) AutNum(ctx context.Context, as types.ASN, source string) (object.AutNum, error) {
+func (s *Source) AutNum(ctx context.Context, as types.ASN, source string) (*object.AutNum, error) {
 	o, err := s.fetchObject(ctx, "aut-num", as.String(), source)
 	if err != nil {
-		return object.AutNum{}, err
+		return nil, err
 	}
-	an, ok := o.(object.AutNum)
+	an, ok := o.(*object.AutNum)
 	if !ok || an.AS != as {
-		return object.AutNum{}, fmt.Errorf("irrd: !maut-num,%s answered with another object", as)
+		return nil, fmt.Errorf("irrd: !maut-num,%s answered with another object", as)
 	}
 	return an, nil
 }
 
 // InetRtr fetches the inet-rtr named name ("!minet-rtr,<name>"), in source
 // alone when it is set. The name must be a DNS name.
-func (s *Source) InetRtr(ctx context.Context, name, source string) (object.InetRtr, error) {
+func (s *Source) InetRtr(ctx context.Context, name, source string) (*object.InetRtr, error) {
 	if !dnsName(name) {
-		return object.InetRtr{}, fmt.Errorf("irrd: invalid inet-rtr name %q", name)
+		return nil, fmt.Errorf("irrd: invalid inet-rtr name %q", name)
 	}
 	o, err := s.fetchObject(ctx, "inet-rtr", name, source)
 	if err != nil {
-		return object.InetRtr{}, err
+		return nil, err
 	}
-	ir, ok := o.(object.InetRtr)
+	ir, ok := o.(*object.InetRtr)
 	if !ok || !strings.EqualFold(strings.TrimSpace(ir.Name), name) {
-		return object.InetRtr{}, fmt.Errorf("irrd: !minet-rtr,%s answered with another object", name)
+		return nil, fmt.Errorf("irrd: !minet-rtr,%s answered with another object", name)
 	}
 	return ir, nil
 }
@@ -863,7 +860,7 @@ func (s *Source) selectSources(conn net.Conn, br *bufio.Reader) error {
 		if errors.Is(err, errNotFound) {
 			return fmt.Errorf("irrd: server rejected source list %q", list)
 		}
-		if errors.Is(err, errQuery) {
+		if errors.Is(err, ErrQueryRefused) {
 			return fmt.Errorf("irrd: selecting sources %q: %w: %w", list, errUnknownSource, err)
 		}
 		return fmt.Errorf("irrd: selecting sources %q: %w", list, err)
@@ -1007,7 +1004,7 @@ func readFrame(br *bufio.Reader, max int64) ([]byte, error) {
 	case 'D':
 		return nil, errNotFound
 	case 'F':
-		return nil, fmt.Errorf("%w: %s", errQuery, strings.TrimSpace(header[1:]))
+		return nil, fmt.Errorf("%w: %s", ErrQueryRefused, strings.TrimSpace(header[1:]))
 	default:
 		return nil, fmt.Errorf("irrd: unexpected response %q", header)
 	}

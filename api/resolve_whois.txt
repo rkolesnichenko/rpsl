@@ -1,0 +1,17 @@
+package whois
+const DefaultTimeout = 60 * time.Second
+type ServerError struct
+	Code int
+	Message string
+func (*ServerError) Error() string
+type Source struct
+	Addr string
+	Sources []string
+	Timeout time.Duration
+	MaxResponse int64
+	Dial func(ctx context.Context) (net.Conn, error)
+func (*Source) AutNum(ctx context.Context, as types.ASN, source string) (*object.AutNum, error)
+func (*Source) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error)
+func (*Source) InetRtr(ctx context.Context, name, source string) (*object.InetRtr, error)
+func (*Source) MembersByRef(ctx context.Context, set object.NamedSet) ([]object.Object, error)
+func (*Source) OriginatedRoutes(ctx context.Context, as types.ASN, afi types.AFI) ([]netip.Prefix, error)

@@ -1,0 +1,25 @@
+package rpsl
+const DefaultMaxObjectBytes = 16 << 20
+const DefaultMaxObjectLines = 1 << 18
+const Error = ast.Error
+const Info = ast.Info
+const Warning = ast.Warning
+var ARIN = object.ARIN
+var IRRd = object.IRRd
+var RFCStrict = object.RFCStrict
+var RIPE = object.RIPE
+func Decode(o *ast.Object) (Object, []Diagnostic)
+func NewBuilder(class, key string) *Builder
+func Parse(r io.Reader) iter.Seq2[*ast.Object, []Diagnostic]
+func ParseObject(text string) (*ast.Object, []Diagnostic)
+func ParseWith(r io.Reader, opts ParseOptions) iter.Seq2[*ast.Object, []Diagnostic]
+func Validate(o *ast.Object, p Profile) []Diagnostic
+type Builder = ast.Builder
+type Diagnostic = ast.Diagnostic
+type FormatOptions = ast.FormatOptions
+type Object = object.Object
+type ParseOptions struct
+	MaxObjectBytes int64
+	MaxObjectLines int
+type Profile = object.Profile
+type Severity = ast.Severity

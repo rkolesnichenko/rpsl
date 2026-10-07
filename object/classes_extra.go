@@ -30,10 +30,10 @@ type Inetnum struct {
 }
 
 // Class returns "inetnum".
-func (i Inetnum) Class() string { return "inetnum" }
+func (i *Inetnum) Class() string { return "inetnum" }
 
 // Raw returns the object's lossless source, or nil for one built without it.
-func (i Inetnum) Raw() *ast.Object { return i.raw }
+func (i *Inetnum) Raw() *ast.Object { return i.raw }
 
 func decodeInetnum(d *decoder) Inetnum {
 	lo, hi := d.addrRange("inetnum", "object/inetnum-range")
@@ -77,10 +77,10 @@ type Inet6num struct {
 }
 
 // Class returns "inet6num".
-func (i Inet6num) Class() string { return "inet6num" }
+func (i *Inet6num) Class() string { return "inet6num" }
 
 // Raw returns the object's lossless source, or nil for one built without it.
-func (i Inet6num) Raw() *ast.Object { return i.raw }
+func (i *Inet6num) Raw() *ast.Object { return i.raw }
 
 func decodeInet6num(d *decoder) Inet6num {
 	return Inet6num{
@@ -126,10 +126,10 @@ type AsBlock struct {
 }
 
 // Class returns "as-block".
-func (b AsBlock) Class() string { return "as-block" }
+func (b *AsBlock) Class() string { return "as-block" }
 
 // Raw returns the object's lossless source, or nil for one built without it.
-func (b AsBlock) Raw() *ast.Object { return b.raw }
+func (b *AsBlock) Raw() *ast.Object { return b.raw }
 
 func decodeAsBlock(d *decoder) AsBlock {
 	lo, hi := d.asnRange("as-block", "object/as-block-range")
@@ -155,10 +155,10 @@ type InetRtr struct {
 }
 
 // Class returns "inet-rtr".
-func (r InetRtr) Class() string { return "inet-rtr" }
+func (r *InetRtr) Class() string { return "inet-rtr" }
 
 // Raw returns the object's lossless source, or nil for one built without it.
-func (r InetRtr) Raw() *ast.Object { return r.raw }
+func (r *InetRtr) Raw() *ast.Object { return r.raw }
 
 func decodeInetRtr(d *decoder) InetRtr {
 	return InetRtr{
@@ -200,10 +200,10 @@ type Irt struct {
 }
 
 // Class returns "irt".
-func (i Irt) Class() string { return "irt" }
+func (i *Irt) Class() string { return "irt" }
 
 // Raw returns the object's lossless source, or nil for one built without it.
-func (i Irt) Raw() *ast.Object { return i.raw }
+func (i *Irt) Raw() *ast.Object { return i.raw }
 
 func decodeIrt(d *decoder) Irt {
 	return Irt{
@@ -240,10 +240,10 @@ type Domain struct {
 }
 
 // Class returns "domain".
-func (d2 Domain) Class() string { return "domain" }
+func (d2 *Domain) Class() string { return "domain" }
 
 // Raw returns the object's lossless source, or nil for one built without it.
-func (d2 Domain) Raw() *ast.Object { return d2.raw }
+func (d2 *Domain) Raw() *ast.Object { return d2.raw }
 
 func decodeDomain(d *decoder) Domain {
 	return Domain{
@@ -282,10 +282,10 @@ type Organisation struct {
 }
 
 // Class returns "organisation".
-func (o Organisation) Class() string { return "organisation" }
+func (o *Organisation) Class() string { return "organisation" }
 
 // Raw returns the object's lossless source, or nil for one built without it.
-func (o Organisation) Raw() *ast.Object { return o.raw }
+func (o *Organisation) Raw() *ast.Object { return o.raw }
 
 func decodeOrganisation(d *decoder) Organisation {
 	return Organisation{

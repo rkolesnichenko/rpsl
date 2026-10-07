@@ -162,13 +162,13 @@ func TestFilterPassesErrors(t *testing.T) {
 
 func TestRouteOfPointers(t *testing.T) {
 	objs := decode(t, "route: 10.0.0.0/8\norigin: AS1\nsource: T\n", "route6: 2001:db8::/32\norigin: AS2\nsource: T\n")
-	r, r6 := objs[0].(object.Route), objs[1].(object.Route6)
-	for _, o := range []object.Object{r, &r, r6, &r6} {
+	r, r6 := objs[0].(*object.Route), objs[1].(*object.Route6)
+	for _, o := range []object.Object{r, r6} {
 		if _, _, ok := route(o); !ok {
 			t.Errorf("route(%T) not a route", o)
 		}
 	}
-	for _, o := range []object.Object{(*object.Route)(nil), (*object.Route6)(nil), object.AutNum{}} {
+	for _, o := range []object.Object{(*object.Route)(nil), (*object.Route6)(nil), &object.AutNum{}} {
 		if _, _, ok := route(o); ok {
 			t.Errorf("route(%T) is a route", o)
 		}

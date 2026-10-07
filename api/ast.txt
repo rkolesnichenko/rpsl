@@ -1,0 +1,48 @@
+package ast
+const Error Severity
+const Info Severity = iota
+const Warning Severity
+var ErrInvalidAttribute = errors.New(…)
+func New(toks []lexer.Token) *Object
+func NewBuilder(class, key string) *Builder
+type Attribute struct
+	Name string
+	Value string
+	Raw string
+	Comment string
+	Span lexer.Span
+	Segments []lexer.Segment
+func (Attribute) List() []ListItem
+func (Attribute) SpanAt(valStart, valEnd int) lexer.Span
+type Builder struct
+func (*Builder) Add(name, value string) *Builder
+func (*Builder) AddAll(name string, values ...string) *Builder
+func (*Builder) Build() (*Object, error)
+func (*Builder) String() string
+type Diagnostic struct
+	Severity Severity
+	Message string
+	Span lexer.Span
+	Rule string
+func (Diagnostic) String() string
+type FormatOptions struct
+	Align int
+	LowerNames bool
+type ListItem struct
+	Value string
+	Start int
+	End int
+type Object struct
+func (*Object) Append(name, value string) error
+func (*Object) Attributes() []Attribute
+func (*Object) Class() string
+func (*Object) Format(opts FormatOptions) string
+func (*Object) GetAll(name string) []Attribute
+func (*Object) GetFirst(name string) (Attribute, bool)
+func (*Object) Has(name string) bool
+func (*Object) Key() string
+func (*Object) Set(name string, values ...string) error
+func (*Object) String() string
+func (*Object) Text() string
+type Severity uint8
+func (Severity) String() string

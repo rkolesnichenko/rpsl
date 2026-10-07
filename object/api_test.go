@@ -64,12 +64,12 @@ func TestProfilesAreReadOnly(t *testing.T) {
 // Attributes and their RFC 4012 mp- forms are separate fields everywhere, as
 // Members/MpMembers and Filter/MpFilter already are.
 func TestMPAttributesAreSeparate(t *testing.T) {
-	r := mustDecode(t, "inet-rtr: rtr.example.net\nlocal-as: AS1\nmp-peer: BGP4 2001:db8::1 asno(AS2)\npeer: BGP4 192.0.2.1 asno(AS3)\n").(InetRtr)
+	r := mustDecode(t, "inet-rtr: rtr.example.net\nlocal-as: AS1\nmp-peer: BGP4 2001:db8::1 asno(AS2)\npeer: BGP4 192.0.2.1 asno(AS3)\n").(*InetRtr)
 	if len(r.Peers) != 1 || r.Peers[0].Raw != "BGP4 192.0.2.1 asno(AS3)" ||
 		len(r.MpPeers) != 1 || r.MpPeers[0].Raw != "BGP4 2001:db8::1 asno(AS2)" {
 		t.Errorf("Peers %q, MpPeers %q", r.Peers, r.MpPeers)
 	}
-	ps := mustDecode(t, "peering-set: PRNG-X\nmp-peering: AS2\npeering: AS3\n").(PeeringSet)
+	ps := mustDecode(t, "peering-set: PRNG-X\nmp-peering: AS2\npeering: AS3\n").(*PeeringSet)
 	if len(ps.Peerings) != 1 || len(ps.MpPeerings) != 1 {
 		t.Errorf("Peerings %d, MpPeerings %d; want 1 and 1", len(ps.Peerings), len(ps.MpPeerings))
 	}
@@ -81,7 +81,7 @@ func TestNilSafety(t *testing.T) {
 	if o.Class() != "" || o.Raw() != nil || diags != nil {
 		t.Errorf("Decode(nil) = %#v, %v", o, diags)
 	}
-	if (AsSet{}).Raw().String() != "" || len(RIPE.Validate(nil)) != 0 {
+	if (&AsSet{}).Raw().String() != "" || len(RIPE.Validate(nil)) != 0 {
 		t.Error("nil Raw is not readable")
 	}
 }

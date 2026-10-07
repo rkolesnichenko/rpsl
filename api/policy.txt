@@ -1,0 +1,349 @@
+package policy
+const ASAnd ASOp = iota
+const ASExcept ASOp
+const ASOr ASOp
+const ActionAppend ActionOp
+const ActionAssign ActionOp = iota
+const ActionMethod ActionOp
+const CommunityContains CommunityOp = iota
+const CommunityEquals CommunityOp
+const MaxFlattenNodes = 1 << 20
+const RepeatPlus RepeatOp
+const RepeatQuest RepeatOp
+const RepeatRange RepeatOp
+const RepeatStar RepeatOp = iota
+const RouterAnd RouterOp = iota
+const RouterExcept RouterOp
+const RouterOr RouterOp
+var ErrFlattenTooLarge = errors.New(…)
+var RFCDictionary = rfcDictionary(…)
+func Flatten(e Expr, af types.AddrFamily) ([]Term, error)
+func MethodName(a Action) string
+func NewDictionary(attrs []RPAttr, typedefs []Typedef, protos []Protocol) Dictionary
+func ParseASExpression(s string) (ASExpr, []ast.Diagnostic)
+func ParseASPathRegexp(body string) (*ASPathRE, error)
+func ParseAggrMtd(s string) (AggrMtd, []ast.Diagnostic)
+func ParseComponents(s string) (Components, []ast.Diagnostic)
+func ParseDefault(s string) (Default, []ast.Diagnostic)
+func ParseDefaultWith(s string, o Options) (Default, []ast.Diagnostic)
+func ParseExport(s string) (Export, []ast.Diagnostic)
+func ParseExportWith(s string, o Options) (Export, []ast.Diagnostic)
+func ParseFilter(s string) (Filter, []ast.Diagnostic)
+func ParseIfaddr(s string) (Ifaddr, []ast.Diagnostic)
+func ParseImport(s string) (Import, []ast.Diagnostic)
+func ParseImportWith(s string, o Options) (Import, []ast.Diagnostic)
+func ParseInject(s string) (Inject, []ast.Diagnostic)
+func ParseInterface(s string) (Interface, []ast.Diagnostic)
+func ParseMPFilter(s string) ([]types.AddrFamily, Filter, []ast.Diagnostic)
+func ParseMntRoutes(s string) (MntRoutes, []ast.Diagnostic)
+func ParsePeer(s string) (Peer, []ast.Diagnostic)
+func ParsePeering(s string) (Peering, []ast.Diagnostic)
+func ParseProtocol(s string) (Protocol, []ast.Diagnostic)
+func ParseRPAttribute(s string) (RPAttr, []ast.Diagnostic)
+func ParseSetNameTemplate(s string) (SetNameTemplate, error)
+func ParseTypedef(s string) (Typedef, []ast.Diagnostic)
+type ASExpr interface
+	isASExpr()
+type ASExprBinary struct
+	Op ASOp
+	L ASExpr
+	R ASExpr
+func (ASExprBinary) String() string
+type ASNum struct
+	AS types.ASN
+func (ASNum) String() string
+type ASOp uint8
+type ASPathASN struct
+	AS types.ASN
+type ASPathASNRange struct
+	Lo types.ASN
+	Hi types.ASN
+type ASPathAlt struct
+	Alts []ASPathExpr
+type ASPathAny struct
+type ASPathClass struct
+	Negated bool
+	Items []ASPathExpr
+type ASPathEnd struct
+type ASPathExpr interface
+	isASPathExpr()
+type ASPathPeerAS struct
+type ASPathRE struct
+	Body ASPathExpr
+func (*ASPathRE) Bind(peer types.ASN) *ASPathRE
+func (*ASPathRE) SetNames() []types.SetName
+func (*ASPathRE) String() string
+func (*ASPathRE) UsesPeer() bool
+type ASPathRepeat struct
+	Inner ASPathExpr
+	Op RepeatOp
+	Min int
+	Max int
+	Same bool
+type ASPathSeq struct
+	Terms []ASPathExpr
+type ASPathSet struct
+	Name types.SetName
+type ASPathSetTemplate struct
+	Template SetNameTemplate
+type ASPathStart struct
+type ASSetRef struct
+	Name types.SetName
+func (ASSetRef) String() string
+type ASSetTemplate struct
+	Template SetNameTemplate
+func (ASSetTemplate) String() string
+type Action struct
+	Attr string
+	Method string
+	Op ActionOp
+	Args []string
+	Value string
+	Raw string
+func (Action) Communities() ([]string, bool)
+func (Action) Int() (int, bool)
+func (Action) Prepends() ([]types.ASN, bool)
+func (Action) String() string
+type ActionOp uint8
+type AggrMtd struct
+	Inbound bool
+	Outbound bool
+	AS ASExpr
+	Raw string
+func (AggrMtd) IsZero() bool
+type CommunityOp uint8
+type ComponentList struct
+	Protocol string
+	Filter Filter
+type Components struct
+	Atomic bool
+	Lists []ComponentList
+	Raw string
+func (Components) IsZero() bool
+type Default struct
+	MP bool
+	AFIs []types.AddrFamily
+	Peering Peering
+	Actions []Action
+	Networks Filter
+func (Default) AppliesTo(af types.AddrFamily) bool
+func (Default) String() string
+func (Default) Unscoped() bool
+type Dictionary struct
+func (Dictionary) Attr(name string) (RPAttr, bool)
+func (Dictionary) AttrNames() []string
+func (Dictionary) IsZero() bool
+func (Dictionary) Protocol(name string) (Protocol, bool)
+func (Dictionary) ProtocolNames() []string
+func (Dictionary) Typedef(name string) (Typedef, bool)
+type Except struct
+	Left Expr
+	Right Expr
+	AFIs []types.AddrFamily
+	MP bool
+func (Except) AppliesTo(af types.AddrFamily) bool
+func (Except) Unscoped() bool
+type Export struct
+	Protocol string
+	IntoProtocol string
+	MP bool
+	AFIs []types.AddrFamily
+	Expr Expr
+func (Export) AppliesTo(af types.AddrFamily) bool
+func (Export) String() string
+func (Export) Terms(af types.AddrFamily) ([]Term, error)
+func (Export) Unscoped() bool
+type Expr interface
+	isExpr()
+type ExprList struct
+	Exprs []Expr
+type Factor struct
+	Peers []PeerAction
+	Filter Filter
+type Filter interface
+	isFilter()
+type FilterASExpr struct
+	AS ASExpr
+	Op types.RangeOperator
+func (FilterASExpr) String() string
+type FilterAnd struct
+	Terms []Filter
+func (FilterAnd) String() string
+type FilterAny struct
+func (FilterAny) String() string
+type FilterCommunity struct
+	Op CommunityOp
+	Values []string
+	Raw string
+func (FilterCommunity) String() string
+type FilterNot struct
+	Inner Filter
+func (FilterNot) String() string
+type FilterOr struct
+	Terms []Filter
+func (FilterOr) String() string
+type FilterPathRE struct
+	Raw string
+	Regexp *ASPathRE
+func (FilterPathRE) String() string
+type FilterPeerAS struct
+	Op types.RangeOperator
+func (FilterPeerAS) String() string
+type FilterPrefixList struct
+	Ranges []types.PrefixRange
+func (FilterPrefixList) String() string
+type FilterSetRef struct
+	Name types.SetName
+	Op types.RangeOperator
+func (FilterSetRef) String() string
+type FilterSetTemplate struct
+	Template SetNameTemplate
+	Op types.RangeOperator
+func (FilterSetTemplate) String() string
+type Ifaddr struct
+	Addr netip.Addr
+	Masklen int
+	Actions []Action
+	Raw string
+func (Ifaddr) String() string
+type Import struct
+	Protocol string
+	IntoProtocol string
+	MP bool
+	AFIs []types.AddrFamily
+	Expr Expr
+func (Import) AppliesTo(af types.AddrFamily) bool
+func (Import) String() string
+func (Import) Terms(af types.AddrFamily) ([]Term, error)
+func (Import) Unscoped() bool
+type Inject struct
+	At RouterExpr
+	Actions []Action
+	Upon InjectCond
+	Raw string
+type InjectAnd struct
+	Terms []InjectCond
+func (InjectAnd) String() string
+type InjectCond interface
+	isInjectCond()
+type InjectExclude struct
+	Ranges []types.PrefixRange
+func (InjectExclude) String() string
+type InjectHaveComponents struct
+	Ranges []types.PrefixRange
+func (InjectHaveComponents) String() string
+type InjectNot struct
+	Inner InjectCond
+func (InjectNot) String() string
+type InjectOr struct
+	Terms []InjectCond
+func (InjectOr) String() string
+type InjectStatic struct
+func (InjectStatic) String() string
+type Interface struct
+	AFI types.AddrFamily
+	Addr netip.Addr
+	Masklen int
+	Actions []Action
+	Tunnel *Tunnel
+	Raw string
+type MntRoutes struct
+	Mntner string
+	Any bool
+	Ranges []types.PrefixRange
+	Raw string
+func (MntRoutes) String() string
+type Options struct
+	MP bool
+	Via bool
+	Dict *Dictionary
+type Peer struct
+	Protocol string
+	Peer RouterExpr
+	Options []PeerOption
+	Raw string
+type PeerAction struct
+	Via Peering
+	Peering Peering
+	Actions []Action
+func (PeerAction) String() string
+type PeerOption struct
+	Name string
+	Args []string
+	Raw string
+func (PeerOption) String() string
+type Peering interface
+	isPeering()
+type PeeringAS struct
+	AS ASExpr
+	Router RouterExpr
+	AtRouter RouterExpr
+func (PeeringAS) String() string
+type PeeringRegexp struct
+	Raw string
+	Regexp *ASPathRE
+func (PeeringRegexp) String() string
+type PeeringSetRef struct
+	Name types.SetName
+func (PeeringSetRef) String() string
+type Protocol struct
+	Name string
+	Options []ProtocolOption
+	Raw string
+func (Protocol) Option(name string) (ProtocolOption, bool)
+type ProtocolOption struct
+	Mandatory bool
+	Name string
+	Args string
+	Raw string
+type RPAttr struct
+	Name string
+	Methods []RPMethod
+	Raw string
+func (RPAttr) Method(name string) (RPMethod, bool)
+type RPMethod struct
+	Name string
+	Args string
+	Raw string
+type Refine struct
+	Left Expr
+	Right Expr
+	AFIs []types.AddrFamily
+	MP bool
+func (Refine) AppliesTo(af types.AddrFamily) bool
+func (Refine) Unscoped() bool
+type RepeatOp uint8
+type RouterAddr struct
+	Addr netip.Addr
+func (RouterAddr) String() string
+type RouterExpr interface
+	isRouterExpr()
+type RouterExprBinary struct
+	Op RouterOp
+	L RouterExpr
+	R RouterExpr
+func (RouterExprBinary) String() string
+type RouterName struct
+	Name string
+func (RouterName) String() string
+type RouterOp uint8
+type RouterSetRef struct
+	Name types.SetName
+func (RouterSetRef) String() string
+type SetNameTemplate struct
+func (SetNameTemplate) Class() types.SetClass
+func (SetNameTemplate) Instantiate(peer types.ASN) types.SetName
+func (SetNameTemplate) String() string
+type Term struct
+	Via Peering
+	Peering Peering
+	Actions []Action
+	Filter Filter
+func (Term) String() string
+type Tunnel struct
+	Remote netip.Addr
+	Type string
+type Typedef struct
+	Name string
+	Definition string
+	Raw string

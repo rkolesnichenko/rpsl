@@ -179,7 +179,7 @@ func (e *Expander) expandAS(ctx context.Context, ref types.SetRef) (ASNSet, int,
 			}
 		}
 		for _, o := range nd.claims {
-			if an, ok := o.(object.AutNum); ok && !g.ex.as(an.AS) {
+			if an, ok := o.(*object.AutNum); ok && !g.ex.as(an.AS) {
 				out.add(an.AS)
 			}
 		}
@@ -387,7 +387,7 @@ func (e *Expander) fetchOne(ctx context.Context, ref types.SetRef) fetchResult {
 			return fetchResult{err: err}
 		}
 		for _, o := range objs {
-			if o = value(o); claimClassOK(set, o) && ClaimAllowed(o, set) {
+			if claimClassOK(set, o) && ClaimAllowed(o, set) {
 				claims = append(claims, o)
 			}
 		}
@@ -395,18 +395,17 @@ func (e *Expander) fetchOne(ctx context.Context, ref types.SetRef) fetchResult {
 	return fetchResult{set: set, claims: claims}
 }
 
-// checkSet returns set, as a value, if it is the set ref asks for. A set of
-// another name, or for a scoped ref one from another registry, is a fault of
-// the Source, which has answered a different question: a backend that ignored
-// the scope must not be expanded as if it had honoured it. A set whose class
-// is not the one its name denotes ("route-set: AS-EVIL") is invalid data, and
-// is treated as not found: expanded under its name's rules it would let an
-// as-set pull in prefixes, or claims, that its class does not allow.
+// checkSet returns set if it is the set ref asks for. A set of another name,
+// or for a scoped ref one from another registry, is a fault of the Source,
+// which has answered a different question: a backend that ignored the scope
+// must not be expanded as if it had honoured it. A set whose class is not the
+// one its name denotes ("route-set: AS-EVIL") is invalid data, and is treated
+// as not found: expanded under its name's rules it would let an as-set pull in
+// prefixes, or claims, that its class does not allow.
 func checkSet(ref types.SetRef, set object.NamedSet) (object.NamedSet, error) {
-	if set == nil {
-		return nil, ErrNotFound // a Source that returns neither a set nor an error
+	if isNil(set) {
+		return nil, ErrNotFound // a Source that returns neither a set (nil or a typed nil) nor an error
 	}
-	set = setValue(set)
 	name := ref.Name()
 	if got := set.SetName(); got != name {
 		return nil, fmt.Errorf("resolve: asked for %s, the Source returned %s", ref, got)
@@ -418,15 +417,6 @@ func checkSet(ref types.SetRef, set object.NamedSet) (object.NamedSet, error) {
 		return nil, fmt.Errorf("resolve: %s is a %s: %w", ref, set.Class(), ErrNotFound)
 	}
 	return set, nil
-}
-
-// setValue is value for a set: a pointer to a set class becomes the value, so
-// type switches on the set see one form.
-func setValue(set object.NamedSet) object.NamedSet {
-	if v, ok := value(set).(object.NamedSet); ok {
-		return v
-	}
-	return set
 }
 
 // ordered returns the graph's nodes in a stable order — the top set first,
@@ -478,7 +468,7 @@ func nestedRefs(set object.NamedSet) []types.SetRef {
 				out = append(out, m.Ref())
 			}
 		}
-	case object.RouterSet:
+	case object.RouterGroup:
 		for _, m := range s.SetRouters() {
 			if m.Kind == object.RtrMemberSet && nestable(parent, m.Set.Class()) {
 				out = append(out, types.Ref(m.Set))
@@ -531,15 +521,15 @@ func isAnySet(n types.SetName) bool {
 func claimClassOK(set object.NamedSet, o object.Object) bool {
 	switch set.SetName().Class() {
 	case types.ClassAsSet:
-		_, ok := o.(object.AutNum)
+		_, ok := o.(*object.AutNum)
 		return ok
 	case types.ClassRouteSet:
 		switch o.(type) {
-		case object.Route, object.Route6:
+		case *object.Route, *object.Route6:
 			return true
 		}
 	case types.ClassRtrSet:
-		_, ok := o.(object.InetRtr)
+		_, ok := o.(*object.InetRtr)
 		return ok
 	}
 	return false
@@ -567,7 +557,7 @@ func (e *Expander) fetchRoutes(ctx context.Context, g *setGraph) error {
 			}
 		}
 		for _, o := range nd.claims {
-			if an, ok := o.(object.AutNum); ok && !g.ex.as(an.AS) {
+			if an, ok := o.(*object.AutNum); ok && !g.ex.as(an.AS) {
 				add(an.AS)
 			}
 		}
@@ -666,11 +656,11 @@ func (v *evaluator) walk(ref types.SetRef, ops opStack) error {
 	for _, o := range nd.claims {
 		var err error
 		switch t := o.(type) {
-		case object.Route:
+		case *object.Route:
 			err = v.addRoutes([]netip.Prefix{t.Prefix}, ops)
-		case object.Route6:
+		case *object.Route6:
 			err = v.addRoutes([]netip.Prefix{t.Prefix}, ops)
-		case object.AutNum:
+		case *object.AutNum:
 			err = v.addRoutes(v.g.routes[t.AS], ops)
 		}
 		if err != nil {

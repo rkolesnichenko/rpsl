@@ -65,6 +65,36 @@ func asnList(s ASNSet) []uint32 {
 	return out
 }
 
+// typedNilSource answers a set it lacks with a typed nil *object.AsSet and no
+// error, as a map-backed Source written the natural way does. Source's
+// contract treats that answer as not found.
+type typedNilSource struct{ Source }
+
+func (s typedNilSource) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error) {
+	set, err := s.Source.GetSet(ctx, ref)
+	if errors.Is(err, ErrNotFound) {
+		var none *object.AsSet
+		return none, nil
+	}
+	return set, err
+}
+
+// A typed-nil set with a nil error is a missing set, never a panic — in the
+// caller's goroutine or, with Concurrency, in a fetch's.
+func TestTypedNilSetIsNotFound(t *testing.T) {
+	src := typedNilSource{corpus(t, asSet("AS-TOP", "AS1", "AS-GONE"))}
+	for _, conc := range []int{0, 4} {
+		e := &Expander{Src: src, Concurrency: conc}
+		got, err := e.ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-TOP")))
+		if err != nil || fmt.Sprint(asnList(got)) != "[1]" || fmt.Sprint(got.Missing()) != "[AS-GONE]" {
+			t.Errorf("Concurrency %d: ExpandAS = %v (missing %v), %v; want [1], missing [AS-GONE]", conc, asnList(got), got.Missing(), err)
+		}
+		if _, err := e.ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-GONE"))); !errors.Is(err, ErrNotFound) {
+			t.Errorf("Concurrency %d: ExpandAS of a missing set: err %v, want ErrNotFound", conc, err)
+		}
+	}
+}
+
 func TestExpandASNestedDedup(t *testing.T) {
 	src := corpus(t,
 		asSet("AS-TOP", "AS1", "AS-MID"),

@@ -137,7 +137,7 @@ func TestRealDataKeepPolicy(t *testing.T) {
 	n := 0
 	for raw := range rpsl.Parse(zr) {
 		o, _ := object.Decode(raw)
-		want, ok := o.(object.AutNum)
+		want, ok := o.(*object.AutNum)
 		if !ok {
 			continue
 		}

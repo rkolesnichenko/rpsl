@@ -26,13 +26,13 @@ func decode(t *testing.T, src string) object.Object {
 }
 
 // memRegistry is a Registry over decoded mntner objects.
-type memRegistry map[string]object.Mntner
+type memRegistry map[string]*object.Mntner
 
 func newRegistry(t *testing.T, srcs ...string) memRegistry {
 	t.Helper()
 	r := memRegistry{}
 	for _, src := range srcs {
-		m, ok := decode(t, src).(object.Mntner)
+		m, ok := decode(t, src).(*object.Mntner)
 		if !ok {
 			t.Fatalf("not a mntner: %q", src)
 		}
@@ -41,10 +41,10 @@ func newRegistry(t *testing.T, srcs ...string) memRegistry {
 	return r
 }
 
-func (r memRegistry) Mntner(_ context.Context, name string) (object.Mntner, error) {
+func (r memRegistry) Mntner(_ context.Context, name string) (*object.Mntner, error) {
 	m, ok := r[strings.ToUpper(strings.TrimSpace(name))]
 	if !ok {
-		return object.Mntner{}, ErrNoMntner
+		return nil, ErrNoMntner
 	}
 	return m, nil
 }
@@ -83,28 +83,28 @@ func verifier() passwordVerifier {
 func TestCheckMntner(t *testing.T) {
 	ctx := context.Background()
 	v := verifier()
-	ok, unsup, err := CheckMntner(ctx, decode(t, mntner("MNT-A", "MD5-PW $1$abc$xyz")).(object.Mntner), goodCred(), v)
+	ok, unsup, err := CheckMntner(ctx, decode(t, mntner("MNT-A", "MD5-PW $1$abc$xyz")).(*object.Mntner), goodCred(), v)
 	if err != nil || !ok || unsup {
 		t.Errorf("CheckMntner = %v, %v, %v; want true, false, nil", ok, unsup, err)
 	}
-	ok, _, err = CheckMntner(ctx, decode(t, mntner("MNT-A", "MD5-PW $1$abc$xyz")).(object.Mntner), wrongCred(), v)
+	ok, _, err = CheckMntner(ctx, decode(t, mntner("MNT-A", "MD5-PW $1$abc$xyz")).(*object.Mntner), wrongCred(), v)
 	if err != nil || ok {
 		t.Errorf("a wrong password was accepted")
 	}
 	// A scheme the verifier cannot check is reported, not treated as a refusal
 	// — a PGP-guarded object is not an unguarded one.
-	ok, unsup, err = CheckMntner(ctx, decode(t, mntner("MNT-P", "PGPKEY-1234ABCD")).(object.Mntner), goodCred(), v)
+	ok, unsup, err = CheckMntner(ctx, decode(t, mntner("MNT-P", "PGPKEY-1234ABCD")).(*object.Mntner), goodCred(), v)
 	if err != nil || ok || !unsup {
 		t.Errorf("CheckMntner = %v, %v, %v; want false, true, nil", ok, unsup, err)
 	}
 	// No verifier at all checks nothing.
-	ok, unsup, err = CheckMntner(ctx, decode(t, mntner("MNT-A", "MD5-PW $1$abc$xyz")).(object.Mntner), goodCred(), nil)
+	ok, unsup, err = CheckMntner(ctx, decode(t, mntner("MNT-A", "MD5-PW $1$abc$xyz")).(*object.Mntner), goodCred(), nil)
 	if err != nil || ok || !unsup {
 		t.Errorf("a nil Verifier accepted something: %v, %v, %v", ok, unsup, err)
 	}
 	// An error from the verifier stops the check.
 	boom := errors.New("hsm offline")
-	_, _, err = CheckMntner(ctx, decode(t, mntner("MNT-A", "MD5-PW $1$abc$xyz")).(object.Mntner), goodCred(), erroring{boom})
+	_, _, err = CheckMntner(ctx, decode(t, mntner("MNT-A", "MD5-PW $1$abc$xyz")).(*object.Mntner), goodCred(), erroring{boom})
 	if !errors.Is(err, boom) {
 		t.Errorf("err = %v, want %v", err, boom)
 	}
@@ -184,6 +184,42 @@ func TestReferralChain(t *testing.T) {
 	}
 	if _, err := ReferralChain(ctx, reg, "MNT-GONE", 0); !errors.Is(err, ErrNoMntner) {
 		t.Errorf("err = %v, want ErrNoMntner", err)
+	}
+}
+
+// nilRegistry answers a maintainer it lacks with no object and no error, as a
+// map-backed Registry written the natural way does. Registry's contract
+// treats that answer as not found.
+type nilRegistry map[string]*object.Mntner
+
+func (r nilRegistry) Mntner(_ context.Context, name string) (*object.Mntner, error) {
+	return r[strings.ToUpper(strings.TrimSpace(name))], nil
+}
+
+// A nil maintainer with a nil error is ErrNoMntner, never a panic: in
+// CheckMntners a dangling name, in ReferralChain the end of the walk.
+func TestNilMntnerIsNotFound(t *testing.T) {
+	reg := nilRegistry(newRegistry(t,
+		mntner("MNT-A", "MD5-PW $1$abc$xyz"),
+		mntner("MNT-LEAF", "NONE", "MNT-GONE"),
+	))
+	ctx, v := context.Background(), verifier()
+	d, err := CheckMntners(ctx, reg, []string{"MNT-GONE", "MNT-A"}, goodCred(), v)
+	if err != nil || !d.OK || !strings.Contains(d.String(), "MNT-GONE: no such maintainer") {
+		t.Errorf("CheckMntners = %v, %v; want authorised by MNT-A, MNT-GONE no such maintainer", d, err)
+	}
+	if d, err := CheckMntners(ctx, reg, []string{"MNT-GONE"}, goodCred(), v); err != nil || d.OK {
+		t.Errorf("CheckMntners = %v, %v; want a refusal", d, err)
+	}
+	chain, err := ReferralChain(ctx, reg, "MNT-LEAF", 0)
+	if !errors.Is(err, ErrNoMntner) || len(chain) != 1 {
+		t.Errorf("ReferralChain to a missing maintainer = %v, %v; want MNT-LEAF and ErrNoMntner", chain, err)
+	}
+	if chain, err := ReferralChain(ctx, reg, "MNT-GONE", 0); !errors.Is(err, ErrNoMntner) || len(chain) != 0 {
+		t.Errorf("ReferralChain from a missing maintainer = %v, %v; want ErrNoMntner", chain, err)
+	}
+	if ok, unsup, err := CheckMntner(ctx, nil, goodCred(), v); ok || unsup || err != nil {
+		t.Errorf("CheckMntner(nil) = %v, %v, %v; want false, false, nil", ok, unsup, err)
 	}
 }
 

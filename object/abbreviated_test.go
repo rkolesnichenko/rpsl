@@ -32,12 +32,12 @@ func TestAbbreviatedPrefixes(t *testing.T) {
 		return obj
 	}
 
-	r := warnings(t, "route: 143.208.148/22\norigin: AS1\nholes: 143.208.149/24\n", "object/route-abbreviated-prefix", 1, 3).(Route)
+	r := warnings(t, "route: 143.208.148/22\norigin: AS1\nholes: 143.208.149/24\n", "object/route-abbreviated-prefix", 1, 3).(*Route)
 	if r.Prefix != netip.MustParsePrefix("143.208.148.0/22") || len(r.Holes) != 1 || r.Holes[0] != netip.MustParsePrefix("143.208.149.0/24") {
 		t.Errorf("route decoded as %v holes %v", r.Prefix, r.Holes)
 	}
 
-	rs := warnings(t, "route-set: RS-X\nmembers: 191.243.44/22, 192.0.2.0/24, 10/8^+\n", "object/route-set-abbreviated-prefix", 2, 2).(RouteSet)
+	rs := warnings(t, "route-set: RS-X\nmembers: 191.243.44/22, 192.0.2.0/24, 10/8^+\n", "object/route-set-abbreviated-prefix", 2, 2).(*RouteSet)
 	if len(rs.Members) != 3 || rs.Members[0].Range.String() != "191.243.44.0/22" || rs.Members[2].Range.String() != "10.0.0.0/8^+" {
 		t.Errorf("route-set members %+v", rs.Members)
 	}

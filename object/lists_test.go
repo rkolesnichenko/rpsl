@@ -91,7 +91,7 @@ func TestDecodeCommaSeparatedMembers(t *testing.T) {
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %+v", diags)
 	}
-	s := obj.(AsSet)
+	s := obj.(*AsSet)
 	var got []string
 	for _, m := range s.SetMembers() {
 		got = append(got, m.Raw)
@@ -109,7 +109,7 @@ func TestDecodeRouteSetMemberOperators(t *testing.T) {
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %+v", diags)
 	}
-	m := obj.(RouteSet).Members
+	m := obj.(*RouteSet).Members
 	if len(m) != 3 {
 		t.Fatalf("members = %+v, want 3", m)
 	}
@@ -128,7 +128,7 @@ func TestDecodeRouteSetMemberOperators(t *testing.T) {
 // and its Error points at the item itself, not the whole attribute.
 func TestInvalidMemberDiagnosedAtItem(t *testing.T) {
 	obj, diags := Decode(parse("as-set: AS-X\nmembers: AS1, garbage!!, AS2\n"))
-	m := obj.(AsSet).Members
+	m := obj.(*AsSet).Members
 	if len(m) != 3 || m[0].AS != 1 || m[1].Kind != MemberInvalid || m[1].Raw != "garbage!!" || m[2].AS != 2 {
 		t.Fatalf("members = %+v, want AS1, invalid garbage!!, AS2", m)
 	}
@@ -142,7 +142,7 @@ func TestInvalidMemberDiagnosedAtItem(t *testing.T) {
 
 func TestEmptyListItemsWarn(t *testing.T) {
 	obj, diags := Decode(parse("as-set: AS-X\nmembers: AS1,,AS2,\n"))
-	if m := obj.(AsSet).Members; len(m) != 2 || m[0].AS != 1 || m[1].AS != 2 {
+	if m := obj.(*AsSet).Members; len(m) != 2 || m[0].AS != 1 || m[1].AS != 2 {
 		t.Errorf("members = %+v, want [AS1 AS2]", m)
 	}
 	n := 0
@@ -168,7 +168,7 @@ func TestListAttributesSplit(t *testing.T) {
 	}
 	for class, key := range keys {
 		obj, _ := Decode(parse(class + ": " + key + "\nmnt-by: MNT-A, MNT-B\n"))
-		f := reflect.ValueOf(obj).FieldByName("MntBy")
+		f := reflect.ValueOf(obj).Elem().FieldByName("MntBy")
 		if !f.IsValid() {
 			t.Fatalf("%s: decoded %T has no MntBy field", class, obj)
 		}
@@ -179,7 +179,7 @@ func TestListAttributesSplit(t *testing.T) {
 
 	for _, class := range []string{"as-set", "route-set", "rtr-set"} {
 		obj, _ := Decode(parse(class + ": " + keys[class] + "\nmbrs-by-ref: MNT-A, MNT-B\n"))
-		got := reflect.ValueOf(obj).FieldByName("MbrsByRef").Interface().([]string)
+		got := reflect.ValueOf(obj).Elem().FieldByName("MbrsByRef").Interface().([]string)
 		if !reflect.DeepEqual(got, []string{"MNT-A", "MNT-B"}) {
 			t.Errorf("%s: MbrsByRef = %q, want [MNT-A MNT-B]", class, got)
 		}
@@ -192,22 +192,22 @@ func TestListAttributesSplit(t *testing.T) {
 		}
 		return out
 	}
-	r := mustDecode(t, "route: 192.0.2.0/24\norigin: AS1\nmember-of: RS-A, rs-b\nholes: 192.0.2.0/25, 192.0.2.128/26\n").(Route)
+	r := mustDecode(t, "route: 192.0.2.0/24\norigin: AS1\nmember-of: RS-A, rs-b\nholes: 192.0.2.0/25, 192.0.2.128/26\n").(*Route)
 	if got := canon(r.MemberOf); !reflect.DeepEqual(got, []string{"RS-A", "RS-B"}) {
 		t.Errorf("route MemberOf = %q, want [RS-A RS-B]", got)
 	}
 	if len(r.Holes) != 2 || r.Holes[1].String() != "192.0.2.128/26" {
 		t.Errorf("route Holes = %v, want 2 holes", r.Holes)
 	}
-	r6 := mustDecode(t, "route6: 2001:db8::/32\norigin: AS1\nmember-of: RS-A, RS-B\nholes: 2001:db8::/48, 2001:db8:1::/48\n").(Route6)
+	r6 := mustDecode(t, "route6: 2001:db8::/32\norigin: AS1\nmember-of: RS-A, RS-B\nholes: 2001:db8::/48, 2001:db8:1::/48\n").(*Route6)
 	if got := canon(r6.MemberOf); !reflect.DeepEqual(got, []string{"RS-A", "RS-B"}) || len(r6.Holes) != 2 {
 		t.Errorf("route6 MemberOf = %q, Holes = %v", got, r6.Holes)
 	}
-	ir := mustDecode(t, "inet-rtr: r.example\nmember-of: RTRS-A, RTRS-B\n").(InetRtr)
+	ir := mustDecode(t, "inet-rtr: r.example\nmember-of: RTRS-A, RTRS-B\n").(*InetRtr)
 	if got := canon(ir.MemberOf); !reflect.DeepEqual(got, []string{"RTRS-A", "RTRS-B"}) {
 		t.Errorf("inet-rtr MemberOf = %q, want [RTRS-A RTRS-B]", got)
 	}
-	rs := mustDecode(t, "rtr-set: RTRS-X\nmembers: r1.example, RTRS-Y\nmp-members: 2001:db8::1, r2.example\n").(RtrSet)
+	rs := mustDecode(t, "rtr-set: RTRS-X\nmembers: r1.example, RTRS-Y\nmp-members: 2001:db8::1, r2.example\n").(*RtrSet)
 	if !reflect.DeepEqual(rawOf(rs.Members), []string{"r1.example", "RTRS-Y"}) ||
 		!reflect.DeepEqual(rawOf(rs.MpMembers), []string{"2001:db8::1", "r2.example"}) {
 		t.Errorf("rtr-set Members = %q, MpMembers = %q", rs.Members, rs.MpMembers)

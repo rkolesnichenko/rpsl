@@ -73,12 +73,12 @@ func TestClaimAllowed(t *testing.T) {
 		{"set without a source", claimant, "RS-Y", "", []string{"ANY"}, false},
 	}
 	for _, c := range cases {
-		set := object.RouteSet{Name: mustSet(t, c.set), MbrsByRef: c.refs, Common: object.Common{Source: c.source}}
+		set := &object.RouteSet{Name: mustSet(t, c.set), MbrsByRef: c.refs, Common: object.Common{Source: c.source}}
 		if got := ClaimAllowed(c.obj, set); got != c.want {
 			t.Errorf("%s: ClaimAllowed = %v, want %v", c.name, got, c.want)
 		}
 	}
-	if ClaimAllowed(nil, object.RouteSet{}) || ClaimAllowed(claimant, nil) {
+	if ClaimAllowed(nil, &object.RouteSet{}) || ClaimAllowed(claimant, nil) {
 		t.Error("ClaimAllowed with a nil object or set = true, want false")
 	}
 }

@@ -22,7 +22,7 @@ mp-export:  afi ipv6.unicast to AS3 announce AS1
 export:     to AS4 announce AS1
 mp-default: to AS3
 default:    to AS2
-`).(AutNum)
+`).(*AutNum)
 
 	peer := func(e policy.Expr) uint32 {
 		return uint32(e.(policy.Factor).Peers[0].Peering.(policy.PeeringAS).AS.(policy.ASNum).AS)

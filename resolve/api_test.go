@@ -14,17 +14,17 @@ import (
 )
 
 // A custom Source may build typed objects itself, with no source text
-// (Raw() == nil), and as values or pointers. Claims on them are checked through
-// their typed fields, and nothing panics.
+// (Raw() == nil). Claims on them are checked through their typed fields, and
+// nothing panics.
 func TestSynthesizedAndPointerObjects(t *testing.T) {
 	set := mustSet(t, "AS-P")
 	common := object.Common{MntBy: []string{"MNT-X"}, Source: "TEST"}
 	objs := []object.Object{
-		object.AsSet{Name: set, Members: []object.SetMember{{Kind: object.MemberAS, AS: 1}},
+		&object.AsSet{Name: set, Members: []object.SetMember{{Kind: object.MemberAS, AS: 1}},
 			MbrsByRef: []string{"MNT-X"}, Common: object.Common{Source: "TEST"}},
-		object.AutNum{AS: 5, MemberOf: []types.SetName{set}, Common: common},
+		&object.AutNum{AS: 5, MemberOf: []types.SetName{set}, Common: common},
 		&object.AutNum{AS: 6, MemberOf: []types.SetName{set}, Common: common},
-		object.AutNum{AS: 7, MemberOf: []types.SetName{set}, Common: object.Common{MntBy: []string{"MNT-EVIL"}, Source: "TEST"}},
+		&object.AutNum{AS: 7, MemberOf: []types.SetName{set}, Common: object.Common{MntBy: []string{"MNT-EVIL"}, Source: "TEST"}},
 	}
 	got, err := (&Expander{Src: NewMemSource(objs)}).ExpandAS(context.Background(), types.Ref(set))
 	if err != nil || !reflect.DeepEqual(asnList(got), []uint32{1, 5, 6}) {

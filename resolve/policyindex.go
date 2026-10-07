@@ -37,7 +37,7 @@ var _ PolicyIndex = (*MemSource)(nil)
 // peerings name directly (an ASNum anywhere in a PeeringAS's AS expression,
 // either side of OR, AND and EXCEPT), ascending, without an's own AS. It is
 // never nil, so a caller can tell "names nothing" from "not computed".
-func peeringASNs(an object.AutNum) []types.ASN {
+func peeringASNs(an *object.AutNum) []types.ASN {
 	out := []types.ASN{}
 	var asExpr func(policy.ASExpr)
 	asExpr = func(e policy.ASExpr) {
@@ -92,7 +92,7 @@ func peeringASNs(an object.AutNum) []types.ASN {
 func namedFromText(text string) []types.ASN {
 	raw, _ := rpsl.ParseObject(text)
 	o, _ := object.Decode(raw)
-	if an, ok := value(o).(object.AutNum); ok {
+	if an, ok := o.(*object.AutNum); ok {
 		return peeringASNs(an)
 	}
 	return []types.ASN{}
@@ -137,7 +137,7 @@ func (s *MemSource) buildIndex() {
 		}
 		named := e.named
 		if named == nil {
-			if an, ok := value(e.obj).(object.AutNum); ok {
+			if an, ok := e.obj.(*object.AutNum); ok {
 				named = peeringASNs(an)
 			} else if e.text != "" {
 				named = namedFromText(e.text)

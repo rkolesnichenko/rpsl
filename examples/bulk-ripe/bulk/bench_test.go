@@ -89,12 +89,12 @@ func BenchmarkRealDataExpand(b *testing.B) {
 	ctx := context.Background()
 	realExpansion.once.Do(func() {
 		var objs []object.Object
-		var sets []object.AsSet
+		var sets []*object.AsSet
 		for _, data := range dumps {
 			for o := range rpsl.Parse(bytes.NewReader(data)) {
 				d, _ := rpsl.Decode(o)
 				objs = append(objs, d)
-				if s, ok := d.(object.AsSet); ok {
+				if s, ok := d.(*object.AsSet); ok {
 					sets = append(sets, s)
 				}
 			}

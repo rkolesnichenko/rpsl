@@ -28,9 +28,9 @@ func (snap *Snapshot) routeVisible(r *Registry, p netip.Prefix, origin types.ASN
 // (claimants) and RFC mode (multiSource) both filter with it.
 func (snap *Snapshot) claimVisible(r *Registry, o object.Object) bool {
 	switch t := o.(type) {
-	case object.Route:
+	case *object.Route:
 		return snap.routeVisible(r, t.Prefix, t.Origin)
-	case object.Route6:
+	case *object.Route6:
 		return snap.routeVisible(r, t.Prefix, t.Origin)
 	}
 	return true

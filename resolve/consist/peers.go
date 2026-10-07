@@ -199,6 +199,9 @@ type peerInfo struct {
 func (c *Checker) peers(ctx context.Context, as types.ASN) (PeerList, peerInfo, error) {
 	ev := c.eval()
 	an, err := ev.Src.AutNum(ctx, as, ev.Source)
+	if err == nil && an == nil { // the PolicySource contract: nil is not found
+		err = fmt.Errorf("resolve: aut-num %s: %w", as, resolve.ErrNotFound)
+	}
 	if err != nil {
 		return PeerList{}, peerInfo{}, fmt.Errorf("consist: %w", err)
 	}
@@ -308,7 +311,7 @@ func (c *Checker) peers(ctx context.Context, as types.ASN) (PeerList, peerInfo, 
 
 // policyPeerings returns every peering of an's import, export and default
 // attributes, in document order.
-func policyPeerings(an object.AutNum) []policy.Peering {
+func policyPeerings(an *object.AutNum) []policy.Peering {
 	var out []policy.Peering
 	for _, ex := range append(importExprs(an), exportExprs(an)...) {
 		out = append(out, exprPeerings(ex)...)
@@ -319,7 +322,7 @@ func policyPeerings(an object.AutNum) []policy.Peering {
 	return out
 }
 
-func importExprs(an object.AutNum) []policy.Expr {
+func importExprs(an *object.AutNum) []policy.Expr {
 	out := make([]policy.Expr, len(an.Imports))
 	for i, x := range an.Imports {
 		out[i] = x.Expr
@@ -327,7 +330,7 @@ func importExprs(an object.AutNum) []policy.Expr {
 	return out
 }
 
-func exportExprs(an object.AutNum) []policy.Expr {
+func exportExprs(an *object.AutNum) []policy.Expr {
 	out := make([]policy.Expr, len(an.Exports))
 	for i, x := range an.Exports {
 		out[i] = x.Expr

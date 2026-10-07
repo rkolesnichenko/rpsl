@@ -13,83 +13,86 @@ import (
 // The tests in this file compare parsed ASTs against hand-written renderings
 // (see renderExpr and friends) so every expectation is an independent literal.
 
+// grammarCases are TestPolicyGrammar's rows, also read by policyInputs.
+var grammarCases = []struct {
+	name     string
+	parse    func(string) (Import, []ast.Diagnostic)
+	in, want string
+}{
+	// Structured policy (RFC 2622 §6.6): the factor-terminating ';' before
+	// except/refine, and right-to-left evaluation.
+	{"rfc2622-6.6-example", ParseImport,
+		"from AS1 action pref = 1; accept as-foo; except { from AS2 action pref = 2; accept AS226; " +
+			"except { from AS3 action pref = 3; accept {128.9.0.0/16}; } }",
+		"except(F[AS1{pref} : AS-FOO], {except(F[AS2{pref} : AS226], {F[AS3{pref} : {128.9.0.0/16}]})})"},
+	{"right-assoc", ParseImport,
+		"from AS1 accept ANY except {from AS2 accept AS2} refine {from AS3 accept AS3}",
+		"except(F[AS1 : ANY], refine({F[AS2 : AS2]}, {F[AS3 : AS3]}))"},
+	{"rfc4012-afi-except", mpImport,
+		"afi any.unicast from AS1 accept ANY; except afi ipv6.unicast { from AS2 accept AS2; }",
+		"except[ipv6.unicast](F[AS1 : ANY], {F[AS2 : AS2]})"},
+	{"brace-list", ParseImport, "{ from AS1 accept AS1; from AS2 accept AS2 }", "{F[AS1 : AS1]; F[AS2 : AS2]}"},
+	{"trailing-semicolon", ParseImport, "from AS1 accept ANY;", "F[AS1 : ANY]"},
+	{"multi-peering", ParseImport, "from AS1 action pref=100; from AS2 accept AS-FOO", "F[AS1{pref}; AS2 : AS-FOO]"},
+
+	// Implicit OR (RFC 2622 §5.4): "x y" is "x OR y", at OR precedence.
+	{"implicit-or", ParseImport, "from AS1 accept AS226 AS227 OR AS228", "F[AS1 : or(AS226 AS227 AS228)]"},
+	{"implicit-or-vs-and", ParseImport, "from AS1 accept AS1 AS2 AND AS3", "F[AS1 : or(AS1 and(AS2 AS3))]"},
+	{"implicit-or-parens", ParseImport, "from AS1 accept (AS1 AS2)", "F[AS1 : or(AS1 AS2)]"},
+	{"implicit-or-not", ParseImport, "from AS1 accept NOT (AS20965 AS1299)", "F[AS1 : not(or(AS20965 AS1299))]"},
+	{"implicit-or-prefixes", ParseImport, "from AS1 accept ANY {0.0.0.0/0^25-32}", "F[AS1 : or(ANY {0.0.0.0/0^25-32})]"},
+	{"explicit-precedence", ParseImport, "from AS1 accept AS1 AND AS2 OR AS3", "F[AS1 : or(and(AS1 AS2) AS3)]"},
+	// A term followed by '(' is an implicit OR with a group, never a method call.
+	{"implicit-or-group", ParseImport, "from AS1 accept AS1 (AS2 OR AS3)", "F[AS1 : or(AS1 or(AS2 AS3))]"},
+	{"implicit-or-set-group", ParseImport, "from AS1 accept AS-FOO (AS1)", "F[AS1 : or(AS-FOO AS1)]"},
+	{"implicit-or-peeras-group", ParseImport, "from AS1 accept PeerAS (AS2)", "F[AS1 : or(PeerAS AS2)]"},
+	{"implicit-or-asdot-group", ParseImport, "from AS1 accept AS1.10 (AS2)", "F[AS1 : or(AS65546 AS2)]"},
+	{"ripe-filter-set", ParseImport,
+		"from AS1 accept AS25229:AS-CUST AS25229:RS-DOMESTIC (AS-PACO-TO-UAIX AND <^AS8207>) (AS-SET-DCS AND <^AS35412>)",
+		"F[AS1 : or(AS25229:AS-CUST AS25229:RS-DOMESTIC and(AS-PACO-TO-UAIX <seq(^ AS8207)>) " +
+			"and(AS-SET-DCS <seq(^ AS35412)>))]"},
+	// The filter methods of RFC 2622 §7: community(...) and community.contains(...).
+	{"community", ParseImport, "from AS1 accept community(65000:1) AND AS1",
+		"F[AS1 : and(community(65000:1) AS1)]"},
+	{"community-contains", ParseImport, "from AS1 accept NOT Community.contains(65000:1, 65000:2)",
+		"F[AS1 : not(Community.contains(65000:1, 65000:2))]"},
+
+	// Range operators on filter terms (RFC 2622 §5.4) and prefix-list
+	// composition (RFC 2622 §5.2 examples).
+	{"op-as-set", ParseImport, "from AS1 accept AS-FOO^+", "F[AS1 : AS-FOO^+]"},
+	{"op-mixed", ParseImport, "from AS1 accept RS-X^24 OR AS1^- OR PeerAS^0-32",
+		"F[AS1 : or(RS-X^24 AS1^- PeerAS^0-32)]"},
+	{"op-prefix-list", ParseImport, "from AS1 accept {10.0.0.0/8, 11.0.0.0/8}^+",
+		"F[AS1 : {10.0.0.0/8^+, 11.0.0.0/8^+}]"},
+	{"op-compose-range", ParseImport, "from AS1 accept {128.9.0.0/16^20-24}^26-28", "F[AS1 : {128.9.0.0/16^26-28}]"},
+	{"op-compose-minus", ParseImport, "from AS1 accept {128.9.0.0/16^+}^-", "F[AS1 : {128.9.0.0/16^-}]"},
+	// {10.0.0.0/8^24}^16, which deletes the range, is in TestPrefixListOpEmptyWarns.
+
+	// PeerAS inside set names (decision 1).
+	{"tpl-filter", ParseImport, "from AS8821:AS-CUSTOMERS accept AS8821:AS-CUSTOMERS:PeerAS",
+		"F[AS8821:AS-CUSTOMERS : tpl:AS8821:AS-CUSTOMERS:PeerAS]"},
+	{"tpl-filter-op", ParseImport, "from AS1 accept PeerAS:AS-TO-GRNET^0-32", "F[AS1 : tpl:PeerAS:AS-TO-GRNET^0-32]"},
+	{"tpl-route-set", ParseImport, "from AS1 accept AS1:RS-X:PeerAS", "F[AS1 : settpl:AS1:RS-X:PeerAS]"},
+	{"tpl-peering", ParseImport, "from AS-ARAX:AS-TRANSIT:PeerAS accept ANY", "F[tpl:AS-ARAX:AS-TRANSIT:PeerAS : ANY]"},
+	{"tpl-regexp", ParseImport, "from AS1 accept <AS8726:AS-PEERING:PeerAS$>",
+		"F[AS1 : <seq(tpl:AS8726:AS-PEERING:PeerAS $)>]"},
+
+	// Peering AS-expressions (RFC 2622 §5.6): EXCEPT binds like AND, OR lowest.
+	{"as-and", ParseImport, "from AS-FOO AND AS2 accept ANY", "F[and(AS-FOO AS2) : ANY]"},
+	{"as-parens-lower", ParseImport, "from (AS42 or AS3856) action pref=100; accept AS-PCH",
+		"F[or(AS42 AS3856){pref} : AS-PCH]"},
+	{"as-precedence", ParseImport, "from AS1 OR AS2 AND AS3 accept ANY", "F[or(AS1 and(AS2 AS3)) : ANY]"},
+	{"as-except-precedence", ParseImport, "from AS1 EXCEPT AS2 OR AS3 accept ANY", "F[or(except(AS1 AS2) AS3) : ANY]"},
+	{"as-except", ParseImport, "from AS-FOO EXCEPT AS3 accept ANY", "F[except(AS-FOO AS3) : ANY]"},
+	{"routers", ParseImport, "from AS1 192.0.2.1 at 192.0.2.2 accept ANY", "F[AS1 192.0.2.1 at 192.0.2.2 : ANY]"},
+	{"router-exprs", ParseImport, "from AS1 rtrs-a AND rtrs-b at 1.1.1.1 EXCEPT 1.1.1.2 accept ANY",
+		"F[AS1 and(RTRS-A RTRS-B) at except(1.1.1.1 1.1.1.2) : ANY]"},
+	{"at-only", ParseImport, "from AS1 at rtrs-foo accept ANY", "F[AS1 at RTRS-FOO : ANY]"},
+	{"peering-set", ParseImport, "from prng-foo accept ANY", "F[PRNG-FOO : ANY]"},
+}
+
 func TestPolicyGrammar(t *testing.T) {
-	cases := []struct {
-		name     string
-		parse    func(string) (Import, []ast.Diagnostic)
-		in, want string
-	}{
-		// Structured policy (RFC 2622 §6.6): the factor-terminating ';' before
-		// except/refine, and right-to-left evaluation.
-		{"rfc2622-6.6-example", ParseImport,
-			"from AS1 action pref = 1; accept as-foo; except { from AS2 action pref = 2; accept AS226; " +
-				"except { from AS3 action pref = 3; accept {128.9.0.0/16}; } }",
-			"except(F[AS1{pref} : AS-FOO], {except(F[AS2{pref} : AS226], {F[AS3{pref} : {128.9.0.0/16}]})})"},
-		{"right-assoc", ParseImport,
-			"from AS1 accept ANY except {from AS2 accept AS2} refine {from AS3 accept AS3}",
-			"except(F[AS1 : ANY], refine({F[AS2 : AS2]}, {F[AS3 : AS3]}))"},
-		{"rfc4012-afi-except", ParseMPImport,
-			"afi any.unicast from AS1 accept ANY; except afi ipv6.unicast { from AS2 accept AS2; }",
-			"except[ipv6.unicast](F[AS1 : ANY], {F[AS2 : AS2]})"},
-		{"brace-list", ParseImport, "{ from AS1 accept AS1; from AS2 accept AS2 }", "{F[AS1 : AS1]; F[AS2 : AS2]}"},
-		{"trailing-semicolon", ParseImport, "from AS1 accept ANY;", "F[AS1 : ANY]"},
-		{"multi-peering", ParseImport, "from AS1 action pref=100; from AS2 accept AS-FOO", "F[AS1{pref}; AS2 : AS-FOO]"},
-
-		// Implicit OR (RFC 2622 §5.4): "x y" is "x OR y", at OR precedence.
-		{"implicit-or", ParseImport, "from AS1 accept AS226 AS227 OR AS228", "F[AS1 : or(AS226 AS227 AS228)]"},
-		{"implicit-or-vs-and", ParseImport, "from AS1 accept AS1 AS2 AND AS3", "F[AS1 : or(AS1 and(AS2 AS3))]"},
-		{"implicit-or-parens", ParseImport, "from AS1 accept (AS1 AS2)", "F[AS1 : or(AS1 AS2)]"},
-		{"implicit-or-not", ParseImport, "from AS1 accept NOT (AS20965 AS1299)", "F[AS1 : not(or(AS20965 AS1299))]"},
-		{"implicit-or-prefixes", ParseImport, "from AS1 accept ANY {0.0.0.0/0^25-32}", "F[AS1 : or(ANY {0.0.0.0/0^25-32})]"},
-		{"explicit-precedence", ParseImport, "from AS1 accept AS1 AND AS2 OR AS3", "F[AS1 : or(and(AS1 AS2) AS3)]"},
-		// A term followed by '(' is an implicit OR with a group, never a method call.
-		{"implicit-or-group", ParseImport, "from AS1 accept AS1 (AS2 OR AS3)", "F[AS1 : or(AS1 or(AS2 AS3))]"},
-		{"implicit-or-set-group", ParseImport, "from AS1 accept AS-FOO (AS1)", "F[AS1 : or(AS-FOO AS1)]"},
-		{"implicit-or-peeras-group", ParseImport, "from AS1 accept PeerAS (AS2)", "F[AS1 : or(PeerAS AS2)]"},
-		{"implicit-or-asdot-group", ParseImport, "from AS1 accept AS1.10 (AS2)", "F[AS1 : or(AS65546 AS2)]"},
-		{"ripe-filter-set", ParseImport,
-			"from AS1 accept AS25229:AS-CUST AS25229:RS-DOMESTIC (AS-PACO-TO-UAIX AND <^AS8207>) (AS-SET-DCS AND <^AS35412>)",
-			"F[AS1 : or(AS25229:AS-CUST AS25229:RS-DOMESTIC and(AS-PACO-TO-UAIX <seq(^ AS8207)>) " +
-				"and(AS-SET-DCS <seq(^ AS35412)>))]"},
-		// The filter methods of RFC 2622 §7: community(...) and community.contains(...).
-		{"community", ParseImport, "from AS1 accept community(65000:1) AND AS1",
-			"F[AS1 : and(community(65000:1) AS1)]"},
-		{"community-contains", ParseImport, "from AS1 accept NOT Community.contains(65000:1, 65000:2)",
-			"F[AS1 : not(Community.contains(65000:1, 65000:2))]"},
-
-		// Range operators on filter terms (RFC 2622 §5.4) and prefix-list
-		// composition (RFC 2622 §5.2 examples).
-		{"op-as-set", ParseImport, "from AS1 accept AS-FOO^+", "F[AS1 : AS-FOO^+]"},
-		{"op-mixed", ParseImport, "from AS1 accept RS-X^24 OR AS1^- OR PeerAS^0-32",
-			"F[AS1 : or(RS-X^24 AS1^- PeerAS^0-32)]"},
-		{"op-prefix-list", ParseImport, "from AS1 accept {10.0.0.0/8, 11.0.0.0/8}^+",
-			"F[AS1 : {10.0.0.0/8^+, 11.0.0.0/8^+}]"},
-		{"op-compose-range", ParseImport, "from AS1 accept {128.9.0.0/16^20-24}^26-28", "F[AS1 : {128.9.0.0/16^26-28}]"},
-		{"op-compose-minus", ParseImport, "from AS1 accept {128.9.0.0/16^+}^-", "F[AS1 : {128.9.0.0/16^-}]"},
-		// {10.0.0.0/8^24}^16, which deletes the range, is in TestPrefixListOpEmptyWarns.
-
-		// PeerAS inside set names (decision 1).
-		{"tpl-filter", ParseImport, "from AS8821:AS-CUSTOMERS accept AS8821:AS-CUSTOMERS:PeerAS",
-			"F[AS8821:AS-CUSTOMERS : tpl:AS8821:AS-CUSTOMERS:PeerAS]"},
-		{"tpl-filter-op", ParseImport, "from AS1 accept PeerAS:AS-TO-GRNET^0-32", "F[AS1 : tpl:PeerAS:AS-TO-GRNET^0-32]"},
-		{"tpl-route-set", ParseImport, "from AS1 accept AS1:RS-X:PeerAS", "F[AS1 : settpl:AS1:RS-X:PeerAS]"},
-		{"tpl-peering", ParseImport, "from AS-ARAX:AS-TRANSIT:PeerAS accept ANY", "F[tpl:AS-ARAX:AS-TRANSIT:PeerAS : ANY]"},
-		{"tpl-regexp", ParseImport, "from AS1 accept <AS8726:AS-PEERING:PeerAS$>",
-			"F[AS1 : <seq(tpl:AS8726:AS-PEERING:PeerAS $)>]"},
-
-		// Peering AS-expressions (RFC 2622 §5.6): EXCEPT binds like AND, OR lowest.
-		{"as-and", ParseImport, "from AS-FOO AND AS2 accept ANY", "F[and(AS-FOO AS2) : ANY]"},
-		{"as-parens-lower", ParseImport, "from (AS42 or AS3856) action pref=100; accept AS-PCH",
-			"F[or(AS42 AS3856){pref} : AS-PCH]"},
-		{"as-precedence", ParseImport, "from AS1 OR AS2 AND AS3 accept ANY", "F[or(AS1 and(AS2 AS3)) : ANY]"},
-		{"as-except-precedence", ParseImport, "from AS1 EXCEPT AS2 OR AS3 accept ANY", "F[or(except(AS1 AS2) AS3) : ANY]"},
-		{"as-except", ParseImport, "from AS-FOO EXCEPT AS3 accept ANY", "F[except(AS-FOO AS3) : ANY]"},
-		{"routers", ParseImport, "from AS1 192.0.2.1 at 192.0.2.2 accept ANY", "F[AS1 192.0.2.1 at 192.0.2.2 : ANY]"},
-		{"router-exprs", ParseImport, "from AS1 rtrs-a AND rtrs-b at 1.1.1.1 EXCEPT 1.1.1.2 accept ANY",
-			"F[AS1 and(RTRS-A RTRS-B) at except(1.1.1.1 1.1.1.2) : ANY]"},
-		{"at-only", ParseImport, "from AS1 at rtrs-foo accept ANY", "F[AS1 at RTRS-FOO : ANY]"},
-		{"peering-set", ParseImport, "from prng-foo accept ANY", "F[PRNG-FOO : ANY]"},
-	}
+	cases := grammarCases
 	for _, c := range cases {
 		imp, diags := c.parse(c.in)
 		if len(diags) != 0 {
@@ -125,7 +128,7 @@ func TestPolicyDiagnosesUnparsedInput(t *testing.T) {
 		{"no-filter", imp("from AS1"), []string{"policy/expect-filter"}},
 		{"empty", imp(""), []string{"policy/empty"}},
 		{"no-peering", imp("accept ANY"), []string{"policy/expect-peering"}},
-		{"empty-afi", func() []ast.Diagnostic { _, d := ParseMPImport("afi from AS1 accept ANY"); return d },
+		{"empty-afi", func() []ast.Diagnostic { _, d := mpImport("afi from AS1 accept ANY"); return d },
 			[]string{"policy/afi"}},
 		{"dangling-except", imp("from AS1 accept ANY except"), []string{"policy/expect-peering"}},
 		{"bad-range-op", imp("from AS1 accept AS-FOO^+24"), []string{"policy/range-op"}},

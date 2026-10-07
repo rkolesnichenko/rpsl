@@ -15,7 +15,7 @@ import (
 // Database is what authorising an update looks up in the registry being
 // updated: its maintainers, and the objects an update's permission comes from.
 // It holds one IRR source — maintainer names are unique only within one — and
-// its objects are values as object.Decode returns them.
+// its objects are typed, as object.Decode returns them.
 //
 // It is the authorisation model's I/O, injected as resolve.Source injects the
 // expansion engine's: a registry implements it over its store, and MemDatabase
@@ -23,12 +23,15 @@ import (
 type Database interface {
 	Registry // Mntner(ctx, name)
 
-	// Current returns the stored object of o's class with o's primary key, or
-	// an error wrapping ErrNotFound.
+	// Current returns the stored object of o's class with o's primary key,
+	// non-nil, or nil and an error wrapping ErrNotFound. A nil object, or a
+	// typed nil, with a nil error is treated as ErrNotFound.
 	Current(ctx context.Context, o object.Object) (object.Object, error)
 
 	// Object returns the object of class with primary key key, compared as
-	// RPSL compares keys, or an error wrapping ErrNotFound.
+	// RPSL compares keys, non-nil, or nil and an error wrapping ErrNotFound.
+	// A nil object, or a typed nil, with a nil error is treated as
+	// ErrNotFound.
 	Object(ctx context.Context, class, key string) (object.Object, error)
 
 	// Covering returns the objects of class — inetnum, inet6num, route or
@@ -37,7 +40,7 @@ type Database interface {
 	Covering(ctx context.Context, class string, lo, hi netip.Addr) ([]object.Object, error)
 
 	// ASBlocks returns the as-blocks that hold as, most specific first.
-	ASBlocks(ctx context.Context, as types.ASN) ([]object.AsBlock, error)
+	ASBlocks(ctx context.Context, as types.ASN) ([]*object.AsBlock, error)
 }
 
 // ErrNotFound reports an object the registry does not have.
@@ -51,7 +54,7 @@ var ErrNotFound = errors.New("auth: not in the registry")
 type MemDatabase struct {
 	objects map[string]object.Object // class + "\x00" + primary key
 	spaces  map[string][]spaceEntry  // class -> address-space objects
-	blocks  []object.AsBlock
+	blocks  []*object.AsBlock
 }
 
 type spaceEntry struct {
@@ -76,7 +79,7 @@ func NewMemDatabase(objs []object.Object) *MemDatabase {
 		if lo, hi, ok := addressRange(o); ok {
 			db.spaces[class] = append(db.spaces[class], spaceEntry{lo, hi, o})
 		}
-		if b, ok := o.(object.AsBlock); ok {
+		if b, ok := o.(*object.AsBlock); ok {
 			db.blocks = append(db.blocks, b)
 		}
 	}
@@ -84,12 +87,12 @@ func NewMemDatabase(objs []object.Object) *MemDatabase {
 }
 
 // Mntner returns the named maintainer, or an error wrapping ErrNoMntner.
-func (db *MemDatabase) Mntner(_ context.Context, name string) (object.Mntner, error) {
+func (db *MemDatabase) Mntner(_ context.Context, name string) (*object.Mntner, error) {
 	o, ok := db.objects["mntner\x00"+normalKey("mntner", name)]
-	if m, isMntner := o.(object.Mntner); ok && isMntner {
+	if m, isMntner := o.(*object.Mntner); ok && isMntner {
 		return m, nil
 	}
-	return object.Mntner{}, fmt.Errorf("%w: %s", ErrNoMntner, name)
+	return nil, fmt.Errorf("%w: %s", ErrNoMntner, name)
 }
 
 // Current returns the stored object with o's class and primary key.
@@ -137,8 +140,8 @@ func (db *MemDatabase) Covering(_ context.Context, class string, lo, hi netip.Ad
 }
 
 // ASBlocks returns the as-blocks holding as, most specific first.
-func (db *MemDatabase) ASBlocks(_ context.Context, as types.ASN) ([]object.AsBlock, error) {
-	var out []object.AsBlock
+func (db *MemDatabase) ASBlocks(_ context.Context, as types.ASN) ([]*object.AsBlock, error) {
+	var out []*object.AsBlock
 	for _, b := range db.blocks {
 		if b.Lo <= as && as <= b.Hi {
 			out = append(out, b)
@@ -153,34 +156,34 @@ func (db *MemDatabase) ASBlocks(_ context.Context, as types.ASN) ([]object.AsBlo
 // origin together, as in the RIPE Database and IRRd.
 func primaryKey(o object.Object) (class, key string, ok bool) {
 	switch t := o.(type) {
-	case object.Route:
+	case *object.Route:
 		if !t.Prefix.IsValid() {
 			return "", "", false
 		}
 		return "route", t.Prefix.Masked().String() + t.Origin.String(), true
-	case object.Route6:
+	case *object.Route6:
 		if !t.Prefix.IsValid() {
 			return "", "", false
 		}
 		return "route6", t.Prefix.Masked().String() + t.Origin.String(), true
-	case object.Inetnum:
+	case *object.Inetnum:
 		if !t.Lo.IsValid() || !t.Hi.IsValid() {
 			return "", "", false
 		}
 		return "inetnum", t.Lo.String() + " - " + t.Hi.String(), true
-	case object.Inet6num:
+	case *object.Inet6num:
 		if !t.Prefix.IsValid() {
 			return "", "", false
 		}
 		return "inet6num", t.Prefix.Masked().String(), true
-	case object.AsBlock:
+	case *object.AsBlock:
 		return "as-block", t.Lo.String() + " - " + t.Hi.String(), true
-	case object.Person: // a person or role is known by its nic-hdl, not its name
+	case *object.Person: // a person or role is known by its nic-hdl, not its name
 		if h := t.NicHdl.String(); h != "" {
 			return "person", strings.ToUpper(h), true
 		}
 		return "", "", false
-	case object.Role:
+	case *object.Role:
 		if h := t.NicHdl.String(); h != "" {
 			return "role", strings.ToUpper(h), true
 		}
@@ -217,13 +220,13 @@ func normalKey(class, key string) string {
 // addressRange returns the addresses an address-space object holds.
 func addressRange(o object.Object) (lo, hi netip.Addr, ok bool) {
 	switch t := o.(type) {
-	case object.Inetnum:
+	case *object.Inetnum:
 		return t.Lo, t.Hi, t.Lo.IsValid() && t.Hi.IsValid()
-	case object.Inet6num:
+	case *object.Inet6num:
 		return prefixRange(t.Prefix)
-	case object.Route:
+	case *object.Route:
 		return prefixRange(t.Prefix)
-	case object.Route6:
+	case *object.Route6:
 		return prefixRange(t.Prefix)
 	}
 	return netip.Addr{}, netip.Addr{}, false

@@ -6,8 +6,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/rkolesnichenko/rpsl/ast"
-	"github.com/rkolesnichenko/rpsl/lexer"
 	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/types"
 )
@@ -26,7 +24,9 @@ import (
 //
 // The zero value is empty and ready to use. A Corpus is not safe for
 // concurrent mutation; a MemSource built from it (Source, SourceOf) is
-// immutable and unaffected by later changes.
+// unaffected by later changes to the corpus (Put, Delete, Merge). Neither
+// changes the objects it holds, but those objects are shared, not copied: see
+// Put.
 type Corpus struct {
 	// KeepPolicy keeps every aut-num and inet-rtr, as its text, so that a
 	// MemSource built from the corpus is a PolicySource that serves them (an
@@ -86,9 +86,13 @@ func (c *Corpus) keepPolicy() bool { return c.KeepPolicy || c.IndexPeers }
 // Put keeps what the engine needs of o, replacing any object with its class,
 // primary key and source. It reports whether anything of o is kept; when
 // nothing is, an earlier object with its identity is still removed.
+//
+// An object kept whole is kept as the pointer o, not a copy, and Whole and a
+// MemSource built from the corpus hand that same pointer to every caller. The
+// caller must not modify o after Put, and no one may modify an object a
+// lookup returns.
 func (c *Corpus) Put(o object.Object) bool {
-	o = value(o)
-	if o == nil {
+	if isNil(o) {
 		return false
 	}
 	c.init()
@@ -101,16 +105,16 @@ func (c *Corpus) Put(o object.Object) bool {
 	memberOf, _, _, claims := claimant(o)
 	var class, pk, source string
 	switch t := o.(type) {
-	case object.Route:
+	case *object.Route:
 		class, source = "route", t.Source
-	case object.Route6:
+	case *object.Route6:
 		class, source = "route6", t.Source
-	case object.AutNum:
+	case *object.AutNum:
 		if !claims {
 			return false // its AS did not decode: no key, and nothing the engine reads
 		}
 		class, pk, source = "aut-num", t.AS.String(), t.Source
-	case object.InetRtr:
+	case *object.InetRtr:
 		class, pk, source = "inet-rtr", strings.ToUpper(strings.TrimSpace(t.Name)), t.Source
 	default:
 		return false
@@ -141,10 +145,10 @@ func (c *Corpus) Put(o object.Object) bool {
 	if c.keepPolicy() && (class == "aut-num" || class == "inet-rtr") {
 		if raw := o.Raw(); raw != nil {
 			var named []types.ASN
-			if an, ok := o.(object.AutNum); ok && c.IndexPeers {
+			if an, ok := o.(*object.AutNum); ok && c.IndexPeers {
 				named = peeringASNs(an)
 			}
-			c.putText(k, ObjectText(raw), named)
+			c.putText(k, raw.Text(), named)
 		} else {
 			c.putWhole(k, o) // built by hand: no text to keep
 		}
@@ -172,7 +176,7 @@ func (c *Corpus) keepText(rk routeKey, o object.Object) {
 	if c.routeText == nil {
 		c.routeText = map[routeKey]string{}
 	}
-	c.routeText[rk] = strings.Clone(ObjectText(raw))
+	c.routeText[rk] = strings.Clone(raw.Text())
 }
 
 // rawRouteKey is the identity of a route whose prefix or origin did not
@@ -208,69 +212,6 @@ func (c *Corpus) putWhole(k wholeKey, o object.Object) {
 	}
 	c.seq++
 	c.whole[k] = held{obj: o, key: k, seq: c.seq}
-}
-
-// ObjectText returns raw's serialized text starting at its first attribute
-// line, dropping the blank, comment and malformed lines the stream attached
-// before the object (ast.Object owns them so the *stream's* own round-trip
-// stays byte-exact; see rpsl.ParseWith). A Corpus entry kept as text is later
-// re-decoded on its own (rpsl.ParseObject, in MemSource.AutNum/InetRtr), so
-// keeping that leading trivia would shift every attribute's re-decoded line
-// by the trivia's own line count.
-//
-// The scan uses the same line rule the streamer itself splits objects by
-// (lexer.StartsAttribute — a blank line, a comment, and a malformed line all
-// fail it and are trivia the stream can attach ahead of an object), not a
-// content search: a leading comment can quote the object's first line
-// verbatim ("# aut-num: AS1" followed by the real "aut-num: AS1"), which a
-// strings.Index on the attribute's raw bytes would match inside the comment
-// itself, understating how much trivia to drop.
-//
-// The text ends with the object's last attribute or continuation line: the
-// stream also attaches to the last object of a dump the blank, comment and
-// malformed lines after it (a dump's closing comment, ARIN's "EOF"), which
-// are no more the object's than the ones before it, so trailing blank,
-// comment and malformed lines are dropped. Lines are read as the lexer reads
-// them: one led by a space, a tab or '+' continues an attribute only right
-// after an attribute or continuation line, and after a blank, comment or
-// malformed line it is malformed. Any line between the first and the last
-// attribute line stays — a comment, or a blank line in an object parsed on
-// its own (rpsl.ParseObject keeps the attributes after it).
-//
-// It is exported for servers that answer with an object as its registry
-// published it (resolve/irrdq): the same text a Corpus keeps.
-func ObjectText(raw *ast.Object) string {
-	text := raw.String()
-	start, end := -1, 0
-	inAttr := false // the previous line was an attribute or continuation line
-	for rest, off := text, 0; len(rest) > 0; {
-		line, eol := rest, len(rest)
-		if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
-			line, eol = rest[:nl], nl+1
-		}
-		line = strings.TrimSuffix(line, "\r")
-		switch {
-		case lexer.IsBlankLine(line):
-			inAttr = false // kept only if an attribute line follows
-		case line[0] == ' ' || line[0] == '\t' || line[0] == '+':
-			if inAttr { // a continuation; otherwise malformed (the lexer's classify)
-				end = off + eol
-			}
-		case lexer.StartsAttribute(line):
-			if start < 0 {
-				start = off
-			}
-			end, inAttr = off+eol, true
-		default: // a comment or a malformed line
-			inAttr = false
-		}
-		off += eol
-		rest = rest[eol:]
-	}
-	if start < 0 {
-		return text
-	}
-	return text[start:end]
 }
 
 // putText is putWhole for an object kept as its text.
@@ -474,7 +415,7 @@ func (c *Corpus) Routes() iter.Seq[CorpusRoute] {
 			}
 			var text string
 			if raw := h.obj.Raw(); raw != nil {
-				text = ObjectText(raw)
+				text = raw.Text()
 			}
 			if !yield(CorpusRoute{p, origin, h.key.source, text}) {
 				return

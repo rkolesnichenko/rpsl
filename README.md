@@ -179,7 +179,7 @@ Imports run strictly downward — `resolve → object → policy → types → a
 | --- | --- | --- | --- |
 | `rpsl` | `github.com/rkolesnichenko/rpsl` | Façade: `ParseObject`, `Parse` (streaming), `Decode`, `Validate` (profiles `RIPE`, `IRRd`, `ARIN`, `RFCStrict`) | `object`, `ast`, `lexer` |
 | `object` | `…/rpsl/object` | Typed classes (`AutNum`, `Route`, `AsSet`, …) + `Decode` | `policy`, `types`, `ast` |
-| `policy` | `…/rpsl/policy` | Routing-policy AST + `ParseImport`/`ParseExport`/`ParseDefault` (and `ParseMP*`, `ParseImportVia`/`ParseExportVia`) | `types`, `ast`, `lexer` |
+| `policy` | `…/rpsl/policy` | Routing-policy AST + `ParseImport`/`ParseExport`/`ParseDefault` and their `…With(s, Options{MP, Via, Dict})` forms | `types`, `ast`, `lexer` |
 | `types` | `…/rpsl/types` | Leaf value types: `ASN`, `SetName`, `PrefixRange`, `AddrFamily`, `NICHandle` | — |
 | `ast` | `…/rpsl/ast` | Generic lossless `Object`/`Attribute` model; `Diagnostic`/`Severity` | `lexer` |
 | `lexer` | `…/rpsl/lexer` | Hand-written scanner; total-partition `Tokenize` | — |
@@ -210,7 +210,7 @@ obj, _ := rpsl.ParseObject(src)
 fmt.Println(obj.String() == src) // true — byte-for-byte
 
 decoded, _ := object.Decode(obj)
-an := decoded.(object.AutNum)
+an := decoded.(*object.AutNum)
 fmt.Println(an.AS, an.MntBy) // AS65001 [EXAMPLE-MNT]
 ```
 
@@ -254,11 +254,11 @@ for obj, diags := range rpsl.Parse(reader) {
 ### Typed decode
 
 `object.Decode` upgrades a generic object to its class type via a registry;
-unknown classes degrade to `object.Generic` rather than erroring.
+unknown classes degrade to `*object.Generic` rather than erroring.
 
 ```go
 decoded, diags := object.Decode(obj)
-an := decoded.(object.AutNum)
+an := decoded.(*object.AutNum)
 fmt.Println(an.AS)       // AS65001
 fmt.Println(an.Imports)  // []policy.Import — parsed, not raw strings
 fmt.Println(an.MntBy)    // [EXAMPLE-MNT]

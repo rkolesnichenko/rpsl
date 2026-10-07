@@ -45,10 +45,10 @@ func TestLiveRPKIAgreesWithRADB(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	byState := map[State][]object.Route{}
+	byState := map[State][]*object.Route{}
 	for o := range rpsl.Parse(zr) {
 		obj, _ := object.Decode(o)
-		if r, ok := obj.(object.Route); ok && r.Prefix.IsValid() {
+		if r, ok := obj.(*object.Route); ok && r.Prefix.IsValid() {
 			st := v.Validate(r.Prefix, r.Origin)
 			byState[st] = append(byState[st], r)
 		}
@@ -73,7 +73,7 @@ func TestLiveRPKIAgreesWithRADB(t *testing.T) {
 }
 
 // radbServes reports whether whois.radb.net serves BELL's route object.
-func radbServes(t *testing.T, rt object.Route) bool {
+func radbServes(t *testing.T, rt *object.Route) bool {
 	t.Helper()
 	c, err := net.DialTimeout("tcp", "whois.radb.net:43", 10*time.Second)
 	if err != nil {

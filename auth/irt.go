@@ -20,9 +20,10 @@ import (
 // that a registry written before irt support still satisfies Registry; one
 // type can implement both.
 type IrtRegistry interface {
-	// Irt returns the named irt object, or an error wrapping ErrNoIrt when the
-	// registry has none by that name.
-	Irt(ctx context.Context, name string) (object.Irt, error)
+	// Irt returns the named irt object, non-nil, or nil and an error wrapping
+	// ErrNoIrt when the registry has none by that name. A nil irt with a nil
+	// error is treated as ErrNoIrt.
+	Irt(ctx context.Context, name string) (*object.Irt, error)
 }
 
 // ErrNoIrt reports an irt object the registry does not have.
@@ -30,8 +31,12 @@ var ErrNoIrt = errors.New("auth: no such irt")
 
 // CheckIrt reports whether cred satisfies any auth: line of irt. It follows
 // CheckMntner: a scheme the verifier does not handle is skipped and reported
-// through unsupported, and a nil Verifier checks nothing.
-func CheckIrt(ctx context.Context, irt object.Irt, cred Credential, v Verifier) (ok, unsupported bool, err error) {
+// through unsupported, a nil Verifier checks nothing, and a nil irt accepts
+// nothing: (false, false, nil).
+func CheckIrt(ctx context.Context, irt *object.Irt, cred Credential, v Verifier) (ok, unsupported bool, err error) {
+	if irt == nil {
+		return false, false, nil
+	}
 	return checkAuth(ctx, irt.Auth, cred, v)
 }
 
@@ -42,6 +47,9 @@ func CheckIrts(ctx context.Context, reg IrtRegistry, names []string, cred Creden
 	var d Decision
 	for _, name := range names {
 		irt, err := reg.Irt(ctx, name)
+		if err == nil && irt == nil {
+			err = fmt.Errorf("%w: %s", ErrNoIrt, name) // the IrtRegistry contract: nil is not found
+		}
 		if err != nil {
 			if !errors.Is(err, ErrNoIrt) {
 				return Decision{}, err
@@ -108,29 +116,25 @@ func MntIrtChange(ctx context.Context, reg IrtRegistry, before, after object.Obj
 }
 
 // mntIrt reads the mnt-irt: references of an object. The classes that carry
-// them are read from their typed fields, as values or pointers; any other
-// object is read from its text, so a shape this switch does not know cannot
-// hide a reference and pass an update unchecked.
+// them are read from their typed fields; any other object is read from its
+// text, so a shape this switch does not know cannot hide a reference and pass
+// an update unchecked.
 func mntIrt(o object.Object) []string {
 	switch t := o.(type) {
 	case nil:
 		return nil
-	case object.Inetnum:
-		return t.MntIrt
 	case *object.Inetnum:
 		if t != nil {
 			return t.MntIrt
 		}
 		return nil
-	case object.Inet6num:
-		return t.MntIrt
 	case *object.Inet6num:
 		if t != nil {
 			return t.MntIrt
 		}
 		return nil
 	}
-	if v := reflect.ValueOf(o); v.Kind() == reflect.Pointer && v.IsNil() {
+	if isNilObject(o) {
 		return nil // a typed nil: no object, so no references
 	}
 	raw := o.Raw()
@@ -146,4 +150,14 @@ func mntIrt(o object.Object) []string {
 		}
 	}
 	return out
+}
+
+// isNilObject reports whether o is no object: nil, or a typed nil such as a
+// nil *object.Inetnum.
+func isNilObject(o object.Object) bool {
+	if o == nil {
+		return true
+	}
+	v := reflect.ValueOf(o)
+	return v.Kind() == reflect.Pointer && v.IsNil()
 }

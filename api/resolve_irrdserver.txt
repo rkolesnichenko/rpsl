@@ -1,0 +1,15 @@
+package irrdserver
+var ErrServerClosed = errors.New(…)
+type Limits struct
+	MaxConns int
+	IdleTimeout time.Duration
+	MaxLine int
+	MaxReply int64
+	QueryTime time.Duration
+type Server struct
+	Snapshot func() *irrdq.Snapshot
+	Limits Limits
+	Log *slog.Logger
+	LogQueries bool
+func (*Server) Serve(ln net.Listener) error
+func (*Server) Shutdown(ctx context.Context) error

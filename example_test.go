@@ -61,7 +61,7 @@ func ExampleDecode() {
 	obj, _ := rpsl.ParseObject(src)
 	decoded, diags := object.Decode(obj)
 
-	an := decoded.(object.AutNum)
+	an := decoded.(*object.AutNum)
 	fmt.Println("as:", an.AS)
 	fmt.Println("as-name:", an.AsName)
 	fmt.Println("imports:", len(an.Imports))

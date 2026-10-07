@@ -1,0 +1,29 @@
+package irrdq
+func Fail(msg string) Reply
+func NewRegistry(name string, serial uint64, c *resolve.Corpus) (*Registry, error)
+func NewSession(snapshot func() *Snapshot) *Session
+func NewSnapshot(regs []*Registry, opts SnapshotOptions) (*Snapshot, error)
+type Registry struct
+func (*Registry) KeepsRouteText() bool
+func (*Registry) Name() string
+func (*Registry) Serial() uint64
+func (*Registry) WithSerial(serial uint64) *Registry
+type Reply struct
+func (Reply) Cause() error
+func (Reply) Close() bool
+func (Reply) Len() int
+func (Reply) Refused(msg string) Reply
+func (Reply) WriteTo(w io.Writer) (int64, error)
+type Session struct
+func (*Session) Do(ctx context.Context, line string) (Reply, error)
+func (*Session) SetMaxReply(n int64)
+func (*Session) Timeout() time.Duration
+type Snapshot struct
+func (*Snapshot) Registries() []*Registry
+func (*Snapshot) With(r *Registry) (*Snapshot, error)
+type SnapshotOptions struct
+	Default []string
+	VRPs *rpki.VRPs
+	RFC bool
+	Expander resolve.Expander
+	Version string

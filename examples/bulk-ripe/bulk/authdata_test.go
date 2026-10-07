@@ -46,7 +46,7 @@ func forEachObject(t *testing.T, path string, f func(object.Object)) {
 type sampleRoute struct {
 	lo, hi netip.Addr
 	key    string
-	route  object.Route
+	route  *object.Route
 }
 
 // TestRealDataAuthRouteParents authorises, under RIPE's rules, the creation of
@@ -71,7 +71,7 @@ func TestRealDataAuthRouteParents(t *testing.T) {
 	var samples []sampleRoute
 	n := 0
 	forEachObject(t, filepath.Join(dir, "ripe.db.route.gz"), func(o object.Object) {
-		r, ok := o.(object.Route)
+		r, ok := o.(*object.Route)
 		if n++; !ok || n%250 != 0 || !r.Prefix.IsValid() {
 			return
 		}
@@ -96,7 +96,7 @@ func TestRealDataAuthRouteParents(t *testing.T) {
 	}
 	var kept []object.Object
 	forEachObject(t, filepath.Join(dir, "ripe.db.route.gz"), func(o object.Object) {
-		if r, ok := o.(object.Route); ok && r.Prefix.IsValid() {
+		if r, ok := o.(*object.Route); ok && r.Prefix.IsValid() {
 			p := r.Prefix.Masked()
 			if !sampled[p.String()+r.Origin.String()] && covers(p.Addr(), last(p)) {
 				kept = append(kept, o)
@@ -104,7 +104,7 @@ func TestRealDataAuthRouteParents(t *testing.T) {
 		}
 	})
 	forEachObject(t, filepath.Join(dir, "ripe.db.inetnum.gz"), func(o object.Object) {
-		if in, ok := o.(object.Inetnum); ok && in.Lo.IsValid() && covers(in.Lo, in.Hi) {
+		if in, ok := o.(*object.Inetnum); ok && in.Lo.IsValid() && covers(in.Lo, in.Hi) {
 			kept = append(kept, o)
 		}
 	})

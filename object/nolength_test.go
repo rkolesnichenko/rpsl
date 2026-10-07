@@ -15,7 +15,7 @@ func TestNoLengthMembers(t *testing.T) {
 		"members: 192.0.2.0/24, 206.197.238.0, 198.51.100.7^+\n" +
 		"mp-members: 2001:db8::32\n"
 	obj, diags := Decode(parse(src))
-	rs := obj.(RouteSet)
+	rs := obj.(*RouteSet)
 	var got []string
 	for _, m := range append(rs.Members, rs.MpMembers...) {
 		got = append(got, m.Range.String())

@@ -29,7 +29,7 @@ func fltrSet(name, filter string) string {
 	return "filter-set: " + name + "\nfilter: " + filter + "\nsource: RIPE\n"
 }
 
-func routerList(s RouterSet) []string {
+func routerList(s Routers) []string {
 	out := make([]string, 0, s.Len())
 	for _, r := range s.List() {
 		out = append(out, r.String())

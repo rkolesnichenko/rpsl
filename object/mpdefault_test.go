@@ -11,7 +11,7 @@ func TestAutNumMpDefault(t *testing.T) {
 	if len(diags) != 0 {
 		t.Fatalf("diags = %+v", diags)
 	}
-	a, ok := obj.(AutNum)
+	a, ok := obj.(*AutNum)
 	if !ok {
 		t.Fatalf("obj = %T, want AutNum", obj)
 	}
@@ -32,7 +32,7 @@ func TestRouteSetMpMembersSeparate(t *testing.T) {
 		"mp-members: 2001:db8::/32\n" +
 		"source:     TEST\n")
 	obj, _ := Decode(o)
-	rs, ok := obj.(RouteSet)
+	rs, ok := obj.(*RouteSet)
 	if !ok {
 		t.Fatalf("obj = %T, want RouteSet", obj)
 	}
@@ -56,7 +56,7 @@ func TestAsSetMpMembersSeparate(t *testing.T) {
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %+v", diags)
 	}
-	as, ok := obj.(AsSet)
+	as, ok := obj.(*AsSet)
 	if !ok {
 		t.Fatalf("obj = %T, want AsSet", obj)
 	}

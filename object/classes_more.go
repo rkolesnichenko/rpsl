@@ -29,10 +29,10 @@ type KeyCert struct {
 }
 
 // Class returns "key-cert".
-func (k KeyCert) Class() string { return "key-cert" }
+func (k *KeyCert) Class() string { return "key-cert" }
 
 // Raw returns the generic object the key-cert was decoded from.
-func (k KeyCert) Raw() *ast.Object { return k.raw }
+func (k *KeyCert) Raw() *ast.Object { return k.raw }
 
 func decodeKeyCert(d *decoder) KeyCert {
 	return KeyCert{
@@ -61,14 +61,14 @@ type Dictionary struct {
 }
 
 // Class returns "dictionary".
-func (d Dictionary) Class() string { return "dictionary" }
+func (d *Dictionary) Class() string { return "dictionary" }
 
 // Raw returns the generic object the dictionary was decoded from.
-func (d Dictionary) Raw() *ast.Object { return d.raw }
+func (d *Dictionary) Raw() *ast.Object { return d.raw }
 
 // Dict returns the object's declarations as a policy.Dictionary, ready to pass
 // as policy.Options.Dict.
-func (d Dictionary) Dict() policy.Dictionary {
+func (d *Dictionary) Dict() policy.Dictionary {
 	return policy.NewDictionary(d.RPAttribute, d.Typedef, d.Protocol)
 }
 
@@ -111,10 +111,10 @@ type Poem struct {
 }
 
 // Class returns "poem".
-func (p Poem) Class() string { return "poem" }
+func (p *Poem) Class() string { return "poem" }
 
 // Raw returns the generic object the poem was decoded from.
-func (p Poem) Raw() *ast.Object { return p.raw }
+func (p *Poem) Raw() *ast.Object { return p.raw }
 
 func decodePoem(d *decoder) Poem {
 	return Poem{
@@ -138,10 +138,10 @@ type PoeticForm struct {
 }
 
 // Class returns "poetic-form".
-func (p PoeticForm) Class() string { return "poetic-form" }
+func (p *PoeticForm) Class() string { return "poetic-form" }
 
 // Raw returns the generic object the poetic-form was decoded from.
-func (p PoeticForm) Raw() *ast.Object { return p.raw }
+func (p *PoeticForm) Raw() *ast.Object { return p.raw }
 
 func decodePoeticForm(d *decoder) PoeticForm {
 	return PoeticForm{

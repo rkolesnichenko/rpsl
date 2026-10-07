@@ -42,7 +42,7 @@ func TestScopedGetSet(t *testing.T) {
 		if err != nil || set.SetSource() != "RIPE" {
 			t.Fatalf("pipeline %d: RIPE::AS-X = %v, %v; want RIPE's copy", pipeline, set, err)
 		}
-		if got, _ := src.GetSet(ctx, ref(t, "AS-X")); got.(object.AsSet).Members[0].AS != 2 {
+		if got, _ := src.GetSet(ctx, ref(t, "AS-X")); got.(*object.AsSet).Members[0].AS != 2 {
 			t.Errorf("pipeline %d: unscoped AS-X = %v; want RADB's", pipeline, got)
 		}
 		if _, err := src.GetSet(ctx, ref(t, "NOSUCH::AS-X")); !errors.Is(err, resolve.ErrNotFound) {
@@ -82,7 +82,7 @@ func TestScopedSelfReference(t *testing.T) {
 				t.Fatalf("pipeline %d: %s: %v", pipeline, c.ref, err)
 			}
 			var got []string
-			for _, m := range set.(object.AsSet).Members {
+			for _, m := range set.(*object.AsSet).Members {
 				got = append(got, m.Ref().Name().String())
 				if m.Kind == object.MemberAS {
 					got[len(got)-1] = m.AS.String()
@@ -101,7 +101,7 @@ func TestSrcMembersOption(t *testing.T) {
 	ctx := context.Background()
 	off := &irrd.Source{Addr: db.IRRd(t), Sources: []string{"RIPE"}, Timeout: 5 * time.Second}
 	set, err := off.GetSet(ctx, ref(t, "AS-X"))
-	if err != nil || len(set.(object.AsSet).SrcMembers) != 0 {
+	if err != nil || len(set.(*object.AsSet).SrcMembers) != 0 {
 		t.Fatalf("SrcMembers off: %v, %v; want no src-members read", set, err)
 	}
 	on := &irrd.Source{Addr: db.IRRd(t), Sources: []string{"RIPE"}, SrcMembers: true, Timeout: 5 * time.Second}
@@ -109,7 +109,7 @@ func TestSrcMembersOption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	as := set.(object.AsSet)
+	as := set.(*object.AsSet)
 	if len(as.SrcMembers) != 1 || as.SrcMembers[0].Ref().String() != "RIPE::AS-Y" || as.SetSource() != "RIPE" {
 		t.Errorf("SrcMembers on: %+v (source %q); want [RIPE::AS-Y] from RIPE", as.SrcMembers, as.SetSource())
 	}

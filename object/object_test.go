@@ -28,7 +28,7 @@ source:  RIPE
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %+v", diags)
 	}
-	m, ok := obj.(Mntner)
+	m, ok := obj.(*Mntner)
 	if !ok {
 		t.Fatalf("Decode = %T, want Mntner", obj)
 	}
@@ -62,7 +62,7 @@ source:  RIPE
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %+v", diags)
 	}
-	a, ok := obj.(AutNum)
+	a, ok := obj.(*AutNum)
 	if !ok {
 		t.Fatalf("Decode = %T, want AutNum", obj)
 	}
@@ -92,7 +92,7 @@ source:    RIPE
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %+v", diags)
 	}
-	a := obj.(AutNum)
+	a := obj.(*AutNum)
 	if len(a.Imports) != 2 {
 		t.Fatalf("Imports = %d, want 2 (import + mp-import)", len(a.Imports))
 	}
@@ -114,7 +114,7 @@ func TestAutNumPolicyResilience(t *testing.T) {
 	src := "aut-num: AS65001\nimport: from @@@ accept ANY\nmnt-by: MAINT-X\n"
 	o := parse(src)
 	obj, diags := Decode(o)
-	a := obj.(AutNum)
+	a := obj.(*AutNum)
 	if len(a.MntBy) != 1 || a.MntBy[0] != "MAINT-X" {
 		t.Errorf("MntBy = %v, want [MAINT-X]", a.MntBy)
 	}
@@ -168,7 +168,7 @@ source:   RIPE
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %+v", diags)
 	}
-	r := obj.(Route)
+	r := obj.(*Route)
 	if r.Prefix != netip.MustParsePrefix("192.0.2.0/24") {
 		t.Errorf("Prefix = %v", r.Prefix)
 	}
@@ -186,7 +186,7 @@ source:   RIPE
 func TestDecodeRoute6Warns(t *testing.T) {
 	o := parse("route6: 192.0.2.0/24\norigin: AS65001\n")
 	obj, diags := Decode(o)
-	r := obj.(Route6)
+	r := obj.(*Route6)
 	if !r.Prefix.IsValid() {
 		t.Error("prefix should still decode")
 	}
@@ -205,7 +205,7 @@ source:  RIPE
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %+v", diags)
 	}
-	s := obj.(AsSet)
+	s := obj.(*AsSet)
 	if s.Name.String() != "AS-CUSTOMERS" {
 		t.Errorf("Name = %q", s.Name.String())
 	}
@@ -230,7 +230,7 @@ source:    RIPE
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %+v", diags)
 	}
-	s := obj.(RouteSet)
+	s := obj.(*RouteSet)
 	if len(s.Members) != 2 {
 		t.Fatalf("Members = %v", s.Members)
 	}
@@ -244,7 +244,7 @@ source:    RIPE
 func TestWrongShapeMemberIsAnError(t *testing.T) {
 	o := parse("as-set: AS-FOO\nmembers: 192.0.2.0/24^+\n")
 	obj, diags := Decode(o)
-	s := obj.(AsSet)
+	s := obj.(*AsSet)
 	if len(s.Members) != 1 || s.Members[0].Kind != MemberInvalid || s.Members[0].Raw != "192.0.2.0/24^+" {
 		t.Errorf("members = %+v, want one MemberInvalid with its Raw", s.Members)
 	}
@@ -291,7 +291,7 @@ func TestSetMemberClassMismatchWarns(t *testing.T) {
 func TestPerAttributeResilience(t *testing.T) {
 	o := parse("route: 192.0.2.0/24\norigin: NOTANASN\nmnt-by: MAINT-X\n")
 	obj, diags := Decode(o)
-	r := obj.(Route)
+	r := obj.(*Route)
 	if len(r.MntBy) != 1 || r.MntBy[0] != "MAINT-X" {
 		t.Errorf("MntBy = %v, want [MAINT-X]", r.MntBy)
 	}
@@ -308,7 +308,7 @@ func TestUnknownClassGeneric(t *testing.T) {
 	if len(diags) != 0 {
 		t.Errorf("unexpected diagnostics: %+v", diags)
 	}
-	if _, ok := obj.(Generic); !ok {
+	if _, ok := obj.(*Generic); !ok {
 		t.Errorf("Decode = %T, want Generic", obj)
 	}
 	if obj.Class() != "limerick" {

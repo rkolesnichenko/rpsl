@@ -1,0 +1,43 @@
+package rpki
+const Invalid State
+const MaxProviders = 10_000
+const NotFound State = iota
+const PseudoSource = "RPKI"
+const SLURMTrustAnchor = "SLURM file"
+const Valid State
+func NewASPAs(as []ASPA) (*ASPAs, error)
+func NewVRPs(vs []VRP) (*VRPs, error)
+func ReadASPAs(r io.Reader) (*ASPAs, error)
+func ReadJSON(r io.Reader) (*VRPs, error)
+type ASPA struct
+	Customer types.ASN
+	Providers []types.ASN
+type ASPAs struct
+func (*ASPAs) All() iter.Seq[ASPA]
+func (*ASPAs) Len() int
+func (*ASPAs) Providers(customer types.ASN) (providers []types.ASN, ok bool)
+type Filter struct
+	Src resolve.Source
+	VRPs *VRPs
+	OnSuppress func(p netip.Prefix, origin types.ASN)
+func (*Filter) AutNum(ctx context.Context, as types.ASN, source string) (*object.AutNum, error)
+func (*Filter) AutNums() (iter.Seq[types.ASN], error)
+func (*Filter) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error)
+func (*Filter) InetRtr(ctx context.Context, name, source string) (*object.InetRtr, error)
+func (*Filter) MembersByRef(ctx context.Context, set object.NamedSet) ([]object.Object, error)
+func (*Filter) NamedBy(as types.ASN) ([]types.ASN, error)
+func (*Filter) OriginatedRoutes(ctx context.Context, as types.ASN, afi types.AFI) ([]netip.Prefix, error)
+type State uint8
+func (State) String() string
+type VRP struct
+	Prefix netip.Prefix
+	MaxLength uint8
+	ASN types.ASN
+	TA string
+type VRPs struct
+func (*VRPs) AddTo(c *resolve.Corpus)
+func (*VRPs) All() iter.Seq[VRP]
+func (*VRPs) ApplySLURM(r io.Reader) (*VRPs, error)
+func (*VRPs) Len() int
+func (*VRPs) Validate(p netip.Prefix, origin types.ASN) State
+func (*VRPs) WriteRPSL(w io.Writer) error

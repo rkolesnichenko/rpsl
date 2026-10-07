@@ -19,10 +19,10 @@ type PeeringSet struct {
 }
 
 // Class returns "peering-set".
-func (s PeeringSet) Class() string { return "peering-set" }
+func (s *PeeringSet) Class() string { return "peering-set" }
 
 // Raw returns the object's lossless source, or nil for one built without it.
-func (s PeeringSet) Raw() *ast.Object { return s.raw }
+func (s *PeeringSet) Raw() *ast.Object { return s.raw }
 
 func decodePeeringSet(d *decoder) PeeringSet {
 	ps := PeeringSet{
@@ -59,10 +59,10 @@ type FilterSet struct {
 }
 
 // Class returns "filter-set".
-func (s FilterSet) Class() string { return "filter-set" }
+func (s *FilterSet) Class() string { return "filter-set" }
 
 // Raw returns the object's lossless source, or nil for one built without it.
-func (s FilterSet) Raw() *ast.Object { return s.raw }
+func (s *FilterSet) Raw() *ast.Object { return s.raw }
 
 func decodeFilterSet(d *decoder) FilterSet {
 	fs := FilterSet{
@@ -98,10 +98,10 @@ type RtrSet struct {
 }
 
 // Class returns "rtr-set".
-func (s RtrSet) Class() string { return "rtr-set" }
+func (s *RtrSet) Class() string { return "rtr-set" }
 
 // Raw returns the object's lossless source, or nil for one built without it.
-func (s RtrSet) Raw() *ast.Object { return s.raw }
+func (s *RtrSet) Raw() *ast.Object { return s.raw }
 
 func decodeRtrSet(d *decoder) RtrSet {
 	return RtrSet{

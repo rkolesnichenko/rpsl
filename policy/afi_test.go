@@ -12,7 +12,7 @@ var (
 )
 
 func TestParseMpDefault(t *testing.T) {
-	d, diags := ParseMPDefault("afi ipv6.unicast to AS1")
+	d, diags := mpDefault("afi ipv6.unicast to AS1")
 	if len(diags) != 0 {
 		t.Fatalf("diags = %+v", diags)
 	}
@@ -35,7 +35,7 @@ func TestParseDefaultUnscoped(t *testing.T) {
 }
 
 func TestParseExceptAFI(t *testing.T) {
-	imp, diags := ParseMPImport("from AS1 accept ANY except afi ipv6.unicast {from AS2 accept AS2}")
+	imp, diags := mpImport("from AS1 accept ANY except afi ipv6.unicast {from AS2 accept AS2}")
 	if len(diags) != 0 {
 		t.Fatalf("diags = %+v", diags)
 	}
@@ -49,7 +49,7 @@ func TestParseExceptAFI(t *testing.T) {
 }
 
 func TestParseRefineAFI(t *testing.T) {
-	imp, diags := ParseMPImport("from AS1 accept ANY refine afi ipv4.unicast {from AS2 accept AS2}")
+	imp, diags := mpImport("from AS1 accept ANY refine afi ipv4.unicast {from AS2 accept AS2}")
 	if len(diags) != 0 {
 		t.Fatalf("diags = %+v", diags)
 	}
@@ -63,7 +63,7 @@ func TestParseRefineAFI(t *testing.T) {
 }
 
 func TestImportAppliesTo(t *testing.T) {
-	scoped, _ := ParseMPImport("afi ipv6.unicast from AS1 accept ANY")
+	scoped, _ := mpImport("afi ipv6.unicast from AS1 accept ANY")
 	if scoped.Unscoped() {
 		t.Errorf("scoped import reported unscoped")
 	}
@@ -87,7 +87,7 @@ func TestImportAppliesTo(t *testing.T) {
 }
 
 func TestExportAppliesTo(t *testing.T) {
-	scoped, _ := ParseMPExport("afi ipv6.unicast to AS1 announce ANY")
+	scoped, _ := mpExport("afi ipv6.unicast to AS1 announce ANY")
 	if !scoped.AppliesTo(v6u) || scoped.AppliesTo(v4u) {
 		t.Errorf("ipv6 export AppliesTo mismatch")
 	}
@@ -98,7 +98,7 @@ func TestExportAppliesTo(t *testing.T) {
 }
 
 func TestDefaultAppliesToWildcard(t *testing.T) {
-	any, _ := ParseMPDefault("afi any to AS1")
+	any, _ := mpDefault("afi any to AS1")
 	if !any.AppliesTo(v4u) || !any.AppliesTo(v6u) {
 		t.Errorf("afi any default should apply to both families, AFIs = %v", any.AFIs)
 	}
@@ -108,9 +108,9 @@ func TestDefaultAppliesToWildcard(t *testing.T) {
 // while a legacy import:/export:/default: means ipv4.unicast only.
 func TestMPWithoutAFIAppliesToAll(t *testing.T) {
 	v4m := types.AddrFamily{AFI: types.AFIv4, SAFI: types.SAFIMulticast}
-	imp, _ := ParseMPImport("from AS1 accept ANY")
-	exp, _ := ParseMPExport("to AS1 announce ANY")
-	def, _ := ParseMPDefault("to AS1")
+	imp, _ := mpImport("from AS1 accept ANY")
+	exp, _ := mpExport("to AS1 announce ANY")
+	def, _ := mpDefault("to AS1")
 	for name, applies := range map[string]func(types.AddrFamily) bool{
 		"mp-import": imp.AppliesTo, "mp-export": exp.AppliesTo, "mp-default": def.AppliesTo,
 	} {
@@ -125,7 +125,7 @@ func TestMPWithoutAFIAppliesToAll(t *testing.T) {
 	if legacy.MP || legacy.AppliesTo(v6u) || legacy.AppliesTo(v4m) || !legacy.AppliesTo(v4u) {
 		t.Errorf("legacy import must be ipv4.unicast only (MP=%v)", legacy.MP)
 	}
-	scoped, _ := ParseMPImport("afi ipv6.unicast from AS1 accept ANY")
+	scoped, _ := mpImport("afi ipv6.unicast from AS1 accept ANY")
 	if scoped.AppliesTo(v4u) || !scoped.AppliesTo(v6u) {
 		t.Errorf("mp-import afi ipv6.unicast must apply to ipv6.unicast only")
 	}

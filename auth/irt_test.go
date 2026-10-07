@@ -11,13 +11,13 @@ import (
 )
 
 // irtRegistry is an IrtRegistry over decoded irt objects.
-type irtRegistry map[string]object.Irt
+type irtRegistry map[string]*object.Irt
 
 func newIrtRegistry(t *testing.T, srcs ...string) irtRegistry {
 	t.Helper()
 	r := irtRegistry{}
 	for _, src := range srcs {
-		irt, ok := decode(t, src).(object.Irt)
+		irt, ok := decode(t, src).(*object.Irt)
 		if !ok {
 			t.Fatalf("not an irt: %q", src)
 		}
@@ -26,10 +26,10 @@ func newIrtRegistry(t *testing.T, srcs ...string) irtRegistry {
 	return r
 }
 
-func (r irtRegistry) Irt(_ context.Context, name string) (object.Irt, error) {
+func (r irtRegistry) Irt(_ context.Context, name string) (*object.Irt, error) {
 	irt, ok := r[strings.ToUpper(strings.TrimSpace(name))]
 	if !ok {
-		return object.Irt{}, ErrNoIrt
+		return nil, ErrNoIrt
 	}
 	return irt, nil
 }
@@ -37,7 +37,7 @@ func (r irtRegistry) Irt(_ context.Context, name string) (object.Irt, error) {
 // failingIrts is an IrtRegistry whose every lookup fails.
 type failingIrts struct{ err error }
 
-func (f failingIrts) Irt(context.Context, string) (object.Irt, error) { return object.Irt{}, f.err }
+func (f failingIrts) Irt(context.Context, string) (*object.Irt, error) { return nil, f.err }
 
 func irt(name, auth string) string {
 	return "irt: " + name + "\naddress: Somewhere\ne-mail: irt@example.net\nauth: " + auth + "\nsource: RIPE\n"
@@ -74,14 +74,14 @@ func TestAddedMntIrt(t *testing.T) {
 
 func TestCheckIrt(t *testing.T) {
 	ctx, v := context.Background(), verifier()
-	good := decode(t, irt("IRT-A", "MD5-PW $1$abc$xyz")).(object.Irt)
+	good := decode(t, irt("IRT-A", "MD5-PW $1$abc$xyz")).(*object.Irt)
 	if ok, unsup, err := CheckIrt(ctx, good, goodCred(), v); err != nil || !ok || unsup {
 		t.Errorf("CheckIrt = %v, %v, %v; want true, false, nil", ok, unsup, err)
 	}
 	if ok, _, err := CheckIrt(ctx, good, wrongCred(), v); err != nil || ok {
 		t.Error("a wrong password was accepted")
 	}
-	pgp := decode(t, irt("IRT-P", "PGPKEY-1234ABCD")).(object.Irt)
+	pgp := decode(t, irt("IRT-P", "PGPKEY-1234ABCD")).(*object.Irt)
 	if ok, unsup, err := CheckIrt(ctx, pgp, goodCred(), v); err != nil || ok || !unsup {
 		t.Errorf("CheckIrt = %v, %v, %v; want false, true, nil", ok, unsup, err)
 	}
@@ -119,6 +119,30 @@ func TestCheckIrts(t *testing.T) {
 	hsm := errors.New("hsm offline")
 	if _, err := CheckIrts(ctx, reg, []string{"IRT-A"}, goodCred(), erroring{hsm}); !errors.Is(err, hsm) {
 		t.Errorf("a verifier error: err = %v, want %v", err, hsm)
+	}
+}
+
+// nilIrts answers an irt it lacks with no object and no error, which
+// IrtRegistry's contract treats as not found.
+type nilIrts map[string]*object.Irt
+
+func (r nilIrts) Irt(_ context.Context, name string) (*object.Irt, error) {
+	return r[strings.ToUpper(strings.TrimSpace(name))], nil
+}
+
+// A nil irt with a nil error is ErrNoIrt: skipped with a reason, never a panic.
+func TestNilIrtIsNotFound(t *testing.T) {
+	reg := nilIrts(newIrtRegistry(t, irt("IRT-A", "MD5-PW $1$abc$xyz")))
+	ctx, v := context.Background(), verifier()
+	d, err := CheckIrts(ctx, reg, []string{"IRT-GONE", "IRT-A"}, goodCred(), v)
+	if err != nil || !d.OK || !strings.Contains(d.String(), "IRT-GONE: no such irt") {
+		t.Errorf("CheckIrts = %v, %v; want authorised by IRT-A, IRT-GONE no such irt", d, err)
+	}
+	if d, err := CheckIrts(ctx, reg, []string{"IRT-GONE"}, goodCred(), v); err != nil || d.OK {
+		t.Errorf("CheckIrts = %v, %v; want a refusal", d, err)
+	}
+	if ok, unsup, err := CheckIrt(ctx, nil, goodCred(), v); ok || unsup || err != nil {
+		t.Errorf("CheckIrt(nil) = %v, %v, %v; want false, false, nil", ok, unsup, err)
 	}
 }
 

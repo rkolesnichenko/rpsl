@@ -1,7 +1,6 @@
 package policy
 
 import (
-	"github.com/rkolesnichenko/rpsl/ast"
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
@@ -16,62 +15,7 @@ import (
 //
 // The via peering is PeerAction.Via. Everything else is the mp-* grammar, so a
 // via policy has the same Import and Export types, renders with String and
-// flattens with Flatten.
-
-// ParseImportVia parses an import-via: value ("AS6777 from AS15562 action
-// pref = 2; accept AS-SNIJDERS"). The result is marked MP: without an afi
-// clause it applies to every address family, as an mp-import: does.
-func ParseImportVia(s string) (Import, []ast.Diagnostic) {
-	imp, p := parseImportVia(s, Options{})
-	return imp, p.diags
-}
-
-// ParseImportViaWith is ParseImportVia with options.
-func ParseImportViaWith(s string, o Options) (Import, []ast.Diagnostic) {
-	imp, p := parseImportVia(s, o)
-	return imp, p.diags
-}
-
-// ParseExportVia parses an export-via: value ("AS6777 to AS15562 announce
-// AS-SNIJDERS"); see ParseImportVia.
-func ParseExportVia(s string) (Export, []ast.Diagnostic) {
-	exp, p := parseExportVia(s, Options{})
-	return exp, p.diags
-}
-
-// ParseExportViaWith is ParseExportVia with options.
-func ParseExportViaWith(s string, o Options) (Export, []ast.Diagnostic) {
-	exp, p := parseExportVia(s, o)
-	return exp, p.diags
-}
-
-func parseImportVia(s string, o Options) (Import, *parser) {
-	p := newParser(s)
-	p.mp, p.via, p.dict = true, "from", o.Dict
-	imp := Import{MP: true}
-	if p.empty() {
-		return imp, p
-	}
-	imp.Protocol, imp.IntoProtocol = p.parseProtocols()
-	imp.AFIs = p.parseAFIs()
-	imp.Expr = p.parseExpr("from", "accept")
-	p.finish()
-	return imp, p
-}
-
-func parseExportVia(s string, o Options) (Export, *parser) {
-	p := newParser(s)
-	p.mp, p.via, p.dict = true, "to", o.Dict
-	exp := Export{MP: true}
-	if p.empty() {
-		return exp, p
-	}
-	exp.Protocol, exp.IntoProtocol = p.parseProtocols()
-	exp.AFIs = p.parseAFIs()
-	exp.Expr = p.parseExpr("to", "announce")
-	p.finish()
-	return exp, p
-}
+// flattens with Flatten; Options.Via selects it.
 
 // parseViaFactor parses one or more "<via-peering> <peerKw> <peering> [action
 // …]" clauses followed by "<filterKw> <filter>". A clause without its via
