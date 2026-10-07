@@ -31,9 +31,9 @@ type Set interface {
 	SetSrcMembers() []SetMember // src-members:, as written (draft-ietf-grow-rpsl-registry-scoped-members)
 }
 
-// RouterSet is a rtr-set: its members are routers and nested rtr-sets
+// RouterGroup is a rtr-set: its members are routers and nested rtr-sets
 // (RFC 2622 §5.5).
-type RouterSet interface {
+type RouterGroup interface {
 	NamedSet
 	SetRouters() []RtrSetMember // direct members: members: plus mp-members:
 }
@@ -146,7 +146,7 @@ func (s *FilterSet) SetSource() string { return s.Source }
 var (
 	_ Set          = &AsSet{}
 	_ Set          = &RouteSet{}
-	_ RouterSet    = &RtrSet{}
+	_ RouterGroup  = &RtrSet{}
 	_ PeeringGroup = &PeeringSet{}
 	_ FilterGroup  = &FilterSet{}
 	_ NamedSet     = &AsSet{}

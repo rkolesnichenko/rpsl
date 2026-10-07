@@ -133,8 +133,8 @@ func (v *Evaluator) newCall(ctx context.Context, s Session) *call {
 	return &call{
 		ctx: ctx, src: v.Src, e: e, m: m, s: s,
 		asns:    map[types.SetName]asMembers{},
-		prngs:   map[types.SetName]*resolve.PeeringSet{},
-		rtrSets: map[types.SetName]*resolve.RouterSet{},
+		prngs:   map[types.SetName]*resolve.Peerings{},
+		rtrSets: map[types.SetName]*resolve.Routers{},
 		rtrs:    map[string][]netip.Addr{},
 		missing: map[types.SetRef]bool{},
 		noRtr:   map[string]bool{},

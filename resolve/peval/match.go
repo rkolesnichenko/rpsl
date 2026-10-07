@@ -32,9 +32,9 @@ type call struct {
 	m       resolve.Expander // for peering and router matching: Exclude cleared
 	s       Session
 	asns    map[types.SetName]asMembers
-	prngs   map[types.SetName]*resolve.PeeringSet // nil: not found
-	rtrSets map[types.SetName]*resolve.RouterSet  // nil: not found
-	rtrs    map[string][]netip.Addr               // inet-rtr addresses, by upper-cased name
+	prngs   map[types.SetName]*resolve.Peerings // nil: not found
+	rtrSets map[types.SetName]*resolve.Routers  // nil: not found
+	rtrs    map[string][]netip.Addr             // inet-rtr addresses, by upper-cased name
 	missing map[types.SetRef]bool
 	noRtr   map[string]bool // inet-rtr names not found, lower-cased
 }
@@ -262,12 +262,12 @@ func (c *call) rtrHas(name string, a netip.Addr) (bool, error) {
 	return false, nil
 }
 
-func (c *call) peeringSet(n types.SetName) (*resolve.PeeringSet, error) {
+func (c *call) peeringSet(n types.SetName) (*resolve.Peerings, error) {
 	if ps, ok := c.prngs[n]; ok {
 		return ps, nil
 	}
 	ps, err := c.m.ExpandPeerings(c.ctx, types.Ref(n))
-	var out *resolve.PeeringSet
+	var out *resolve.Peerings
 	switch {
 	case errors.Is(err, resolve.ErrNotFound):
 		c.note(types.Ref(n))
@@ -283,12 +283,12 @@ func (c *call) peeringSet(n types.SetName) (*resolve.PeeringSet, error) {
 	return out, nil
 }
 
-func (c *call) routerSet(n types.SetName) (*resolve.RouterSet, error) {
+func (c *call) routerSet(n types.SetName) (*resolve.Routers, error) {
 	if rs, ok := c.rtrSets[n]; ok {
 		return rs, nil
 	}
 	rs, err := c.m.ExpandRouters(c.ctx, types.Ref(n))
-	var out *resolve.RouterSet
+	var out *resolve.Routers
 	switch {
 	case errors.Is(err, resolve.ErrNotFound):
 		c.note(types.Ref(n))

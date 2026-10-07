@@ -151,33 +151,33 @@ func listString[T fmt.Stringer](items []T) string {
 	return "[" + strings.Join(parts, " ") + "]"
 }
 
-// RouterSet is the result of expanding an rtr-set: the distinct routers it
+// Routers is the result of expanding an rtr-set: the distinct routers it
 // denotes, by address or by inet-rtr name.
-type RouterSet struct {
+type Routers struct {
 	m       map[types.RouterID]struct{}
 	missing []types.SetRef
 }
 
-func newRouterSet() *RouterSet { return &RouterSet{m: map[types.RouterID]struct{}{}} }
+func newRouterSet() *Routers { return &Routers{m: map[types.RouterID]struct{}{}} }
 
-func (s *RouterSet) add(r types.RouterID) {
+func (s *Routers) add(r types.RouterID) {
 	if !r.IsZero() {
 		s.m[r] = struct{}{}
 	}
 }
 
 // Has reports whether the set contains r.
-func (s RouterSet) Has(r types.RouterID) bool { _, ok := s.m[r]; return ok }
+func (s Routers) Has(r types.RouterID) bool { _, ok := s.m[r]; return ok }
 
 // Len returns the number of distinct routers.
-func (s RouterSet) Len() int { return len(s.m) }
+func (s Routers) Len() int { return len(s.m) }
 
 // Missing returns the nested sets that were not found, sorted by String(); a
 // scoped reference prints as RIPE::AS-FOO.
-func (s RouterSet) Missing() []types.SetRef { return s.missing }
+func (s Routers) Missing() []types.SetRef { return s.missing }
 
 // List returns the routers sorted by their canonical text.
-func (s RouterSet) List() []types.RouterID {
+func (s Routers) List() []types.RouterID {
 	out := make([]types.RouterID, 0, len(s.m))
 	for r := range s.m {
 		out = append(out, r)
@@ -187,19 +187,19 @@ func (s RouterSet) List() []types.RouterID {
 }
 
 // String renders the routers as a comma-separated list.
-func (s RouterSet) String() string { return listString(s.List()) }
+func (s Routers) String() string { return listString(s.List()) }
 
-// PeeringSet is the result of expanding a peering-set: the peerings it denotes,
+// Peerings is the result of expanding a peering-set: the peerings it denotes,
 // in discovery order, with duplicates removed by their canonical text.
-type PeeringSet struct {
+type Peerings struct {
 	list    []policy.Peering
 	seen    map[string]bool
 	missing []types.SetRef
 }
 
-func newPeeringSet() *PeeringSet { return &PeeringSet{seen: map[string]bool{}} }
+func newPeeringSet() *Peerings { return &Peerings{seen: map[string]bool{}} }
 
-func (s *PeeringSet) add(p policy.Peering) {
+func (s *Peerings) add(p policy.Peering) {
 	if p == nil {
 		return
 	}
@@ -212,24 +212,24 @@ func (s *PeeringSet) add(p policy.Peering) {
 }
 
 // Has reports whether the set contains a peering that renders as text.
-func (s PeeringSet) Has(text string) bool { return s.seen[text] }
+func (s Peerings) Has(text string) bool { return s.seen[text] }
 
 // Len returns the number of distinct peerings.
-func (s PeeringSet) Len() int { return len(s.list) }
+func (s Peerings) Len() int { return len(s.list) }
 
 // Missing returns the nested sets that were not found, sorted by String(); a
 // scoped reference prints as RIPE::AS-FOO.
-func (s PeeringSet) Missing() []types.SetRef { return s.missing }
+func (s Peerings) Missing() []types.SetRef { return s.missing }
 
 // List returns the peerings in discovery order.
-func (s PeeringSet) List() []policy.Peering {
+func (s Peerings) List() []policy.Peering {
 	out := make([]policy.Peering, len(s.list))
 	copy(out, s.list)
 	return out
 }
 
 // Strings returns each peering's canonical text, in the same order as List.
-func (s PeeringSet) Strings() []string {
+func (s Peerings) Strings() []string {
 	out := make([]string, len(s.list))
 	for i, p := range s.list {
 		out[i] = peeringText(p)
@@ -239,7 +239,7 @@ func (s PeeringSet) Strings() []string {
 
 // String renders the peerings as a space-separated list in brackets, as the
 // other result types do.
-func (s PeeringSet) String() string { return "[" + strings.Join(s.Strings(), " ") + "]" }
+func (s Peerings) String() string { return "[" + strings.Join(s.Strings(), " ") + "]" }
 
 // peeringText is a peering's canonical text, the identity by which the result
 // deduplicates.

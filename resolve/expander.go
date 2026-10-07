@@ -468,7 +468,7 @@ func nestedRefs(set object.NamedSet) []types.SetRef {
 				out = append(out, m.Ref())
 			}
 		}
-	case object.RouterSet:
+	case object.RouterGroup:
 		for _, m := range s.SetRouters() {
 			if m.Kind == object.RtrMemberSet && nestable(parent, m.Set.Class()) {
 				out = append(out, types.Ref(m.Set))

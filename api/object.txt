@@ -370,7 +370,7 @@ func (*RouteSet) SetMembers() []SetMember
 func (*RouteSet) SetName() types.SetName
 func (*RouteSet) SetSource() string
 func (*RouteSet) SetSrcMembers() []SetMember
-type RouterSet interface
+type RouterGroup interface
 	NamedSet
 	SetRouters() []RtrSetMember
 type RtrMemberKind uint8

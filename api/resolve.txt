@@ -106,10 +106,10 @@ type Expander struct
 func (*Expander) EvalFilter(ctx context.Context, f policy.Filter) (RangeSet, error)
 func (*Expander) ExpandAS(ctx context.Context, ref types.SetRef) (ASNSet, error)
 func (*Expander) ExpandFilterSet(ctx context.Context, ref types.SetRef) (RangeSet, error)
-func (*Expander) ExpandPeerings(ctx context.Context, ref types.SetRef) (PeeringSet, error)
+func (*Expander) ExpandPeerings(ctx context.Context, ref types.SetRef) (Peerings, error)
 func (*Expander) ExpandPrefixRanges(ctx context.Context, ref types.SetRef) (RangeSet, error)
 func (*Expander) ExpandPrefixes(ctx context.Context, ref types.SetRef) (PrefixSet, error)
-func (*Expander) ExpandRouters(ctx context.Context, ref types.SetRef) (RouterSet, error)
+func (*Expander) ExpandRouters(ctx context.Context, ref types.SetRef) (Routers, error)
 func (*Expander) NormalizeFilter(ctx context.Context, f policy.Filter) (NormalFilter, error)
 type Limit uint8
 func (Limit) String() string
@@ -134,13 +134,13 @@ type PathMatch struct
 	Negated bool
 	RE *policy.ASPathRE
 	Sets map[types.SetName]ASNSet
-type PeeringSet struct
-func (PeeringSet) Has(text string) bool
-func (PeeringSet) Len() int
-func (PeeringSet) List() []policy.Peering
-func (PeeringSet) Missing() []types.SetRef
-func (PeeringSet) String() string
-func (PeeringSet) Strings() []string
+type Peerings struct
+func (Peerings) Has(text string) bool
+func (Peerings) Len() int
+func (Peerings) List() []policy.Peering
+func (Peerings) Missing() []types.SetRef
+func (Peerings) String() string
+func (Peerings) Strings() []string
 type PolicyIndex interface
 	PolicySource
 	AutNums() (iter.Seq[types.ASN], error)
@@ -161,12 +161,12 @@ func (RangeSet) Len() int
 func (RangeSet) List() []types.PrefixRange
 func (RangeSet) Missing() []types.SetRef
 func (RangeSet) String() string
-type RouterSet struct
-func (RouterSet) Has(r types.RouterID) bool
-func (RouterSet) Len() int
-func (RouterSet) List() []types.RouterID
-func (RouterSet) Missing() []types.SetRef
-func (RouterSet) String() string
+type Routers struct
+func (Routers) Has(r types.RouterID) bool
+func (Routers) Len() int
+func (Routers) List() []types.RouterID
+func (Routers) Missing() []types.SetRef
+func (Routers) String() string
 type SetTooLargeError struct
 	Name types.SetRef
 	Limit Limit
