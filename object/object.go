@@ -33,10 +33,10 @@ type Object interface {
 type Generic struct{ raw *ast.Object }
 
 // Class returns the class name of the underlying object.
-func (g Generic) Class() string { return g.raw.Class() }
+func (g *Generic) Class() string { return g.raw.Class() }
 
 // Raw returns the object's lossless source, or nil for one built without it.
-func (g Generic) Raw() *ast.Object { return g.raw }
+func (g *Generic) Raw() *ast.Object { return g.raw }
 
 // decoder removes per-attribute boilerplate and centralizes diagnostics. Each
 // failed parse appends an Error diagnostic keyed to the offending attribute's

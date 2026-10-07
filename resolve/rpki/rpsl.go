@@ -70,9 +70,9 @@ func (s *VRPs) AddTo(c *resolve.Corpus) {
 	for v := range s.All() {
 		common := object.Common{Source: PseudoSource}
 		if v.Prefix.Addr().Is6() {
-			c.Put(object.Route6{Common: common, Prefix: v.Prefix, Origin: v.ASN})
+			c.Put(&object.Route6{Common: common, Prefix: v.Prefix, Origin: v.ASN})
 		} else {
-			c.Put(object.Route{Common: common, Prefix: v.Prefix, Origin: v.ASN})
+			c.Put(&object.Route{Common: common, Prefix: v.Prefix, Origin: v.ASN})
 		}
 	}
 }

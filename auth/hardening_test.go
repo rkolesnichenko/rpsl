@@ -23,18 +23,17 @@ func (r rawOnly) Raw() *ast.Object { return r.raw }
 func TestMntIrtPointerAndUnknownShapes(t *testing.T) {
 	ctx, v := context.Background(), verifier()
 	reg := newIrtRegistry(t, irt("IRT-VICTIM", "MD5-PW $1$other$pw"))
-	before := decode(t, inetnum()).(object.Inetnum)
-	after := decode(t, inetnum("IRT-VICTIM")).(object.Inetnum)
-	before6 := decode(t, "inet6num: 2001:db8::/32\nnetname: X\nsource: RIPE\n").(object.Inet6num)
-	after6 := decode(t, "inet6num: 2001:db8::/32\nnetname: X\nmnt-irt: IRT-VICTIM\nsource: RIPE\n").(object.Inet6num)
+	before := decode(t, inetnum()).(*object.Inetnum)
+	after := decode(t, inetnum("IRT-VICTIM")).(*object.Inetnum)
+	before6 := decode(t, "inet6num: 2001:db8::/32\nnetname: X\nsource: RIPE\n").(*object.Inet6num)
+	after6 := decode(t, "inet6num: 2001:db8::/32\nnetname: X\nmnt-irt: IRT-VICTIM\nsource: RIPE\n").(*object.Inet6num)
 	for _, c := range []struct {
 		name          string
 		before, after object.Object
 	}{
-		{"values", before, after},
-		{"pointers", &before, &after},
-		{"inet6num pointers", &before6, &after6},
-		{"a creation from a pointer", nil, &after},
+		{"pointers", before, after},
+		{"inet6num pointers", before6, after6},
+		{"a creation from a pointer", nil, after},
 		{"an object known only by its text", nil, rawOnly{after.Raw()}},
 	} {
 		d, err := MntIrtChange(ctx, reg, c.before, c.after, goodCred(), v)
@@ -56,7 +55,7 @@ func TestRouteCreationChecksOriginAndSpace(t *testing.T) {
 		mntner("MNT-OWN", "MD5-PW $1$abc$xyz"),
 		mntner("MNT-EVIL", "MD5-PW $1$abc$xyz"),
 	)
-	route := decode(t, "route: 192.0.2.0/24\norigin: AS64500\nmnt-by: MNT-OWN\nsource: RIPE\n").(object.Route)
+	route := decode(t, "route: 192.0.2.0/24\norigin: AS64500\nmnt-by: MNT-OWN\nsource: RIPE\n").(*object.Route)
 	evilAS := decode(t, "aut-num: AS64999\nas-name: EVIL\nmnt-by: MNT-EVIL\nsource: RIPE\n")
 	evilSpace := decode(t, "inetnum: 198.51.100.0 - 198.51.100.255\nnetname: EVIL\nmnt-by: MNT-EVIL\nsource: RIPE\n")
 	moreSpecific := decode(t, "route: 192.0.2.0/25\norigin: AS64999\nmnt-by: MNT-EVIL\nsource: RIPE\n")

@@ -142,19 +142,19 @@ func (v *Evaluator) newCall(ctx context.Context, s Session) *call {
 }
 
 // begin checks a call's arguments and reads Local's aut-num.
-func (v *Evaluator) begin(ctx context.Context, s Session) (object.AutNum, *call, error) {
+func (v *Evaluator) begin(ctx context.Context, s Session) (*object.AutNum, *call, error) {
 	if v.Src == nil {
-		return object.AutNum{}, nil, errNoSource
+		return nil, nil, errNoSource
 	}
 	if s.Local == 0 || s.Peer == 0 {
-		return object.AutNum{}, nil, errors.New("peval: Session.Local and Session.Peer must be set")
+		return nil, nil, errors.New("peval: Session.Local and Session.Peer must be set")
 	}
 	if s.AF == (types.AddrFamily{}) {
-		return object.AutNum{}, nil, errors.New("peval: Session.AF must be set")
+		return nil, nil, errors.New("peval: Session.AF must be set")
 	}
 	an, err := v.Src.AutNum(ctx, s.Local, v.Source)
 	if err != nil {
-		return object.AutNum{}, nil, fmt.Errorf("peval: %w", err)
+		return nil, nil, fmt.Errorf("peval: %w", err)
 	}
 	return an, v.newCall(ctx, s), nil
 }

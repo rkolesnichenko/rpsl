@@ -311,13 +311,13 @@ type setSize struct {
 func (r *retainer) add(opts Options, class string, typed object.Object) {
 	limit, key := 0, class
 	switch typed.(type) {
-	case object.AutNum:
+	case *object.AutNum:
 		limit = opts.MaxRetainAutNums
-	case object.AsSet:
+	case *object.AsSet:
 		limit = opts.MaxRetainAsSets
-	case object.RouteSet:
+	case *object.RouteSet:
 		limit = opts.MaxRetainRouteSets
-	case object.Route, object.Route6:
+	case *object.Route, *object.Route6:
 		limit, key = opts.MaxRetainRoutes, "route"
 	default:
 		return
@@ -329,9 +329,9 @@ func (r *retainer) add(opts Options, class string, typed object.Object) {
 	r.put[key]++
 	r.corpus.Put(typed)
 	switch t := typed.(type) {
-	case object.AsSet:
+	case *object.AsSet:
 		r.asSets = append(r.asSets, setSize{t.Name, len(t.Members) + len(t.MbrsByRef)})
-	case object.RouteSet:
+	case *object.RouteSet:
 		r.routeSets = append(r.routeSets, setSize{t.Name, len(t.Members) + len(t.MpMembers) + len(t.MbrsByRef)})
 	}
 }

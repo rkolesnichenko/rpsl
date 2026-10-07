@@ -352,7 +352,7 @@ func isLimit(err error) bool {
 
 // linter collects one aut-num's issues.
 type linter struct {
-	an    object.AutNum
+	an    *object.AutNum
 	attrs map[string][]ast.Attribute // "import", "export", "default" -> those attributes (and their mp- forms), in order
 	first lexer.Span                 // the object's first attribute: spans are made relative to it
 	m     map[issueKey]*Issue
@@ -394,7 +394,7 @@ type issueKey struct {
 	msg        string
 }
 
-func newLinter(ctx context.Context, ev *peval.Evaluator, an object.AutNum) *linter {
+func newLinter(ctx context.Context, ev *peval.Evaluator, an *object.AutNum) *linter {
 	l := &linter{an: an, attrs: map[string][]ast.Attribute{}, m: map[issueKey]*Issue{}, reported: map[setKey]bool{},
 		ctx: ctx, ev: ev, fltrObj: map[string]fltrObjEntry{}}
 	if raw := an.Raw(); raw != nil {
@@ -605,7 +605,7 @@ func (l *linter) peerDependentOn(f policy.Filter, visited map[string]bool) bool 
 // looked up at most once per Lint call, however many times a cycle or
 // several clauses reach it.
 type fltrObjEntry struct {
-	fs  object.FilterSet
+	fs  *object.FilterSet
 	ok  bool // false: missing (or not a filter-set) — fs is unset
 	err error
 }
@@ -616,13 +616,13 @@ type fltrObjEntry struct {
 // A context already cancelled or past its deadline is reported as the fetch's
 // error without a call to the Source, so a walk over many filter-sets stops
 // promptly once the caller gives up rather than running every fetch out.
-func (l *linter) filterSetObject(n types.SetName) (fs object.FilterSet, ok bool, err error) {
+func (l *linter) filterSetObject(n types.SetName) (fs *object.FilterSet, ok bool, err error) {
 	k := n.String()
 	if e, cached := l.fltrObj[k]; cached {
 		return e.fs, e.ok, e.err
 	}
 	if cerr := l.ctx.Err(); cerr != nil {
-		return object.FilterSet{}, false, cerr
+		return nil, false, cerr
 	}
 	var e fltrObjEntry
 	set, ferr := l.ev.Src.GetSet(l.ctx, types.Ref(n))
@@ -633,10 +633,8 @@ func (l *linter) filterSetObject(n types.SetName) (fs object.FilterSet, ok bool,
 		e.err = ferr
 	default:
 		switch x := set.(type) {
-		case object.FilterSet:
-			e.fs, e.ok = x, true
 		case *object.FilterSet:
-			e.fs, e.ok = *x, true
+			e.fs, e.ok = x, true
 		}
 	}
 	l.fltrObj[k] = e

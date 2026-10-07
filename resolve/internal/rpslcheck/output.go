@@ -35,8 +35,11 @@ func (w *writer) emit(v any) {
 // attrLines maps an aut-num's attribute positions to their line numbers in
 // its text, counted from its first attribute (line 1) whatever positions
 // the object was decoded with: kind "import" (import:, mp-import:),
-// "export" or "default".
-func attrLines(an object.AutNum, kind string) []int {
+// "export" or "default". An aut-num the source does not have (nil) has none.
+func attrLines(an *object.AutNum, kind string) []int {
+	if an == nil {
+		return nil
+	}
 	raw := an.Raw()
 	if raw == nil {
 		return nil
@@ -120,7 +123,7 @@ func asText(ases []types.ASN) []string {
 }
 
 // lint writes as's issues; it reports whether any is a Warning.
-func (w *writer) lint(as types.ASN, an object.AutNum, issues []consist.Issue) (warned bool) {
+func (w *writer) lint(as types.ASN, an *object.AutNum, issues []consist.Issue) (warned bool) {
 	lines := map[string][]int{"import": attrLines(an, "import"), "export": attrLines(an, "export"), "default": attrLines(an, "default")}
 	header := false
 	for _, is := range issues {

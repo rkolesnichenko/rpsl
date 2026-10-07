@@ -546,7 +546,7 @@ type uncheckedClaims struct {
 func (u uncheckedClaims) MembersByRef(_ context.Context, set object.NamedSet) ([]object.Object, error) {
 	var out []object.Object
 	for _, o := range u.objs {
-		if an, ok := o.(object.AutNum); ok && slices.Contains(an.MemberOf, set.SetName()) {
+		if an, ok := o.(*object.AutNum); ok && slices.Contains(an.MemberOf, set.SetName()) {
 			out = append(out, o)
 		}
 	}

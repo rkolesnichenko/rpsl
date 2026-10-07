@@ -19,8 +19,8 @@ import (
 // peering-sets keep coming from GetSet.
 type PolicySource interface {
 	Source
-	AutNum(ctx context.Context, as types.ASN, source string) (object.AutNum, error)
-	InetRtr(ctx context.Context, name, source string) (object.InetRtr, error)
+	AutNum(ctx context.Context, as types.ASN, source string) (*object.AutNum, error)
+	InetRtr(ctx context.Context, name, source string) (*object.InetRtr, error)
 }
 
 // ErrNoPolicy is returned by a wrapper (Cache, rpki.Filter) whose inner Source
@@ -47,7 +47,7 @@ func (e policyEntry) decode() object.Object {
 	}
 	raw, _ := rpsl.ParseObject(e.text)
 	o, _ := object.Decode(raw)
-	return value(o)
+	return o
 }
 
 // pick returns the entry a lookup in source selects: "" the first the default
@@ -73,17 +73,17 @@ func (s *MemSource) pick(entries []policyEntry, source string) (policyEntry, err
 // text-kept entry (Corpus.KeepPolicy) is decoded on every call — MemSource
 // holds no decoded cache of its own, so it stays an immutable, freely
 // shareable value; wrap it in a Cache for repeated lookups.
-func (s *MemSource) AutNum(_ context.Context, as types.ASN, source string) (object.AutNum, error) {
+func (s *MemSource) AutNum(_ context.Context, as types.ASN, source string) (*object.AutNum, error) {
 	if !s.policy {
-		return object.AutNum{}, ErrNoPolicy
+		return nil, ErrNoPolicy
 	}
 	e, err := s.pick(s.autnums[as], source)
 	if err != nil {
-		return object.AutNum{}, fmt.Errorf("resolve: aut-num %s: %w", as, err)
+		return nil, fmt.Errorf("resolve: aut-num %s: %w", as, err)
 	}
-	an, ok := e.decode().(object.AutNum)
+	an, ok := e.decode().(*object.AutNum)
 	if !ok || an.AS != as {
-		return object.AutNum{}, fmt.Errorf("resolve: aut-num %s: %w", as, ErrNotFound)
+		return nil, fmt.Errorf("resolve: aut-num %s: %w", as, ErrNotFound)
 	}
 	return an, nil
 }
@@ -92,17 +92,17 @@ func (s *MemSource) AutNum(_ context.Context, as types.ASN, source string) (obje
 // from source ("" for the precedence), or ErrNoPolicy as AutNum. Like
 // AutNum, a text-kept entry is decoded on every call; wrap the source in a
 // Cache for repeated lookups.
-func (s *MemSource) InetRtr(_ context.Context, name, source string) (object.InetRtr, error) {
+func (s *MemSource) InetRtr(_ context.Context, name, source string) (*object.InetRtr, error) {
 	if !s.policy {
-		return object.InetRtr{}, ErrNoPolicy
+		return nil, ErrNoPolicy
 	}
 	e, err := s.pick(s.rtrs[rtrKey(name)], source)
 	if err != nil {
-		return object.InetRtr{}, fmt.Errorf("resolve: inet-rtr %s: %w", name, err)
+		return nil, fmt.Errorf("resolve: inet-rtr %s: %w", name, err)
 	}
-	ir, ok := e.decode().(object.InetRtr)
+	ir, ok := e.decode().(*object.InetRtr)
 	if !ok || rtrKey(ir.Name) != rtrKey(name) {
-		return object.InetRtr{}, fmt.Errorf("resolve: inet-rtr %s: %w", name, ErrNotFound)
+		return nil, fmt.Errorf("resolve: inet-rtr %s: %w", name, ErrNotFound)
 	}
 	return ir, nil
 }

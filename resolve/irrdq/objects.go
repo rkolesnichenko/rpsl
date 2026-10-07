@@ -99,9 +99,9 @@ func objectEntry(r *Registry, o object.Object) entry {
 	var p netip.Prefix
 	var origin types.ASN
 	switch t := o.(type) {
-	case object.Route:
+	case *object.Route:
 		p, origin = t.Prefix, t.Origin
-	case object.Route6:
+	case *object.Route6:
 		p, origin = t.Prefix, t.Origin
 	default:
 		return entry{reg: r, obj: o.Raw()}

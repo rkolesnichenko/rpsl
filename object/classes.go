@@ -33,10 +33,10 @@ type AutNum struct {
 }
 
 // Class returns "aut-num".
-func (a AutNum) Class() string { return "aut-num" }
+func (a *AutNum) Class() string { return "aut-num" }
 
 // Raw returns the object's lossless source, or nil for one built without it.
-func (a AutNum) Raw() *ast.Object { return a.raw }
+func (a *AutNum) Raw() *ast.Object { return a.raw }
 
 func decodeAutNum(d *decoder) AutNum {
 	an := AutNum{
@@ -98,10 +98,10 @@ type Mntner struct {
 }
 
 // Class returns "mntner".
-func (m Mntner) Class() string { return "mntner" }
+func (m *Mntner) Class() string { return "mntner" }
 
 // Raw returns the object's lossless source, or nil for one built without it.
-func (m Mntner) Raw() *ast.Object { return m.raw }
+func (m *Mntner) Raw() *ast.Object { return m.raw }
 
 func decodeMntner(d *decoder) Mntner {
 	return Mntner{
@@ -131,10 +131,10 @@ type Person struct {
 }
 
 // Class returns "person".
-func (p Person) Class() string { return "person" }
+func (p *Person) Class() string { return "person" }
 
 // Raw returns the object's lossless source, or nil for one built without it.
-func (p Person) Raw() *ast.Object { return p.raw }
+func (p *Person) Raw() *ast.Object { return p.raw }
 
 func decodePerson(d *decoder) Person {
 	var nh types.NICHandle
@@ -172,10 +172,10 @@ type Role struct {
 }
 
 // Class returns "role".
-func (r Role) Class() string { return "role" }
+func (r *Role) Class() string { return "role" }
 
 // Raw returns the object's lossless source, or nil for one built without it.
-func (r Role) Raw() *ast.Object { return r.raw }
+func (r *Role) Raw() *ast.Object { return r.raw }
 
 func decodeRole(d *decoder) Role {
 	var nh types.NICHandle
@@ -222,10 +222,10 @@ type Route struct {
 }
 
 // Class returns "route".
-func (r Route) Class() string { return "route" }
+func (r *Route) Class() string { return "route" }
 
 // Raw returns the object's lossless source, or nil for one built without it.
-func (r Route) Raw() *ast.Object { return r.raw }
+func (r *Route) Raw() *ast.Object { return r.raw }
 
 func decodeRoute(d *decoder) Route {
 	pfx := d.routePrefix("route", false)
@@ -271,10 +271,10 @@ type Route6 struct {
 }
 
 // Class returns "route6".
-func (r Route6) Class() string { return "route6" }
+func (r *Route6) Class() string { return "route6" }
 
 // Raw returns the object's lossless source, or nil for one built without it.
-func (r Route6) Raw() *ast.Object { return r.raw }
+func (r *Route6) Raw() *ast.Object { return r.raw }
 
 func decodeRoute6(d *decoder) Route6 {
 	pfx := d.routePrefix("route6", true)
@@ -315,10 +315,10 @@ type AsSet struct {
 }
 
 // Class returns "as-set".
-func (s AsSet) Class() string { return "as-set" }
+func (s *AsSet) Class() string { return "as-set" }
 
 // Raw returns the object's lossless source, or nil for one built without it.
-func (s AsSet) Raw() *ast.Object { return s.raw }
+func (s *AsSet) Raw() *ast.Object { return s.raw }
 
 func decodeAsSet(d *decoder) AsSet {
 	members := d.members("members", "object/as-set-members", types.ClassAsSet)
@@ -349,10 +349,10 @@ type RouteSet struct {
 }
 
 // Class returns "route-set".
-func (s RouteSet) Class() string { return "route-set" }
+func (s *RouteSet) Class() string { return "route-set" }
 
 // Raw returns the object's lossless source, or nil for one built without it.
-func (s RouteSet) Raw() *ast.Object { return s.raw }
+func (s *RouteSet) Raw() *ast.Object { return s.raw }
 
 func decodeRouteSet(d *decoder) RouteSet {
 	members := d.members("members", "object/route-set-members", types.ClassRouteSet)

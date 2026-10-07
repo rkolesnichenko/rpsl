@@ -183,3 +183,17 @@ func TestCachePolicyKeyIsCanonical(t *testing.T) {
 		t.Errorf(`InetRtr(r, "ripeſ") = %+v from the cache; want an invalid source name`, ir)
 	}
 }
+
+// TestPolicyLookupMissIsNil: a lookup that finds nothing returns a nil
+// pointer beside its error, never a zero object.
+func TestPolicyLookupMissIsNil(t *testing.T) {
+	src := (&resolve.Corpus{KeepPolicy: true}).Source()
+	an, err := src.AutNum(context.Background(), 64500, "")
+	if err == nil || an != nil {
+		t.Errorf("AutNum miss = %v, %v; want nil and an error", an, err)
+	}
+	ir, err := src.InetRtr(context.Background(), "rtr.example.net", "")
+	if err == nil || ir != nil {
+		t.Errorf("InetRtr miss = %v, %v; want nil and an error", ir, err)
+	}
+}

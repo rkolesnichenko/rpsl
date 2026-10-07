@@ -270,8 +270,6 @@ func directASNs(ctx context.Context, src resolve.Source, n types.SetName) (asns 
 		}
 		var a types.ASN
 		switch an := o.(type) {
-		case object.AutNum:
-			a = an.AS
 		case *object.AutNum:
 			a = an.AS
 		default:

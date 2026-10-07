@@ -492,9 +492,9 @@ func (s *Source) getSet(ctx context.Context, name types.SetName, source string) 
 	}
 	common := object.Common{Source: source}
 	if name.Class() == types.ClassAsSet {
-		return object.AsSet{Common: common, Name: name, Members: members, SrcMembers: src}, nil
+		return &object.AsSet{Common: common, Name: name, Members: members, SrcMembers: src}, nil
 	}
-	return object.RouteSet{Common: common, Name: name, Members: members, SrcMembers: src}, nil
+	return &object.RouteSet{Common: common, Name: name, Members: members, SrcMembers: src}, nil
 }
 
 // selfReference restores a set's reference to its own name, which IRRd's
@@ -540,31 +540,31 @@ func (s *Source) fetchSet(ctx context.Context, name types.SetName) (object.Named
 // AutNum fetches the aut-num of as ("!maut-num,AS1"), in source alone when it
 // is set; a registry the server does not have is resolve.ErrNotFound, known
 // as GetSet knows it (from "!j-*", without a query of its own).
-func (s *Source) AutNum(ctx context.Context, as types.ASN, source string) (object.AutNum, error) {
+func (s *Source) AutNum(ctx context.Context, as types.ASN, source string) (*object.AutNum, error) {
 	o, err := s.fetchObject(ctx, "aut-num", as.String(), source)
 	if err != nil {
-		return object.AutNum{}, err
+		return nil, err
 	}
-	an, ok := o.(object.AutNum)
+	an, ok := o.(*object.AutNum)
 	if !ok || an.AS != as {
-		return object.AutNum{}, fmt.Errorf("irrd: !maut-num,%s answered with another object", as)
+		return nil, fmt.Errorf("irrd: !maut-num,%s answered with another object", as)
 	}
 	return an, nil
 }
 
 // InetRtr fetches the inet-rtr named name ("!minet-rtr,<name>"), in source
 // alone when it is set. The name must be a DNS name.
-func (s *Source) InetRtr(ctx context.Context, name, source string) (object.InetRtr, error) {
+func (s *Source) InetRtr(ctx context.Context, name, source string) (*object.InetRtr, error) {
 	if !dnsName(name) {
-		return object.InetRtr{}, fmt.Errorf("irrd: invalid inet-rtr name %q", name)
+		return nil, fmt.Errorf("irrd: invalid inet-rtr name %q", name)
 	}
 	o, err := s.fetchObject(ctx, "inet-rtr", name, source)
 	if err != nil {
-		return object.InetRtr{}, err
+		return nil, err
 	}
-	ir, ok := o.(object.InetRtr)
+	ir, ok := o.(*object.InetRtr)
 	if !ok || !strings.EqualFold(strings.TrimSpace(ir.Name), name) {
-		return object.InetRtr{}, fmt.Errorf("irrd: !minet-rtr,%s answered with another object", name)
+		return nil, fmt.Errorf("irrd: !minet-rtr,%s answered with another object", name)
 	}
 	return ir, nil
 }

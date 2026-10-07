@@ -68,9 +68,9 @@ func mustSet(t *testing.T, s string) types.SetName {
 }
 
 // refSet is a route-set in source whose mbrs-by-ref lists refs.
-func refSet(t *testing.T, name, source string, refs ...string) object.RouteSet {
+func refSet(t *testing.T, name, source string, refs ...string) *object.RouteSet {
 	t.Helper()
-	return object.RouteSet{Name: mustSet(t, name), MbrsByRef: refs, Common: object.Common{Source: source}}
+	return &object.RouteSet{Name: mustSet(t, name), MbrsByRef: refs, Common: object.Common{Source: source}}
 }
 
 func TestWhoisGetSet(t *testing.T) {
@@ -127,7 +127,7 @@ func TestWhoisMembersByRefMntnerCheck(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("got %d objects, want 1 (only MAINT-GOOD)", len(got))
 	}
-	if r, ok := got[0].(object.Route); !ok || r.Prefix.String() != "198.51.100.0/24" {
+	if r, ok := got[0].(*object.Route); !ok || r.Prefix.String() != "198.51.100.0/24" {
 		t.Errorf("member = %+v, want the MAINT-GOOD route", got[0])
 	}
 }

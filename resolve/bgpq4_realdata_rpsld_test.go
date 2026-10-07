@@ -96,9 +96,9 @@ func TestRpsldMatchesRpslqRealData(t *testing.T) {
 					others++
 				}
 				switch s := obj.(type) {
-				case object.AsSet:
+				case *object.AsSet:
 					asSets = append(asSets, sized{s.Name.String(), len(s.SetMembers())})
-				case object.RouteSet:
+				case *object.RouteSet:
 					routeSets = append(routeSets, sized{s.Name.String(), len(s.SetMembers())})
 				}
 			}

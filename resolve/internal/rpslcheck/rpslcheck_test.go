@@ -257,9 +257,9 @@ func TestNoPolicyEitherWay(t *testing.T) {
 // context ends: Lint looks them up, Peers never does.
 type slowRouters struct{ *resolve.MemSource }
 
-func (s slowRouters) InetRtr(ctx context.Context, name, source string) (object.InetRtr, error) {
+func (s slowRouters) InetRtr(ctx context.Context, name, source string) (*object.InetRtr, error) {
 	<-ctx.Done()
-	return object.InetRtr{}, ctx.Err()
+	return nil, ctx.Err()
 }
 
 // Ruling R15: a sweep lists an aut-num's peers before its lint, each under

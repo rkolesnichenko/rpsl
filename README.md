@@ -210,7 +210,7 @@ obj, _ := rpsl.ParseObject(src)
 fmt.Println(obj.String() == src) // true — byte-for-byte
 
 decoded, _ := object.Decode(obj)
-an := decoded.(object.AutNum)
+an := decoded.(*object.AutNum)
 fmt.Println(an.AS, an.MntBy) // AS65001 [EXAMPLE-MNT]
 ```
 
@@ -254,11 +254,11 @@ for obj, diags := range rpsl.Parse(reader) {
 ### Typed decode
 
 `object.Decode` upgrades a generic object to its class type via a registry;
-unknown classes degrade to `object.Generic` rather than erroring.
+unknown classes degrade to `*object.Generic` rather than erroring.
 
 ```go
 decoded, diags := object.Decode(obj)
-an := decoded.(object.AutNum)
+an := decoded.(*object.AutNum)
 fmt.Println(an.AS)       // AS65001
 fmt.Println(an.Imports)  // []policy.Import — parsed, not raw strings
 fmt.Println(an.MntBy)    // [EXAMPLE-MNT]

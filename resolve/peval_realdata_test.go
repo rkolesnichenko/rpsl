@@ -68,8 +68,8 @@ func TestRealDataPeval(t *testing.T) {
 			}
 			for o := range rpsl.Parse(zr) {
 				if obj, _ := rpsl.Decode(o); obj != nil {
-					if an, ok := obj.(object.AutNum); ok {
-						fn(&an)
+					if an, ok := obj.(*object.AutNum); ok {
+						fn(an)
 					}
 				}
 			}

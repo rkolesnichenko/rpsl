@@ -77,8 +77,8 @@ func TestSuspectValuesAreDiagnosed(t *testing.T) {
 
 // RIPE allows several country: attributes on an inetnum/inet6num.
 func TestInetnumCountryIsMultiValued(t *testing.T) {
-	in := mustDecode(t, "inetnum: 192.0.2.0 - 192.0.2.255\ncountry: NL\ncountry: BE\n").(Inetnum)
-	in6 := mustDecode(t, "inet6num: 2001:db8::/32\ncountry: NL\ncountry: BE\n").(Inet6num)
+	in := mustDecode(t, "inetnum: 192.0.2.0 - 192.0.2.255\ncountry: NL\ncountry: BE\n").(*Inetnum)
+	in6 := mustDecode(t, "inet6num: 2001:db8::/32\ncountry: NL\ncountry: BE\n").(*Inet6num)
 	if !reflect.DeepEqual(in.Country, []string{"NL", "BE"}) || !reflect.DeepEqual(in6.Country, []string{"NL", "BE"}) {
 		t.Errorf("Country = %q / %q, want [NL BE]", in.Country, in6.Country)
 	}
@@ -88,19 +88,19 @@ func TestInetnumCountryIsMultiValued(t *testing.T) {
 // in the typed struct; a hole with host bits is read as its network.
 func TestImpossibleValuesAreDropped(t *testing.T) {
 	decode := func(src string) Object { obj, _ := Decode(parse(src)); return obj }
-	in := decode("inetnum: 192.0.2.255 - 192.0.2.0\n").(Inetnum)
+	in := decode("inetnum: 192.0.2.255 - 192.0.2.0\n").(*Inetnum)
 	if in.Lo.IsValid() || in.Hi.IsValid() {
 		t.Errorf("reversed inetnum range = %s - %s, want none", in.Lo, in.Hi)
 	}
-	b := decode("as-block: AS10 - AS1\n").(AsBlock)
+	b := decode("as-block: AS10 - AS1\n").(*AsBlock)
 	if b.Lo != 0 || b.Hi != 0 {
 		t.Errorf("reversed as-block = %s - %s, want none", b.Lo, b.Hi)
 	}
-	in6 := decode("inet6num: 192.0.2.0/24\n").(Inet6num)
+	in6 := decode("inet6num: 192.0.2.0/24\n").(*Inet6num)
 	if in6.Prefix.IsValid() {
 		t.Errorf("IPv4 inet6num = %s, want none", in6.Prefix)
 	}
-	r := decode("route: 192.0.2.0/24\norigin: AS1\nholes: 192.0.2.1/25\n").(Route)
+	r := decode("route: 192.0.2.0/24\norigin: AS1\nholes: 192.0.2.1/25\n").(*Route)
 	if len(r.Holes) != 1 || r.Holes[0].String() != "192.0.2.0/25" {
 		t.Errorf("holes = %v, want [192.0.2.0/25]", r.Holes)
 	}

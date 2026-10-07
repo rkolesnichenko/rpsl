@@ -39,13 +39,13 @@ func sameAnswers(t *testing.T, label string, objs []object.Object, got, want *re
 			names[s.SetName().String()] = s.SetName()
 		}
 		switch r := o.(type) {
-		case object.Route:
+		case *object.Route:
 			asns[r.Origin] = true
-		case object.Route6:
+		case *object.Route6:
 			asns[r.Origin] = true
-		case object.AutNum:
+		case *object.AutNum:
 			asns[r.AS] = true
-		case object.InetRtr:
+		case *object.InetRtr:
 			rtrNames[r.Name] = true
 		}
 	}
@@ -168,13 +168,13 @@ func latest(objs []object.Object) []object.Object {
 		switch t := o.(type) {
 		case object.NamedSet:
 			return o.Class() + " " + t.SetName().String() + " " + src
-		case object.Route:
+		case *object.Route:
 			return fmt.Sprintf("route %s%s %s", t.Prefix.Masked(), t.Origin, src)
-		case object.Route6:
+		case *object.Route6:
 			return fmt.Sprintf("route6 %s%s %s", t.Prefix.Masked(), t.Origin, src)
-		case object.AutNum:
+		case *object.AutNum:
 			return fmt.Sprintf("aut-num %s %s", t.AS, src)
-		case object.InetRtr:
+		case *object.InetRtr:
 			return fmt.Sprintf("inet-rtr %s %s", strings.ToUpper(strings.TrimSpace(t.Name)), src)
 		}
 		return fmt.Sprintf("%p", o)
@@ -296,8 +296,8 @@ func TestCorpusKeeps(t *testing.T) {
 	if c.Put(nilRoute) {
 		t.Error("a nil *Route was kept")
 	}
-	r := decodeOne(t, "route: 10.0.0.0/8\norigin: AS7\nsource: RIPE\n").(object.Route)
-	if !c.Put(&r) || c.Len() != 5 {
+	r := decodeOne(t, "route: 10.0.0.0/8\norigin: AS7\nsource: RIPE\n").(*object.Route)
+	if !c.Put(r) || c.Len() != 5 {
 		t.Error("a *Route was not kept")
 	}
 }
@@ -342,7 +342,7 @@ func TestCorpusReplaces(t *testing.T) {
 	c.Put(decodeOne(t, "as-set: as-y\nmembers: AS2\nsource: RIPE\n"))
 	n, _ := types.ParseSetName("AS-Y")
 	s, _ := c.Source().GetSet(ctx, types.Ref(n))
-	if as := s.(object.AsSet); len(as.Members) != 1 || as.Members[0].AS != 2 {
+	if as := s.(*object.AsSet); len(as.Members) != 1 || as.Members[0].AS != 2 {
 		t.Fatalf("AS-Y = %+v", as.Members)
 	}
 }

@@ -50,7 +50,7 @@ func (e *Expander) ExpandRouters(ctx context.Context, ref types.SetRef) (RouterS
 		}
 		// An inet-rtr that claims membership joins under its own name.
 		for _, o := range nd.claims {
-			ir, ok := o.(object.InetRtr)
+			ir, ok := o.(*object.InetRtr)
 			if !ok {
 				continue
 			}

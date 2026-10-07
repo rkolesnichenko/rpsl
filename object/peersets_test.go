@@ -17,7 +17,7 @@ source:      RIPE
 	if len(diags) != 0 {
 		t.Fatalf("diags = %+v", diags)
 	}
-	ps, ok := obj.(PeeringSet)
+	ps, ok := obj.(*PeeringSet)
 	if !ok {
 		t.Fatalf("Decode = %T, want PeeringSet", obj)
 	}
@@ -45,7 +45,7 @@ source:     RIPE
 	if len(diags) != 0 {
 		t.Fatalf("diags = %+v", diags)
 	}
-	fs, ok := obj.(FilterSet)
+	fs, ok := obj.(*FilterSet)
 	if !ok {
 		t.Fatalf("Decode = %T, want FilterSet", obj)
 	}
@@ -69,7 +69,7 @@ source:      RIPE
 	if len(diags) != 0 {
 		t.Fatalf("diags = %+v", diags)
 	}
-	rs, ok := obj.(RtrSet)
+	rs, ok := obj.(*RtrSet)
 	if !ok {
 		t.Fatalf("Decode = %T, want RtrSet", obj)
 	}

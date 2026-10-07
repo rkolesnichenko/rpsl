@@ -581,7 +581,7 @@ type evilSource struct{ resolve.PolicySource }
 
 func (s evilSource) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error) {
 	if ref.Name().String() == "AS-EVIL" {
-		return object.RouteSet{Name: ref.Name()}, nil
+		return &object.RouteSet{Name: ref.Name()}, nil
 	}
 	return s.PolicySource.GetSet(ctx, ref)
 }

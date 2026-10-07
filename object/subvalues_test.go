@@ -22,7 +22,7 @@ aggr-mtd:       outbound AS-ANY
 export-comps:   {128.8.0.0/16^-}
 mnt-by:         EXAMPLE-MNT
 source:         RIPE
-`).(Route)
+`).(*Route)
 
 	if len(r.Pingable) != 2 || r.Pingable[0].String() != "128.8.0.1" || r.Pingable[1].String() != "128.8.0.2" {
 		t.Errorf("Pingable = %v", r.Pingable)
@@ -68,7 +68,7 @@ source:         RIPE
 
 // A route with none of the aggregation attributes leaves them all zero.
 func TestDecodeRouteAggregationAbsent(t *testing.T) {
-	r := mustDecode(t, "route: 192.0.2.0/24\norigin: AS1\nmnt-by: M\nsource: RIPE\n").(Route)
+	r := mustDecode(t, "route: 192.0.2.0/24\norigin: AS1\nmnt-by: M\nsource: RIPE\n").(*Route)
 	if len(r.Pingable) != 0 || len(r.Inject) != 0 {
 		t.Errorf("Pingable %v, Inject %v", r.Pingable, r.Inject)
 	}
@@ -98,7 +98,7 @@ func TestDecodeRouteAggregationDiagnostics(t *testing.T) {
 	if d, ok := byRule["object/route-pingable"]; !ok || d.Span.StartLine != 4 {
 		t.Errorf("pingable diagnostic = %+v", d)
 	}
-	r := obj.(Route)
+	r := obj.(*Route)
 	if r.Origin.String() != "AS1" || r.Prefix.String() != "192.0.2.0/24" {
 		t.Errorf("the rest of the object was lost: %+v", r)
 	}
@@ -114,7 +114,7 @@ peer:           BGP4 192.0.2.2 asno(AS2), flap_damp()
 mp-peer:        BGP4 2001:db8::2 asno(AS2)
 mnt-by:         EXAMPLE-MNT
 source:         RIPE
-`).(InetRtr)
+`).(*InetRtr)
 
 	if len(r.Ifaddr) != 1 || r.Ifaddr[0].Addr.String() != "192.0.2.1" || r.Ifaddr[0].Masklen != 30 {
 		t.Fatalf("Ifaddr = %+v", r.Ifaddr)
@@ -153,7 +153,7 @@ auth:           SSO ex@example.net
 auth:           NONE
 mnt-by:         EXAMPLE-MNT
 source:         RIPE
-`).(Mntner)
+`).(*Mntner)
 	if len(m.Auth) != 4 {
 		t.Fatalf("Auth = %+v", m.Auth)
 	}
@@ -177,7 +177,7 @@ source:         RIPE
 	if len(diags) != 1 || diags[0].Severity != ast.Warning || diags[0].Rule != "object/mntner-auth" {
 		t.Fatalf("diags = %+v, want one object/mntner-auth warning", diags)
 	}
-	if a := obj.(Mntner).Auth; len(a) != 1 || a[0].Method != AuthUnknown || a[0].Raw != "WEIRD-PW abc" {
+	if a := obj.(*Mntner).Auth; len(a) != 1 || a[0].Method != AuthUnknown || a[0].Raw != "WEIRD-PW abc" {
 		t.Errorf("Auth = %+v", a)
 	}
 }
@@ -204,7 +204,7 @@ changed:        other@example.net
 created:        2020-01-01T00:00:00Z
 last-modified:  2021-06-30T12:34:56Z
 source:         RIPE
-`).(Route)
+`).(*Route)
 	if len(r.Changed) != 2 {
 		t.Fatalf("Changed = %+v", r.Changed)
 	}
@@ -230,7 +230,7 @@ source:         RIPE
 	if len(diags) != 1 || diags[0].Severity != ast.Warning || diags[0].Rule != "object/route-created" {
 		t.Fatalf("diags = %+v, want one object/route-created warning", diags)
 	}
-	if c := obj.(Route).Created; c.Raw != "yesterday" || c.Known() {
+	if c := obj.(*Route).Created; c.Raw != "yesterday" || c.Known() {
 		t.Errorf("Created = %+v", c)
 	}
 }
@@ -243,7 +243,7 @@ mnt-routes:     MNT-A
 mnt-routes:     MNT-B ANY
 mnt-routes:     MNT-C {192.0.2.0/25^+, 192.0.2.128/25}
 source:         RIPE
-`).(Route)
+`).(*Route)
 	if len(r.MntRoutes) != 3 {
 		t.Fatalf("MntRoutes = %+v", r.MntRoutes)
 	}
@@ -308,7 +308,7 @@ func TestDecodeRtrSetBadMember(t *testing.T) {
 	if len(diags) != 1 || diags[0].Severity != ast.Error || diags[0].Rule != "object/rtr-set-members" {
 		t.Fatalf("diags = %+v, want one object/rtr-set-members error", diags)
 	}
-	ms := obj.(RtrSet).Members
+	ms := obj.(*RtrSet).Members
 	if len(ms) != 3 || ms[0].Kind != RtrMemberRouter || ms[1].Kind != RtrMemberInvalid || ms[2].Kind != RtrMemberRouter {
 		t.Errorf("Members = %+v", ms)
 	}

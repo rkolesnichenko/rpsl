@@ -31,10 +31,10 @@ type Cache struct
 	Src Source
 	TTL time.Duration
 	MaxEntries int
-func (*Cache) AutNum(ctx context.Context, as types.ASN, source string) (object.AutNum, error)
+func (*Cache) AutNum(ctx context.Context, as types.ASN, source string) (*object.AutNum, error)
 func (*Cache) AutNums() (iter.Seq[types.ASN], error)
 func (*Cache) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error)
-func (*Cache) InetRtr(ctx context.Context, name, source string) (object.InetRtr, error)
+func (*Cache) InetRtr(ctx context.Context, name, source string) (*object.InetRtr, error)
 func (*Cache) MembersByRef(ctx context.Context, set object.NamedSet) ([]object.Object, error)
 func (*Cache) NamedBy(as types.ASN) ([]types.ASN, error)
 func (*Cache) OriginatedRoutes(ctx context.Context, as types.ASN, afi types.AFI) ([]netip.Prefix, error)
@@ -114,10 +114,10 @@ func (*Expander) NormalizeFilter(ctx context.Context, f policy.Filter) (NormalFi
 type Limit uint8
 func (Limit) String() string
 type MemSource struct
-func (*MemSource) AutNum(_ context.Context, as types.ASN, source string) (object.AutNum, error)
+func (*MemSource) AutNum(_ context.Context, as types.ASN, source string) (*object.AutNum, error)
 func (*MemSource) AutNums() (iter.Seq[types.ASN], error)
 func (*MemSource) GetSet(_ context.Context, ref types.SetRef) (object.NamedSet, error)
-func (*MemSource) InetRtr(_ context.Context, name, source string) (object.InetRtr, error)
+func (*MemSource) InetRtr(_ context.Context, name, source string) (*object.InetRtr, error)
 func (*MemSource) MembersByRef(_ context.Context, set object.NamedSet) ([]object.Object, error)
 func (*MemSource) NamedBy(as types.ASN) ([]types.ASN, error)
 func (*MemSource) OriginatedRoutes(_ context.Context, as types.ASN, afi types.AFI) ([]netip.Prefix, error)
@@ -147,8 +147,8 @@ type PolicyIndex interface
 	NamedBy(as types.ASN) ([]types.ASN, error)
 type PolicySource interface
 	Source
-	AutNum(ctx context.Context, as types.ASN, source string) (object.AutNum, error)
-	InetRtr(ctx context.Context, name, source string) (object.InetRtr, error)
+	AutNum(ctx context.Context, as types.ASN, source string) (*object.AutNum, error)
+	InetRtr(ctx context.Context, name, source string) (*object.InetRtr, error)
 type PrefixSet struct
 func (PrefixSet) Has(p netip.Prefix) bool
 func (PrefixSet) Len() int

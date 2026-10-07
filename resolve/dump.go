@@ -152,7 +152,7 @@ func Expandable(o object.Object) bool {
 		return true
 	}
 	switch o.(type) {
-	case object.Route, object.Route6, object.AutNum, object.InetRtr:
+	case *object.Route, *object.Route6, *object.AutNum, *object.InetRtr:
 		return true
 	}
 	return false

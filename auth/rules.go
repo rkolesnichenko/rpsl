@@ -139,7 +139,7 @@ func (c *check) mntners(what string, names []string, self *object.Mntner) (bool,
 			if !strings.EqualFold(strings.TrimSpace(n), self.Handle) {
 				continue
 			}
-			ok, _, err := CheckMntner(c.ctx, *self, c.cred, c.v)
+			ok, _, err := CheckMntner(c.ctx, self, c.cred, c.v)
 			if err != nil {
 				return false, err
 			}
@@ -176,8 +176,8 @@ func (c *check) ripe(u Update) (Decision, error) {
 	switch u.Action {
 	case Create:
 		var self *object.Mntner
-		if m, ok := o.(object.Mntner); ok {
-			self = &m
+		if m, ok := o.(*object.Mntner); ok {
+			self = m
 		}
 		if ok, err := c.mntners("the object's own maintainers", values(o, "mnt-by"), self); err != nil || !ok {
 			return c.d, err
@@ -216,15 +216,15 @@ func (c *check) ripe(u Update) (Decision, error) {
 // ripeParent applies the parent's consent a creation needs, by class.
 func (c *check) ripeParent(o object.Object) (bool, error) {
 	switch t := o.(type) {
-	case object.Inetnum:
+	case *object.Inetnum:
 		return c.addressParent("inetnum", t.Lo, t.Hi)
-	case object.Inet6num:
+	case *object.Inet6num:
 		lo, hi, ok := prefixRange(t.Prefix)
 		if !ok {
 			return c.fail("the inet6num has no valid prefix")
 		}
 		return c.addressParent("inet6num", lo, hi)
-	case object.AutNum:
+	case *object.AutNum:
 		blocks, err := c.db.ASBlocks(c.ctx, t.AS)
 		if err != nil {
 			return false, err
@@ -234,11 +234,11 @@ func (c *check) ripeParent(o object.Object) (bool, error) {
 		}
 		b := blocks[0]
 		return c.mntners("the parent as-block "+b.Lo.String()+" - "+b.Hi.String(), firstPresent(b, "mnt-lower", "mnt-by"), nil)
-	case object.Route:
+	case *object.Route:
 		return c.routeParent("route", "inetnum", t.Prefix)
-	case object.Route6:
+	case *object.Route6:
 		return c.routeParent("route6", "inet6num", t.Prefix)
-	case object.Domain:
+	case *object.Domain:
 		return c.domainParent(t)
 	case object.NamedSet:
 		return c.namedParent(t)
@@ -314,7 +314,7 @@ func (c *check) firstCovering(lo, hi netip.Addr, classes ...string) (object.Obje
 // specific inetnum or inet6num of its range. Its mnt-domains: decides, else its
 // mnt-lower: when it is strictly less specific, else its mnt-by:. A domain
 // outside in-addr.arpa and ip6.arpa (e164.arpa) has no parent.
-func (c *check) domainParent(d object.Domain) (bool, error) {
+func (c *check) domainParent(d *object.Domain) (bool, error) {
 	lo, hi, ok := d.ReverseRange()
 	if !ok {
 		if isReverseName(d.Name) {
@@ -344,7 +344,7 @@ func (c *check) domainParent(d object.Domain) (bool, error) {
 // its mnt-domains:, as the RIPE Database does when the domain's own
 // maintainers fail.
 func (c *check) domainHolder(stored object.Object) (bool, error) {
-	d, ok := stored.(object.Domain)
+	d, ok := stored.(*object.Domain)
 	if !ok {
 		return false, nil
 	}
@@ -480,17 +480,17 @@ func (c *check) referenced(name string, classes []string) (object.Object, string
 // irtLookup is an IrtRegistry over a Database.
 type irtLookup struct{ db Database }
 
-func (l irtLookup) Irt(ctx context.Context, name string) (object.Irt, error) {
+func (l irtLookup) Irt(ctx context.Context, name string) (*object.Irt, error) {
 	o, err := l.db.Object(ctx, "irt", name)
 	if errors.Is(err, ErrNotFound) {
-		return object.Irt{}, fmt.Errorf("%w: %s", ErrNoIrt, name)
+		return nil, fmt.Errorf("%w: %s", ErrNoIrt, name)
 	}
 	if err != nil {
-		return object.Irt{}, err
+		return nil, err
 	}
-	irt, ok := o.(object.Irt)
-	if !ok {
-		return object.Irt{}, fmt.Errorf("%w: %s", ErrNoIrt, name)
+	irt, ok := o.(*object.Irt)
+	if !ok || irt == nil {
+		return nil, fmt.Errorf("%w: %s", ErrNoIrt, name)
 	}
 	return irt, nil
 }
@@ -500,7 +500,7 @@ func (l irtLookup) Irt(ctx context.Context, name string) (object.Irt, error) {
 func (c *check) irrd(u Update) (Decision, error) {
 	o := u.Object
 	if u.Action == Create {
-		if _, ok := o.(object.Mntner); ok {
+		if _, ok := o.(*object.Mntner); ok {
 			return c.refuse("a new mntner is an administrator's to create")
 		}
 	}
@@ -519,7 +519,7 @@ func (c *check) irrd(u Update) (Decision, error) {
 		if ok, err := c.mntners("the stored object's maintainers", values(stored, "mnt-by"), nil); err != nil || !ok {
 			return c.d, err
 		}
-		if m, isMntner := o.(object.Mntner); isMntner && u.Action == Modify {
+		if m, isMntner := o.(*object.Mntner); isMntner && u.Action == Modify {
 			ok, _, err := CheckMntner(c.ctx, m, c.cred, c.v)
 			if err != nil {
 				return Decision{}, err
@@ -545,9 +545,9 @@ func (c *check) irrdRelated(o object.Object) (bool, error) {
 	var routeClass, spaceClass string
 	var p netip.Prefix
 	switch t := o.(type) {
-	case object.Route:
+	case *object.Route:
 		routeClass, spaceClass, p = "route", "inetnum", t.Prefix
-	case object.Route6:
+	case *object.Route6:
 		routeClass, spaceClass, p = "route6", "inet6num", t.Prefix
 	case object.NamedSet:
 		first, _, _ := strings.Cut(t.SetName().String(), ":")

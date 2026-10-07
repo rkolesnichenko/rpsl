@@ -87,8 +87,7 @@ func (c *Corpus) keepPolicy() bool { return c.KeepPolicy || c.IndexPeers }
 // primary key and source. It reports whether anything of o is kept; when
 // nothing is, an earlier object with its identity is still removed.
 func (c *Corpus) Put(o object.Object) bool {
-	o = value(o)
-	if o == nil {
+	if isNil(o) {
 		return false
 	}
 	c.init()
@@ -101,16 +100,16 @@ func (c *Corpus) Put(o object.Object) bool {
 	memberOf, _, _, claims := claimant(o)
 	var class, pk, source string
 	switch t := o.(type) {
-	case object.Route:
+	case *object.Route:
 		class, source = "route", t.Source
-	case object.Route6:
+	case *object.Route6:
 		class, source = "route6", t.Source
-	case object.AutNum:
+	case *object.AutNum:
 		if !claims {
 			return false // its AS did not decode: no key, and nothing the engine reads
 		}
 		class, pk, source = "aut-num", t.AS.String(), t.Source
-	case object.InetRtr:
+	case *object.InetRtr:
 		class, pk, source = "inet-rtr", strings.ToUpper(strings.TrimSpace(t.Name)), t.Source
 	default:
 		return false
@@ -141,7 +140,7 @@ func (c *Corpus) Put(o object.Object) bool {
 	if c.keepPolicy() && (class == "aut-num" || class == "inet-rtr") {
 		if raw := o.Raw(); raw != nil {
 			var named []types.ASN
-			if an, ok := o.(object.AutNum); ok && c.IndexPeers {
+			if an, ok := o.(*object.AutNum); ok && c.IndexPeers {
 				named = peeringASNs(an)
 			}
 			c.putText(k, ObjectText(raw), named)

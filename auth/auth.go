@@ -76,7 +76,7 @@ type Verifier interface {
 type Registry interface {
 	// Mntner returns the named maintainer, or an error wrapping ErrNoMntner
 	// when the registry has none by that name.
-	Mntner(ctx context.Context, name string) (object.Mntner, error)
+	Mntner(ctx context.Context, name string) (*object.Mntner, error)
 }
 
 // ErrNoMntner reports a maintainer the registry does not have.
@@ -107,7 +107,7 @@ func (d Decision) String() string {
 // caller can distinguish "no line matched" from "no line could be checked".
 //
 // A nil Verifier checks nothing and reports every line as unsupported.
-func CheckMntner(ctx context.Context, m object.Mntner, cred Credential, v Verifier) (ok, unsupported bool, err error) {
+func CheckMntner(ctx context.Context, m *object.Mntner, cred Credential, v Verifier) (ok, unsupported bool, err error) {
 	return checkAuth(ctx, m.Auth, cred, v)
 }
 
@@ -177,11 +177,11 @@ func CheckMntners(ctx context.Context, reg Registry, names []string, cred Creden
 // It returns the chain, starting with name's own maintainer. A cycle that does
 // not close on itself returns ErrReferralCycle along with the chain walked so
 // far, so a caller can show where it looped.
-func ReferralChain(ctx context.Context, reg Registry, name string, maxDepth int) ([]object.Mntner, error) {
+func ReferralChain(ctx context.Context, reg Registry, name string, maxDepth int) ([]*object.Mntner, error) {
 	if maxDepth <= 0 {
 		maxDepth = 32
 	}
-	var chain []object.Mntner
+	var chain []*object.Mntner
 	seen := map[string]bool{}
 	for at := name; ; {
 		key := strings.ToUpper(strings.TrimSpace(at))

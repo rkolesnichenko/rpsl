@@ -190,7 +190,7 @@ func TestEveryAttributeLandsInItsOwnField(t *testing.T) {
 				t.Errorf("%s: the test object does not decode cleanly: %v", class, d)
 			}
 		}
-		got, own := fields(reflect.ValueOf(obj))
+		got, own := fields(reflect.ValueOf(obj).Elem())
 		fed := map[string]bool{}
 		for attr, needle := range needles {
 			want := []string{fieldFor(attr)}

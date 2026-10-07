@@ -55,11 +55,11 @@ type FilterGroup interface {
 	SetMpFilter() policy.Filter // mp-filter:, or nil when absent
 }
 
-func (s AsSet) SetName() types.SetName { return s.Name }
+func (s *AsSet) SetName() types.SetName { return s.Name }
 
 // SetMembers returns the as-set's direct members: members: then mp-members:, in
 // that order.
-func (s AsSet) SetMembers() []SetMember {
+func (s *AsSet) SetMembers() []SetMember {
 	out := make([]SetMember, 0, len(s.Members)+len(s.MpMembers))
 	out = append(out, s.Members...)
 	out = append(out, s.MpMembers...)
@@ -67,18 +67,18 @@ func (s AsSet) SetMembers() []SetMember {
 }
 
 // SetSrcMembers returns the as-set's src-members:, as written.
-func (s AsSet) SetSrcMembers() []SetMember { return append([]SetMember(nil), s.SrcMembers...) }
+func (s *AsSet) SetSrcMembers() []SetMember { return append([]SetMember(nil), s.SrcMembers...) }
 
 // RefMntners returns the mbrs-by-ref maintainers.
-func (s AsSet) RefMntners() []string { return s.MbrsByRef }
+func (s *AsSet) RefMntners() []string { return s.MbrsByRef }
 
 // SetSource returns the set's source: attribute.
-func (s AsSet) SetSource() string { return s.Source }
+func (s *AsSet) SetSource() string { return s.Source }
 
-func (s RouteSet) SetName() types.SetName { return s.Name }
+func (s *RouteSet) SetName() types.SetName { return s.Name }
 
 // SetMembers returns the route-set's direct members: members: then mp-members:.
-func (s RouteSet) SetMembers() []SetMember {
+func (s *RouteSet) SetMembers() []SetMember {
 	out := make([]SetMember, 0, len(s.Members)+len(s.MpMembers))
 	out = append(out, s.Members...)
 	out = append(out, s.MpMembers...)
@@ -86,18 +86,18 @@ func (s RouteSet) SetMembers() []SetMember {
 }
 
 // SetSrcMembers returns the route-set's src-members:, as written.
-func (s RouteSet) SetSrcMembers() []SetMember { return append([]SetMember(nil), s.SrcMembers...) }
+func (s *RouteSet) SetSrcMembers() []SetMember { return append([]SetMember(nil), s.SrcMembers...) }
 
 // RefMntners returns the mbrs-by-ref maintainers.
-func (s RouteSet) RefMntners() []string { return s.MbrsByRef }
+func (s *RouteSet) RefMntners() []string { return s.MbrsByRef }
 
 // SetSource returns the set's source: attribute.
-func (s RouteSet) SetSource() string { return s.Source }
+func (s *RouteSet) SetSource() string { return s.Source }
 
-func (s RtrSet) SetName() types.SetName { return s.Name }
+func (s *RtrSet) SetName() types.SetName { return s.Name }
 
 // SetRouters returns the rtr-set's direct members: members: then mp-members:.
-func (s RtrSet) SetRouters() []RtrSetMember {
+func (s *RtrSet) SetRouters() []RtrSetMember {
 	out := make([]RtrSetMember, 0, len(s.Members)+len(s.MpMembers))
 	out = append(out, s.Members...)
 	out = append(out, s.MpMembers...)
@@ -105,15 +105,15 @@ func (s RtrSet) SetRouters() []RtrSetMember {
 }
 
 // RefMntners returns the mbrs-by-ref maintainers.
-func (s RtrSet) RefMntners() []string { return s.MbrsByRef }
+func (s *RtrSet) RefMntners() []string { return s.MbrsByRef }
 
 // SetSource returns the set's source: attribute.
-func (s RtrSet) SetSource() string { return s.Source }
+func (s *RtrSet) SetSource() string { return s.Source }
 
-func (s PeeringSet) SetName() types.SetName { return s.Name }
+func (s *PeeringSet) SetName() types.SetName { return s.Name }
 
 // SetPeerings returns the peering-set's peerings: peering: then mp-peering:.
-func (s PeeringSet) SetPeerings() []policy.Peering {
+func (s *PeeringSet) SetPeerings() []policy.Peering {
 	out := make([]policy.Peering, 0, len(s.Peerings)+len(s.MpPeerings))
 	out = append(out, s.Peerings...)
 	out = append(out, s.MpPeerings...)
@@ -122,36 +122,36 @@ func (s PeeringSet) SetPeerings() []policy.Peering {
 
 // RefMntners returns no maintainers: a peering-set has no mbrs-by-ref:, so it
 // has no indirect membership.
-func (s PeeringSet) RefMntners() []string { return nil }
+func (s *PeeringSet) RefMntners() []string { return nil }
 
 // SetSource returns the set's source: attribute.
-func (s PeeringSet) SetSource() string { return s.Source }
+func (s *PeeringSet) SetSource() string { return s.Source }
 
-func (s FilterSet) SetName() types.SetName { return s.Name }
+func (s *FilterSet) SetName() types.SetName { return s.Name }
 
 // SetFilter returns the filter: expression, or nil when there is none.
-func (s FilterSet) SetFilter() policy.Filter { return s.Filter }
+func (s *FilterSet) SetFilter() policy.Filter { return s.Filter }
 
 // SetMpFilter returns the mp-filter: expression, or nil when there is none.
-func (s FilterSet) SetMpFilter() policy.Filter { return s.MpFilter }
+func (s *FilterSet) SetMpFilter() policy.Filter { return s.MpFilter }
 
 // RefMntners returns no maintainers: a filter-set has no mbrs-by-ref:, so it
 // has no indirect membership.
-func (s FilterSet) RefMntners() []string { return nil }
+func (s *FilterSet) RefMntners() []string { return nil }
 
 // SetSource returns the set's source: attribute.
-func (s FilterSet) SetSource() string { return s.Source }
+func (s *FilterSet) SetSource() string { return s.Source }
 
 // Compile-time checks that each set class satisfies the interface for its kind.
 var (
-	_ Set          = AsSet{}
-	_ Set          = RouteSet{}
-	_ RouterSet    = RtrSet{}
-	_ PeeringGroup = PeeringSet{}
-	_ FilterGroup  = FilterSet{}
-	_ NamedSet     = AsSet{}
-	_ NamedSet     = RouteSet{}
-	_ NamedSet     = RtrSet{}
-	_ NamedSet     = PeeringSet{}
-	_ NamedSet     = FilterSet{}
+	_ Set          = &AsSet{}
+	_ Set          = &RouteSet{}
+	_ RouterSet    = &RtrSet{}
+	_ PeeringGroup = &PeeringSet{}
+	_ FilterGroup  = &FilterSet{}
+	_ NamedSet     = &AsSet{}
+	_ NamedSet     = &RouteSet{}
+	_ NamedSet     = &RtrSet{}
+	_ NamedSet     = &PeeringSet{}
+	_ NamedSet     = &FilterSet{}
 )

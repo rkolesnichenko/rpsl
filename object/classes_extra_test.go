@@ -15,7 +15,7 @@ source:  RIPE
 	if len(diags) != 0 {
 		t.Fatalf("diags = %+v", diags)
 	}
-	in, ok := obj.(Inetnum)
+	in, ok := obj.(*Inetnum)
 	if !ok {
 		t.Fatalf("Decode = %T, want Inetnum", obj)
 	}
@@ -37,7 +37,7 @@ status:   ALLOCATED-BY-RIR
 source:   RIPE
 `)
 	obj, _ := Decode(o)
-	in, ok := obj.(Inet6num)
+	in, ok := obj.(*Inet6num)
 	if !ok {
 		t.Fatalf("Decode = %T, want Inet6num", obj)
 	}
@@ -55,7 +55,7 @@ source:   RIPE
 	if len(diags) != 0 {
 		t.Fatalf("diags = %+v", diags)
 	}
-	b, ok := obj.(AsBlock)
+	b, ok := obj.(*AsBlock)
 	if !ok {
 		t.Fatalf("Decode = %T, want AsBlock", obj)
 	}
@@ -74,7 +74,7 @@ mnt-by:    MAINT-EX
 source:    RIPE
 `)
 	obj, _ := Decode(o)
-	r, ok := obj.(InetRtr)
+	r, ok := obj.(*InetRtr)
 	if !ok {
 		t.Fatalf("Decode = %T, want InetRtr", obj)
 	}
@@ -88,15 +88,15 @@ source:    RIPE
 
 func TestDecodeIrtDomainOrg(t *testing.T) {
 	irt, _ := Decode(parse("irt: irt-EXAMPLE\ne-mail: abuse@example.net\nauth: PGPKEY-1\nsource: RIPE\n"))
-	if v, ok := irt.(Irt); !ok || v.Name != "irt-EXAMPLE" || len(v.Email) != 1 {
+	if v, ok := irt.(*Irt); !ok || v.Name != "irt-EXAMPLE" || len(v.Email) != 1 {
 		t.Errorf("irt = %+v", irt)
 	}
 	dom, _ := Decode(parse("domain: 2.0.192.in-addr.arpa\nnserver: ns1.example.net\nzone-c: EX1-RIPE\nsource: RIPE\n"))
-	if v, ok := dom.(Domain); !ok || v.Name != "2.0.192.in-addr.arpa" || len(v.Nserver) != 1 || len(v.ZoneC) != 1 {
+	if v, ok := dom.(*Domain); !ok || v.Name != "2.0.192.in-addr.arpa" || len(v.Nserver) != 1 || len(v.ZoneC) != 1 {
 		t.Errorf("domain = %+v", dom)
 	}
 	org, _ := Decode(parse("organisation: ORG-EX1-RIPE\norg-name: Example Org\norg-type: LIR\nsource: RIPE\n"))
-	if v, ok := org.(Organisation); !ok || v.OrgID != "ORG-EX1-RIPE" || v.OrgType != "LIR" {
+	if v, ok := org.(*Organisation); !ok || v.OrgID != "ORG-EX1-RIPE" || v.OrgType != "LIR" {
 		t.Errorf("organisation = %+v", org)
 	}
 }

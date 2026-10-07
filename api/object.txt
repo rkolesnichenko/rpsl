@@ -35,8 +35,8 @@ type AsBlock struct
 	Registry
 	Lo types.ASN
 	Hi types.ASN
-func (AsBlock) Class() string
-func (AsBlock) Raw() *ast.Object
+func (*AsBlock) Class() string
+func (*AsBlock) Raw() *ast.Object
 type AsSet struct
 	Common
 	Registry
@@ -45,13 +45,13 @@ type AsSet struct
 	MpMembers []SetMember
 	SrcMembers []SetMember
 	MbrsByRef []string
-func (AsSet) Class() string
-func (AsSet) Raw() *ast.Object
-func (AsSet) RefMntners() []string
-func (AsSet) SetMembers() []SetMember
-func (AsSet) SetName() types.SetName
-func (AsSet) SetSource() string
-func (AsSet) SetSrcMembers() []SetMember
+func (*AsSet) Class() string
+func (*AsSet) Raw() *ast.Object
+func (*AsSet) RefMntners() []string
+func (*AsSet) SetMembers() []SetMember
+func (*AsSet) SetName() types.SetName
+func (*AsSet) SetSource() string
+func (*AsSet) SetSrcMembers() []SetMember
 type AttrSpec struct
 	Required bool
 	Single bool
@@ -67,8 +67,8 @@ type AutNum struct
 	ImportVia []policy.Import
 	ExportVia []policy.Export
 	Status string
-func (AutNum) Class() string
-func (AutNum) Raw() *ast.Object
+func (*AutNum) Class() string
+func (*AutNum) Raw() *ast.Object
 type Auth struct
 	Method AuthMethod
 	Value string
@@ -101,9 +101,9 @@ type Dictionary struct
 	RPAttribute []policy.RPAttr
 	Typedef []policy.Typedef
 	Protocol []policy.Protocol
-func (Dictionary) Class() string
-func (Dictionary) Dict() policy.Dictionary
-func (Dictionary) Raw() *ast.Object
+func (*Dictionary) Class() string
+func (*Dictionary) Dict() policy.Dictionary
+func (*Dictionary) Raw() *ast.Object
 type Domain struct
 	Common
 	Registry
@@ -114,9 +114,9 @@ type Domain struct
 	SubDom []string
 	DomNet []string
 	Refer string
-func (Domain) Class() string
-func (Domain) Raw() *ast.Object
-func (Domain) ReverseRange() (lo, hi netip.Addr, ok bool)
+func (*Domain) Class() string
+func (*Domain) Raw() *ast.Object
+func (*Domain) ReverseRange() (lo, hi netip.Addr, ok bool)
 type FilterGroup interface
 	NamedSet
 	SetFilter() policy.Filter
@@ -127,16 +127,16 @@ type FilterSet struct
 	Name types.SetName
 	Filter policy.Filter
 	MpFilter policy.Filter
-func (FilterSet) Class() string
-func (FilterSet) Raw() *ast.Object
-func (FilterSet) RefMntners() []string
-func (FilterSet) SetFilter() policy.Filter
-func (FilterSet) SetMpFilter() policy.Filter
-func (FilterSet) SetName() types.SetName
-func (FilterSet) SetSource() string
+func (*FilterSet) Class() string
+func (*FilterSet) Raw() *ast.Object
+func (*FilterSet) RefMntners() []string
+func (*FilterSet) SetFilter() policy.Filter
+func (*FilterSet) SetMpFilter() policy.Filter
+func (*FilterSet) SetName() types.SetName
+func (*FilterSet) SetSource() string
 type Generic struct
-func (Generic) Class() string
-func (Generic) Raw() *ast.Object
+func (*Generic) Class() string
+func (*Generic) Raw() *ast.Object
 type Inet6num struct
 	Common
 	Registry
@@ -150,8 +150,8 @@ type Inet6num struct
 	Language []string
 	AssignmentSize string
 	RevSrv []string
-func (Inet6num) Class() string
-func (Inet6num) Raw() *ast.Object
+func (*Inet6num) Class() string
+func (*Inet6num) Raw() *ast.Object
 type InetRtr struct
 	Common
 	Registry
@@ -165,8 +165,8 @@ type InetRtr struct
 	MemberOf []types.SetName
 	RsIn string
 	RsOut string
-func (InetRtr) Class() string
-func (InetRtr) Raw() *ast.Object
+func (*InetRtr) Class() string
+func (*InetRtr) Raw() *ast.Object
 type Inetnum struct
 	Common
 	Registry
@@ -181,8 +181,8 @@ type Inetnum struct
 	Language []string
 	AssignmentSize string
 	RevSrv []string
-func (Inetnum) Class() string
-func (Inetnum) Raw() *ast.Object
+func (*Inetnum) Class() string
+func (*Inetnum) Raw() *ast.Object
 type Irt struct
 	Common
 	Registry
@@ -197,8 +197,8 @@ type Irt struct
 	Contact []string
 	IrtNfy []string
 	AbuseMailbox string
-func (Irt) Class() string
-func (Irt) Raw() *ast.Object
+func (*Irt) Class() string
+func (*Irt) Raw() *ast.Object
 type KeyCert struct
 	Common
 	Registry
@@ -207,8 +207,8 @@ type KeyCert struct
 	Owner []string
 	Fingerpr string
 	Certif []string
-func (KeyCert) Class() string
-func (KeyCert) Raw() *ast.Object
+func (*KeyCert) Class() string
+func (*KeyCert) Raw() *ast.Object
 type MemberKind uint8
 func (MemberKind) String() string
 type Mntner struct
@@ -219,8 +219,8 @@ type Mntner struct
 	UpdTo []string
 	MntNfy []string
 	ReferralBy []string
-func (Mntner) Class() string
-func (Mntner) Raw() *ast.Object
+func (*Mntner) Class() string
+func (*Mntner) Raw() *ast.Object
 type NamedSet interface
 	Object
 	SetName() types.SetName
@@ -245,8 +245,8 @@ type Organisation struct
 	Language []string
 	RegNr string
 	RefNfy []string
-func (Organisation) Class() string
-func (Organisation) Raw() *ast.Object
+func (*Organisation) Class() string
+func (*Organisation) Raw() *ast.Object
 type PeeringGroup interface
 	NamedSet
 	SetPeerings() []policy.Peering
@@ -256,12 +256,12 @@ type PeeringSet struct
 	Name types.SetName
 	Peerings []policy.Peering
 	MpPeerings []policy.Peering
-func (PeeringSet) Class() string
-func (PeeringSet) Raw() *ast.Object
-func (PeeringSet) RefMntners() []string
-func (PeeringSet) SetName() types.SetName
-func (PeeringSet) SetPeerings() []policy.Peering
-func (PeeringSet) SetSource() string
+func (*PeeringSet) Class() string
+func (*PeeringSet) Raw() *ast.Object
+func (*PeeringSet) RefMntners() []string
+func (*PeeringSet) SetName() types.SetName
+func (*PeeringSet) SetPeerings() []policy.Peering
+func (*PeeringSet) SetSource() string
 type Person struct
 	Common
 	Registry
@@ -272,8 +272,8 @@ type Person struct
 	FaxNo []string
 	Email []string
 	Contact []string
-func (Person) Class() string
-func (Person) Raw() *ast.Object
+func (*Person) Class() string
+func (*Person) Raw() *ast.Object
 type Poem struct
 	Common
 	Registry
@@ -281,14 +281,14 @@ type Poem struct
 	Form string
 	Text []string
 	Author []types.NICHandle
-func (Poem) Class() string
-func (Poem) Raw() *ast.Object
+func (*Poem) Class() string
+func (*Poem) Raw() *ast.Object
 type PoeticForm struct
 	Common
 	Registry
 	Name string
-func (PoeticForm) Class() string
-func (PoeticForm) Raw() *ast.Object
+func (*PoeticForm) Class() string
+func (*PoeticForm) Raw() *ast.Object
 type Profile struct
 func (Profile) Class(class string) (ClassSpec, bool)
 func (Profile) Classes() []string
@@ -317,8 +317,8 @@ type Role struct
 	Email []string
 	Contact []string
 	AbuseMailbox string
-func (Role) Class() string
-func (Role) Raw() *ast.Object
+func (*Role) Class() string
+func (*Role) Raw() *ast.Object
 type Route struct
 	Common
 	Registry
@@ -335,8 +335,8 @@ type Route struct
 	ExportComps policy.Filter
 	GeoIdx []string
 	RoaURI string
-func (Route) Class() string
-func (Route) Raw() *ast.Object
+func (*Route) Class() string
+func (*Route) Raw() *ast.Object
 type Route6 struct
 	Common
 	Registry
@@ -353,8 +353,8 @@ type Route6 struct
 	ExportComps policy.Filter
 	GeoIdx []string
 	RoaURI string
-func (Route6) Class() string
-func (Route6) Raw() *ast.Object
+func (*Route6) Class() string
+func (*Route6) Raw() *ast.Object
 type RouteSet struct
 	Common
 	Registry
@@ -363,13 +363,13 @@ type RouteSet struct
 	MpMembers []SetMember
 	SrcMembers []SetMember
 	MbrsByRef []string
-func (RouteSet) Class() string
-func (RouteSet) Raw() *ast.Object
-func (RouteSet) RefMntners() []string
-func (RouteSet) SetMembers() []SetMember
-func (RouteSet) SetName() types.SetName
-func (RouteSet) SetSource() string
-func (RouteSet) SetSrcMembers() []SetMember
+func (*RouteSet) Class() string
+func (*RouteSet) Raw() *ast.Object
+func (*RouteSet) RefMntners() []string
+func (*RouteSet) SetMembers() []SetMember
+func (*RouteSet) SetName() types.SetName
+func (*RouteSet) SetSource() string
+func (*RouteSet) SetSrcMembers() []SetMember
 type RouterSet interface
 	NamedSet
 	SetRouters() []RtrSetMember
@@ -382,12 +382,12 @@ type RtrSet struct
 	Members []RtrSetMember
 	MpMembers []RtrSetMember
 	MbrsByRef []string
-func (RtrSet) Class() string
-func (RtrSet) Raw() *ast.Object
-func (RtrSet) RefMntners() []string
-func (RtrSet) SetName() types.SetName
-func (RtrSet) SetRouters() []RtrSetMember
-func (RtrSet) SetSource() string
+func (*RtrSet) Class() string
+func (*RtrSet) Raw() *ast.Object
+func (*RtrSet) RefMntners() []string
+func (*RtrSet) SetName() types.SetName
+func (*RtrSet) SetRouters() []RtrSetMember
+func (*RtrSet) SetSource() string
 type RtrSetMember struct
 	Kind RtrMemberKind
 	Router types.RouterID

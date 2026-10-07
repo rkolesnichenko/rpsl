@@ -11,7 +11,7 @@ import (
 // addresses ("0-127.2.0.192.in-addr.arpa", only in the first of four labels),
 // or an ip6.arpa zone of nibbles. ok is false for any other name, e164.arpa
 // among them. Names compare without regard to case or a trailing dot.
-func (d Domain) ReverseRange() (lo, hi netip.Addr, ok bool) {
+func (d *Domain) ReverseRange() (lo, hi netip.Addr, ok bool) {
 	name := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(d.Name), "."))
 	switch {
 	case strings.HasSuffix(name, ".in-addr.arpa"):

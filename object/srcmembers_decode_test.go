@@ -40,7 +40,7 @@ func TestDraftFigure2DecodesClean(t *testing.T) {
 	if len(diags) != 0 {
 		t.Fatalf("figure 2 diagnostics: %+v", diags)
 	}
-	rs := obj.(RouteSet)
+	rs := obj.(*RouteSet)
 	if len(rs.SrcMembers) != 3 || rs.SrcMembers[1].Ref().String() != "RIPE::RS-OTHER" {
 		t.Errorf("figure 2 SrcMembers = %+v", rs.SrcMembers)
 	}
@@ -60,7 +60,7 @@ func TestDraftFigure3IsUnlistedTwice(t *testing.T) {
 			t.Errorf("unexpected unlisted item: %s", d.Message)
 		}
 	}
-	if n := len(obj.(RouteSet).SrcMembers); n != 4 { // unlisted members are kept: the resolver follows them
+	if n := len(obj.(*RouteSet).SrcMembers); n != 4 { // unlisted members are kept: the resolver follows them
 		t.Errorf("figure 3 kept %d SrcMembers, want 4", n)
 	}
 }
@@ -70,7 +70,7 @@ func TestDraftFigure4IsAConflict(t *testing.T) {
 	if rulesOf(diags)["object/as-set-src-members-conflict"] != 2 {
 		t.Fatalf("figure 4 diagnostics = %+v; want a conflict error at each of the two items", diags)
 	}
-	if n := len(obj.(AsSet).SrcMembers); n != 0 {
+	if n := len(obj.(*AsSet).SrcMembers); n != 0 {
 		t.Errorf("figure 4 kept %d SrcMembers; both conflicting entries must be dropped", n)
 	}
 }
@@ -93,7 +93,7 @@ func TestSrcMembersSameRegistryTwiceIsKeptOnce(t *testing.T) {
 	if len(diags) != 0 {
 		t.Fatalf("diagnostics: %+v", diags)
 	}
-	if n := len(obj.(AsSet).SrcMembers); n != 1 {
+	if n := len(obj.(*AsSet).SrcMembers); n != 1 {
 		t.Errorf("kept %d, want 1", n)
 	}
 }

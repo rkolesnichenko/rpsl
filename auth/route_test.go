@@ -187,12 +187,12 @@ func TestRouteCreationMissingContext(t *testing.T) {
 
 // The request builders read a decoded route or route6.
 func TestRouteRequestBuilders(t *testing.T) {
-	r := decode(t, "route: 192.0.2.0/24\norigin: AS64500\nmnt-by: MNT-OWN\nsource: RIPE\n").(object.Route)
+	r := decode(t, "route: 192.0.2.0/24\norigin: AS64500\nmnt-by: MNT-OWN\nsource: RIPE\n").(*object.Route)
 	req := RouteRequestFor(r, nil, nil)
 	if req.Prefix.String() != "192.0.2.0/24" || req.OriginAS != 64500 || len(req.MntBy) != 1 || req.MntBy[0] != "MNT-OWN" {
 		t.Errorf("RouteRequestFor = %+v", req)
 	}
-	r6 := decode(t, "route6: 2001:db8::/32\norigin: AS64500\nmnt-by: MNT-OWN\nsource: RIPE\n").(object.Route6)
+	r6 := decode(t, "route6: 2001:db8::/32\norigin: AS64500\nmnt-by: MNT-OWN\nsource: RIPE\n").(*object.Route6)
 	req = RouteRequestFor6(r6, nil, nil)
 	if req.Prefix.String() != "2001:db8::/32" {
 		t.Errorf("RouteRequestFor6 = %+v", req)

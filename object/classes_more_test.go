@@ -22,7 +22,7 @@ source:         RIPE
 	if len(diags) != 0 {
 		t.Fatalf("diagnostics: %+v", diags)
 	}
-	k, ok := obj.(KeyCert)
+	k, ok := obj.(*KeyCert)
 	if !ok {
 		t.Fatalf("Decode = %T, want KeyCert", obj)
 	}
@@ -67,7 +67,7 @@ source:         RIPE
 	if len(diags) != 0 {
 		t.Fatalf("diagnostics: %+v", diags)
 	}
-	d, ok := obj.(Dictionary)
+	d, ok := obj.(*Dictionary)
 	if !ok {
 		t.Fatalf("Decode = %T, want Dictionary", obj)
 	}
@@ -113,7 +113,7 @@ source:         RIPE
 	if got := diags[0].Span.StartLine; got != 3 {
 		t.Errorf("diagnostic on line %d, want 3", got)
 	}
-	if d := obj.(Dictionary); len(d.RPAttribute) != 2 || d.RPAttribute[0].Name != "pref" {
+	if d := obj.(*Dictionary); len(d.RPAttribute) != 2 || d.RPAttribute[0].Name != "pref" {
 		t.Errorf("the good declaration was lost: %+v", d.RPAttribute)
 	}
 }
@@ -132,7 +132,7 @@ source:         RIPE
 	if len(diags) != 0 {
 		t.Fatalf("diagnostics: %+v", diags)
 	}
-	p, ok := obj.(Poem)
+	p, ok := obj.(*Poem)
 	if !ok {
 		t.Fatalf("Decode = %T, want Poem", obj)
 	}
@@ -151,7 +151,7 @@ source:         RIPE
 	if len(diags) != 0 {
 		t.Fatalf("diagnostics: %+v", diags)
 	}
-	f, ok := obj.(PoeticForm)
+	f, ok := obj.(*PoeticForm)
 	if !ok {
 		t.Fatalf("Decode = %T, want PoeticForm", obj)
 	}
@@ -167,7 +167,7 @@ func TestDecodePoemBadAuthor(t *testing.T) {
 	if len(diags) != 1 || diags[0].Severity != ast.Error || diags[0].Rule != "object/poem-author" {
 		t.Fatalf("diags = %+v, want one object/poem-author error", diags)
 	}
-	if p := obj.(Poem); len(p.Author) != 0 || p.Name != "POEM-X" {
+	if p := obj.(*Poem); len(p.Author) != 0 || p.Name != "POEM-X" {
 		t.Errorf("Poem = %+v", p)
 	}
 }

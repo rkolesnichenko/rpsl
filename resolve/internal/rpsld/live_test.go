@@ -141,7 +141,7 @@ func largestASSets(t *testing.T, dump string, n int) []string {
 				continue
 			}
 			o, _ := object.Decode(raw)
-			if s, ok := o.(object.AsSet); ok {
+			if s, ok := o.(*object.AsSet); ok {
 				all = append(all, sized{s.Name.String(), len(s.SetMembers())})
 			}
 		}
@@ -221,7 +221,7 @@ func whoisMembers(ws *whois.Source, set object.NamedSet) ([]string, error) {
 		return nil, err
 	}
 	for _, o := range claims {
-		if a, ok := o.(object.AutNum); ok {
+		if a, ok := o.(*object.AutNum); ok {
 			items = append(items, a.AS.String())
 		}
 	}

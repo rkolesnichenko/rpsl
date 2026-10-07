@@ -2,6 +2,7 @@ package resolve
 
 import (
 	"net/netip"
+	"reflect"
 	"strings"
 
 	"github.com/rkolesnichenko/rpsl/object"
@@ -16,9 +17,9 @@ import (
 // same rule). Maintainers and sources compare case-insensitively; an absent
 // source matches only an absent source.
 //
-// Only aut-num, route and route6 objects claim membership (as values or
-// pointers); they are judged by their typed fields (MemberOf, MntBy, Source), so
-// objects a Source builds itself, without source text, work too.
+// Only aut-num, route and route6 objects claim membership; they are judged by
+// their typed fields (MemberOf, MntBy, Source), so objects a Source builds
+// itself, without source text, work too.
 //
 // This is the single implementation of the mntner check. Sources should use it
 // in MembersByRef, and the Expander re-applies it to every object a Source
@@ -73,17 +74,20 @@ func equalFoldASCII(a, b string) bool {
 // claimant returns the fields a membership claim is judged by, for the classes
 // that can claim membership (RFC 2622 §5.1-5.2).
 func claimant(o object.Object) (memberOf []types.SetName, mntBy []string, source string, ok bool) {
-	switch t := value(o).(type) {
-	case object.AutNum:
+	if isNil(o) {
+		return nil, nil, "", false
+	}
+	switch t := o.(type) {
+	case *object.AutNum:
 		if t.AS == 0 && !asnDecodes(t, "aut-num") {
 			return nil, nil, "", false // an aut-num whose key did not decode is no AS
 		}
 		return t.MemberOf, t.MntBy, t.Source, true
-	case object.Route:
+	case *object.Route:
 		return t.MemberOf, t.MntBy, t.Source, true
-	case object.InetRtr:
+	case *object.InetRtr:
 		return t.MemberOf, t.MntBy, t.Source, true
-	case object.Route6:
+	case *object.Route6:
 		return t.MemberOf, t.MntBy, t.Source, true
 	}
 	return nil, nil, "", false
@@ -91,14 +95,14 @@ func claimant(o object.Object) (memberOf []types.SetName, mntBy []string, source
 
 // sourceOf returns o's source: attribute ("" for a class without Common).
 func sourceOf(o object.Object) string {
-	switch t := value(o).(type) {
-	case object.Route:
+	switch t := o.(type) {
+	case *object.Route:
 		return t.Source
-	case object.Route6:
+	case *object.Route6:
 		return t.Source
-	case object.AutNum:
+	case *object.AutNum:
 		return t.Source
-	case object.InetRtr:
+	case *object.InetRtr:
 		return t.Source
 	}
 	if set, ok := o.(object.NamedSet); ok {
@@ -113,9 +117,9 @@ func sourceOf(o object.Object) string {
 // NewMemSource and Corpus both index by it.
 func routeOf(o object.Object) (p netip.Prefix, origin types.ASN, ok bool) {
 	switch t := o.(type) {
-	case object.Route:
+	case *object.Route:
 		p, origin = t.Prefix, t.Origin
-	case object.Route6:
+	case *object.Route6:
 		p, origin = t.Prefix, t.Origin
 	default:
 		return netip.Prefix{}, 0, false
@@ -149,49 +153,13 @@ func names(list []types.SetName, set types.SetName) bool {
 	return false
 }
 
-// value returns o with a pointer to one of the object package's types replaced
-// by the value it points to (nil for a nil pointer), so the engine's type
-// switches see one form. Other objects are returned unchanged.
-func value(o object.Object) object.Object {
-	switch t := o.(type) {
-	case *object.AutNum:
-		if t != nil {
-			return *t
-		}
-	case *object.Route:
-		if t != nil {
-			return *t
-		}
-	case *object.Route6:
-		if t != nil {
-			return *t
-		}
-	case *object.AsSet:
-		if t != nil {
-			return *t
-		}
-	case *object.RouteSet:
-		if t != nil {
-			return *t
-		}
-	case *object.RtrSet:
-		if t != nil {
-			return *t
-		}
-	case *object.PeeringSet:
-		if t != nil {
-			return *t
-		}
-	case *object.FilterSet:
-		if t != nil {
-			return *t
-		}
-	case *object.InetRtr:
-		if t != nil {
-			return *t
-		}
-	default:
-		return o
+// isNil reports whether o is no object: nil, or a nil pointer to a class. The
+// engine skips it, so a caller or Source that hands one over indexes, claims
+// and expands nothing by it.
+func isNil(o object.Object) bool {
+	if o == nil {
+		return true
 	}
-	return nil
+	v := reflect.ValueOf(o)
+	return v.Kind() == reflect.Pointer && v.IsNil()
 }

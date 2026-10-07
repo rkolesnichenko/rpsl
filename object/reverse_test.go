@@ -18,7 +18,7 @@ func TestDomainReverseRange(t *testing.T) {
 		{"8.b.d.0.1.0.0.2.ip6.arpa", "2001:db8::", "2001:db8:ffff:ffff:ffff:ffff:ffff:ffff"},
 		{"1.8.b.d.0.1.0.0.2.ip6.arpa", "2001:db8:1000::", "2001:db8:1fff:ffff:ffff:ffff:ffff:ffff"},
 	} {
-		lo, hi, ok := Domain{Name: c.name}.ReverseRange()
+		lo, hi, ok := (&Domain{Name: c.name}).ReverseRange()
 		if !ok || lo.String() != c.lo || hi.String() != c.hi {
 			t.Errorf("%s: %s - %s, %v; want %s - %s", c.name, lo, hi, ok, c.lo, c.hi)
 		}
@@ -30,7 +30,7 @@ func TestDomainReverseRange(t *testing.T) {
 		"g.8.b.d.0.1.0.0.2.ip6.arpa", "ab.8.b.d.0.1.0.0.2.ip6.arpa", "ip6.arpa",
 		"01.0.192.in-addr.arpa",
 	} {
-		if lo, hi, ok := (Domain{Name: name}).ReverseRange(); ok {
+		if lo, hi, ok := (&Domain{Name: name}).ReverseRange(); ok {
 			t.Errorf("%q: %s - %s, want not a reverse zone", name, lo, hi)
 		}
 	}
@@ -68,7 +68,7 @@ func TestDomainReverseRangeRoundTrip(t *testing.T) {
 			labels = append(labels, "ip6", "arpa")
 		}
 		name := strings.Join(labels, ".")
-		lo, hi, ok := Domain{Name: name}.ReverseRange()
+		lo, hi, ok := (&Domain{Name: name}).ReverseRange()
 		want := netipRangeOf(p)
 		if !ok || lo != want[0] || hi != want[1] {
 			t.Fatalf("%s (%s): %s - %s, %v", name, p, lo, hi, ok)

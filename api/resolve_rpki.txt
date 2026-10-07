@@ -20,10 +20,10 @@ type Filter struct
 	Src resolve.Source
 	VRPs *VRPs
 	OnSuppress func(p netip.Prefix, origin types.ASN)
-func (*Filter) AutNum(ctx context.Context, as types.ASN, source string) (object.AutNum, error)
+func (*Filter) AutNum(ctx context.Context, as types.ASN, source string) (*object.AutNum, error)
 func (*Filter) AutNums() (iter.Seq[types.ASN], error)
 func (*Filter) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error)
-func (*Filter) InetRtr(ctx context.Context, name, source string) (object.InetRtr, error)
+func (*Filter) InetRtr(ctx context.Context, name, source string) (*object.InetRtr, error)
 func (*Filter) MembersByRef(ctx context.Context, set object.NamedSet) ([]object.Object, error)
 func (*Filter) NamedBy(as types.ASN) ([]types.ASN, error)
 func (*Filter) OriginatedRoutes(ctx context.Context, as types.ASN, afi types.AFI) ([]netip.Prefix, error)

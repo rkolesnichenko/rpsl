@@ -43,7 +43,7 @@ func TestWhoisMembersByRefListValues(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("got %d objects, want 1 (the MAINT-GOOD route)", len(got))
 	}
-	if r, ok := got[0].(object.Route); !ok || r.Prefix.String() != "198.51.100.0/24" {
+	if r, ok := got[0].(*object.Route); !ok || r.Prefix.String() != "198.51.100.0/24" {
 		t.Errorf("member = %+v, want 198.51.100.0/24", got[0])
 	}
 }
@@ -57,7 +57,7 @@ func TestWhoisRejectsZeroSetName(t *testing.T) {
 	if _, err := src.GetSet(context.Background(), types.Ref(types.SetName{})); err == nil {
 		t.Error("GetSet(zero SetName) succeeded, want an error")
 	}
-	if _, err := src.MembersByRef(context.Background(), object.RouteSet{MbrsByRef: []string{"ANY"}}); err == nil {
+	if _, err := src.MembersByRef(context.Background(), &object.RouteSet{MbrsByRef: []string{"ANY"}}); err == nil {
 		t.Error("MembersByRef(zero SetName) succeeded, want an error")
 	}
 	if _, err := src.MembersByRef(context.Background(), nil); err == nil {

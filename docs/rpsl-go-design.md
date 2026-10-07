@@ -493,8 +493,8 @@ type Source interface {
 // evaluator, the next milestone; it has no consumer yet.
 type PolicySource interface {
     Source
-    AutNum(ctx context.Context, as types.ASN, source string) (object.AutNum, error)
-    InetRtr(ctx context.Context, name, source string) (object.InetRtr, error)
+    AutNum(ctx context.Context, as types.ASN, source string) (*object.AutNum, error)
+    InetRtr(ctx context.Context, name, source string) (*object.InetRtr, error)
 }
 ```
 

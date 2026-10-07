@@ -5,28 +5,28 @@ import "github.com/rkolesnichenko/rpsl/ast"
 // registry maps a class name to its typed decoder. A class absent here decodes
 // to Generic with no diagnostics.
 var registry = map[string]func(*decoder) Object{
-	"aut-num":      func(d *decoder) Object { return decodeAutNum(d) },
-	"mntner":       func(d *decoder) Object { return decodeMntner(d) },
-	"person":       func(d *decoder) Object { return decodePerson(d) },
-	"role":         func(d *decoder) Object { return decodeRole(d) },
-	"route":        func(d *decoder) Object { return decodeRoute(d) },
-	"route6":       func(d *decoder) Object { return decodeRoute6(d) },
-	"as-set":       func(d *decoder) Object { return decodeAsSet(d) },
-	"route-set":    func(d *decoder) Object { return decodeRouteSet(d) },
-	"peering-set":  func(d *decoder) Object { return decodePeeringSet(d) },
-	"filter-set":   func(d *decoder) Object { return decodeFilterSet(d) },
-	"rtr-set":      func(d *decoder) Object { return decodeRtrSet(d) },
-	"inetnum":      func(d *decoder) Object { return decodeInetnum(d) },
-	"inet6num":     func(d *decoder) Object { return decodeInet6num(d) },
-	"as-block":     func(d *decoder) Object { return decodeAsBlock(d) },
-	"inet-rtr":     func(d *decoder) Object { return decodeInetRtr(d) },
-	"irt":          func(d *decoder) Object { return decodeIrt(d) },
-	"domain":       func(d *decoder) Object { return decodeDomain(d) },
-	"organisation": func(d *decoder) Object { return decodeOrganisation(d) },
-	"key-cert":     func(d *decoder) Object { return decodeKeyCert(d) },
-	"dictionary":   func(d *decoder) Object { return decodeDictionary(d) },
-	"poem":         func(d *decoder) Object { return decodePoem(d) },
-	"poetic-form":  func(d *decoder) Object { return decodePoeticForm(d) },
+	"aut-num":      func(d *decoder) Object { v := decodeAutNum(d); return &v },
+	"mntner":       func(d *decoder) Object { v := decodeMntner(d); return &v },
+	"person":       func(d *decoder) Object { v := decodePerson(d); return &v },
+	"role":         func(d *decoder) Object { v := decodeRole(d); return &v },
+	"route":        func(d *decoder) Object { v := decodeRoute(d); return &v },
+	"route6":       func(d *decoder) Object { v := decodeRoute6(d); return &v },
+	"as-set":       func(d *decoder) Object { v := decodeAsSet(d); return &v },
+	"route-set":    func(d *decoder) Object { v := decodeRouteSet(d); return &v },
+	"peering-set":  func(d *decoder) Object { v := decodePeeringSet(d); return &v },
+	"filter-set":   func(d *decoder) Object { v := decodeFilterSet(d); return &v },
+	"rtr-set":      func(d *decoder) Object { v := decodeRtrSet(d); return &v },
+	"inetnum":      func(d *decoder) Object { v := decodeInetnum(d); return &v },
+	"inet6num":     func(d *decoder) Object { v := decodeInet6num(d); return &v },
+	"as-block":     func(d *decoder) Object { v := decodeAsBlock(d); return &v },
+	"inet-rtr":     func(d *decoder) Object { v := decodeInetRtr(d); return &v },
+	"irt":          func(d *decoder) Object { v := decodeIrt(d); return &v },
+	"domain":       func(d *decoder) Object { v := decodeDomain(d); return &v },
+	"organisation": func(d *decoder) Object { v := decodeOrganisation(d); return &v },
+	"key-cert":     func(d *decoder) Object { v := decodeKeyCert(d); return &v },
+	"dictionary":   func(d *decoder) Object { v := decodeDictionary(d); return &v },
+	"poem":         func(d *decoder) Object { v := decodePoem(d); return &v },
+	"poetic-form":  func(d *decoder) Object { v := decodePoeticForm(d); return &v },
 }
 
 // Decode upgrades a generic ast.Object to its typed form via the class registry,
@@ -35,7 +35,7 @@ var registry = map[string]func(*decoder) Object{
 func Decode(o *ast.Object) (Object, []ast.Diagnostic) {
 	fn, ok := registry[o.Class()]
 	if !ok {
-		return Generic{raw: o}, nil
+		return &Generic{raw: o}, nil
 	}
 	d := newDecoder(o)
 	return fn(d), d.diags

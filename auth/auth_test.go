@@ -26,13 +26,13 @@ func decode(t *testing.T, src string) object.Object {
 }
 
 // memRegistry is a Registry over decoded mntner objects.
-type memRegistry map[string]object.Mntner
+type memRegistry map[string]*object.Mntner
 
 func newRegistry(t *testing.T, srcs ...string) memRegistry {
 	t.Helper()
 	r := memRegistry{}
 	for _, src := range srcs {
-		m, ok := decode(t, src).(object.Mntner)
+		m, ok := decode(t, src).(*object.Mntner)
 		if !ok {
 			t.Fatalf("not a mntner: %q", src)
 		}
@@ -41,10 +41,10 @@ func newRegistry(t *testing.T, srcs ...string) memRegistry {
 	return r
 }
 
-func (r memRegistry) Mntner(_ context.Context, name string) (object.Mntner, error) {
+func (r memRegistry) Mntner(_ context.Context, name string) (*object.Mntner, error) {
 	m, ok := r[strings.ToUpper(strings.TrimSpace(name))]
 	if !ok {
-		return object.Mntner{}, ErrNoMntner
+		return nil, ErrNoMntner
 	}
 	return m, nil
 }
@@ -83,28 +83,28 @@ func verifier() passwordVerifier {
 func TestCheckMntner(t *testing.T) {
 	ctx := context.Background()
 	v := verifier()
-	ok, unsup, err := CheckMntner(ctx, decode(t, mntner("MNT-A", "MD5-PW $1$abc$xyz")).(object.Mntner), goodCred(), v)
+	ok, unsup, err := CheckMntner(ctx, decode(t, mntner("MNT-A", "MD5-PW $1$abc$xyz")).(*object.Mntner), goodCred(), v)
 	if err != nil || !ok || unsup {
 		t.Errorf("CheckMntner = %v, %v, %v; want true, false, nil", ok, unsup, err)
 	}
-	ok, _, err = CheckMntner(ctx, decode(t, mntner("MNT-A", "MD5-PW $1$abc$xyz")).(object.Mntner), wrongCred(), v)
+	ok, _, err = CheckMntner(ctx, decode(t, mntner("MNT-A", "MD5-PW $1$abc$xyz")).(*object.Mntner), wrongCred(), v)
 	if err != nil || ok {
 		t.Errorf("a wrong password was accepted")
 	}
 	// A scheme the verifier cannot check is reported, not treated as a refusal
 	// — a PGP-guarded object is not an unguarded one.
-	ok, unsup, err = CheckMntner(ctx, decode(t, mntner("MNT-P", "PGPKEY-1234ABCD")).(object.Mntner), goodCred(), v)
+	ok, unsup, err = CheckMntner(ctx, decode(t, mntner("MNT-P", "PGPKEY-1234ABCD")).(*object.Mntner), goodCred(), v)
 	if err != nil || ok || !unsup {
 		t.Errorf("CheckMntner = %v, %v, %v; want false, true, nil", ok, unsup, err)
 	}
 	// No verifier at all checks nothing.
-	ok, unsup, err = CheckMntner(ctx, decode(t, mntner("MNT-A", "MD5-PW $1$abc$xyz")).(object.Mntner), goodCred(), nil)
+	ok, unsup, err = CheckMntner(ctx, decode(t, mntner("MNT-A", "MD5-PW $1$abc$xyz")).(*object.Mntner), goodCred(), nil)
 	if err != nil || ok || !unsup {
 		t.Errorf("a nil Verifier accepted something: %v, %v, %v", ok, unsup, err)
 	}
 	// An error from the verifier stops the check.
 	boom := errors.New("hsm offline")
-	_, _, err = CheckMntner(ctx, decode(t, mntner("MNT-A", "MD5-PW $1$abc$xyz")).(object.Mntner), goodCred(), erroring{boom})
+	_, _, err = CheckMntner(ctx, decode(t, mntner("MNT-A", "MD5-PW $1$abc$xyz")).(*object.Mntner), goodCred(), erroring{boom})
 	if !errors.Is(err, boom) {
 		t.Errorf("err = %v, want %v", err, boom)
 	}

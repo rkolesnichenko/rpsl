@@ -154,15 +154,15 @@ func (snap *Snapshot) claimants(ctx context.Context, r *Registry, set object.Nam
 			continue
 		}
 		switch t := o.(type) {
-		case object.AutNum:
+		case *object.AutNum:
 			if isAS {
 				out = append(out, t.AS.String())
 			}
-		case object.Route:
+		case *object.Route:
 			if !isAS && t.Prefix.IsValid() {
 				out = append(out, t.Prefix.Masked().String())
 			}
-		case object.Route6:
+		case *object.Route6:
 			if !isAS && t.Prefix.IsValid() {
 				out = append(out, t.Prefix.Masked().String())
 			}

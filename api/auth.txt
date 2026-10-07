@@ -11,17 +11,17 @@ var ErrUnsupportedMethod = errors.New(…)
 var IRRd Rules
 var RIPE Rules
 func AddedMntIrt(before, after object.Object) []string
-func CheckIrt(ctx context.Context, irt object.Irt, cred Credential, v Verifier) (ok, unsupported bool, err error)
+func CheckIrt(ctx context.Context, irt *object.Irt, cred Credential, v Verifier) (ok, unsupported bool, err error)
 func CheckIrts(ctx context.Context, reg IrtRegistry, names []string, cred Credential, v Verifier) (Decision, error)
-func CheckMntner(ctx context.Context, m object.Mntner, cred Credential, v Verifier) (ok, unsupported bool, err error)
+func CheckMntner(ctx context.Context, m *object.Mntner, cred Credential, v Verifier) (ok, unsupported bool, err error)
 func CheckMntners(ctx context.Context, reg Registry, names []string, cred Credential, v Verifier) (Decision, error)
 func MntIrtChange(ctx context.Context, reg IrtRegistry, before, after object.Object, cred Credential, v Verifier) (Decision, error)
 func NewMemDatabase(objs []object.Object) *MemDatabase
-func ReferralChain(ctx context.Context, reg Registry, name string, maxDepth int) ([]object.Mntner, error)
+func ReferralChain(ctx context.Context, reg Registry, name string, maxDepth int) ([]*object.Mntner, error)
 func RouteAuthority(o object.Object, prefix netip.Prefix) []string
 func RouteCreation(ctx context.Context, reg Registry, req RouteRequest, cred Credential, v Verifier) (Decision, error)
-func RouteRequestFor(r object.Route, origin, space object.Object) RouteRequest
-func RouteRequestFor6(r object.Route6, origin, space object.Object) RouteRequest
+func RouteRequestFor(r *object.Route, origin, space object.Object) RouteRequest
+func RouteRequestFor6(r *object.Route6, origin, space object.Object) RouteRequest
 type Action uint8
 func (Action) String() string
 type Credential struct
@@ -34,21 +34,21 @@ type Database interface
 	Current(ctx context.Context, o object.Object) (object.Object, error)
 	Object(ctx context.Context, class, key string) (object.Object, error)
 	Covering(ctx context.Context, class string, lo, hi netip.Addr) ([]object.Object, error)
-	ASBlocks(ctx context.Context, as types.ASN) ([]object.AsBlock, error)
+	ASBlocks(ctx context.Context, as types.ASN) ([]*object.AsBlock, error)
 type Decision struct
 	OK bool
 	Reasons []string
 func (Decision) String() string
 type IrtRegistry interface
-	Irt(ctx context.Context, name string) (object.Irt, error)
+	Irt(ctx context.Context, name string) (*object.Irt, error)
 type MemDatabase struct
-func (*MemDatabase) ASBlocks(_ context.Context, as types.ASN) ([]object.AsBlock, error)
+func (*MemDatabase) ASBlocks(_ context.Context, as types.ASN) ([]*object.AsBlock, error)
 func (*MemDatabase) Covering(_ context.Context, class string, lo, hi netip.Addr) ([]object.Object, error)
 func (*MemDatabase) Current(_ context.Context, o object.Object) (object.Object, error)
-func (*MemDatabase) Mntner(_ context.Context, name string) (object.Mntner, error)
+func (*MemDatabase) Mntner(_ context.Context, name string) (*object.Mntner, error)
 func (*MemDatabase) Object(_ context.Context, class, key string) (object.Object, error)
 type Registry interface
-	Mntner(ctx context.Context, name string) (object.Mntner, error)
+	Mntner(ctx context.Context, name string) (*object.Mntner, error)
 type RouteRequest struct
 	Prefix netip.Prefix
 	OriginAS types.ASN

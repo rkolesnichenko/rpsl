@@ -14,9 +14,9 @@ type Source struct
 	Pipeline int
 	SrcMembers bool
 func (*Source) ASSetPrefixes(ctx context.Context, name types.SetName, afi types.AFI) ([]netip.Prefix, error)
-func (*Source) AutNum(ctx context.Context, as types.ASN, source string) (object.AutNum, error)
+func (*Source) AutNum(ctx context.Context, as types.ASN, source string) (*object.AutNum, error)
 func (*Source) Close() error
 func (*Source) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error)
-func (*Source) InetRtr(ctx context.Context, name, source string) (object.InetRtr, error)
+func (*Source) InetRtr(ctx context.Context, name, source string) (*object.InetRtr, error)
 func (*Source) MembersByRef(_ context.Context, set object.NamedSet) ([]object.Object, error)
 func (*Source) OriginatedRoutes(ctx context.Context, as types.ASN, afi types.AFI) ([]netip.Prefix, error)

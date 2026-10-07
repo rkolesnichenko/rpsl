@@ -49,12 +49,12 @@ type RouteRequest struct {
 // RouteRequestFor builds a RouteRequest for an already-decoded route object.
 // Origin and Space are still the caller's to supply: finding them is a registry
 // lookup, which this package does not do.
-func RouteRequestFor(r object.Route, origin, space object.Object) RouteRequest {
+func RouteRequestFor(r *object.Route, origin, space object.Object) RouteRequest {
 	return RouteRequest{Prefix: r.Prefix, OriginAS: r.Origin, MntBy: r.MntBy, Origin: origin, Space: space}
 }
 
 // RouteRequestFor6 is RouteRequestFor for a route6 object.
-func RouteRequestFor6(r object.Route6, origin, space object.Object) RouteRequest {
+func RouteRequestFor6(r *object.Route6, origin, space object.Object) RouteRequest {
 	return RouteRequest{Prefix: r.Prefix, OriginAS: r.Origin, MntBy: r.MntBy, Origin: origin, Space: space}
 }
 
@@ -120,11 +120,9 @@ func mismatch(step int, req RouteRequest) string {
 	return ""
 }
 
-// autNumAS returns the AS of an aut-num, as a value or a pointer.
+// autNumAS returns the AS of an aut-num.
 func autNumAS(o object.Object) (types.ASN, bool) {
 	switch t := o.(type) {
-	case object.AutNum:
-		return t.AS, true
 	case *object.AutNum:
 		if t != nil {
 			return t.AS, true
@@ -143,27 +141,19 @@ func covers(o object.Object, p netip.Prefix) (exact, ok bool) {
 	}
 	var q netip.Prefix
 	switch t := o.(type) {
-	case object.Inetnum:
-		return rangeCovers(t.Lo, t.Hi, p)
 	case *object.Inetnum:
 		if t == nil {
 			return false, false
 		}
 		return rangeCovers(t.Lo, t.Hi, p)
-	case object.Inet6num:
-		q = t.Prefix
 	case *object.Inet6num:
 		if t != nil {
 			q = t.Prefix
 		}
-	case object.Route:
-		q = t.Prefix
 	case *object.Route:
 		if t != nil {
 			q = t.Prefix
 		}
-	case object.Route6:
-		q = t.Prefix
 	case *object.Route6:
 		if t != nil {
 			q = t.Prefix
@@ -256,15 +246,15 @@ func scopedMntners(entries []policy.MntRoutes, prefix netip.Prefix) []string {
 // authority. ok is false for a class that has none of them.
 func authorities(o object.Object) (mntRoutes []policy.MntRoutes, mntLower, mntBy []string, ok bool) {
 	switch t := o.(type) {
-	case object.AutNum:
+	case *object.AutNum:
 		return t.MntRoutes, t.MntLower, t.MntBy, true
-	case object.Route:
+	case *object.Route:
 		return t.MntRoutes, t.MntLower, t.MntBy, true
-	case object.Route6:
+	case *object.Route6:
 		return t.MntRoutes, t.MntLower, t.MntBy, true
-	case object.Inetnum:
+	case *object.Inetnum:
 		return t.MntRoutes, t.MntLower, t.MntBy, true
-	case object.Inet6num:
+	case *object.Inet6num:
 		return t.MntRoutes, t.MntLower, t.MntBy, true
 	}
 	return nil, nil, nil, false

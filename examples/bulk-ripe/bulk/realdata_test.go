@@ -198,11 +198,11 @@ func checkDump(t *testing.T, reg registry, path string) {
 		}
 		typed, decodeDiags := object.Decode(obj)
 		switch r := typed.(type) {
-		case object.Route:
+		case *object.Route:
 			if !r.Prefix.IsValid() {
 				badRoutes = append(badRoutes, obj.Key())
 			}
-		case object.Route6:
+		case *object.Route6:
 			if !r.Prefix.IsValid() {
 				badRoutes = append(badRoutes, obj.Key())
 			}

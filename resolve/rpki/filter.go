@@ -65,19 +65,19 @@ func (f *Filter) MembersByRef(ctx context.Context, set object.NamedSet) ([]objec
 }
 
 // AutNum returns Src's aut-num unchanged: RPKI suppresses route objects only.
-func (f *Filter) AutNum(ctx context.Context, as types.ASN, source string) (object.AutNum, error) {
+func (f *Filter) AutNum(ctx context.Context, as types.ASN, source string) (*object.AutNum, error) {
 	ps, ok := f.Src.(resolve.PolicySource)
 	if !ok {
-		return object.AutNum{}, resolve.ErrNoPolicy
+		return nil, resolve.ErrNoPolicy
 	}
 	return ps.AutNum(ctx, as, source)
 }
 
 // InetRtr returns Src's inet-rtr unchanged.
-func (f *Filter) InetRtr(ctx context.Context, name, source string) (object.InetRtr, error) {
+func (f *Filter) InetRtr(ctx context.Context, name, source string) (*object.InetRtr, error) {
 	ps, ok := f.Src.(resolve.PolicySource)
 	if !ok {
-		return object.InetRtr{}, resolve.ErrNoPolicy
+		return nil, resolve.ErrNoPolicy
 	}
 	return ps.InetRtr(ctx, name, source)
 }
@@ -135,18 +135,13 @@ func (f *Filter) suppressed(p netip.Prefix, origin types.ASN) bool {
 	return true
 }
 
-// route returns the prefix and origin of a route or route6 object, as a value
-// or a pointer.
+// route returns the prefix and origin of a route or route6 object.
 func route(o object.Object) (netip.Prefix, types.ASN, bool) {
 	switch t := o.(type) {
-	case object.Route:
-		return t.Prefix, t.Origin, true
 	case *object.Route:
 		if t != nil {
 			return t.Prefix, t.Origin, true
 		}
-	case object.Route6:
-		return t.Prefix, t.Origin, true
 	case *object.Route6:
 		if t != nil {
 			return t.Prefix, t.Origin, true
