@@ -121,24 +121,14 @@ func (l *DumpLoader) SourceOf(sources ...string) *MemSource {
 // loader's own: reading more dumps changes it.
 func (l *DumpLoader) Corpus() *Corpus { return &l.corpus }
 
-// LoadDump reads one dump into a MemSource. It is DumpLoader for the common
-// case; use the loader itself to read several files, to set a source
-// precedence, or to see what the dump contained.
+// LoadDump reads one dump into a MemSource, with an optional source
+// precedence as NewMemSource takes it. It is DumpLoader for the common case;
+// use the loader itself to read several files, keep policy objects or route
+// text, or see what the dump contained.
 func LoadDump(r io.Reader, sourcePrecedence ...string) (*MemSource, error) {
 	l := &DumpLoader{Sources: sourcePrecedence}
 	if err := l.Read(r); err != nil {
 		return nil, err
-	}
-	return l.Source(), nil
-}
-
-// LoadDumps reads several dumps into one MemSource, in order.
-func LoadDumps(rs []io.Reader, sourcePrecedence ...string) (*MemSource, error) {
-	l := &DumpLoader{Sources: sourcePrecedence}
-	for _, r := range rs {
-		if err := l.Read(r); err != nil {
-			return nil, err
-		}
 	}
 	return l.Source(), nil
 }

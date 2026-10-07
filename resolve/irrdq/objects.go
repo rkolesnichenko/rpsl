@@ -45,11 +45,11 @@ func knownClass(class string) bool {
 	return ripe || irrd
 }
 
-// objectText is raw's text as its registry published it (resolve.ObjectText:
+// objectText is raw's text as its registry published it (ast.Object.Text:
 // without the blank and comment lines a dump stream attached around it),
 // ending in a newline.
 func objectText(raw *ast.Object) string {
-	text := resolve.ObjectText(raw)
+	text := raw.Text()
 	if !strings.HasSuffix(text, "\n") {
 		text += "\n"
 	}

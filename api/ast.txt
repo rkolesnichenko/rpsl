@@ -43,5 +43,6 @@ func (*Object) Has(name string) bool
 func (*Object) Key() string
 func (*Object) Set(name string, values ...string) error
 func (*Object) String() string
+func (*Object) Text() string
 type Severity uint8
 func (Severity) String() string

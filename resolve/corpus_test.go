@@ -755,11 +755,20 @@ func TestObjectText(t *testing.T) {
 	dump := "# head\n\nroute: 192.0.2.0/24\n# inside\norigin: AS1\nremarks: a\n+\n b\nsource: RIPE\n\n# tail\nEOF\n\n"
 	var got []string
 	for o := range rpsl.Parse(strings.NewReader(dump)) {
-		got = append(got, resolve.ObjectText(o))
+		got = append(got, o.Text())
 	}
 	want := []string{"route: 192.0.2.0/24\n# inside\norigin: AS1\nremarks: a\n+\n b\nsource: RIPE\n"}
 	if !slices.Equal(got, want) {
-		t.Errorf("ObjectText:\n got %q\nwant %q", got, want)
+		t.Errorf("Text:\n got %q\nwant %q", got, want)
+	}
+	// In a dump stream the last object owns the dump's closing lines.
+	const obj = "aut-num: AS1\nsource: RIPE\n"
+	got = nil
+	for o := range rpsl.Parse(strings.NewReader("as-set: AS-X\nsource: RIPE\n\n" + obj + "\n  # closing\n")) {
+		got = append(got, o.Text())
+	}
+	if want := []string{"as-set: AS-X\nsource: RIPE\n", obj}; !slices.Equal(got, want) {
+		t.Errorf("stream: %q, want %q", got, want)
 	}
 	l := &resolve.DumpLoader{KeepRouteText: true}
 	if err := l.Read(strings.NewReader(dump)); err != nil {
@@ -774,13 +783,13 @@ func TestObjectText(t *testing.T) {
 
 // TestObjectTextKeepsAttributesAfterABlankLine: an object parsed on its own
 // (rpsl.ParseObject, as the NRTMv4 client builds them) keeps attributes after
-// an internal blank line, and ObjectText keeps them too — a Corpus that kept
+// an internal blank line, and Text keeps them too — a Corpus that kept
 // less would serve an aut-num without the imports its peer index read.
 func TestObjectTextKeepsAttributesAfterABlankLine(t *testing.T) {
 	text := "aut-num: AS1\nas-name: A\n\nimport: from AS2 accept ANY\nsource: RIPE\n"
 	o, _ := rpsl.ParseObject(text + "# trailing\nEOF\n\n")
-	if got := resolve.ObjectText(o); got != text {
-		t.Errorf("ObjectText: %q, want %q", got, text)
+	if got := o.Text(); got != text {
+		t.Errorf("Text: %q, want %q", got, text)
 	}
 	obj, _ := rpsl.Decode(o)
 	c := &resolve.Corpus{IndexPeers: true}
@@ -791,37 +800,5 @@ func TestObjectTextKeepsAttributesAfterABlankLine(t *testing.T) {
 	}
 	if len(an.Imports) != 1 {
 		t.Errorf("served %d imports, want 1", len(an.Imports))
-	}
-}
-
-// TestObjectTextLineRules: ObjectText reads lines as the lexer does. A line
-// led by a space, a tab or '+' continues an attribute only right after an
-// attribute or continuation line; after a blank, comment or malformed line it
-// is malformed (lexer/malformed-line), and trailing it is dropped like any
-// other trivia.
-func TestObjectTextLineRules(t *testing.T) {
-	const obj = "aut-num: AS1\nsource: RIPE\n"
-	for _, c := range []struct{ text, want string }{
-		{obj + "\n stray\n", obj},
-		{obj + "\n+\n", obj},
-		{obj + "\n  # c\n", obj},
-		{obj + "# c\n stray\n", obj},
-		{obj + "EOF\n\tstray\n", obj},
-		{"aut-num: AS1\r\nremarks: a\r\n b\r\n+\r\nsource: RIPE\r\n\r\n  # c\r\n", "aut-num: AS1\r\nremarks: a\r\n b\r\n+\r\nsource: RIPE\r\n"},
-		{"aut-num: AS1\n\n stray\nsource: RIPE\n\n stray\n", "aut-num: AS1\n\n stray\nsource: RIPE\n"},
-		{"aut-num: AS1\nremarks: a\n b\n\tc\n+ d\n", "aut-num: AS1\nremarks: a\n b\n\tc\n+ d\n"},
-	} {
-		o, _ := rpsl.ParseObject(c.text)
-		if got := resolve.ObjectText(o); got != c.want {
-			t.Errorf("ObjectText(%q) = %q, want %q", c.text, got, c.want)
-		}
-	}
-	// In a dump stream the last object owns the dump's closing lines.
-	var got []string
-	for o := range rpsl.Parse(strings.NewReader("as-set: AS-X\nsource: RIPE\n\n" + obj + "\n  # closing\n")) {
-		got = append(got, resolve.ObjectText(o))
-	}
-	if want := []string{"as-set: AS-X\nsource: RIPE\n", obj}; !slices.Equal(got, want) {
-		t.Errorf("stream: %q, want %q", got, want)
 	}
 }

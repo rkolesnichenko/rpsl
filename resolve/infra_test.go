@@ -463,14 +463,17 @@ source:         TEST
 	}
 }
 
-// LoadDumps reads several readers into one Source, with source precedence.
+// A DumpLoader reads several readers into one Source, with source precedence.
 func TestLoadDumps(t *testing.T) {
 	a := "as-set: AS-DUP\nmembers: AS1\nsource: RIPE\n"
 	b := "as-set: AS-DUP\nmembers: AS2\nsource: RADB\n"
-	src, err := LoadDumps([]io.Reader{strings.NewReader(b), strings.NewReader(a)}, "RIPE", "RADB")
-	if err != nil {
-		t.Fatal(err)
+	l := &DumpLoader{Sources: []string{"RIPE", "RADB"}}
+	for _, r := range []io.Reader{strings.NewReader(b), strings.NewReader(a)} {
+		if err := l.Read(r); err != nil {
+			t.Fatal(err)
+		}
 	}
+	src := l.Source()
 	got, err := (&Expander{Src: src}).ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-DUP")))
 	if err != nil {
 		t.Fatal(err)
@@ -561,8 +564,8 @@ func TestDumpReadError(t *testing.T) {
 	if _, err := LoadDump(io.MultiReader(strings.NewReader("a: 1\n"), iotest.ErrReader(boom))); err == nil {
 		t.Error("LoadDump reported no error on a truncated dump")
 	}
-	if _, err := LoadDumps([]io.Reader{iotest.ErrReader(boom)}); err == nil {
-		t.Error("LoadDumps reported no error on a truncated dump")
+	if err := (&DumpLoader{}).Read(iotest.ErrReader(boom)); err == nil {
+		t.Error("DumpLoader.Read reported no error on a truncated dump")
 	}
 }
 

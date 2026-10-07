@@ -13,11 +13,9 @@ func ClaimAllowed(o object.Object, set object.NamedSet) bool
 func Expandable(o object.Object) bool
 func ExpandableClass(class string) bool
 func LoadDump(r io.Reader, sourcePrecedence ...string) (*MemSource, error)
-func LoadDumps(rs []io.Reader, sourcePrecedence ...string) (*MemSource, error)
 func NewASNSet(asns ...types.ASN) ASNSet
 func NewCache(src Source, ttl time.Duration) *Cache
 func NewMemSource(objs []object.Object, sourcePrecedence ...string) *MemSource
-func ObjectText(raw *ast.Object) string
 type ASNSet struct
 func (ASNSet) Has(a types.ASN) bool
 func (ASNSet) Len() int
