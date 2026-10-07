@@ -89,6 +89,15 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   Go's stand-in for sum types. Exhaustive type switches over them.
 - Ordering is significant: store attributes as a slice, never a map. `GetAll` preserves document order.
 - Comparable value types where possible (ASN, Prefix) so they work as map keys and in tests.
+- **API conventions** (design §2), held by `go run ./internal/apisurface -check` (check.sh runs it):
+  - Options: `X(in)` with the zero options, `XWith(in, XOptions)` with all of them (C1).
+  - A whole attribute value's parser returns `(T, []ast.Diagnostic)`; a single value's parser or
+    constructor `(T, error)`. A trailing `ok bool` is for an expected false (a lookup miss, an
+    empty result: `Intersect`, `Apply`, `NewPrefixRange`), never on a `Parse*` (C2).
+  - Every `object` class is a pointer (`Decode` returns `*object.X`, pointer receivers); parsed
+    values, policy AST nodes and expansion results are values; a type holding an index, a cache
+    or a connection is a pointer.
+  - A type is named after an RPSL class only if it is that class. Sentinels use `errors.New` (C3).
 
 ## Testing (design §11) — treat as part of "done"
 
@@ -362,6 +371,9 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
 - Engine purity: `cd resolve && go list -deps . ./peval ./rtconfig ./consist ./irrdq ./rpki` must NOT
   include `net` (sockets live only in resolve/irrd, resolve/whois, resolve/rdap, resolve/nrtm4
   and resolve/irrdserver).
+- API surface: `api/<pkg>.txt` is the golden of every public signature (no comments; const
+  values kept). `go run ./internal/apisurface -check` fails on any difference and on a broken
+  convention (C1–C3); `RPSL_API_UPDATE=1` rewrites `api/` — review the diff, it is the API change list.
 - A `resolve`-module test that reads a file outside `resolve/` (a docs/*.md contract, such as
   `TestRpslconfDocs`) skips when `../../go.work` is absent: `resolve` publishes on its own, and
   release.sh step 6 tests that published zip from an empty module cache, where nothing outside

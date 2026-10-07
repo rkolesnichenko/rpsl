@@ -9,6 +9,34 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Breaking
+
+- `policy`: `ParseImport`, `ParseExport` and `ParseDefault` each have one options form,
+  `ParseImportWith(s, Options)` etc., with `Options{MP, Via, Dict}`. Removed: `ParseMPImport`,
+  `ParseMPExport`, `ParseMPDefault`, `ParseImportVia`, `ParseExportVia`, `ParseImportViaWith`,
+  `ParseExportViaWith`, and the `(s, mp, o)` forms. `Via` implies `MP`; `ParseDefaultWith` with
+  `Via` reports `policy/no-default-via` (there is no `default-via:`) and reads `mp-default:`.
+- `object`: every class is a pointer. `Decode` returns `*object.AutNum`, `*object.Route`, …, and
+  only pointers implement `object.Object`; type switches and assertions name `*object.X`.
+- `resolve`: `PolicySource.AutNum`/`InetRtr` (and `MemSource`, `Cache`, `irrd.Source`,
+  `whois.Source`, `rpki.Filter`) return `*object.AutNum`/`*object.InetRtr`, nil on error.
+- `auth`: `Registry.Mntner`, `IrtRegistry.Irt`, `Database.ASBlocks` and `ReferralChain` return
+  pointers; `CheckMntner`, `CheckIrt`, `RouteRequestFor` and `RouteRequestFor6` take them.
+- Renamed: `object.RouterSet` → `object.RouterGroup`; `resolve.PeeringSet` → `resolve.Peerings`;
+  `resolve.RouterSet` → `resolve.Routers`.
+- `resolve.ObjectText(raw)` is now `raw.Text()` (`ast.Object.Text`). `resolve.LoadDumps` is
+  removed; use `DumpLoader`.
+
+### Changed
+
+- `resolve/irrd`: `ErrQueryRefused` is its own sentinel rather than an alias of an unexported one;
+  `errors.Is` answers are unchanged. `resolve/rdap`: `ErrNotFound` is built with `errors.New`.
+
+### Added
+
+- `api/`: the golden of every public package's signatures, checked by
+  `go run ./internal/apisurface -check` with three API-convention checks (CLAUDE.md, design §2).
+
 ## [0.25.0] - 2026-10-06
 
 ### Added

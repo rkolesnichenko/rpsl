@@ -45,6 +45,34 @@ Imports run strictly downward: `resolve → object → policy → types → ast 
 
 For local development the modules are wired together with a root `go.work` (`use`), which overrides the inter-module `require`s — they name the latest release — with the local directories. See [README.md#Releasing](../README.md#releasing) for the per-module tagging order when publishing.
 
+### API conventions
+
+1. **Options.** A function with options has two forms: `X(in)` with the
+   zero options, and `XWith(in, XOptions)` with all of them. `X(in)` equals
+   `XWith(in, XOptions{})`.
+2. **Errors, diagnostics and comma-ok.**
+   - A parser of a whole attribute value recovers and reports every problem
+     it finds: it returns `(T, []ast.Diagnostic)` and never an `error`.
+   - A parser or constructor of one value (`types.ParseASN`,
+     `object.ParseAuth`, `policy.ParseASPathRegexp`) succeeds or fails: it
+     returns `(T, error)`.
+   - A trailing `ok bool` is for a false case that is an expected outcome:
+     a lookup miss (`GetFirst`, `Dictionary.Attr`, `ASPAs.Providers`) or an
+     empty result (`Intersect`, `Apply`, `NewPrefixRange`). Malformed input
+     is always an `error`, so no `Parse*` function returns a `bool`.
+3. **Pointers and values.**
+   - Every `object` class is a pointer: `object.Decode` returns `*object.X`,
+     and every method of a class has a pointer receiver, so only `*object.X`
+     implements `object.Object`.
+   - Parsed values (`types.*`, `object.Auth`, `object.SetMember`, …), policy
+     AST nodes and expansion results (`resolve.ASNSet`, …) are values.
+   - A type holding an index, a cache or a connection is a pointer
+     (`MemSource`, `Corpus`, `rpki.VRPs`, `irrd.Source`).
+4. **Names.** A type is named after an RPSL class only if it is that class.
+5. **Sentinel errors** are declared with `errors.New`.
+
+`internal/apisurface` holds `api/`, the golden of the public signatures, and checks rules 1, 2 and 5 mechanically (C1–C3); rule 3 is enforced by the compiler once the receivers are pointers, rule 4 by review.
+
 ---
 
 ## 3. Lexer
