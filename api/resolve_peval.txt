@@ -1,0 +1,50 @@
+package peval
+const WhyInto = "into"
+const WhyLocalRouter = "local router not given"
+const WhyPeerRouter = "peer router not given"
+const WhyPeeringRegexp = "peering regexp"
+const WhyProtocol = "protocol"
+const WhyUnknownPeering = "unknown peering"
+const WhyViaPeerAS = "PeerAS beyond a via peering names no single AS"
+func Whys() []string
+type Clause struct
+	Index int
+	Term policy.Term
+	Actions []policy.Action
+	Filter resolve.NormalFilter
+	Remote policy.Peering
+type DefaultClause struct
+	Index int
+	Peering policy.Peering
+	Actions []policy.Action
+	Networks *resolve.NormalFilter
+type Defaults struct
+	Clauses []DefaultClause
+	Undecided []Undecided
+func (Defaults) Missing() []types.SetRef
+func (Defaults) MissingRouters() []string
+type Evaluator struct
+	Src resolve.PolicySource
+	Expander resolve.Expander
+	Source string
+func (*Evaluator) Default(ctx context.Context, s Session) (Defaults, error)
+func (*Evaluator) Export(ctx context.Context, s Session) (Policy, error)
+func (*Evaluator) ExportVia(ctx context.Context, s Session) (Policy, error)
+func (*Evaluator) Filter(ctx context.Context, f policy.Filter, afi types.AFI, peer types.ASN) (resolve.NormalFilter, error)
+func (*Evaluator) Import(ctx context.Context, s Session) (Policy, error)
+func (*Evaluator) ImportVia(ctx context.Context, s Session) (Policy, error)
+type Policy struct
+	Clauses []Clause
+	Undecided []Undecided
+func (Policy) Missing() []types.SetRef
+func (Policy) MissingRouters() []string
+type Session struct
+	Local types.ASN
+	Peer types.ASN
+	LocalRtr netip.Addr
+	PeerRtr netip.Addr
+	AF types.AddrFamily
+type Undecided struct
+	Index int
+	Term policy.Term
+	Why string

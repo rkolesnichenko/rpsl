@@ -1,0 +1,119 @@
+package types
+const AFIAny AFI
+const AFIUnspecified AFI = iota
+const AFIv4 AFI
+const AFIv6 AFI
+const ClassAsSet SetClass
+const ClassFilterSet SetClass
+const ClassPeeringSet SetClass
+const ClassRouteSet SetClass
+const ClassRtrSet SetClass
+const ClassUnknown SetClass = iota
+const MaxNICHandleLen = 64
+const MaxRouterNameLen = 253
+const MaxSetNameLen = 1024
+const MaxSourceNameLen = 64
+const RangeExact RangeOp = iota
+const RangeLength RangeOp
+const RangeMinus RangeOp
+const RangePlus RangeOp
+const RangeRange RangeOp
+const SAFIMulticast SAFI
+const SAFIUnicast SAFI
+const SAFIUnspecified SAFI = iota
+var ErrTooManyPrefixes = errors.New(…)
+func AbbreviatedIPv4(s string) bool
+func FullSpace(afi AFI) PrefixSpace
+func NewPrefixRange(p netip.Prefix, lo, hi int) (_ PrefixRange, ok bool)
+func NewSetRef(source string, name SetName) (SetRef, error)
+func PaddedIPv4(s string) bool
+func ParseASN(s string) (ASN, error)
+func ParseAddr(s string) (netip.Addr, error)
+func ParseAddrFamily(s string) (AddrFamily, error)
+func ParseNICHandle(s string) (NICHandle, error)
+func ParsePrefix(s string) (netip.Prefix, error)
+func ParsePrefixRange(s string) (PrefixRange, error)
+func ParseRangeOperator(s string) (RangeOperator, error)
+func ParseRouterID(s string) (RouterID, error)
+func ParseSetName(s string) (SetName, error)
+func ParseSetRef(s string) (SetRef, error)
+func ParseSourceName(s string) (string, error)
+func Ref(name SetName) SetRef
+func SpaceOf(rs ...PrefixRange) PrefixSpace
+type AFI uint8
+func (AFI) String() string
+type ASN uint32
+func (ASN) MarshalText() ([]byte, error)
+func (ASN) String() string
+func (*ASN) UnmarshalJSON(b []byte) error
+func (*ASN) UnmarshalText(b []byte) error
+type AddrFamily struct
+	AFI AFI
+	SAFI SAFI
+func (AddrFamily) Covers(b AddrFamily) bool
+func (AddrFamily) MarshalText() ([]byte, error)
+func (AddrFamily) String() string
+func (*AddrFamily) UnmarshalText(b []byte) error
+type NICHandle string
+func (NICHandle) MarshalText() ([]byte, error)
+func (NICHandle) String() string
+func (*NICHandle) UnmarshalText(b []byte) error
+type PrefixRange struct
+func (PrefixRange) All() iter.Seq[netip.Prefix]
+func (PrefixRange) Contains(p netip.Prefix) bool
+func (PrefixRange) Hi() int
+func (PrefixRange) Intersect(s PrefixRange) (_ PrefixRange, ok bool)
+func (PrefixRange) IsEmpty() bool
+func (PrefixRange) IsZero() bool
+func (PrefixRange) Lo() int
+func (PrefixRange) MarshalText() ([]byte, error)
+func (PrefixRange) Materialize(maxPrefixes int) ([]netip.Prefix, error)
+func (PrefixRange) Op() RangeOp
+func (PrefixRange) Prefix() netip.Prefix
+func (PrefixRange) String() string
+func (*PrefixRange) UnmarshalText(b []byte) error
+type PrefixSpace struct
+func (PrefixSpace) Contains(p netip.Prefix) bool
+func (PrefixSpace) Equal(t PrefixSpace) bool
+func (PrefixSpace) Example() (p netip.Prefix, ok bool)
+func (PrefixSpace) Intersect(t PrefixSpace) PrefixSpace
+func (PrefixSpace) IsEmpty() bool
+func (PrefixSpace) Minus(t PrefixSpace) PrefixSpace
+func (PrefixSpace) Ranges() iter.Seq[PrefixRange]
+func (PrefixSpace) String() string
+func (PrefixSpace) Subset(t PrefixSpace) bool
+func (PrefixSpace) Union(t PrefixSpace) PrefixSpace
+type RangeOp uint8
+type RangeOperator struct
+	Op RangeOp
+	N uint8
+	M uint8
+func (RangeOperator) Apply(r PrefixRange) (_ PrefixRange, ok bool)
+func (RangeOperator) IsZero() bool
+func (RangeOperator) MarshalText() ([]byte, error)
+func (RangeOperator) String() string
+func (*RangeOperator) UnmarshalText(b []byte) error
+type RouterID struct
+func (RouterID) Addr() (netip.Addr, bool)
+func (RouterID) IsZero() bool
+func (RouterID) MarshalText() ([]byte, error)
+func (RouterID) Name() string
+func (RouterID) String() string
+func (*RouterID) UnmarshalText(b []byte) error
+type SAFI uint8
+func (SAFI) String() string
+type SetClass uint8
+func (SetClass) String() string
+type SetName struct
+func (SetName) Class() SetClass
+func (SetName) Components() []string
+func (SetName) IsZero() bool
+func (SetName) MarshalText() ([]byte, error)
+func (SetName) String() string
+func (*SetName) UnmarshalText(b []byte) error
+type SetRef struct
+func (SetRef) IsScoped() bool
+func (SetRef) IsZero() bool
+func (SetRef) Name() SetName
+func (SetRef) Source() string
+func (SetRef) String() string

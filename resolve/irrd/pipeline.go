@@ -66,7 +66,7 @@ func (s *Source) doPipelined(ctx context.Context, cmd string) ([]byte, error) {
 			return nil, netconn.Err(ctx, err)
 		}
 		payload, err := p.call(ctx, cmd)
-		if err == nil || errors.Is(err, errNotFound) || errors.Is(err, errQuery) || errors.Is(err, ErrClosed) ||
+		if err == nil || errors.Is(err, errNotFound) || errors.Is(err, ErrQueryRefused) || errors.Is(err, ErrClosed) ||
 			ctx.Err() != nil || attempt > 0 || !isStale(err) {
 			return payload, netconn.Err(ctx, err)
 		}
@@ -440,7 +440,7 @@ func (p *pipe) read() {
 			_ = p.conn.SetReadDeadline(time.Now().Add(t))
 		}
 		payload, err := readFrame(p.br, p.s.maxResponse())
-		if err != nil && !errors.Is(err, errNotFound) && !errors.Is(err, errQuery) {
+		if err != nil && !errors.Is(err, errNotFound) && !errors.Is(err, ErrQueryRefused) {
 			p.load.Add(-1)
 			p.shut(err)
 			c.done <- result{nil, p.err}

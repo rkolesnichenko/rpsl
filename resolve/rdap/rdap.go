@@ -123,7 +123,7 @@ func (e *RateLimitedError) Error() string {
 }
 
 // ErrNotFound is returned for a 404 RDAP response.
-var ErrNotFound = fmt.Errorf("rdap: object not found")
+var ErrNotFound = errors.New("rdap: object not found")
 
 // ErrInsecure is returned when an http:// URL is used without AllowInsecure.
 var ErrInsecure = errors.New("rdap: insecure (non-https) URL refused; set AllowInsecure to opt in")

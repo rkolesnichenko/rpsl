@@ -1,0 +1,73 @@
+package consist
+const NoAutNum Kind
+const NoExport Kind
+const NoImport Kind
+const NotExported Kind
+const NotImported Kind = iota
+const RuleASPACustomerSet = "lint/aspa-customer-set"
+const RuleASPAMissingProvider = "lint/aspa-missing-provider"
+const RuleASPAStaleProvider = "lint/aspa-stale-provider"
+const RuleEmpty = "lint/empty"
+const RuleLimit = "lint/limit"
+const RuleMissingRouter = "lint/missing-router"
+const RuleMissingSet = "lint/missing-set"
+const RuleNoAutNum = "lint/no-aut-num"
+const RuleShadowed = "lint/shadowed"
+const RuleUndecided = "lint/undecided"
+const Undecided Kind
+const WhyExporterUndecided = "exporter has undecided terms"
+const WhyImporterUndecided = "importer has undecided terms"
+const WhySymbolic = "symbolic test on one side only"
+func Rules() []string
+func Whys() []string
+type Checker struct
+	Eval peval.Evaluator
+	MaxRanges int
+	ASPAs *rpki.ASPAs
+	SetPeers bool
+func (*Checker) Check(ctx context.Context, p Pair) (Report, error)
+func (*Checker) Lint(ctx context.Context, as types.ASN) ([]Issue, error)
+func (*Checker) Peers(ctx context.Context, as types.ASN) (PeerList, error)
+type Direction struct
+	From types.ASN
+	To types.ASN
+	Findings []Finding
+	NoPolicy bool
+type Finding struct
+	Kind Kind
+	Of Kind
+	Severity ast.Severity
+	AS types.ASN
+	Example netip.Prefix
+	Ranges []types.PrefixRange
+	Truncated bool
+	Given []string
+	Export []int
+	Import []int
+	Why string
+type Issue struct
+	ast.Diagnostic
+	Attr string
+	Index int
+	Peers []types.ASN
+	AFs []types.AddrFamily
+type Kind uint8
+func (Kind) String() string
+type Pair struct
+	A types.ASN
+	B types.ASN
+	AF types.AddrFamily
+	ARtr netip.Addr
+	BRtr netip.Addr
+type PeerList struct
+	Forward []types.ASN
+	ViaSets []types.ASN
+	Reverse []types.ASN
+	Skipped []string
+	NoIndex bool
+type Report struct
+	Pair Pair
+	AtoB Direction
+	BtoA Direction
+func (Report) Missing() []types.SetRef
+func (Report) MissingRouters() []string

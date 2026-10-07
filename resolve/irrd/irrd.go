@@ -124,13 +124,10 @@ type pconn struct {
 // errNotFound is the internal sentinel for a 'D' (key not found) response.
 var errNotFound = errors.New("irrd: key not found")
 
-// errQuery wraps an 'F' response: the server refused the query itself, and the
-// connection is still in step.
-var errQuery = errors.New("irrd: query error")
-
 // ErrQueryRefused is returned when the server refuses a query outright ('F'),
-// as a server without IRRd 4's "!a" does for ASSetPrefixes.
-var ErrQueryRefused = errQuery
+// as a server without IRRd 4's "!a" does for ASSetPrefixes. The connection is
+// still in step.
+var ErrQueryRefused = errors.New("irrd: query error")
 
 // errUnknownSource marks a server's refusal of a "!s" source list: IRRd
 // answers "F One or more selected sources are unavailable."
@@ -321,7 +318,7 @@ func (s *Source) learnRegistries(ctx context.Context) (map[string]bool, error) {
 	switch {
 	case err == nil:
 		return parseRegistries(payload), nil
-	case errors.Is(err, errQuery), errors.Is(err, errNotFound):
+	case errors.Is(err, ErrQueryRefused), errors.Is(err, errNotFound):
 		return nil, nil
 	}
 	return nil, err
@@ -863,7 +860,7 @@ func (s *Source) selectSources(conn net.Conn, br *bufio.Reader) error {
 		if errors.Is(err, errNotFound) {
 			return fmt.Errorf("irrd: server rejected source list %q", list)
 		}
-		if errors.Is(err, errQuery) {
+		if errors.Is(err, ErrQueryRefused) {
 			return fmt.Errorf("irrd: selecting sources %q: %w: %w", list, errUnknownSource, err)
 		}
 		return fmt.Errorf("irrd: selecting sources %q: %w", list, err)
@@ -1007,7 +1004,7 @@ func readFrame(br *bufio.Reader, max int64) ([]byte, error) {
 	case 'D':
 		return nil, errNotFound
 	case 'F':
-		return nil, fmt.Errorf("%w: %s", errQuery, strings.TrimSpace(header[1:]))
+		return nil, fmt.Errorf("%w: %s", ErrQueryRefused, strings.TrimSpace(header[1:]))
 	default:
 		return nil, fmt.Errorf("irrd: unexpected response %q", header)
 	}

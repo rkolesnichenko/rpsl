@@ -63,6 +63,10 @@ step "tools: scripts/mkproxy builds and vets"
 step "engine purity: resolve, resolve/peval, resolve/rtconfig, resolve/consist, resolve/irrdq and resolve/rpki do not import net"
 if (cd resolve && go list -deps . ./peval ./rtconfig ./consist ./irrdq ./rpki) | grep -qx net; then bad "resolve, resolve/peval, resolve/rtconfig, resolve/consist, resolve/irrdq or resolve/rpki imports net"; fi
 
+step "api surface: api/ matches the public API, and the API conventions hold"
+go run ./internal/apisurface -check ||
+	bad "api surface (RPSL_API_UPDATE=1 go run ./internal/apisurface -check rewrites api/; review the diff)"
+
 bin=$(go env GOPATH)/bin
 for tool in staticcheck govulncheck; do
 	cmd=$(command -v "$tool" || true)

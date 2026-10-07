@@ -1,0 +1,37 @@
+package rdap
+const DefaultTimeout = 60 * time.Second
+var ErrForbiddenHost = errors.New(…)
+var ErrInsecure = errors.New(…)
+var ErrNotFound = errors.New(…)
+type Autnum struct
+	Handle string `json:"handle"`
+	StartAutnum types.ASN `json:"startAutnum"`
+	EndAutnum types.ASN `json:"endAutnum"`
+	Name string `json:"name"`
+	Country string `json:"country"`
+	Status []string `json:"status"`
+	Entities []Entity `json:"entities"`
+type Client struct
+	BaseURL string
+	HTTP *http.Client
+	MaxResponse int64
+	AllowInsecure bool
+	UserAgent string
+	Timeout time.Duration
+func (*Client) LookupAutnum(ctx context.Context, as types.ASN) (*Autnum, error)
+func (*Client) LookupIP(ctx context.Context, prefix netip.Prefix) (*IPNetwork, error)
+type Entity struct
+	Handle string `json:"handle"`
+	Roles []string `json:"roles"`
+type IPNetwork struct
+	Handle string `json:"handle"`
+	StartAddress netip.Addr `json:"startAddress"`
+	EndAddress netip.Addr `json:"endAddress"`
+	Name string `json:"name"`
+	Country string `json:"country"`
+	Type string `json:"type"`
+	Status []string `json:"status"`
+	Entities []Entity `json:"entities"`
+type RateLimitedError struct
+	RetryAfter time.Duration
+func (*RateLimitedError) Error() string
