@@ -55,8 +55,8 @@ type Expander struct {
 func (e *Expander) ExpandAS(ctx context.Context, ref types.SetRef) (ASNSet, error)
 func (e *Expander) ExpandPrefixes(ctx context.Context, ref types.SetRef) (PrefixSet, error)
 func (e *Expander) ExpandPrefixRanges(ctx context.Context, ref types.SetRef) (RangeSet, error)
-func (e *Expander) ExpandRouters(ctx context.Context, ref types.SetRef) (RouterSet, error)
-func (e *Expander) ExpandPeerings(ctx context.Context, ref types.SetRef) (PeeringSet, error)
+func (e *Expander) ExpandRouters(ctx context.Context, ref types.SetRef) (Routers, error)
+func (e *Expander) ExpandPeerings(ctx context.Context, ref types.SetRef) (Peerings, error)
 func (e *Expander) ExpandFilterSet(ctx context.Context, ref types.SetRef) (RangeSet, error)
 func (e *Expander) EvalFilter(ctx context.Context, f policy.Filter) (RangeSet, error)
 ```
