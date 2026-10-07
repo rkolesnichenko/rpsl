@@ -29,7 +29,8 @@ func TestOptionsMPAndVia(t *testing.T) {
 }
 
 // TestDefaultHasNoVia: RFC 2622 has no default-via:. With Via, the value is
-// read as mp-default: and one Error spanning the whole value comes first.
+// read as mp-default: and one Error spanning the whole value is added; it
+// comes first for a value with no other problem, as this one.
 func TestDefaultHasNoVia(t *testing.T) {
 	const s = "to AS1 action pref = 10; networks ANY"
 	got, ds := ParseDefaultWith(s, Options{Via: true})

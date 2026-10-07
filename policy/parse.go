@@ -24,8 +24,8 @@ type Options struct {
 	// Via reads import-via: or export-via: (draft-ietf-grow-rpsl-via): every
 	// clause names, before "from" or "to", the peering its routes pass
 	// through. It implies MP. There is no default-via:, so ParseDefaultWith
-	// reports one Error ("policy/no-default-via") and reads the value as
-	// mp-default:.
+	// adds one Error ("policy/no-default-via") to its diagnostics and reads
+	// the value as mp-default:.
 	Via bool
 
 	// Dict, when set, checks actions and protocols against a dictionary;
@@ -100,8 +100,10 @@ func parseExport(s string, o Options) (Export, *parser) {
 func ParseDefault(s string) (Default, []ast.Diagnostic) { return ParseDefaultWith(s, Options{}) }
 
 // ParseDefaultWith is ParseDefault with options: mp-default: syntax and a
-// dictionary. RFC 2622 has no default-via:; with Via set it reports one Error
-// over the whole value and reads it as mp-default:.
+// dictionary. RFC 2622 has no default-via:; with Via set it adds one Error
+// over the whole value and reads it as mp-default:. A value the parser has
+// already abandoned (policy/too-long, policy/too-many-errors) gets no such
+// Error.
 func ParseDefaultWith(s string, o Options) (Default, []ast.Diagnostic) {
 	d, p := parseDefault(s, o)
 	return d, p.diags

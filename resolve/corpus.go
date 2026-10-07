@@ -24,7 +24,9 @@ import (
 //
 // The zero value is empty and ready to use. A Corpus is not safe for
 // concurrent mutation; a MemSource built from it (Source, SourceOf) is
-// immutable and unaffected by later changes.
+// unaffected by later changes to the corpus (Put, Delete, Merge). Neither
+// changes the objects it holds, but those objects are shared, not copied: see
+// Put.
 type Corpus struct {
 	// KeepPolicy keeps every aut-num and inet-rtr, as its text, so that a
 	// MemSource built from the corpus is a PolicySource that serves them (an
@@ -84,6 +86,11 @@ func (c *Corpus) keepPolicy() bool { return c.KeepPolicy || c.IndexPeers }
 // Put keeps what the engine needs of o, replacing any object with its class,
 // primary key and source. It reports whether anything of o is kept; when
 // nothing is, an earlier object with its identity is still removed.
+//
+// An object kept whole is kept as the pointer o, not a copy, and Whole and a
+// MemSource built from the corpus hand that same pointer to every caller. The
+// caller must not modify o after Put, and no one may modify an object a
+// lookup returns.
 func (c *Corpus) Put(o object.Object) bool {
 	if isNil(o) {
 		return false

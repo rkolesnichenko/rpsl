@@ -30,8 +30,10 @@ var registry = map[string]func(*decoder) Object{
 }
 
 // Decode upgrades a generic ast.Object to its typed form via the class registry,
-// returning best-effort diagnostics. Unknown classes degrade to Generic with no
-// diagnostics. The returned object's Raw() is always byte-exact with the source.
+// returning best-effort diagnostics: a non-nil *X for a class it knows
+// (*AutNum, *Route, *AsSet, …), and a *Generic, with no diagnostics, for an
+// unknown class. The returned object's Raw() is always byte-exact with the
+// source.
 func Decode(o *ast.Object) (Object, []ast.Diagnostic) {
 	fn, ok := registry[o.Class()]
 	if !ok {

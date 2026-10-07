@@ -34,6 +34,11 @@ const DefaultCacheEntries = 1 << 16
 // the underlying Source, so a burst of goroutines expanding overlapping sets
 // does not multiply the load on the registry.
 //
+// A cached set, aut-num or inet-rtr is one object, shared by every caller
+// the entry answers, not a copy: callers must not modify it. Route and claim
+// lists are copied for each caller, but the claim objects in them are shared
+// in the same way.
+//
 // The zero value is not usable: build one with NewCache.
 type Cache struct {
 	// Src is the Source being cached.

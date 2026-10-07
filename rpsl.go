@@ -64,9 +64,10 @@ func parseObjectAt(text string, line, byteOffset int) (*ast.Object, []Diagnostic
 	return ast.New(toks), diagnose(toks)
 }
 
-// Decode upgrades a generic object to its typed form (AutNum, Route, AsSet, …),
-// returning best-effort diagnostics. Unknown classes degrade to a generic
-// object. Decoding never fails a whole object; use Validate for schema checks.
+// Decode upgrades a generic object to its typed form, a non-nil *object.X
+// (*object.AutNum, *object.Route, *object.AsSet, …), returning best-effort
+// diagnostics. An unknown class gives an *object.Generic. Decoding never fails
+// a whole object; use Validate for schema checks.
 func Decode(o *ast.Object) (Object, []Diagnostic) {
 	return object.Decode(o)
 }

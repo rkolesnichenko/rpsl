@@ -17,6 +17,10 @@ import (
 // source scopes a lookup as a SetRef does: "" is the Source's precedence, and a
 // registry it does not hold is ErrNotFound. Filter-sets, rtr-sets and
 // peering-sets keep coming from GetSet.
+//
+// An object a PolicySource returns may be shared, not copied: a MemSource
+// hands every caller the aut-num it was given decoded, and a Cache the one it
+// cached. Callers must not modify one they receive.
 type PolicySource interface {
 	Source
 
@@ -47,7 +51,8 @@ type policyEntry struct {
 }
 
 // decode returns the entry's object, decoding its text on each call: a
-// MemSource stays immutable and shareable, and a Cache is what remembers.
+// MemSource holds no cache that lookups would change, so it is safe to share
+// between goroutines, and a Cache is what remembers.
 // Decode diagnostics are dropped; the loader reported them.
 func (e policyEntry) decode() object.Object {
 	if e.obj != nil {
@@ -79,8 +84,11 @@ func (s *MemSource) pick(entries []policyEntry, source string) (policyEntry, err
 // AutNum returns the aut-num of as, from source ("" for the precedence), or
 // ErrNoPolicy from a MemSource built from a Corpus without KeepPolicy. A
 // text-kept entry (Corpus.KeepPolicy) is decoded on every call — MemSource
-// holds no decoded cache of its own, so it stays an immutable, freely
-// shareable value; wrap it in a Cache for repeated lookups.
+// holds no decoded cache of its own, so lookups never change it and it is
+// safe to share between goroutines; wrap it in a Cache for repeated lookups.
+// An aut-num given decoded (NewMemSource, or a Corpus claimant) is returned
+// as the pointer given, shared with every caller, not a copy: callers must
+// not modify it.
 func (s *MemSource) AutNum(_ context.Context, as types.ASN, source string) (*object.AutNum, error) {
 	if !s.policy {
 		return nil, ErrNoPolicy

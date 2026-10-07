@@ -16,12 +16,17 @@ same version (see [RELEASING.md](RELEASING.md)).
   `ParseMPExport`, `ParseMPDefault`, `ParseImportVia`, `ParseExportVia`, `ParseImportViaWith`,
   `ParseExportViaWith`, and the `(s, mp, o)` forms. `Via` implies `MP`; `ParseDefaultWith` with
   `Via` reports `policy/no-default-via` (there is no `default-via:`) and reads `mp-default:`.
+  `ParseDefaultWith` (formerly the three-argument form) now reports a missing `to` as
+  "expected 'to' at start of default", the wording `ParseDefault` always used (it said
+  "expected 'to' in a default policy").
 - `object`: every class is a pointer. `Decode` returns `*object.AutNum`, `*object.Route`, …, and
   only pointers implement `object.Object`; type switches and assertions name `*object.X`.
 - `resolve`: `PolicySource.AutNum`/`InetRtr` (and `MemSource`, `Cache`, `irrd.Source`,
   `whois.Source`, `rpki.Filter`) return `*object.AutNum`/`*object.InetRtr`, nil on error.
-- `auth`: `Registry.Mntner`, `IrtRegistry.Irt`, `Database.ASBlocks` and `ReferralChain` return
-  pointers; `CheckMntner`, `CheckIrt`, `RouteRequestFor` and `RouteRequestFor6` take them.
+- `auth`: `Registry.Mntner` and `IrtRegistry.Irt` return pointers, nil on error, and
+  `Database.ASBlocks` and `ReferralChain` slices of them; `CheckMntner`, `CheckIrt`,
+  `RouteRequestFor` and `RouteRequestFor6` take them. A nil object with a nil error, from these
+  interfaces or from `resolve.Source` and `resolve.PolicySource`, is treated as not found.
 - Renamed: `object.RouterSet` → `object.RouterGroup`; `resolve.PeeringSet` → `resolve.Peerings`;
   `resolve.RouterSet` → `resolve.Routers`.
 - `resolve.ObjectText(raw)` is now `raw.Text()` (`ast.Object.Text`). `resolve.LoadDumps` is
@@ -34,6 +39,7 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ### Added
 
+- `ast`: `(*Object).Text`, the object's text without the trivia a stream attached.
 - `api/`: the golden of every public package's signatures, checked by
   `go run ./internal/apisurface -check` with three API-convention checks (CLAUDE.md, design §2).
 

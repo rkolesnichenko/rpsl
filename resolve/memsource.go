@@ -50,6 +50,12 @@ type memSet struct {
 //
 // It is a PolicySource that serves every aut-num and inet-rtr in objs.
 //
+// The MemSource keeps the objects of objs themselves, not copies, and returns
+// them as they are: every caller of GetSet, AutNum, InetRtr or MembersByRef
+// receives the same pointers. It never changes them; the caller must not
+// modify an object after passing it here, and no one may modify an object a
+// lookup returns.
+//
 // Corpus.Source builds with it too, so that the two cannot answer differently.
 func NewMemSource(objs []object.Object, sourcePrecedence ...string) *MemSource {
 	return newMemSource(objs, sourcePrecedence, nil)

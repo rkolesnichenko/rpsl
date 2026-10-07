@@ -6,7 +6,8 @@
 // the embedded Common, RIPE's cross-class ones via the embedded Registry).
 // Decoding is fallible per-attribute: a malformed value is skipped with a
 // Diagnostic, never aborting the whole object, and Raw always drops back to the
-// lossless ast.Object. Other classes decode to Generic.
+// lossless ast.Object. Decode returns each class as a non-nil pointer to its
+// struct (*AutNum, *Route, …); any other class decodes to a *Generic.
 package object
 
 import (
