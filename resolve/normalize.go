@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 
 	"github.com/rkolesnichenko/rpsl/policy"
 	"github.com/rkolesnichenko/rpsl/types"
@@ -31,6 +32,13 @@ type Conjunct struct {
 	Paths       []PathMatch
 	Communities []CommunityMatch
 	any         bool
+	space       *spaceOnce // set by NormalizeFilter: Space computed once, shared by copies
+}
+
+// spaceOnce is a conjunct's space, computed on first use.
+type spaceOnce struct {
+	once sync.Once
+	s    types.PrefixSpace
 }
 
 // AnyPrefix reports whether Prefixes is every prefix of the Expander's address
@@ -40,8 +48,19 @@ func (c Conjunct) AnyPrefix() bool { return c.any }
 // Space returns the prefixes the conjunct's prefix tests accept: Prefixes
 // less NotPrefixes. ANY is in Prefixes as 0.0.0.0/0^0-32 and ::/0^0-128,
 // trimmed to the Expander's AFI, so a conjunct with AnyPrefix gives every
-// prefix of that family.
+// prefix of that family. For a conjunct NormalizeFilter built it is computed
+// once and shared by every copy (a memoized NormalFilter is handed to many
+// callers); for one built by hand, on each call.
 func (c Conjunct) Space() types.PrefixSpace {
+	if c.space == nil {
+		return c.computeSpace()
+	}
+	c.space.once.Do(func() { c.space.s = c.computeSpace() })
+	return c.space.s
+}
+
+// computeSpace is Space without the cache.
+func (c Conjunct) computeSpace() types.PrefixSpace {
 	// SpaceOf does not depend on the order of its ranges: List's sort would
 	// be wasted, and on a large set it was a fifth of a sweep's CPU.
 	return types.SpaceOf(c.Prefixes.unsorted()...).Minus(types.SpaceOf(c.NotPrefixes.unsorted()...))
@@ -600,6 +619,7 @@ func (n *normalizer) finish(cs []nconj) (NormalFilter, error) {
 			Paths:       c.paths,
 			Communities: c.comms,
 			any:         covers(pos, all),
+			space:       &spaceOnce{},
 		}
 		dup, text := false, ""
 		for i, kept := range nf.Conjuncts {
