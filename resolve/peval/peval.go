@@ -162,25 +162,30 @@ func (v *Evaluator) begin(ctx context.Context, s Session) (*object.AutNum, *call
 	return an, v.newCall(ctx, s), nil
 }
 
-// attr is one import or export attribute, as evaluation needs it.
+// attr is one import or export attribute, as evaluation needs it. x is a
+// *policy.Import or *policy.Export into the aut-num's own slice: a pointer
+// in an interface, so building a call's list copies and allocates nothing
+// per attribute (method values would copy each one twice).
 type attr struct {
 	proto, into string
-	applies     func(types.AddrFamily) bool
-	terms       func(types.AddrFamily) ([]policy.Term, error)
+	x           interface {
+		AppliesTo(types.AddrFamily) bool
+		Terms(types.AddrFamily) ([]policy.Term, error)
+	}
 }
 
 func imports(is []policy.Import) []attr {
 	out := make([]attr, len(is))
-	for i, x := range is {
-		out[i] = attr{x.Protocol, x.IntoProtocol, x.AppliesTo, x.Terms}
+	for i := range is {
+		out[i] = attr{is[i].Protocol, is[i].IntoProtocol, &is[i]}
 	}
 	return out
 }
 
 func exports(es []policy.Export) []attr {
 	out := make([]attr, len(es))
-	for i, x := range es {
-		out[i] = attr{x.Protocol, x.IntoProtocol, x.AppliesTo, x.Terms}
+	for i := range es {
+		out[i] = attr{es[i].Protocol, es[i].IntoProtocol, &es[i]}
 	}
 	return out
 }
@@ -281,7 +286,7 @@ func (v *Evaluator) Filter(ctx context.Context, f policy.Filter, afi types.AFI, 
 func (c *call) policy(attrs []attr, via bool) (Policy, error) {
 	var p Policy
 	for i, a := range attrs {
-		if !a.applies(c.s.AF) {
+		if !a.x.AppliesTo(c.s.AF) {
 			continue
 		}
 		if !isBGP(a.proto) || !isBGP(a.into) {
@@ -292,7 +297,7 @@ func (c *call) policy(attrs []attr, via bool) (Policy, error) {
 			p.Undecided = append(p.Undecided, Undecided{Index: i, Why: why})
 			continue
 		}
-		terms, err := a.terms(c.s.AF)
+		terms, err := a.x.Terms(c.s.AF)
 		if err != nil {
 			return Policy{}, fmt.Errorf("peval: %w", err)
 		}
