@@ -189,11 +189,13 @@ first line, whatever the source: a dump's `member-of:` claimant aut-num
 too.
 
 **Known limit.** `Lint` evaluates each attribute once per session, so its
-time grows with the aut-num's size times its number of peers: measured, an
-aut-num with N peers, one import and one export each, took 29 ms at
-N=250, 108 ms at N=500 and 396 ms at N=1000. A sweep's `-check-timeout`
-bounds it; memoizing per-attribute evaluation within one lint is a
-follow-up.
+time grows with the aut-num's size times its number of peers. It reads the
+aut-num a fixed number of times, whatever its number of peers, so this is
+evaluation, not decoding: measured
+(`BenchmarkLint`, over a dump loaded with `KeepPolicy`, as `rpslcheck`
+loads one), an aut-num with N peers, one import and one export each, took
+16 ms at N=250, 55 ms at N=500 and 184 ms at N=1000. A sweep's
+`-check-timeout` bounds it.
 
 ### A real example
 
