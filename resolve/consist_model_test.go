@@ -6,6 +6,7 @@ import (
 	"maps"
 	"math/rand/v2"
 	"net/netip"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -1041,4 +1042,38 @@ func randomXFilter(r *rand.Rand, universe []netip.Prefix) *xFilter {
 		return &xFilter{op: "or", l: randomXList(r, universe), r: randomXList(r, universe)}
 	}
 	return &xFilter{op: "andnot", l: randomXList(r, universe), r: randomXList(r, universe)}
+}
+
+// The memo changes no answer: every seed's checks and lints with one shared
+// Memo equal those without (review focus 5: Lint's sentinel sessions too).
+func TestModelConsistMemo(t *testing.T) {
+	ctx := context.Background()
+	hits := 0
+	seeds, _ := resolve.ModelSeeds(200)
+	for seed := uint64(0); seed < seeds; seed++ {
+		r := rand.New(rand.NewPCG(seed, 43))
+		cm := randomConsist(t, r, seed)
+		src := resolve.NewMemSource(decodeAll(t, cm.texts), "RIPE", "RADB")
+		plain := &consist.Checker{Eval: peval.Evaluator{Src: src}, MaxRanges: 1 << 16}
+		withMemo := &consist.Checker{Eval: peval.Evaluator{Src: src}, MaxRanges: 1 << 16, Memo: consist.NewMemo()}
+		for k := 0; k < 6; k++ {
+			p := cm.pair(r)
+			want, werr := plain.Check(ctx, p)
+			got, gerr := withMemo.Check(ctx, p)
+			if fmt.Sprint(gerr) != fmt.Sprint(werr) || !reflect.DeepEqual(got, want) {
+				t.Fatalf("seed %d %v: memo %+v %v, plain %+v %v", seed, p, got, gerr, want, werr)
+			}
+		}
+		for _, as := range []types.ASN{localAS, peerAS} {
+			want, werr := plain.Lint(ctx, as)
+			got, gerr := withMemo.Lint(ctx, as)
+			if fmt.Sprint(gerr) != fmt.Sprint(werr) || !reflect.DeepEqual(got, want) {
+				t.Fatalf("seed %d lint %s: memo %v %v, plain %v %v", seed, as, got, gerr, want, werr)
+			}
+		}
+		hits += withMemo.Memo.Stats().Filters.Hits
+	}
+	if hits == 0 {
+		t.Fatal("the memo never answered a filter: the test compared nothing")
+	}
 }

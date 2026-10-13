@@ -18,6 +18,8 @@ const Undecided Kind
 const WhyExporterUndecided = "exporter has undecided terms"
 const WhyImporterUndecided = "importer has undecided terms"
 const WhySymbolic = "symbolic test on one side only"
+func NewMemo() *Memo
+func NewMemoWith(o MemoOptions) *Memo
 func Rules() []string
 func Whys() []string
 type Checker struct
@@ -25,6 +27,7 @@ type Checker struct
 	MaxRanges int
 	ASPAs *rpki.ASPAs
 	SetPeers bool
+	Memo *Memo
 func (*Checker) Check(ctx context.Context, p Pair) (Report, error)
 func (*Checker) Lint(ctx context.Context, as types.ASN) ([]Issue, error)
 func (*Checker) Peers(ctx context.Context, as types.ASN) (PeerList, error)
@@ -53,6 +56,15 @@ type Issue struct
 	AFs []types.AddrFamily
 type Kind uint8
 func (Kind) String() string
+type Memo struct
+func (*Memo) Stats() MemoStats
+type MemoOptions struct
+	AutNums int
+	Ranges int
+type MemoStats struct
+	AutNumHits int
+	AutNumMisses int
+	Filters resolve.FilterMemoStats
 type Pair struct
 	A types.ASN
 	B types.ASN
