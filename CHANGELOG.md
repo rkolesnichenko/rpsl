@@ -9,6 +9,8 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+## [0.26.1] - 2026-10-13
+
 ### Fixed
 
 - `resolve/consist`: `Lint` over a `Corpus` with `KeepPolicy` (what `rpslcheck` loads a dump
@@ -1165,7 +1167,8 @@ The first release. There is no earlier version to migrate from.
   values do; a few common RP-attributes have typed helpers.
 - **`rdap` is not a `Source`.** RDAP serves registration data, not IRR sets.
 
-[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.26.0...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.26.1...HEAD
+[0.26.1]: https://github.com/rkolesnichenko/rpsl/compare/v0.26.0...v0.26.1
 [0.26.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.24.1...v0.25.0
 [0.24.1]: https://github.com/rkolesnichenko/rpsl/compare/v0.24.0...v0.24.1
