@@ -1137,6 +1137,18 @@ The CLI is `rpslcheck` (`resolve/cmd/rpslcheck`, logic in
 named only through sets it counts, and checks with `-set-peers`. See `docs/rpslcheck.md` for its modes,
 output and exit status.
 
+A sweep repeats the same work, so three pieces share it without changing an answer. A
+normalized conjunct computes its prefix space once, and its copies share it. `resolve.FilterMemo`
+(`Expander.Memo`) shares `NormalizeFilter`'s answers between Expanders that differ only in AFI and
+peer: an answer whose normalization read the peer is never stored, nor is a context or Source
+error; it is bounded by the prefix ranges it holds, least recently used first. `consist.Memo`
+adds the decoded aut-nums and inet-rtrs (a least-recently-used set of 256) and is set as
+`Checker.Memo`, which replaces `Eval.Expander.Memo` with its own filter memo; one `Memo` serves
+one snapshot. The default bound is 1<<21 ranges. Over all of RIPE (39,918 aut-nums),
+`TestRealDataConsist` took 1h43m17s without the memo and 55m39s with it, with every pair and
+direction count identical (the lint counts differ only by the lints that ran out of their 60 s
+budget: 44 without the memo, 11 with it).
+
 ### 8.13 An IRRd-compatible server (`resolve/irrdq`, `resolve/irrdserver`, `rpsld`)
 
 Everything above reads an IRR the way its servers do, but nothing answered a

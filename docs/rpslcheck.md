@@ -197,6 +197,17 @@ loads one), an aut-num with N peers, one import and one export each, took
 16 ms at N=250, 55 ms at N=500 and 184 ms at N=1000. A sweep's
 `-check-timeout` bounds it.
 
+`rpslcheck` shares a `consist.Memo` across a run's checks in every mode (decoded
+aut-nums and normalized filters; it changes no answer). Measured on RIPE's nine
+dumps with `-sweep -sample 2000 -c 4`, GOMAXPROCS 4: 280.5 s and 3,247 MB max
+RSS without the memo, 156.6 s and 3,976 MB with it, byte-identical JSON. A
+full RIPE sweep with the memo was not measured: a sweep keeps every aut-num's
+lint issues in memory until linting ends, so its peak is dominated by them
+(without the memo, the full sweep took 100 minutes and peaked at 6,264 MB max
+RSS, with `GOMEMLIMIT=5GiB`); the memo's own share of the heap on the full
+registry was about 0.45 GB. `rpslcheck` sets no `GOMEMLIMIT` itself; set one if
+the machine is short of memory.
+
 ### A real example
 
 Running the test fixture `resolve/testdata/rpslcheck/objects.rpsl` (four
