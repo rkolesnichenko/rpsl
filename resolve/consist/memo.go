@@ -39,7 +39,7 @@ type Memo struct {
 // MemoOptions bounds a Memo. A zero field takes its default.
 type MemoOptions struct {
 	AutNums int // decoded aut-nums and inet-rtrs held (default 256)
-	Ranges  int // prefix ranges the filter memo holds (default 1<<21, 2,097,152)
+	Ranges  int // the filter memo's bound, in prefix ranges and path-set ASNs (default 1<<21, 2,097,152; see resolve.FilterMemo)
 }
 
 // MemoStats is a Memo's counters, for measurement and tests.

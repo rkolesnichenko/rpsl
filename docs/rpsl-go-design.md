@@ -1139,9 +1139,12 @@ output and exit status.
 
 A sweep repeats the same work, so three pieces share it without changing an answer. A
 normalized conjunct computes its prefix space once, and its copies share it. `resolve.FilterMemo`
-(`Expander.Memo`) shares `NormalizeFilter`'s answers between Expanders that differ only in AFI and
-peer: an answer whose normalization read the peer is never stored, nor is a context or Source
-error; it is bounded by the prefix ranges it holds, least recently used first. `consist.Memo`
+(`Expander.Memo`) shares `NormalizeFilter`'s answers between Expanders over one `Src`, keyed by the
+filter's whole structure (every grouping, operator and spelling: the normalizer charges its limits
+per group, and an answer carries a community test's and a regexp's text), the AFI and the
+effective limits: an answer whose normalization read the peer is never stored, nor is a context or
+Source error; it is bounded by the prefix ranges and AS-path-test ASNs it holds, least recently
+used first. `consist.Memo`
 adds the decoded aut-nums and inet-rtrs (a least-recently-used set of 256) and is set as
 `Checker.Memo`, which replaces `Eval.Expander.Memo` with its own filter memo; one `Memo` serves
 one snapshot. The default bound is 1<<21 ranges. Over all of RIPE (39,918 aut-nums),

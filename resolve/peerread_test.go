@@ -42,9 +42,12 @@ func TestNormalizeReportsPeerRead(t *testing.T) {
 		f, _ := policy.ParseFilter(c.filter)
 		for _, peer := range []types.ASN{0, 65002} {
 			e := &Expander{Src: src, Peer: peer}
-			_, _, used, _ := e.normalize(context.Background(), f)
+			_, _, used, err := e.normalize(context.Background(), f)
 			if used != c.peer {
 				t.Errorf("%s (peer %d): read the peer %v, want %v", c.filter, peer, used, c.peer)
+			}
+			if !c.peer && err != nil {
+				t.Errorf("%s (peer %d): %v", c.filter, peer, err)
 			}
 		}
 	}

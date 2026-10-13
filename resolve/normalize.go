@@ -3,7 +3,6 @@ package resolve
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 
@@ -51,7 +50,10 @@ func (c Conjunct) AnyPrefix() bool { return c.any }
 // trimmed to the Expander's AFI, so a conjunct with AnyPrefix gives every
 // prefix of that family. For a conjunct NormalizeFilter built it is computed
 // once and shared by every copy (a memoized NormalFilter is handed to many
-// callers); for one built by hand, on each call.
+// callers); for one built by hand, on each call. So a normalized conjunct's
+// Prefixes and NotPrefixes must not be reassigned (its copies would keep the
+// old space), and reflect.DeepEqual on two such conjuncts also compares
+// whether Space has been called on each.
 func (c Conjunct) Space() types.PrefixSpace {
 	if c.space == nil {
 		return c.computeSpace()
@@ -134,16 +136,17 @@ func (e *Expander) NormalizeFilter(ctx context.Context, f policy.Filter) (Normal
 }
 
 // memoKey is f's key in e.Memo, and whether the memo applies: it is set,
-// Exclude is empty, and f has a text (every policy filter does).
+// Exclude is empty, and memoText knows every node of f.
 func (e *Expander) memoKey(f policy.Filter) (filterKey, bool) {
 	if e.Memo == nil || len(e.Exclude.Sets) > 0 || len(e.Exclude.ASNs) > 0 {
 		return filterKey{}, false
 	}
-	s, ok := f.(fmt.Stringer)
+	text, ok := memoText(f)
 	if !ok {
 		return filterKey{}, false
 	}
-	return filterKey{text: s.String(), afi: e.AFI}, true
+	return filterKey{text: text, afi: e.AFI, depth: e.maxDepth(), prefixes: e.maxPrefixes(),
+		visited: e.maxVisited(), conjuncts: e.maxConjuncts()}, true
 }
 
 // normalize is NormalizeFilter, also returning the largest disjunction built

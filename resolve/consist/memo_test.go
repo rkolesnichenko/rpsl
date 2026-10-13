@@ -24,7 +24,8 @@ func keepPolicySource(t *testing.T, n int) resolve.PolicySource {
 }
 
 // A bounded LRU still reads AS1 once when its checks run consecutively, as
-// rpslcheck orders them.
+// rpslcheck orders them; it never holds more than its bound, and an aut-num
+// it evicted is read from the Source again.
 func TestMemoAutNumsBounded(t *testing.T) {
 	src := countingSource{keepPolicySource(t, 5), map[types.ASN]int{}}
 	c := &Checker{Eval: peval.Evaluator{Src: src}, Memo: NewMemoWith(MemoOptions{AutNums: 2})}
@@ -40,6 +41,18 @@ func TestMemoAutNumsBounded(t *testing.T) {
 	// Import): 20 lookups, AS1 and each peer missed once.
 	if st := c.Memo.Stats(); st.AutNumHits != 14 || st.AutNumMisses != 6 {
 		t.Fatalf("stats %+v, want 14 hits and 6 misses", st)
+	}
+	if n, m := c.Memo.lru.Len(), len(c.Memo.objects); n > 2 || m > 2 {
+		t.Fatalf("the memo holds %d (list) and %d (map) aut-nums, over its bound of 2", n, m)
+	}
+	// AS3 and AS4 push AS1 out, so checking AS1 again reads it again.
+	for _, p := range []Pair{{A: 3, B: 4, AF: v4}, {A: 1, B: 2, AF: v4}} {
+		if _, err := c.Check(context.Background(), p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if src.n[1] != 2 {
+		t.Fatalf("AS1 read %d times, want 2: once, and again after it was evicted", src.n[1])
 	}
 }
 
@@ -77,7 +90,10 @@ func TestMemoSourceFailureNotStored(t *testing.T) {
 	}
 }
 
-// Review focus 2: a check over its budget leaves nothing for the next.
+// Review focus 2: a cancelled check does not change the next check's answer.
+// It cannot tell put's ctx.Err() guard apart: MemSource.AutNum ignores the
+// context, so what the cancelled check reads is a true answer either way.
+// The guard is defensive.
 func TestMemoCheckAfterTimeout(t *testing.T) {
 	src := keepPolicySource(t, 3)
 	c := &Checker{Eval: peval.Evaluator{Src: src}, Memo: NewMemo()}

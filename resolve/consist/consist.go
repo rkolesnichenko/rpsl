@@ -62,7 +62,8 @@ type Checker struct {
 
 	// Memo, when set, shares decoded aut-nums and inet-rtrs and normalized
 	// filters across this Checker's calls (Check, Lint, Peers); see Memo.
-	// nil: each call stands alone. Results are the same either way.
+	// Its filter memo replaces Eval.Expander.Memo. nil: each call stands
+	// alone. Results are the same either way.
 	Memo *Memo
 }
 

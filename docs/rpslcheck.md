@@ -204,8 +204,9 @@ RSS without the memo, 156.6 s and 3,976 MB with it, byte-identical JSON. A
 full RIPE sweep with the memo was not measured: a sweep keeps every aut-num's
 lint issues in memory until linting ends, so its peak is dominated by them
 (without the memo, the full sweep took 100 minutes and peaked at 6,264 MB max
-RSS, with `GOMEMLIMIT=5GiB`); the memo's own share of the heap on the full
-registry was about 0.45 GB. `rpslcheck` sets no `GOMEMLIMIT` itself; set one if
+RSS, with `GOMEMLIMIT=5GiB`); the memo's own share of the heap, measured
+part-way through the full sweep (at about 1,088 s, while it was still
+linting), was about 0.45 GB. `rpslcheck` sets no `GOMEMLIMIT` itself; set one if
 the machine is short of memory.
 
 ### A real example

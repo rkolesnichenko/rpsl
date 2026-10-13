@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -93,7 +94,10 @@ func TestFilterMemoIgnoredWithExclude(t *testing.T) {
 	}
 }
 
-// Review focus 2: a context error is never stored.
+// Review focus 2: a context error is not stored. NormalizeFilter's ctx.Err()
+// guard and memoizable each keep it out, and this test cannot tell which
+// did; the guard is defensive, since a memoizable error never depends on the
+// context.
 func TestFilterMemoContextNotStored(t *testing.T) {
 	src, memo := memoCorpus(t), NewFilterMemo(1<<10)
 	e := &Expander{Src: src, Memo: memo}
@@ -183,6 +187,45 @@ func TestFilterMemoBounded(t *testing.T) {
 	}
 }
 
+// An answer heavier than a quarter of the bound is computed and not stored:
+// the memo is unchanged after it, and asking again misses again.
+func TestFilterMemoOversizeNotStored(t *testing.T) {
+	src, memo := memoCorpus(t), NewFilterMemo(12)
+	plain := &Expander{Src: src}
+	e := &Expander{Src: src, Memo: memo}
+	light := mustFilter(t, "{10.0.0.0/8, 10.1.0.0/16}")               // weight 3, a quarter of 12
+	heavy := mustFilter(t, "{10.7.0.0/16, 10.8.0.0/16, 10.9.0.0/16}") // weight 4
+	if _, err := e.NormalizeFilter(context.Background(), light); err != nil {
+		t.Fatal(err)
+	}
+	before := memo.Stats()
+	if before.Entries != 1 || before.Held != 3 {
+		t.Fatalf("stats %+v after the light filter, want 1 entry holding 3", before)
+	}
+	for i := 0; i < 2; i++ {
+		want, werr := plain.NormalizeFilter(context.Background(), heavy)
+		got, gerr := e.NormalizeFilter(context.Background(), heavy)
+		sameNormal(t, "heavy", got, gerr, want, werr)
+	}
+	after := memo.Stats()
+	if after.Entries != before.Entries || after.Held != before.Held || after.Hits != before.Hits {
+		t.Fatalf("stats %+v after the heavy filter, want %+v but for 2 more misses", after, before)
+	}
+}
+
+// An AS-path test's sets count toward an answer's weight, one per ASN.
+func TestFilterMemoWeighsPathSets(t *testing.T) {
+	src, memo := memoCorpus(t), NewFilterMemo(1<<10)
+	nf, err := (&Expander{Src: src, Memo: memo}).NormalizeFilter(context.Background(), mustFilter(t, "<AS-A>"))
+	if err != nil || len(nf.Conjuncts) != 1 || nf.Conjuncts[0].Paths[0].Sets[mustSet(t, "AS-A")].Len() != 1 {
+		t.Fatalf("<AS-A>: %+v %v", nf.Conjuncts, err)
+	}
+	c := nf.Conjuncts[0]
+	if want, st := 1+c.Prefixes.Len()+c.NotPrefixes.Len()+1, memo.Stats(); st.Held != want {
+		t.Fatalf("held %d, want %d: one, the conjunct's ranges and AS-A's one ASN", st.Held, want)
+	}
+}
+
 func TestFilterMemoConcurrent(t *testing.T) {
 	src, memo := memoCorpus(t), NewFilterMemo(1<<10)
 	var fs []policy.Filter
@@ -207,4 +250,170 @@ func TestFilterMemoConcurrent(t *testing.T) {
 		}(g)
 	}
 	wg.Wait()
+}
+
+// Two groupings of one text are two filters: the normalizer charges depth
+// per group, so under MaxDepth 1 the nested one fails where the flat one
+// succeeds, and a memo must give each its own answer, in either order.
+func TestFilterMemoKeyedByGrouping(t *testing.T) {
+	src := memoCorpus(t)
+	flat := mustFilter(t, "AS-A AND AS65001 AND {10.0.0.0/8^+}")
+	nested := mustFilter(t, "(AS-A AND AS65001) AND {10.0.0.0/8^+}")
+	if fmt.Sprint(flat) != fmt.Sprint(nested) {
+		t.Fatalf("the two groupings print %q and %q; the test needs one text", flat, nested)
+	}
+	for _, lim := range []Expander{{MaxDepth: 1}, {MaxVisited: 6, MaxDepth: 1}} {
+		plain := lim
+		plain.Src = src
+		_, ferr := plain.NormalizeFilter(context.Background(), flat)
+		_, nerr := plain.NormalizeFilter(context.Background(), nested)
+		if fmt.Sprint(ferr) == fmt.Sprint(nerr) {
+			t.Fatalf("%+v: both groupings give %v; the test needs two answers", lim, ferr)
+		}
+		for _, order := range [][]policy.Filter{{flat, nested}, {nested, flat}} {
+			withMemo := plain
+			withMemo.Memo = NewFilterMemo(1 << 10)
+			for _, f := range order {
+				want, werr := plain.NormalizeFilter(context.Background(), f)
+				got, gerr := withMemo.NormalizeFilter(context.Background(), f)
+				sameNormal(t, fmt.Sprintf("%#v under %+v", f, lim), got, gerr, want, werr)
+			}
+			if st := withMemo.Memo.Stats(); st.Hits != 0 {
+				t.Fatalf("%+v: stats %+v, want no hit between the groupings", lim, st)
+			}
+		}
+	}
+}
+
+// Two spellings of one community test print alike, but a hit must return the
+// test as the filter wrote it: each spelling gets its own Raw back.
+func TestFilterMemoKeyedByCommunitySpelling(t *testing.T) {
+	src, memo := memoCorpus(t), NewFilterMemo(1<<10)
+	texts := []string{"community(65000:1)", "community.contains(65000:1)", "community(  65000:1 )"}
+	for round := 0; round < 2; round++ {
+		for _, s := range texts {
+			f := mustFilter(t, s)
+			want, werr := (&Expander{Src: src}).NormalizeFilter(context.Background(), f)
+			got, gerr := (&Expander{Src: src, Memo: memo}).NormalizeFilter(context.Background(), f)
+			if werr != nil || gerr != nil || !reflect.DeepEqual(got.Conjuncts[0].Communities, want.Conjuncts[0].Communities) {
+				t.Fatalf("%s: memo %+v %v, plain %+v %v", s, got.Conjuncts, gerr, want.Conjuncts, werr)
+			}
+			if raw := got.Conjuncts[0].Communities[0].Test.Raw; raw != f.(policy.FilterCommunity).Raw {
+				t.Fatalf("%s: the memo returned Raw %q", s, raw)
+			}
+		}
+	}
+	if st := memo.Stats(); st.Entries != len(texts) || st.Hits != len(texts) {
+		t.Fatalf("stats %+v, want one entry per spelling, each hit once", st)
+	}
+}
+
+// An AS-path regexp's tree is part of the answer (PathMatch.RE), so two
+// regexps with one Raw and one String but different trees are two filters.
+func TestFilterMemoKeyedByRegexpTree(t *testing.T) {
+	src, memo := memoCorpus(t), NewFilterMemo(1<<10)
+	re := func(min, max int) policy.Filter {
+		return policy.FilterPathRE{Raw: "AS1*", Regexp: &policy.ASPathRE{Body: policy.ASPathRepeat{
+			Inner: policy.ASPathASN{AS: 1}, Op: policy.RepeatStar, Min: min, Max: max}}}
+	}
+	a, b := re(0, -1), re(2, 7)
+	if a.(policy.FilterPathRE).Regexp.String() != b.(policy.FilterPathRE).Regexp.String() {
+		t.Fatal("the two trees print differently; the test needs one text")
+	}
+	for _, f := range []policy.Filter{a, b, a, b} {
+		got, err := (&Expander{Src: src, Memo: memo}).NormalizeFilter(context.Background(), f)
+		if err != nil || !reflect.DeepEqual(got.Conjuncts[0].Paths[0].RE, f.(policy.FilterPathRE).Regexp) {
+			t.Fatalf("%#v: got %+v %v", f, got.Conjuncts, err)
+		}
+	}
+	if st := memo.Stats(); st.Entries != 2 || st.Hits != 2 {
+		t.Fatalf("stats %+v, want 2 entries, each hit once", st)
+	}
+}
+
+// memoText tells apart what String does not, and refuses what it cannot
+// render rather than guessing.
+func TestMemoText(t *testing.T) {
+	text := func(f policy.Filter) string {
+		t.Helper()
+		s, ok := memoText(f)
+		if !ok {
+			t.Fatalf("memoText(%#v) refused", f)
+		}
+		return s
+	}
+	rs := mustFilter(t, "RS-X").(policy.FilterSetRef)
+	plusN := rs
+	plusN.Op = types.RangeOperator{Op: types.RangePlus, N: 3}
+	plus := rs
+	plus.Op = types.RangeOperator{Op: types.RangePlus}
+	pairs := [][2]policy.Filter{
+		{mustFilter(t, "(AS1 OR AS2) OR AS3"), mustFilter(t, "AS1 OR AS2 OR AS3")},
+		{mustFilter(t, "community(1:1)"), mustFilter(t, "community.contains(1:1)")},
+		{plusN, plus},
+		{policy.FilterPrefixList{Ranges: []types.PrefixRange{{}}}, policy.FilterPrefixList{}},
+		{policy.FilterASExpr{AS: policy.ASSetRef{Name: mustSet(t, "AS-A")}}, policy.FilterSetRef{Name: mustSet(t, "AS-A")}},
+		{policy.FilterCommunity{Raw: "community(1:1)", Values: []string{}}, policy.FilterCommunity{Raw: "community(1:1)"}},
+	}
+	for _, p := range pairs {
+		if fmt.Sprint(p[0]) != fmt.Sprint(p[1]) {
+			continue // String already tells these apart; memoText must too
+		}
+		if a, b := text(p[0]), text(p[1]); a == b {
+			t.Errorf("%#v and %#v share the key %q", p[0], p[1], a)
+		}
+	}
+	for _, f := range []policy.Filter{nil, &policy.FilterAny{}, policy.FilterNot{}, policy.FilterAnd{Terms: []policy.Filter{policy.FilterAny{}, nil}},
+		policy.FilterASExpr{}, policy.FilterPathRE{Raw: "x", Regexp: &policy.ASPathRE{}}} {
+		if s, ok := memoText(f); ok {
+			t.Errorf("memoText(%#v) = %q, want it refused", f, s)
+		}
+	}
+}
+
+// The limits are part of the key: Expanders with different limits sharing a
+// memo each get their own answer, and a zero limit shares with its default.
+func TestFilterMemoKeyedByLimits(t *testing.T) {
+	src := memoCorpus(t)
+	for _, c := range []struct {
+		filter string
+		tight  Expander
+	}{
+		{"AS-A OR AS65002", Expander{MaxPrefixes: 1}},
+		{"<^AS65001> OR <^AS65002>", Expander{MaxConjuncts: 1}},
+		{"(AS-A AND AS65001) AND {10.0.0.0/8^+}", Expander{MaxDepth: 1}},
+	} {
+		f := mustFilter(t, c.filter)
+		tight := c.tight
+		tight.Src = src
+		loose := Expander{Src: src}
+		_, terr := tight.NormalizeFilter(context.Background(), f)
+		_, lerr := loose.NormalizeFilter(context.Background(), f)
+		if terr == nil || lerr != nil {
+			t.Fatalf("%s: tight %v, loose %v; the test needs an error and a success", c.filter, terr, lerr)
+		}
+		for _, order := range [][]Expander{{tight, loose}, {loose, tight}} {
+			memo := NewFilterMemo(1 << 10)
+			for _, e := range order {
+				want, werr := e.NormalizeFilter(context.Background(), f)
+				withMemo := e
+				withMemo.Memo = memo
+				got, gerr := withMemo.NormalizeFilter(context.Background(), f)
+				sameNormal(t, fmt.Sprintf("%s under %+v", c.filter, e), got, gerr, want, werr)
+			}
+		}
+	}
+	memo := NewFilterMemo(1 << 10)
+	f := mustFilter(t, "AS-A")
+	zero := &Expander{Src: src, Memo: memo}
+	explicit := &Expander{Src: src, Memo: memo, MaxDepth: defaultMaxDepth, MaxPrefixes: defaultMaxPrefixes,
+		MaxVisited: defaultMaxVisited, MaxConjuncts: defaultMaxConjuncts}
+	for _, e := range []*Expander{zero, explicit} {
+		if _, err := e.NormalizeFilter(context.Background(), f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if st := memo.Stats(); st.Hits != 1 || st.Entries != 1 {
+		t.Fatalf("stats %+v: zero limits and explicit defaults should share one entry", st)
+	}
 }
