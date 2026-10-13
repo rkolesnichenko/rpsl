@@ -125,7 +125,9 @@ func (c *Checker) Lint(ctx context.Context, as types.ASN) ([]Issue, error) {
 		return nil, err
 	}
 	for _, peer := range c.sessionPeers(as, peers, info.groups) {
-		if pan, err := ev.Src.AutNum(ctx, peer, ev.Source); errors.Is(err, resolve.ErrNotFound) || err == nil && pan == nil {
+		// Not through ev.Src: its memo would keep every peer's aut-num,
+		// decoded, until Lint returns (with SetPeers, most of a registry).
+		if pan, err := c.Eval.Src.AutNum(ctx, peer, ev.Source); errors.Is(err, resolve.ErrNotFound) || err == nil && pan == nil {
 			l.add(RuleNoAutNum, "", -1, fmt.Sprintf("%s's aut-num is not in the source", peer), peer, nil)
 		} else if err != nil {
 			return nil, err

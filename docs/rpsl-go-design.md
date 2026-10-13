@@ -1093,8 +1093,11 @@ all — `*resolve.AnySetError`, `*resolve.NotEnumerableError` — which makes
 that one session undecidable without aborting the rest of the lint). Its
 cost grows with the aut-num's size times its peers, since each attribute is
 evaluated once per session — a known limit, bounded in a sweep by the
-per-check budget (measured: an aut-num with N peers, one import and one
-export each, 29 ms at N=250, 108 ms at N=500, 396 ms at N=1000).
+per-check budget. A memo over `Src` for each evaluator reads the aut-num a
+fixed number of times per `Lint`, whatever its number of peers, so a
+`KeepPolicy` corpus does not decode it per session (measured, `BenchmarkLint`: an
+aut-num with N peers, one import and one export each, 16 ms at N=250,
+55 ms at N=500, 184 ms at N=1000).
 
 **ASPA rules (`Checker.ASPAs`, v0.25.0).** With a `*rpki.ASPAs` set, `Lint` also
 compares the aut-num with the ASPAs; they read conjunct structure, peerings, set
@@ -1357,7 +1360,9 @@ sub-grammar of RFC 2622 §8.1 and §9 parsed, the `policy` AST with canonical `S
 engine expanding every set class — including `EvalFilter` over the enumerable fragment of the
 filter language — with in-memory, dump and caching `Source`s, optional concurrency and the
 bgpq4 differential, the three live backends in `resolve/{irrd,whois,rdap}`, and the `auth`
-package for RFC 2725 and RIPE's `mnt-irt:` consent rule, and RPKI-aware expansion as IRRd 4 does it (`resolve/rpki`, §8.7), and NRTMv4 mirroring (`resolve/nrtm4`, §8.8), and policy evaluation (`resolve/peval`, §8.10) and `rpslconf -e`. v0.22.0 adds the last piece: router configuration for Cisco IOS/IOS-XE, Junos, Cisco IOS-XR and BIRD 2 (`resolve/rtconfig`, §8.11), and `rpslconf`'s template mode, which reads `RtConfig`'s `@RtConfig` command language and drives it. v0.23.0 ships the consumer that follows from having both `peval` and a prefix-set algebra: `types.PrefixSpace` (§5), policy consistency checking and lint (`resolve/consist`, §8.12), and `rpslcheck`, the CLI for both. v0.24.0 ships `rpsld`, an IRRd-compatible mirror of dumps, NRTMv4 and RPKI, with its two packages: `resolve/irrdq`, IRRd's query semantics over in-memory snapshots, and `resolve/irrdserver`, which serves them (§8.13). v0.25.0 adds ASPA to the registry cross-checks: `rpki.ASPAs` and `ReadASPAs`, three `lint/aspa-*` rules in `resolve/consist` and `rpslcheck -rpki` (§8.7, §8.12), and widens the NRTMv4 client to ES384, ES512, Ed25519, RS256 and PS256, each bound to its key type (§8.8). See [README.md#Status](../README.md#status) for the same matrix in
+package for RFC 2725 and RIPE's `mnt-irt:` consent rule, and RPKI-aware expansion as IRRd 4 does it (`resolve/rpki`, §8.7), and NRTMv4 mirroring (`resolve/nrtm4`, §8.8), and policy evaluation (`resolve/peval`, §8.10) and `rpslconf -e`. v0.22.0 adds the last piece: router configuration for Cisco IOS/IOS-XE, Junos, Cisco IOS-XR and BIRD 2 (`resolve/rtconfig`, §8.11), and `rpslconf`'s template mode, which reads `RtConfig`'s `@RtConfig` command language and drives it. v0.23.0 ships the consumer that follows from having both `peval` and a prefix-set algebra: `types.PrefixSpace` (§5), policy consistency checking and lint (`resolve/consist`, §8.12), and `rpslcheck`, the CLI for both. v0.24.0 ships `rpsld`, an IRRd-compatible mirror of dumps, NRTMv4 and RPKI, with its two packages: `resolve/irrdq`, IRRd's query semantics over in-memory snapshots, and `resolve/irrdserver`, which serves them (§8.13). v0.25.0 adds ASPA to the registry cross-checks: `rpki.ASPAs` and `ReadASPAs`, three `lint/aspa-*` rules in `resolve/consist` and `rpslcheck -rpki` (§8.7, §8.12), and widens the NRTMv4 client to ES384, ES512, Ed25519, RS256 and PS256, each bound to its key type (§8.8). v0.26.0 adds no layer: it settles the API on the
+conventions of §2 (one `X`/`XWith` pair per options form, every `object` class a pointer) and
+holds them with `internal/apisurface` and the `api/` golden. See [README.md#Status](../README.md#status) for the same matrix in
 shipping form.
 
 Three limits are deliberate and are not gaps. AS-path regexps are parsed but never evaluated

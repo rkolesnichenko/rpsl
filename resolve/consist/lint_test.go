@@ -824,3 +824,43 @@ func TestLintSetPeers(t *testing.T) {
 		})
 	}
 }
+
+// countingSource counts AutNum lookups per AS.
+type countingSource struct {
+	resolve.PolicySource
+	n map[types.ASN]int
+}
+
+func (s countingSource) AutNum(ctx context.Context, as types.ASN, source string) (*object.AutNum, error) {
+	s.n[as]++
+	return s.PolicySource.AutNum(ctx, as, source)
+}
+
+// Lint reads each aut-num a fixed number of times, whatever its number of
+// peers: a Corpus with KeepPolicy decodes on every lookup, and reading the
+// linted aut-num once per session made a lint quadratic in its peers.
+func TestLintReadsEachAutNumOnce(t *testing.T) {
+	for _, n := range []int{2, 50} {
+		l := &resolve.DumpLoader{Sources: []string{"RIPE"}, KeepPolicy: true}
+		if err := l.Read(strings.NewReader(lintDump(n))); err != nil {
+			t.Fatal(err)
+		}
+		src := countingSource{l.Source(), map[types.ASN]int{}}
+		c := &Checker{Eval: peval.Evaluator{Src: src}}
+		lint(t, c, 1)
+		// Once for Lint and once for the Peers it runs (each call has its
+		// own memo); a peer's once, for lint/no-aut-num.
+		if got := src.n[1]; got != 2 {
+			t.Errorf("N=%d: AS1 read %d times, want 2", n, got)
+		}
+		if got := src.n[2]; got != 1 {
+			t.Errorf("N=%d: AS2 read %d times, want 1", n, got)
+		}
+		if _, err := c.Check(context.Background(), Pair{A: 1, B: 2, AF: types.AddrFamily{AFI: types.AFIv4, SAFI: types.SAFIUnicast}}); err != nil {
+			t.Fatal(err)
+		}
+		if got := src.n[1]; got != 3 {
+			t.Errorf("N=%d: after Check, AS1 read %d times, want 3", n, got)
+		}
+	}
+}

@@ -20,3 +20,7 @@ Thumbs.db
 .remember/
 .claude/settings.local.json
 .claude/worktrees/
+
+# Written by an IDE in workspace mode; the workspace builds without it and
+# release.sh runs with GOWORK=off, so it is never needed.
+/go.work.sum

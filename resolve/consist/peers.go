@@ -291,7 +291,7 @@ func (c *Checker) peers(ctx context.Context, as types.ASN) (PeerList, peerInfo, 
 		delete(via, a)
 	}
 	pl := PeerList{Forward: slices.Sorted(maps.Keys(fwd)), ViaSets: slices.Sorted(maps.Keys(via)), Skipped: slices.Sorted(maps.Keys(skipped))}
-	pi, ok := ev.Src.(resolve.PolicyIndex)
+	pi, ok := c.Eval.Src.(resolve.PolicyIndex) // not ev.Src: policyMemo hides it
 	if !ok {
 		pl.NoIndex = true
 		return pl, info, nil

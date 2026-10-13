@@ -3,10 +3,12 @@ package auth
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"strings"
 	"testing"
 
 	"github.com/rkolesnichenko/rpsl/object"
+	"github.com/rkolesnichenko/rpsl/types"
 )
 
 // The maintainers the rule tests use. A case lists those that accept the
@@ -53,8 +55,20 @@ func runRules(t *testing.T, rules Rules, cases []ruleCase) {
 
 // nilMissDB is a Database that answers a miss with no object and no error —
 // Mntner with a nil maintainer, Current with a nil object, Object with a
-// typed nil — which Database's contract treats as not found.
+// typed nil — which Database's contract treats as not found, and puts nil
+// elements, which the contract skips, first in Covering's and ASBlocks'
+// answers.
 type nilMissDB struct{ *MemDatabase }
+
+func (db nilMissDB) Covering(ctx context.Context, class string, lo, hi netip.Addr) ([]object.Object, error) {
+	cov, err := db.MemDatabase.Covering(ctx, class, lo, hi)
+	return append([]object.Object{nil, (*object.Inetnum)(nil)}, cov...), err
+}
+
+func (db nilMissDB) ASBlocks(ctx context.Context, as types.ASN) ([]*object.AsBlock, error) {
+	blocks, err := db.MemDatabase.ASBlocks(ctx, as)
+	return append([]*object.AsBlock{nil}, blocks...), err
+}
 
 func (db nilMissDB) Mntner(ctx context.Context, name string) (*object.Mntner, error) {
 	m, err := db.MemDatabase.Mntner(ctx, name)

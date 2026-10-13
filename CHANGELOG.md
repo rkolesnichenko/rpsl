@@ -9,6 +9,19 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Fixed
+
+- `resolve/consist`: `Lint` over a `Corpus` with `KeepPolicy` (what `rpslcheck` loads a dump
+  into) decoded the aut-num from its text six times per peer; it now reads it a fixed number of
+  times, whatever the number of peers, and `Check` reads each side's aut-num once.
+  `BenchmarkLint`, an aut-num with N peers and one import and one export each: 899 ms → 16 ms
+  at N=250, 13.6 s → 184 ms at N=1000. On RIPE's dump, `Lint` of AS6695 (10,520 import/export lines, 1,532 peers) took 3m28s and
+  now takes 1.4 s, with the same 11,860 issues.
+- `resolve/peval`: evaluating an aut-num's imports or exports no longer copies each attribute
+  twice per call; `Lint` on a `MemSource` takes 180 ms at N=1000 instead of 350 ms.
+- `auth`: a `Database` whose `Covering` or `ASBlocks` answer holds a nil element (or a typed nil)
+  no longer panics `Authorise`; the element is skipped, as the interface now documents.
+
 ## [0.26.0] - 2026-10-07
 
 ### Breaking

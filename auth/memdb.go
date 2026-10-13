@@ -36,10 +36,11 @@ type Database interface {
 
 	// Covering returns the objects of class — inetnum, inet6num, route or
 	// route6 — whose address space holds all of lo..hi, most specific first,
-	// an exact match included.
+	// an exact match included. A nil element, or a typed nil, is skipped.
 	Covering(ctx context.Context, class string, lo, hi netip.Addr) ([]object.Object, error)
 
-	// ASBlocks returns the as-blocks that hold as, most specific first.
+	// ASBlocks returns the as-blocks that hold as, most specific first. A
+	// nil element is skipped.
 	ASBlocks(ctx context.Context, as types.ASN) ([]*object.AsBlock, error)
 }
 

@@ -26,8 +26,10 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/rkolesnichenko/rpsl/ast"
+	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/policy"
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/peval"
@@ -59,12 +61,75 @@ type Checker struct {
 	SetPeers bool
 }
 
-// eval is c.Eval with Expander.Exclude cleared: every evaluation consist
-// makes goes through it.
+// eval is c.Eval with Expander.Exclude cleared and Src memoizing its
+// aut-nums and inet-rtrs (policyMemo): every evaluation consist makes goes
+// through it. Each call has its own memo, so a Lint, which makes four, reads
+// its aut-num a fixed number of times, whatever its number of peers.
 func (c *Checker) eval() *peval.Evaluator {
 	e := c.Eval
 	e.Expander.Exclude = resolve.Exclusion{}
+	if e.Src != nil {
+		e.Src = &policyMemo{PolicySource: e.Src, autNums: map[policyKey]autNumAnswer{}, rtrs: map[policyKey]inetRtrAnswer{}}
+	}
 	return &e
+}
+
+// policyMemo is a PolicySource answering each aut-num and inet-rtr once.
+// peval reads Local's aut-num on every call, and a Corpus with KeepPolicy
+// decodes it from text on every lookup: Lint evaluates an aut-num six times
+// per peer, so without the memo it decoded an aut-num with N peers 6N times,
+// quadratic in N (BenchmarkLint). It lives as long as the evaluator eval
+// returns, inside one Lint, Check or Peers call, so it never serves a
+// registry's older answer. It hides the Source's other methods: PolicyIndex
+// is asserted on Checker.Eval.Src. A peer's aut-num is not read through it
+// (Lint), so it holds only the aut-nums evaluated.
+type policyMemo struct {
+	resolve.PolicySource
+	mu      sync.Mutex
+	autNums map[policyKey]autNumAnswer
+	rtrs    map[policyKey]inetRtrAnswer
+}
+
+type policyKey struct {
+	name, source string // an AS number as text, or an inet-rtr's name as asked
+}
+
+type autNumAnswer struct {
+	an  *object.AutNum
+	err error
+}
+
+type inetRtrAnswer struct {
+	ir  *object.InetRtr
+	err error
+}
+
+func (m *policyMemo) AutNum(ctx context.Context, as types.ASN, source string) (*object.AutNum, error) {
+	k := policyKey{as.String(), source}
+	m.mu.Lock()
+	a, ok := m.autNums[k]
+	m.mu.Unlock()
+	if !ok {
+		a.an, a.err = m.PolicySource.AutNum(ctx, as, source)
+		m.mu.Lock()
+		m.autNums[k] = a
+		m.mu.Unlock()
+	}
+	return a.an, a.err
+}
+
+func (m *policyMemo) InetRtr(ctx context.Context, name, source string) (*object.InetRtr, error) {
+	k := policyKey{name, source}
+	m.mu.Lock()
+	a, ok := m.rtrs[k]
+	m.mu.Unlock()
+	if !ok {
+		a.ir, a.err = m.PolicySource.InetRtr(ctx, name, source)
+		m.mu.Lock()
+		m.rtrs[k] = a
+		m.mu.Unlock()
+	}
+	return a.ir, a.err
 }
 
 func (c *Checker) maxRanges() int {
