@@ -196,15 +196,16 @@ type filterEval struct {
 	visits  int          // filter terms evaluated and sets reached, against MaxVisited
 	cur     types.SetRef // the filter-set being evaluated, to name it in errors
 
-	sets   map[string]object.FilterGroup // filter-sets fetched, by SetRef.String(); nil for one not found
-	memo   map[string]rangeSetOf         // filter-set values of this pass, by SetRef.String()
-	approx map[string]rangeSetOf         // filter-set values of the pass before
-	active map[string]bool               // filter-sets on the path being evaluated
-	cyclic bool                          // this pass took a back-edge
-	ranges map[string]RangeSet           // route-set and as-set expansions
-	asns   map[string]ASNSet             // as-set expansions in AS expressions
-	ex     excluded                      // what the expansion leaves out
-	anyAll bool                          // AS-ANY and RS-ANY denote every route (NormalizeFilter) rather than an AnySetError
+	sets     map[string]object.FilterGroup // filter-sets fetched, by SetRef.String(); nil for one not found
+	memo     map[string]rangeSetOf         // filter-set values of this pass, by SetRef.String()
+	approx   map[string]rangeSetOf         // filter-set values of the pass before
+	active   map[string]bool               // filter-sets on the path being evaluated
+	cyclic   bool                          // this pass took a back-edge
+	ranges   map[string]RangeSet           // route-set and as-set expansions
+	asns     map[string]ASNSet             // as-set expansions in AS expressions
+	ex       excluded                      // what the expansion leaves out
+	anyAll   bool                          // AS-ANY and RS-ANY denote every route (NormalizeFilter) rather than an AnySetError
+	usedPeer bool                          // Expander.Peer was read (peer): the answer depends on it
 }
 
 func newFilterEval(e *Expander, ctx context.Context) *filterEval {
@@ -217,6 +218,12 @@ func newFilterEval(e *Expander, ctx context.Context) *filterEval {
 		ex:     e.excluded(),
 	}
 }
+
+// peer returns Expander.Peer and records that the answer depends on it —
+// bound or not (an unbound peer's error depends on it too). Every read of
+// the peer during evaluation goes through here, so FilterMemo never shares
+// an answer that read it (TestPeerReadsGoThroughAccessor).
+func (ev *filterEval) peer() types.ASN { ev.usedPeer = true; return ev.e.Peer }
 
 // skipSet reports whether a set reference is excluded: only one met inside a
 // filter-set is, since the terms of the filter passed in are the caller's.
@@ -389,18 +396,20 @@ func (ev *filterEval) eval(f policy.Filter, depth int) (rangeSetOf, error) {
 	case policy.FilterNot:
 		return nil, &NotEnumerableError{Term: filterText(x), Why: "a negation has no finite set of prefixes"}
 	case policy.FilterPeerAS:
-		if ev.e.Peer == 0 {
+		peer := ev.peer()
+		if peer == 0 {
 			return nil, unboundPeer("PeerAS")
 		}
-		if ev.skipAS(ev.e.Peer) {
+		if ev.skipAS(peer) {
 			return rangeSetOf{}, nil
 		}
-		return ev.routesOf(map[types.ASN]bool{ev.e.Peer: true}, x.Op)
+		return ev.routesOf(map[types.ASN]bool{peer: true}, x.Op)
 	case policy.FilterSetTemplate:
-		if ev.e.Peer == 0 {
+		peer := ev.peer()
+		if peer == 0 {
 			return nil, unboundPeer(x.Template.String())
 		}
-		return ev.setRef(x.Template.Instantiate(ev.e.Peer), x.Op, depth)
+		return ev.setRef(x.Template.Instantiate(peer), x.Op, depth)
 	case policy.FilterCommunity:
 		return nil, &NotEnumerableError{Term: filterText(x), Why: "a community test needs a routing table"}
 	case policy.FilterPathRE:
@@ -641,10 +650,11 @@ func (ev *filterEval) asExpr(e policy.ASExpr, depth int) (map[types.ASN]bool, er
 		}
 		return out, nil
 	case policy.ASSetTemplate:
-		if ev.e.Peer == 0 {
+		peer := ev.peer()
+		if peer == 0 {
 			return nil, unboundPeer(x.Template.String())
 		}
-		return ev.asExpr(policy.ASSetRef{Name: x.Template.Instantiate(ev.e.Peer)}, depth)
+		return ev.asExpr(policy.ASSetRef{Name: x.Template.Instantiate(peer)}, depth)
 	}
 	return nil, &NotEnumerableError{Term: "AS expression", Why: "unknown AS expression"}
 }

@@ -97,12 +97,13 @@ type CommunityMatch struct {
 // sets fetched, the filter terms evaluated and the normalization steps taken,
 // together. Each is a *SetTooLargeError naming the limit.
 func (e *Expander) NormalizeFilter(ctx context.Context, f policy.Filter) (NormalFilter, error) {
-	nf, _, err := e.normalize(ctx, f)
+	nf, _, _, err := e.normalize(ctx, f)
 	return nf, err
 }
 
-// normalize is NormalizeFilter, also returning the largest disjunction built.
-func (e *Expander) normalize(ctx context.Context, f policy.Filter) (NormalFilter, int, error) {
+// normalize is NormalizeFilter, also returning the largest disjunction built
+// and whether the answer read Expander.Peer.
+func (e *Expander) normalize(ctx context.Context, f policy.Filter) (NormalFilter, int, bool, error) {
 	n := &normalizer{ev: newFilterEval(e, ctx), inline: map[string]bool{}, memo: map[string][]nconj{}, height: map[string]int{}}
 	n.ev.anyAll = true
 	// noEx is the same Expander with Exclude cleared. It evaluates negated
@@ -116,11 +117,12 @@ func (e *Expander) normalize(ctx context.Context, f policy.Filter) (NormalFilter
 	n.noEx = newFilterEval(&noExclude, ctx)
 	n.noEx.anyAll = true
 	cs, err := n.norm(f, false, 0)
+	used := func() bool { return n.ev.usedPeer || n.noEx.usedPeer }
 	if err != nil {
-		return NormalFilter{}, n.peak, err
+		return NormalFilter{}, n.peak, used(), err
 	}
 	nf, err := n.finish(cs)
-	return nf, n.peak, err
+	return nf, n.peak, used(), err
 }
 
 // nconj is a conjunct being built.
@@ -453,10 +455,11 @@ func (n *normalizer) path(x policy.FilterPathRE) (PathMatch, error) {
 	}
 	re := x.Regexp
 	if re.UsesPeer() {
-		if n.ev.e.Peer == 0 {
+		peer := n.ev.peer()
+		if peer == 0 {
 			return PathMatch{}, unboundPeer(filterText(x))
 		}
-		re = re.Bind(n.ev.e.Peer)
+		re = re.Bind(peer)
 	}
 	pm := PathMatch{RE: re, Sets: map[types.SetName]ASNSet{}}
 	ev := n.noEx
