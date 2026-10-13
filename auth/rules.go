@@ -133,6 +133,38 @@ func lookup(ctx context.Context, db Database, class, key string) (object.Object,
 	return o, err
 }
 
+// covering is Database.Covering without its nil elements (nil, or a typed
+// nil), as Database's contract says.
+func (c *check) covering(class string, lo, hi netip.Addr) ([]object.Object, error) {
+	cov, err := c.db.Covering(c.ctx, class, lo, hi)
+	if err != nil {
+		return nil, err
+	}
+	out := cov[:0:0]
+	for _, o := range cov {
+		if !isNilObject(o) {
+			out = append(out, o)
+		}
+	}
+	return out, nil
+}
+
+// asBlocks is Database.ASBlocks without its nil elements, as Database's
+// contract says.
+func (c *check) asBlocks(as types.ASN) ([]*object.AsBlock, error) {
+	blocks, err := c.db.ASBlocks(c.ctx, as)
+	if err != nil {
+		return nil, err
+	}
+	out := blocks[:0:0]
+	for _, b := range blocks {
+		if b != nil {
+			out = append(out, b)
+		}
+	}
+	return out, nil
+}
+
 // refuse ends the check with a final reason.
 func (c *check) refuse(reason string) (Decision, error) {
 	c.d.OK = false
@@ -245,7 +277,7 @@ func (c *check) ripeParent(o object.Object) (bool, error) {
 		}
 		return c.addressParent("inet6num", lo, hi)
 	case *object.AutNum:
-		blocks, err := c.db.ASBlocks(c.ctx, t.AS)
+		blocks, err := c.asBlocks(t.AS)
 		if err != nil {
 			return false, err
 		}
@@ -279,7 +311,7 @@ func (c *check) addressParent(class string, lo, hi netip.Addr) (bool, error) {
 	if !lo.IsValid() || !hi.IsValid() {
 		return c.fail("the " + class + " has no valid range")
 	}
-	cov, err := c.db.Covering(c.ctx, class, lo, hi)
+	cov, err := c.covering(class, lo, hi)
 	if err != nil {
 		return false, err
 	}
@@ -319,7 +351,7 @@ func (c *check) routeParent(routeClass, spaceClass string, p netip.Prefix) (bool
 // in order.
 func (c *check) firstCovering(lo, hi netip.Addr, classes ...string) (object.Object, error) {
 	for _, class := range classes {
-		cov, err := c.db.Covering(c.ctx, class, lo, hi)
+		cov, err := c.covering(class, lo, hi)
 		if err != nil {
 			return nil, err
 		}
@@ -376,7 +408,7 @@ func (c *check) domainHolder(stored object.Object) (bool, error) {
 	if lo.Is6() {
 		class = "inet6num"
 	}
-	cov, err := c.db.Covering(c.ctx, class, lo, hi)
+	cov, err := c.covering(class, lo, hi)
 	if err != nil {
 		return false, err
 	}
@@ -595,7 +627,7 @@ func (c *check) irrdRelated(o object.Object) (bool, error) {
 		return false, err
 	}
 	if related == nil {
-		cov, err := c.db.Covering(c.ctx, routeClass, lo, hi)
+		cov, err := c.covering(routeClass, lo, hi)
 		if err != nil {
 			return false, err
 		}
