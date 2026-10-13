@@ -130,7 +130,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if *sweep {
 		return runSweep(ctx, src, afs, *sample, *seed, *conc, *checkTimeout, *setPeers, aspas, w, stderr)
 	}
-	c := &consist.Checker{Eval: peval.Evaluator{Src: src}, SetPeers: *setPeers, ASPAs: aspas}
+	c := &consist.Checker{Eval: peval.Evaluator{Src: src}, SetPeers: *setPeers, ASPAs: aspas, Memo: consist.NewMemo()}
 	r := &runner{ctx: ctx, c: c, src: src, w: w, stderr: stderr, afs: afs}
 	if len(ases) == 1 {
 		return r.one(ases[0], afs)

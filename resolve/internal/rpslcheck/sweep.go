@@ -114,7 +114,7 @@ func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFam
 		ases = ases[:sample]
 		slices.Sort(ases)
 	}
-	c := &consist.Checker{Eval: peval.Evaluator{Src: src}, SetPeers: setPeers, ASPAs: aspas}
+	c := &consist.Checker{Eval: peval.Evaluator{Src: src}, SetPeers: setPeers, ASPAs: aspas, Memo: consist.NewMemo()}
 	if !w.json {
 		w.only = ast.Warning
 	}
