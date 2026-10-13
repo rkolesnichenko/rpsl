@@ -18,7 +18,7 @@ import (
 type Registry struct {
 	name     string
 	serial   uint64
-	src      *resolve.MemSource     // sets, claims, aut-nums, inet-rtrs, routes by origin
+	src      *resolve.MemSource     // sets, claims, aut-nums, inet-rtrs, routes by origin; GetSet never answers a nil set without an error
 	routes   []route                // every route and route6, sorted (routeCmp)
 	byPrefix map[netip.Prefix][]int // exact prefix -> indexes into routes
 	text     bool                   // route text kept (Corpus.KeepRouteText)

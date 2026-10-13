@@ -802,3 +802,24 @@ func TestObjectTextKeepsAttributesAfterABlankLine(t *testing.T) {
 		t.Errorf("served %d imports, want 1", len(an.Imports))
 	}
 }
+
+// A MemSource, built directly or from a Corpus, drops nil objects: GetSet
+// answers a set it has, or ErrNotFound, never a nil set with no error.
+// irrdq reads its registries' sets without a nil check on this guarantee.
+func TestMemSourceNeverAnswersNilSet(t *testing.T) {
+	objs := []object.Object{nil, (*object.AsSet)(nil), (*object.RouteSet)(nil)}
+	c := &resolve.Corpus{}
+	for _, o := range objs {
+		c.Put(o)
+	}
+	ctx := context.Background()
+	for _, name := range []string{"AS-FOO", "RS-FOO"} {
+		n, _ := types.ParseSetName(name)
+		for _, src := range []resolve.Source{resolve.NewMemSource(objs), c.Source()} {
+			set, err := src.GetSet(ctx, types.Ref(n))
+			if set != nil || !errors.Is(err, resolve.ErrNotFound) {
+				t.Errorf("%T GetSet(%s) = %v, %v; want nil, ErrNotFound", src, name, set, err)
+			}
+		}
+	}
+}
