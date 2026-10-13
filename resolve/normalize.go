@@ -42,7 +42,9 @@ func (c Conjunct) AnyPrefix() bool { return c.any }
 // trimmed to the Expander's AFI, so a conjunct with AnyPrefix gives every
 // prefix of that family.
 func (c Conjunct) Space() types.PrefixSpace {
-	return types.SpaceOf(c.Prefixes.List()...).Minus(types.SpaceOf(c.NotPrefixes.List()...))
+	// SpaceOf does not depend on the order of its ranges: List's sort would
+	// be wasted, and on a large set it was a fifth of a sweep's CPU.
+	return types.SpaceOf(c.Prefixes.unsorted()...).Minus(types.SpaceOf(c.NotPrefixes.unsorted()...))
 }
 
 // PathMatch is an AS-path regexp a route's path must match (or, Negated, must
@@ -539,7 +541,19 @@ func (n *normalizer) finish(cs []nconj) (NormalFilter, error) {
 	ev := n.ev
 	all := ev.everything()
 	var nf NormalFilter
-	seen := map[string]bool{}
+	// keys holds the text of each kept conjunct once it has been needed: a
+	// conjunct whose text repeats an earlier one's is dropped, but only two
+	// with the same counts can print the same, so a conjunct's text (its
+	// ranges sorted and printed) is built only then.
+	keys := map[int]string{}
+	key := func(i int, c Conjunct) string {
+		k, ok := keys[i]
+		if !ok {
+			k = c.String()
+			keys[i] = k
+		}
+		return k
+	}
 	for _, c := range cs {
 		pos := c.pos
 		if pos == nil {
@@ -584,11 +598,27 @@ func (n *normalizer) finish(cs []nconj) (NormalFilter, error) {
 			Communities: c.comms,
 			any:         covers(pos, all),
 		}
-		key := conj.String()
-		if seen[key] {
+		dup, text := false, ""
+		for i, kept := range nf.Conjuncts {
+			// Conjunct.String prints the prefix list only when !any, and the
+			// negated list always: equal text needs these counts equal.
+			if kept.any == conj.any && (conj.any || kept.Prefixes.Len() == conj.Prefixes.Len()) &&
+				kept.NotPrefixes.Len() == conj.NotPrefixes.Len() {
+				if text == "" {
+					text = conj.String()
+				}
+				if key(i, kept) == text {
+					dup = true
+					break
+				}
+			}
+		}
+		if dup {
 			continue
 		}
-		seen[key] = true
+		if text != "" {
+			keys[len(nf.Conjuncts)] = text
+		}
 		nf.Conjuncts = append(nf.Conjuncts, conj)
 	}
 	nf.missing = mergedMissing(n.ev.missing, n.noEx.missing)

@@ -1,6 +1,7 @@
 package types
 
 import (
+	"math/rand/v2"
 	"net/netip"
 	"slices"
 	"testing"
@@ -289,5 +290,33 @@ func TestSpaceOperandsUnchanged(t *testing.T) {
 	_ = a.Intersect(b)
 	if after := a.String() + b.String(); after != before {
 		t.Errorf("operands changed: %s, then %s", before, after)
+	}
+}
+
+// SpaceOf does not depend on the order of its ranges (resolve's
+// Conjunct.Space hands it a map's ranges unsorted).
+func TestSpaceOfOrderIndependent(t *testing.T) {
+	r := rand.New(rand.NewPCG(7, 0))
+	for range 200 {
+		var rs []PrefixRange
+		for range 1 + r.IntN(40) {
+			bits := 8 + r.IntN(17)
+			addr := netip.AddrFrom4([4]byte{10, byte(r.IntN(4)), byte(r.IntN(256)), 0})
+			p := netip.PrefixFrom(addr, bits).Masked()
+			lo := bits + r.IntN(33-bits)
+			hi := lo + r.IntN(33-lo)
+			pr, ok := NewPrefixRange(p, lo, hi)
+			if !ok {
+				continue
+			}
+			rs = append(rs, pr)
+		}
+		want := SpaceOf(rs...)
+		for range 5 {
+			r.Shuffle(len(rs), func(i, j int) { rs[i], rs[j] = rs[j], rs[i] })
+			if got := SpaceOf(rs...); !got.Equal(want) {
+				t.Fatalf("SpaceOf(%v) = %v, in another order %v", rs, got, want)
+			}
+		}
 	}
 }
