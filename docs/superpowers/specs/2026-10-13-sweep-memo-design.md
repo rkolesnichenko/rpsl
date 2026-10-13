@@ -14,8 +14,8 @@ answer with the memo is the answer without it.
 Three pieces:
 
 1. `resolve.FilterMemo`: `NormalizeFilter`'s answers, shared between
-   Expanders that differ only in `AFI` and `Peer`, keyed by the filter's
-   text. An answer that read the peer is never shared; the normalizer
+   Expanders that differ only in `AFI`, limits and `Peer`, keyed by the
+   filter's whole structure, the AFI and the effective limits. An answer that read the peer is never shared; the normalizer
    records whether it did (§4.2).
 2. A cached `PrefixSpace` inside each `Conjunct` that `NormalizeFilter`
    builds, so every copy of a memoized conjunct shares one (§4.3).
@@ -55,9 +55,16 @@ The upper bound of the gain is the 84% above; the real gain is measured in
 - **Opt-in.** `Expander.Memo` and `Checker.Memo` are nil by default, and
   nil is today's behaviour. No other caller (peval directly, rtconfig,
   rpslq, irrdq) changes.
-- **Keyed by filter text, not by attribute.** Two aut-nums importing
-  "AS-FOO" share one answer. `policy.Filter.String()` is canonical: two
-  filters with one text are one filter.
+- **Keyed by filter structure, not by attribute.** Two aut-nums importing
+  "AS-FOO" share one answer. The key is `memoText`, a rendering of the whole
+  tree (every AND/OR/NOT and binary AS expression bracketed, a community
+  test's operator, Raw and Values and an AS-path regexp's Raw and tree
+  verbatim), plus the AFI and the effective MaxDepth, MaxPrefixes,
+  MaxVisited and MaxConjuncts. (Amended after the final review:
+  `policy.Filter.String()` is not unique per filter — it drops grouping that
+  the normalizer's limit accounting depends on, and collapses community
+  spellings — so a String-keyed hit could change a limit error into a
+  success. A filter with a node memoText does not know is not memoized.)
 - **Bounded memory, by what grows.** The `FilterMemo` is bounded by the
   prefix ranges it holds, the aut-num LRU by entry count. Defaults are
   chosen from the measurement in §7, not guessed.
@@ -109,8 +116,9 @@ type Expander struct {
 }
 ```
 
-Key: `filterKey{text string; afi types.AFI}`. Lookup in `NormalizeFilter`:
-when `e.Memo != nil && e.Exclude.empty()`, compute `f.String()`; on a hit
+Key (as amended): `filterKey{text string; afi types.AFI; depth, prefixes,
+visited, conjuncts int}`, text from `memoText(f)`. Lookup in `NormalizeFilter`:
+when `e.Memo != nil && e.Exclude.empty()`, compute the key; on a hit
 return the stored `(NormalFilter, error)`; on a miss normalize, then store
 unless the normalizer read the peer or the error is not one of the three.
 Two goroutines missing the same key both compute; the second store is a
