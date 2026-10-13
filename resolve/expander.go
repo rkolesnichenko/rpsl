@@ -60,6 +60,11 @@ type Expander struct {
 	// them unbound: such a term is a *NotEnumerableError wrapping
 	// ErrUnboundPeer. It binds inside filter-sets too. AS0 is never a peer.
 	Peer types.ASN
+	// Memo, when set, answers NormalizeFilter from a FilterMemo shared with
+	// other Expanders (see FilterMemo for which may share one). It is
+	// ignored when Exclude is set. EvalFilter and set expansion do not read
+	// it.
+	Memo *FilterMemo
 }
 
 // Exclusion is what an expansion leaves out, as bgpq4's EXCEPT does: a set

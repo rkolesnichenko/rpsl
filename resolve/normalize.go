@@ -3,6 +3,7 @@ package resolve
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 
@@ -115,9 +116,34 @@ type CommunityMatch struct {
 // repeated in a conjunct counted once) of every conjunct; MaxVisited caps the
 // sets fetched, the filter terms evaluated and the normalization steps taken,
 // together. Each is a *SetTooLargeError naming the limit.
+//
+// With Expander.Memo set and no Exclude, an answer may come from the memo; it
+// is the answer NormalizeFilter would compute (see FilterMemo).
 func (e *Expander) NormalizeFilter(ctx context.Context, f policy.Filter) (NormalFilter, error) {
-	nf, _, _, err := e.normalize(ctx, f)
+	k, memo := e.memoKey(f)
+	if memo {
+		if a, ok := e.Memo.get(k); ok {
+			return a.nf, a.err
+		}
+	}
+	nf, _, usedPeer, err := e.normalize(ctx, f)
+	if memo && (err == nil || ctx.Err() == nil) {
+		e.Memo.put(k, nf, err, usedPeer)
+	}
 	return nf, err
+}
+
+// memoKey is f's key in e.Memo, and whether the memo applies: it is set,
+// Exclude is empty, and f has a text (every policy filter does).
+func (e *Expander) memoKey(f policy.Filter) (filterKey, bool) {
+	if e.Memo == nil || len(e.Exclude.Sets) > 0 || len(e.Exclude.ASNs) > 0 {
+		return filterKey{}, false
+	}
+	s, ok := f.(fmt.Stringer)
+	if !ok {
+		return filterKey{}, false
+	}
+	return filterKey{text: s.String(), afi: e.AFI}, true
 }
 
 // normalize is NormalizeFilter, also returning the largest disjunction built
