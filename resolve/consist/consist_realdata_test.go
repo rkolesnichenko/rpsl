@@ -101,6 +101,10 @@ func TestRealDataConsist(t *testing.T) {
 		slices.Sort(ases)
 	}
 	c := &Checker{Eval: peval.Evaluator{Src: resolve.NewCache(src, 0)}, MaxRanges: 64}
+	if os.Getenv("RPSL_CONSIST_MEMO") != "" {
+		c.Memo = NewMemoWith(MemoOptions{AutNums: atoiEnv("RPSL_CONSIST_MEMO_AUTNUMS"), Ranges: atoiEnv("RPSL_CONSIST_MEMO_RANGES")})
+		defer func() { t.Logf("memo: %+v", c.Memo.Stats()) }()
+	}
 	if os.Getenv("RPSL_CONSIST_ASPA") != "" {
 		f, err := os.Open(filepath.Join(dir, "rpki", "vrps.json"))
 		if err != nil {
@@ -315,3 +319,5 @@ func (c *Checker) verify(ctx context.Context, d Direction, f Finding, af types.A
 	}
 	return "", nil
 }
+
+func atoiEnv(k string) int { n, _ := strconv.Atoi(os.Getenv(k)); return n }
