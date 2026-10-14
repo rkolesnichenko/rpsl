@@ -19,12 +19,14 @@ same version (see [RELEASING.md](RELEASING.md)).
   worst-case size doubles. Sharing one bound, the IXP sets an aut-num's
   peerings expand evicted its filters: RIPE's AS202827, linted alone, took
   24.7 s where v0.27.1 took 16.0 s; bounded apart, 5.5 s.
-- `resolve/consist`: `Lint` expands a peering's as-set once per call, not once
-  for each of the six evaluations it makes per peer, and `lint/shadowed` keeps
-  each clause signature's cover up to date instead of rebuilding it for every
-  clause, which was quadratic in the clauses. A `Checker` without `Memo` now
-  memoizes for itself, with a filter memo of 1<<18 per pool for each evaluator
-  (its memory was not measured). No result changes.
+- `resolve/consist`: `Lint` no longer expands a peering's as-set for each of
+  the six evaluations it makes per peer: the filter memo holds the expansion
+  (with `Checker.Memo`, across calls; without, for each evaluator, while it
+  fits). `lint/shadowed` keeps each clause signature's cover up to date
+  instead of rebuilding it for every clause, which was quadratic in the
+  clauses. A `Checker` without `Memo` now memoizes for itself, with a filter
+  memo of 1<<18 per pool for each evaluator (its memory was not measured). No
+  result changes.
 
   Measured (GOMAXPROCS 4): `BenchmarkLintIXP` (new; an aut-num with 100 peers,
   all in a 5,100-AS set, importing 200 prefix lists from it) went from
@@ -42,12 +44,13 @@ same version (see [RELEASING.md](RELEASING.md)).
   AS212895 from 2m47s to 5.6 s, AS1101 from 49.9 s to 42.7 s.
 
   Three lints still run out of their budget in the sweep. AS1101 takes 4.7 s
-  alone, but its first session's IXP filters weigh 1,518,917 of the memo's
-  2,097,152, and beside other workers' lints they are evicted between its
-  sessions: in a sweep of RIPE's aut-nums up to AS3000 it took 49.1 s, and
-  7.4 s with a 16x bound. AS47147 (42.1 s alone) and AS31117
-  (7.6 s) spend their time in `lint/shadowed`'s prefix-space unions and subset
-  tests over their large IXP clauses.
+  alone, but its first session's IXP filters weigh 1,518,917 of the filter
+  pool's 2,097,152, and beside other workers' lints they are evicted between
+  its sessions: before the pools were split, a sweep of RIPE's aut-nums up to
+  AS3000 took it 49.1 s, and 7.4 s with a 16x bound. AS47147 (42.1 s alone)
+  spends its time in `lint/shadowed`'s prefix-space unions and subset tests
+  over its large IXP clauses. AS31117 takes 7.6 s alone, mostly in the same
+  place; why it runs past 60 s in the sweep was not determined.
 
 ## [0.27.1] - 2026-10-14
 

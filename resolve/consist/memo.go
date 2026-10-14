@@ -14,7 +14,9 @@ import (
 // The defaults NewMemo uses, from RIPE measurements: 1<<21 ranges is the
 // largest bound that kept the memo's cost within 1 GB on a 2,000-aut-num
 // sample sweep, and 256 aut-nums answered 92.8% of that sample's lookups
-// from the memo.
+// from the memo. That bound was measured for filters alone; since v0.27.2
+// expansions have a pool of their own with the same bound, whose memory was
+// not measured apart.
 const (
 	defaultMemoAutNums = 256
 	defaultMemoRanges  = 1 << 21

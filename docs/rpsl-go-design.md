@@ -1097,8 +1097,8 @@ per-check budget. A memo over `Src` for each evaluator reads the aut-num a
 fixed number of times per `Lint`, whatever its number of peers, so a
 `KeepPolicy` corpus does not decode it per session (measured, `BenchmarkLint`: an
 aut-num with N peers, one import and one export each, 16 ms at N=250,
-55 ms at N=500, 184 ms at N=1000). Since v0.27.2 a peering's as-set is
-expanded once per `Lint` through the filter memo, not once per evaluation, and
+55 ms at N=500, 184 ms at N=1000). Since v0.27.2 the filter memo holds a
+peering's expanded as-set, so it is not expanded again for each evaluation, and
 `lint/shadowed` keeps each clause signature's cover (`sigCover`) up to date
 instead of rebuilding it per clause, which was quadratic in the clauses.
 
@@ -1152,12 +1152,12 @@ effective `MaxDepth` and `MaxVisited`; expansions are bounded apart from filters
 same bound, since sharing one let a lint's IXP expansions evict its filters. `consist.Memo`
 adds the decoded aut-nums and inet-rtrs (a least-recently-used set of 256) and is set as
 `Checker.Memo`, which replaces `Eval.Expander.Memo` with its own filter memo; one `Memo` serves
-one snapshot. The default bound is 1<<21 ranges. Over all of RIPE (39,918 aut-nums),
+one snapshot. The default bound is 1<<21 ranges per pool. Over all of RIPE (39,918 aut-nums),
 `TestRealDataConsist` took 1h43m17s without the memo and 55m39s with it, with every pair and
 direction count identical (the lint counts differ only by the lints that ran out of their 60 s
 budget: 44 without the memo, 11 with it). A `Checker` without a `Memo` gets a
-filter memo of its own for each evaluator (1<<18 per pool), so a lint without one still
-expands each peering set of up to 65,535 ASNs once.
+filter memo of its own for each evaluator (1<<18 per pool), so its evaluations share an
+expansion of up to 65,535 ASNs while it stays in the pool.
 
 ### 8.13 An IRRd-compatible server (`resolve/irrdq`, `resolve/irrdserver`, `rpsld`)
 

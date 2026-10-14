@@ -34,9 +34,9 @@ import (
 // memo holds at most maxRanges of filter weight and, apart, at most maxRanges
 // of expansion weight, so neither kind evicts the other; each is evicted least
 // recently used first, and it does not store an answer heavier than a quarter
-// of maxRanges. A NormalFilter or ASNSet it returns is shared: the caller must not modify it.
-// It never notices a change in the Source: build a new one for a new
-// snapshot. Safe for concurrent use.
+// of maxRanges. A NormalFilter or ASNSet it returns is shared: the caller must
+// not modify it. It never notices a change in the Source: build a new one for
+// a new snapshot. Safe for concurrent use.
 type FilterMemo struct {
 	mu      sync.Mutex
 	max     int

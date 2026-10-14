@@ -91,11 +91,11 @@ func (c *Checker) eval() *peval.Evaluator {
 	return &e
 }
 
-// callMemoRanges bounds the filter memo eval makes when the Checker has no
-// Memo: Lint evaluates each policy six times per peer, and without one it
+// callMemoRanges bounds each pool of the filter memo eval makes when the
+// Checker has no Memo: Lint evaluates each policy six times per peer, and without one it
 // expanded a peering's as-set on every evaluation (RIPE's AS212895 took
 // 2m23s). It stores an expansion of up to 65,535 ASNs and missing sets (a
-// quarter of the bound) and lives as long as the evaluator: Check makes one
+// quarter of the pool's bound) and lives as long as the evaluator: Check makes one
 // per side, Peers one, and Lint one for its sessions and one each for its
 // peer list, set walk and router walk.
 const callMemoRanges = 1 << 18

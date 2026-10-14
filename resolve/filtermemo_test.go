@@ -583,7 +583,7 @@ func TestFilterMemoExpandASWeighsMissing(t *testing.T) {
 // bounded apart. Sharing one bound, RIPE's AS202827 filled the memo with its
 // filters, and the IXP sets its peerings expand pushed them out, so it
 // normalized them again and again: alone, it took 24.7 s, where v0.27.1 had
-// taken 16.0 s; bounded apart, 6.1 s.
+// taken 16.0 s; bounded apart, 5.5 s.
 func TestFilterMemoExpansionsDoNotEvictFilters(t *testing.T) {
 	src := corpus(t, asSet("AS-A", "AS1", "AS2"), asSet("AS-B", "AS3", "AS4"), asSet("AS-C", "AS5", "AS6"), asSet("AS-D", "AS7", "AS8"))
 	memo := NewFilterMemo(12)
