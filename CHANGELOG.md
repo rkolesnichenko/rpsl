@@ -9,6 +9,8 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-10-14
+
 ### Added
 
 - `resolve`: `FilterMemo` (`NewFilterMemo`, `FilterMemoStats`) and `Expander.Memo`. It shares
@@ -24,8 +26,8 @@ same version (see [RELEASING.md](RELEASING.md)).
 ### Changed
 
 - `rpslcheck` shares a `consist.Memo` across a run's checks. On RIPE's dumps, `-sweep -sample 2000
-  -c 4` (GOMAXPROCS 4, no GOMEMLIMIT) took 280.5 s and now takes 156.6 s (max RSS 3,247 MB, now
-  3,976 MB), with identical output. `TestRealDataConsist` over all 39,918 RIPE aut-nums took
+  -c 4` (GOMAXPROCS 4, no GOMEMLIMIT) took 280.5 s and now takes 155.7 s (max RSS 3,247 MB, now
+  4,023 MB), with identical output. `TestRealDataConsist` over all 39,918 RIPE aut-nums took
   1h43m17s and now takes 55m39s (peak 4,327 MB, now 4,526 MB, GOMEMLIMIT=4GiB), with identical
   pair and direction counts. A full
   `rpslcheck` sweep with the memo was not measured.
@@ -1192,7 +1194,8 @@ The first release. There is no earlier version to migrate from.
   values do; a few common RP-attributes have typed helpers.
 - **`rdap` is not a `Source`.** RDAP serves registration data, not IRR sets.
 
-[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.26.1...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.27.0...HEAD
+[0.27.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.26.1...v0.27.0
 [0.26.1]: https://github.com/rkolesnichenko/rpsl/compare/v0.26.0...v0.26.1
 [0.26.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.24.1...v0.25.0

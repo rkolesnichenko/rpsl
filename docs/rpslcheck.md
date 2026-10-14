@@ -200,7 +200,7 @@ loads one), an aut-num with N peers, one import and one export each, took
 `rpslcheck` shares a `consist.Memo` across a run's checks in every mode (decoded
 aut-nums and normalized filters; it changes no answer). Measured on RIPE's nine
 dumps with `-sweep -sample 2000 -c 4`, GOMAXPROCS 4: 280.5 s and 3,247 MB max
-RSS without the memo, 156.6 s and 3,976 MB with it, byte-identical JSON. A
+RSS without the memo, 155.7 s and 4,023 MB with it, byte-identical JSON. A
 full RIPE sweep with the memo was not measured: a sweep keeps every aut-num's
 lint issues in memory until linting ends, so its peak is dominated by them
 (without the memo, the full sweep took 100 minutes and peaked at 6,264 MB max
