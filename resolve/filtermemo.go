@@ -30,11 +30,12 @@ import (
 // (*SetTooLargeError, *NotEnumerableError, *AnySetError); a context error, a
 // Source failure or a missing top set never is. A filter answer weighs one
 // plus its conjuncts' Prefixes and NotPrefixes ranges and the ASNs in its
-// AS-path tests' Sets, an expansion one plus its ASNs; the memo holds at most
-// maxRanges of weight in all, evicting the least recently used, and does not
-// store an answer heavier than a quarter of that. A NormalFilter or ASNSet it
-// returns is shared: the caller must not modify it. It never notices a change
-// in the Source: build a new one for a new snapshot. Safe for concurrent use.
+// AS-path tests' Sets, an expansion one plus its ASNs and missing sets; the
+// memo holds at most maxRanges of weight in all, evicting the least recently
+// used, and does not store an answer heavier than a quarter of that. A
+// NormalFilter or ASNSet it returns is shared: the caller must not modify it.
+// It never notices a change in the Source: build a new one for a new
+// snapshot. Safe for concurrent use.
 type FilterMemo struct {
 	mu      sync.Mutex
 	max     int
@@ -123,7 +124,7 @@ func (m *FilterMemo) put(k filterKey, nf NormalFilter, err error, usedPeer bool)
 
 // putASNs stores an ExpandAS answer computed for k, as put does.
 func (m *FilterMemo) putASNs(k filterKey, s ASNSet, err error) {
-	m.store(&filterAnswer{key: k, asns: s, err: err, weight: 1 + s.Len()})
+	m.store(&filterAnswer{key: k, asns: s, err: err, weight: 1 + s.Len() + len(s.Missing())})
 }
 
 // store adds a, unless its error does not follow from the inputs alone or it

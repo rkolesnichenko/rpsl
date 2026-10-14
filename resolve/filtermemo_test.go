@@ -520,6 +520,8 @@ func TestFilterMemoExpandASStoresDeterministicError(t *testing.T) {
 }
 
 // A Source failure, a context error and a missing top set are not stored.
+// The context error is kept out by memoizable; ExpandAS's ctx.Err() guard,
+// like NormalizeFilter's, is defensive, and this test cannot tell it apart.
 func TestFilterMemoExpandASFailuresNotStored(t *testing.T) {
 	src := &downSource{Source: memoCorpus(t), down: true}
 	memo := NewFilterMemo(1 << 10)
@@ -559,5 +561,20 @@ func TestFilterMemoExpandASOversizeNotStored(t *testing.T) {
 	}
 	if st := memo.Stats(); st.Entries != 1 || st.Held != 3 || st.Misses != 3 {
 		t.Fatalf("stats %+v, want AS-SMALL alone stored and AS-BIG missing twice", st)
+	}
+}
+
+// An expansion weighs its missing sets too: a set of few ASNs can name up to
+// MaxVisited sets that are not there, each held in its Missing list.
+func TestFilterMemoExpandASWeighsMissing(t *testing.T) {
+	src := corpus(t, asSet("AS-M", "AS1", "AS-X1", "AS-X2", "AS-X3"))
+	memo := NewFilterMemo(1 << 10)
+	e := &Expander{Src: src, Memo: memo}
+	got, err := e.ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-M")))
+	if err != nil || got.Len() != 1 || len(got.Missing()) != 3 {
+		t.Fatalf("AS-M: %v missing %v, %v; the test needs 1 ASN and 3 missing sets", got, got.Missing(), err)
+	}
+	if st := memo.Stats(); st.Held != 5 {
+		t.Fatalf("stats %+v, want AS-M held at weight 5 (1 + 1 ASN + 3 missing)", st)
 	}
 }

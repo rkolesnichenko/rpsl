@@ -21,7 +21,8 @@ const (
 )
 
 // Memo shares work between a Checker's calls: decoded aut-nums and
-// inet-rtrs (a bounded LRU) and normalized filters (a resolve.FilterMemo).
+// inet-rtrs (a bounded LRU), and normalized filters and expanded as-sets (a
+// resolve.FilterMemo).
 // It changes no answer. It holds data read from Checker.Eval.Src, so it
 // serves one Checker, or Checkers with the same Eval; it never notices a
 // change in the Source, so build a new one for a new snapshot. Safe for
@@ -39,7 +40,7 @@ type Memo struct {
 // MemoOptions bounds a Memo. A zero field takes its default.
 type MemoOptions struct {
 	AutNums int // decoded aut-nums and inet-rtrs held (default 256)
-	Ranges  int // the filter memo's bound, in prefix ranges and path-set ASNs (default 1<<21, 2,097,152; see resolve.FilterMemo)
+	Ranges  int // the filter memo's bound, in prefix ranges, path-set ASNs and expanded as-sets' ASNs (default 1<<21, 2,097,152; see resolve.FilterMemo)
 }
 
 // MemoStats is a Memo's counters, for measurement and tests.

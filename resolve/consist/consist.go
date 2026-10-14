@@ -60,8 +60,9 @@ type Checker struct {
 	// representative session (Lint).
 	SetPeers bool
 
-	// Memo, when set, shares decoded aut-nums and inet-rtrs and normalized
-	// filters across this Checker's calls (Check, Lint, Peers); see Memo.
+	// Memo, when set, shares decoded aut-nums and inet-rtrs, normalized
+	// filters and expanded as-sets across this Checker's calls (Check, Lint,
+	// Peers); see Memo.
 	// Its filter memo replaces Eval.Expander.Memo. nil: each call stands
 	// alone, with a memo of its own (Eval.Expander.Memo, when set, is kept).
 	// Results are the same either way.
@@ -90,11 +91,13 @@ func (c *Checker) eval() *peval.Evaluator {
 	return &e
 }
 
-// callMemoRanges bounds the filter memo a call makes for itself when the
-// Checker has no Memo: Lint evaluates each policy six times per peer, and
-// without one it expanded a peering's as-set on every evaluation (RIPE's
-// AS212895: 105 s of a 115 s lint). It holds an as-set of up to 65,536 ASNs
-// (a quarter), and lives as long as the call.
+// callMemoRanges bounds the filter memo eval makes when the Checker has no
+// Memo: Lint evaluates each policy six times per peer, and without one it
+// expanded a peering's as-set on every evaluation (RIPE's AS212895 took
+// 2m23s). It stores an expansion of up to 65,535 ASNs and missing sets (a
+// quarter of the bound) and lives as long as the evaluator: Check makes one
+// per side, Peers one, and Lint one for its sessions and one each for its
+// peer list, set walk and router walk.
 const callMemoRanges = 1 << 18
 
 // policyMemo is a PolicySource answering each aut-num and inet-rtr once.
