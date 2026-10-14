@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -862,5 +864,121 @@ func TestLintReadsEachAutNumOnce(t *testing.T) {
 		if got := src.n[1]; got != 3 {
 			t.Errorf("N=%d: after Check, AS1 read %d times, want 3", n, got)
 		}
+	}
+}
+
+// setCountingSource counts GetSet lookups per set.
+type setCountingSource struct {
+	resolve.PolicySource
+	mu *sync.Mutex
+	n  map[string]int
+}
+
+func (s setCountingSource) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error) {
+	s.mu.Lock()
+	s.n[ref.String()]++
+	s.mu.Unlock()
+	return s.PolicySource.GetSet(ctx, ref)
+}
+
+// With a Memo, Lint expands a peering's as-set a fixed number of times,
+// whatever its number of peers: peval tests whether each session's peer is in
+// AS-IXP, six calls per peer, and expanding it on every call made a lint of
+// an aut-num with an IXP peering take minutes (RIPE's AS212895: 2m23s).
+func TestLintExpandsEachPeeringSetOnce(t *testing.T) {
+	reads := map[int]int{}
+	for _, n := range []int{2, 50} {
+		var b strings.Builder
+		b.WriteString(lintDump(n))
+		b.WriteString("\nas-set: AS-IXP\nmembers: AS100, AS101\nsource: RIPE\n")
+		dump := strings.Replace(b.String(), "as-name: BIG\n", "as-name: BIG\nimport: from AS-IXP accept AS-IXP\n", 1)
+		l := &resolve.DumpLoader{Sources: []string{"RIPE"}, KeepPolicy: true}
+		if err := l.Read(strings.NewReader(dump)); err != nil {
+			t.Fatal(err)
+		}
+		src := setCountingSource{l.Source(), &sync.Mutex{}, map[string]int{}}
+		c := &Checker{Eval: peval.Evaluator{Src: src}, Memo: NewMemo()}
+		lint(t, c, 1)
+		reads[n] = src.n["AS-IXP"]
+	}
+	if reads[2] == 0 || reads[50] != reads[2] {
+		t.Fatalf("AS-IXP read %d times with 2 peers, %d with 50; want the same, more than none", reads[2], reads[50])
+	}
+}
+
+// shadowedNaive is what cover.shadowed computes, from scratch: every route
+// cs accepts is accepted by earlier — per signature T of cs, its space lies
+// in the union of the earlier conjuncts whose tests are a subset of T.
+func shadowedNaive(cs, earlier []conj) bool {
+	bySig := map[string][]conj{}
+	for _, cj := range cs {
+		k := strings.Join(cj.sig, "\x00")
+		bySig[k] = append(bySig[k], cj)
+	}
+	for _, g := range bySig {
+		var cover []conj
+		for _, e := range earlier {
+			if subset(e.sig, g[0].sig) {
+				cover = append(cover, e)
+			}
+		}
+		if !union(g).Subset(union(cover)) {
+			return false
+		}
+	}
+	return true
+}
+
+// cover answers as shadowedNaive does over random clause sequences: random
+// signatures over three tests, random spaces over a few nested ranges, and
+// clauses of up to three conjuncts, each added after it is asked about, as
+// linter.policy does.
+func TestCoverMatchesNaive(t *testing.T) {
+	tests := []string{"<^AS1>", "community(65000:1)", "community(65000:2)"}
+	var ranges []types.PrefixRange
+	for _, s := range []string{"10.0.0.0/8", "10.0.0.0/8^+", "10.0.0.0/16^+", "10.1.0.0/16", "10.1.0.0/16^24", "2001:db8::/32^+", "11.0.0.0/8^-"} {
+		r, err := types.ParsePrefixRange(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ranges = append(ranges, r)
+	}
+	shadows := 0
+	for seed := uint64(0); seed < 500; seed++ {
+		r := rand.New(rand.NewPCG(seed, 0xc0))
+		randConj := func() conj {
+			var sig []string
+			for _, x := range tests {
+				if r.IntN(3) == 0 {
+					sig = append(sig, x)
+				}
+			}
+			slices.Sort(sig)
+			var rs []types.PrefixRange
+			for k := r.IntN(3); k > 0; k-- {
+				rs = append(rs, ranges[r.IntN(len(ranges))])
+			}
+			return conj{sig: sig, space: types.SpaceOf(rs...)}
+		}
+		var cov cover
+		var earlier []conj
+		for range 12 {
+			cs := make([]conj, 1+r.IntN(3))
+			for i := range cs {
+				cs[i] = randConj()
+			}
+			want := shadowedNaive(cs, earlier)
+			if got := cov.shadowed(cs); got != want {
+				t.Fatalf("seed %d after %d conjuncts: cover %v, naive %v", seed, len(earlier), got, want)
+			}
+			if want {
+				shadows++
+			}
+			cov.add(cs)
+			earlier = append(earlier, cs...)
+		}
+	}
+	if shadows < 500 {
+		t.Fatalf("only %d shadowed clauses in 6000: the test draws too few", shadows)
 	}
 }
