@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/resolve/internal/buildinfo"
+	"github.com/rkolesnichenko/rpsl/types"
 )
 
 const (
@@ -207,8 +209,10 @@ func TestSweepCheckTimeout(t *testing.T) {
 	if !strings.Contains(js, `{"type":"timeout",`) {
 		t.Errorf("no timeout record:\n%s", js)
 	}
-	if _, errw, code := run(t, "-dump", fixture, "-sweep", "-timeout", "1ns"); code != exitFailed {
-		t.Errorf("-timeout 1ns: exit %d, want %d; stderr %s", code, exitFailed, errw)
+	// Review Focus 2 (spec §3.6): the run's own deadline is reported as
+	// the run's error, never as an aut-num's.
+	if _, errw, code := run(t, "-dump", fixture, "-sweep", "-timeout", "1ns"); code != exitFailed || errw != "rpslcheck: context deadline exceeded\n" {
+		t.Errorf("-timeout 1ns: exit %d, want %d; stderr %q, want the run's own error", code, exitFailed, errw)
 	}
 }
 
@@ -295,6 +299,132 @@ source: RIPE
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("want %q in:\n%s", want, out.String())
+		}
+	}
+}
+
+// failingAutNum is a MemSource whose aut-num lookups fail, for one AS, with
+// an error that is not a limit.
+type failingAutNum struct {
+	*resolve.MemSource
+	as types.ASN
+}
+
+var errBoom = errors.New("boom")
+
+func (s failingAutNum) AutNum(ctx context.Context, as types.ASN, source string) (*object.AutNum, error) {
+	if as == s.as {
+		return nil, errBoom
+	}
+	return s.MemSource.AutNum(ctx, as, source)
+}
+
+// Review Focus 1 (spec §3.5): an aut-num that cannot be read stops the
+// sweep where it is reached in order. Every aut-num before it is written,
+// nothing after it is, and there are no totals.
+func TestSweepStopsAtError(t *testing.T) {
+	const objs = `aut-num: AS65001
+as-name: ONE
+import: from AS65009 accept ANY
+mnt-by: MNT-A
+source: RIPE
+
+aut-num: AS65003
+as-name: THREE
+mnt-by: MNT-A
+source: RIPE
+
+aut-num: AS65004
+as-name: FOUR
+import: from AS65008 accept ANY
+mnt-by: MNT-A
+source: RIPE
+`
+	l := &resolve.DumpLoader{Sources: []string{"RIPE"}, IndexPeers: true}
+	if err := l.Read(strings.NewReader(objs)); err != nil {
+		t.Fatal(err)
+	}
+	src := failingAutNum{l.Source(), 65003}
+	afs, _ := families("both")
+	for _, conc := range []int{1, 8} {
+		var out, errw bytes.Buffer
+		code := runSweep(context.Background(), src, afs, 0, 1, conc, 0, false, nil, newWriter(&out, true), &errw)
+		if code != exitFailed {
+			t.Errorf("-c %d: exit %d, want %d", conc, code, exitFailed)
+		}
+		if !strings.Contains(out.String(), `"as":"AS65001"`) {
+			t.Errorf("-c %d: AS65001's lint, before the failing aut-num, is not written:\n%s", conc, out.String())
+		}
+		if strings.Contains(out.String(), `"as":"AS65004"`) || strings.Contains(out.String(), `"type":"totals"`) {
+			t.Errorf("-c %d: written past the failing aut-num:\n%s", conc, out.String())
+		}
+		if e := errw.String(); !strings.HasPrefix(e, "rpslcheck: AS65003: ") || !strings.Contains(e, "boom") {
+			t.Errorf("-c %d: stderr %q, want the failing aut-num's error", conc, e)
+		}
+	}
+}
+
+// cancelAt is a writer that cancels the run when a write holds marker.
+type cancelAt struct {
+	bytes.Buffer
+	marker string
+	cancel context.CancelFunc
+}
+
+func (c *cancelAt) Write(p []byte) (int, error) {
+	if bytes.Contains(p, []byte(c.marker)) {
+		c.cancel()
+	}
+	return c.Buffer.Write(p)
+}
+
+// Review Focus 2 (spec §3.6), mid-phase: when the run ends while results
+// are still being written, the sweep reports the run's error at the next
+// result it reaches — never that result's own error — and writes nothing
+// after it, in the lint phase and in the check phase.
+func TestSweepRunCancelledMidPhase(t *testing.T) {
+	for _, c := range []struct{ name, marker string }{
+		{"lint", `"type":"issue"`},
+		{"check", `"type":"direction"`},
+	} {
+		ctx, cancel := context.WithCancel(context.Background())
+		out := &cancelAt{marker: c.marker, cancel: cancel}
+		var errw bytes.Buffer
+		code := Run(ctx, []string{"-dump", fixture, "-sweep", "-json", "-c", "8"}, strings.NewReader(""), out, &errw)
+		cancel()
+		if code != exitFailed || errw.String() != "rpslcheck: context canceled\n" {
+			t.Errorf("%s: exit %d, want %d; stderr %q, want the run's own error", c.name, code, exitFailed, errw.String())
+		}
+		var issueASes, directions []string
+		for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+			var rec struct{ Type, AS, From, To string }
+			if err := json.Unmarshal([]byte(line), &rec); err != nil {
+				t.Fatalf("%s: %q: %v", c.name, line, err)
+			}
+			switch rec.Type {
+			case "issue":
+				issueASes = append(issueASes, rec.AS)
+			case "direction":
+				directions = append(directions, rec.From+" "+rec.To)
+			case "totals":
+				t.Errorf("%s: totals written after the run ended", c.name)
+			}
+		}
+		switch c.name {
+		case "lint": // only the first aut-num's lint, the one being written
+			for _, as := range issueASes {
+				if as != issueASes[0] {
+					t.Errorf("lint: written past the cancelled aut-num: %v", issueASes)
+					break
+				}
+			}
+			if len(directions) > 0 {
+				t.Errorf("lint: pairs written after the run ended: %v", directions)
+			}
+		case "check": // only the first pair's report, the one being written
+			if len(directions) == 0 || len(directions) > 2 {
+				t.Errorf("check: %d direction records, want the first pair's (1 or 2): %v", len(directions), directions)
+			}
 		}
 	}
 }

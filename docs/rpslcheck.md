@@ -200,14 +200,23 @@ loads one), an aut-num with N peers, one import and one export each, took
 `rpslcheck` shares a `consist.Memo` across a run's checks in every mode (decoded
 aut-nums and normalized filters; it changes no answer). Measured on RIPE's nine
 dumps with `-sweep -sample 2000 -c 4`, GOMAXPROCS 4: 280.5 s and 3,247 MB max
-RSS without the memo, 155.7 s and 4,023 MB with it, byte-identical JSON. A
-full RIPE sweep with the memo was not measured: a sweep keeps every aut-num's
-lint issues in memory until linting ends, so its peak is dominated by them
-(without the memo, the full sweep took 100 minutes and peaked at 6,264 MB max
-RSS, with `GOMEMLIMIT=5GiB`); the memo's own share of the heap, measured
-part-way through the full sweep (at about 1,088 s, while it was still
-linting), was about 0.45 GB. `rpslcheck` sets no `GOMEMLIMIT` itself; set one if
-the machine is short of memory.
+RSS without the memo, 155.7 s and 4,023 MB with it, byte-identical JSON.
+
+A sweep writes each aut-num's lint, and each pair's report, as soon as it and
+every one before it are done, and keeps none of them after; at most 1,024
+results wait for an earlier one still running, whatever `-check-timeout` is.
+The output is the same as if everything were written at the end. This saves
+memory, not time: on the same sample it took max RSS from 3,997 and 3,896 MB to
+3,459 and 3,452 MB (two runs each) and wall time from 166.3 s to 160.7 s, with
+byte-identical JSON. With it, a full RIPE sweep (`-sweep -c 4 -json`, GOMAXPROCS
+4, `GOMEMLIMIT=5GiB`) finishes in 47 minutes with 6,089 MB max RSS. Before, the
+sweep held every lint until linting ended: with the memo it did not fit under
+7 GB, and without it, it took 100 minutes and 6,264 MB. The time saved is the
+memo's. A sweep that stops before
+its end — an aut-num's or a pair's error, `-timeout`, an interrupt — exits 3 and
+leaves the results it had already written on stdout; its JSON then has no
+`totals` record. `rpslcheck` sets no `GOMEMLIMIT` itself; set one if the machine
+is short of memory.
 
 ### A real example
 
