@@ -97,6 +97,16 @@ type RangeSet struct {
 
 func newRangeSet() *RangeSet { return &RangeSet{m: make(map[types.PrefixRange]struct{})} }
 
+// unsorted is the ranges in no particular order: List without its sort, for
+// a caller the order cannot matter to.
+func (s RangeSet) unsorted() []types.PrefixRange {
+	out := make([]types.PrefixRange, 0, len(s.m))
+	for r := range s.m {
+		out = append(out, r)
+	}
+	return out
+}
+
 func (s *RangeSet) add(r types.PrefixRange) { s.m[r] = struct{}{} }
 
 // Has reports whether the set holds a range denoting the same prefixes as r.

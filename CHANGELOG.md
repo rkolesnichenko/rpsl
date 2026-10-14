@@ -9,6 +9,31 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Added
+
+- `resolve`: `FilterMemo` (`NewFilterMemo`, `FilterMemoStats`) and `Expander.Memo`. It shares
+  `NormalizeFilter`'s answers between Expanders over one Source, keyed by the filter's whole
+  structure (every grouping, operator and spelling), the AFI and the effective limits, and bounded
+  by the prefix ranges and AS-path-test ASNs it holds; an answer that read the peer, a context error
+  or a Source error is never stored, so a hit is the answer `NormalizeFilter` computes for that
+  filter.
+- `resolve/consist`: `Memo`, `MemoOptions`, `MemoStats`, `NewMemo` and `NewMemoWith`, and
+  `Checker.Memo`. A `Memo` adds decoded aut-nums and inet-rtrs (256 by default) to a filter memo
+  (bounded at 1<<21 prefix ranges and ASNs by default) and changes no answer.
+
+### Changed
+
+- `rpslcheck` shares a `consist.Memo` across a run's checks. On RIPE's dumps, `-sweep -sample 2000
+  -c 4` (GOMAXPROCS 4, no GOMEMLIMIT) took 280.5 s and now takes 156.6 s (max RSS 3,247 MB, now
+  3,976 MB), with identical output. `TestRealDataConsist` over all 39,918 RIPE aut-nums took
+  1h43m17s and now takes 55m39s (peak 4,327 MB, now 4,526 MB, GOMEMLIMIT=4GiB), with identical
+  pair and direction counts. A full
+  `rpslcheck` sweep with the memo was not measured.
+- `resolve`: a normalized conjunct computes its `Conjunct.Space` once, and its copies share it.
+- `resolve`: `Conjunct.Space` no longer sorts a conjunct's ranges (`SpaceOf` ignores their order),
+  and normalization builds a conjunct's text for deduplication only when two conjuncts could
+  print the same.
+
 ## [0.26.1] - 2026-10-13
 
 ### Fixed

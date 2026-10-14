@@ -3,6 +3,7 @@ package resolve_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 	"testing"
 	"time"
@@ -57,8 +58,24 @@ func FuzzNormalizeFilter(f *testing.F) {
 		objs = append(objs, o)
 	}
 	src := resolve.NewMemSource(objs)
+	memo := resolve.NewFilterMemo(1 << 14)
 	f.Fuzz(func(t *testing.T, s string) {
 		pf, parsed := policy.ParseFilter(s)
+		// The memo answers as NormalizeFilter does, for any parse, clean or
+		// not, with answers stored from earlier inputs.
+		for _, peer := range []types.ASN{0, 65002} {
+			plain := resolve.Expander{Src: src, Peer: peer, MaxConjuncts: 64, MaxPrefixes: 1 << 12, MaxVisited: 1 << 12}
+			withMemo := plain
+			withMemo.Memo = memo
+			mctx, mcancel := context.WithTimeout(context.Background(), 2*time.Second)
+			want, werr := plain.NormalizeFilter(mctx, pf)
+			got, gerr := withMemo.NormalizeFilter(mctx, pf)
+			late := mctx.Err() != nil
+			mcancel()
+			if !late && (fmt.Sprint(gerr) != fmt.Sprint(werr) || got.String() != want.String()) {
+				t.Fatalf("%q peer %d: memo %q %v, plain %q %v", s, peer, got, gerr, want, werr)
+			}
+		}
 		for _, d := range parsed {
 			if d.Severity >= ast.Error {
 				return // only clean parses have a meaning to preserve

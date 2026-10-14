@@ -59,16 +59,27 @@ type Checker struct {
 	// tens of thousands. Without it, each set peering is linted through one
 	// representative session (Lint).
 	SetPeers bool
+
+	// Memo, when set, shares decoded aut-nums and inet-rtrs and normalized
+	// filters across this Checker's calls (Check, Lint, Peers); see Memo.
+	// Its filter memo replaces Eval.Expander.Memo. nil: each call stands
+	// alone. Results are the same either way.
+	Memo *Memo
 }
 
 // eval is c.Eval with Expander.Exclude cleared and Src memoizing its
-// aut-nums and inet-rtrs (policyMemo): every evaluation consist makes goes
-// through it. Each call has its own memo, so a Lint, which makes four, reads
-// its aut-num a fixed number of times, whatever its number of peers.
+// aut-nums and inet-rtrs: through c.Memo, shared by every call, when set
+// (and Expander.Memo set to its filter memo); otherwise a per-call
+// policyMemo. Every evaluation consist makes goes through it.
 func (c *Checker) eval() *peval.Evaluator {
 	e := c.Eval
 	e.Expander.Exclude = resolve.Exclusion{}
-	if e.Src != nil {
+	switch {
+	case e.Src == nil:
+	case c.Memo != nil:
+		e.Src = memoSource{PolicySource: e.Src, m: c.Memo}
+		e.Expander.Memo = c.Memo.filters
+	default:
 		e.Src = &policyMemo{PolicySource: e.Src, autNums: map[policyKey]autNumAnswer{}, rtrs: map[policyKey]inetRtrAnswer{}}
 	}
 	return &e

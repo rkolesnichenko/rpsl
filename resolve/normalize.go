@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 
 	"github.com/rkolesnichenko/rpsl/policy"
 	"github.com/rkolesnichenko/rpsl/types"
@@ -31,6 +32,13 @@ type Conjunct struct {
 	Paths       []PathMatch
 	Communities []CommunityMatch
 	any         bool
+	space       *spaceOnce // set by NormalizeFilter: Space computed once, shared by copies
+}
+
+// spaceOnce is a conjunct's space, computed on first use.
+type spaceOnce struct {
+	once sync.Once
+	s    types.PrefixSpace
 }
 
 // AnyPrefix reports whether Prefixes is every prefix of the Expander's address
@@ -40,9 +48,25 @@ func (c Conjunct) AnyPrefix() bool { return c.any }
 // Space returns the prefixes the conjunct's prefix tests accept: Prefixes
 // less NotPrefixes. ANY is in Prefixes as 0.0.0.0/0^0-32 and ::/0^0-128,
 // trimmed to the Expander's AFI, so a conjunct with AnyPrefix gives every
-// prefix of that family.
+// prefix of that family. For a conjunct NormalizeFilter built it is computed
+// once and shared by every copy (a memoized NormalFilter is handed to many
+// callers); for one built by hand, on each call. So a normalized conjunct's
+// Prefixes and NotPrefixes must not be reassigned (its copies would keep the
+// old space), and reflect.DeepEqual on two such conjuncts also compares
+// whether Space has been called on each.
 func (c Conjunct) Space() types.PrefixSpace {
-	return types.SpaceOf(c.Prefixes.List()...).Minus(types.SpaceOf(c.NotPrefixes.List()...))
+	if c.space == nil {
+		return c.computeSpace()
+	}
+	c.space.once.Do(func() { c.space.s = c.computeSpace() })
+	return c.space.s
+}
+
+// computeSpace is Space without the cache.
+func (c Conjunct) computeSpace() types.PrefixSpace {
+	// SpaceOf does not depend on the order of its ranges: List's sort would
+	// be wasted, and on a large set it was a fifth of a sweep's CPU.
+	return types.SpaceOf(c.Prefixes.unsorted()...).Minus(types.SpaceOf(c.NotPrefixes.unsorted()...))
 }
 
 // PathMatch is an AS-path regexp a route's path must match (or, Negated, must
@@ -94,13 +118,40 @@ type CommunityMatch struct {
 // repeated in a conjunct counted once) of every conjunct; MaxVisited caps the
 // sets fetched, the filter terms evaluated and the normalization steps taken,
 // together. Each is a *SetTooLargeError naming the limit.
+//
+// With Expander.Memo set and no Exclude, an answer may come from the memo; it
+// is the answer NormalizeFilter would compute (see FilterMemo).
 func (e *Expander) NormalizeFilter(ctx context.Context, f policy.Filter) (NormalFilter, error) {
-	nf, _, err := e.normalize(ctx, f)
+	k, memo := e.memoKey(f)
+	if memo {
+		if a, ok := e.Memo.get(k); ok {
+			return a.nf, a.err
+		}
+	}
+	nf, _, usedPeer, err := e.normalize(ctx, f)
+	if memo && (err == nil || ctx.Err() == nil) {
+		e.Memo.put(k, nf, err, usedPeer)
+	}
 	return nf, err
 }
 
-// normalize is NormalizeFilter, also returning the largest disjunction built.
-func (e *Expander) normalize(ctx context.Context, f policy.Filter) (NormalFilter, int, error) {
+// memoKey is f's key in e.Memo, and whether the memo applies: it is set,
+// Exclude is empty, and memoText knows every node of f.
+func (e *Expander) memoKey(f policy.Filter) (filterKey, bool) {
+	if e.Memo == nil || len(e.Exclude.Sets) > 0 || len(e.Exclude.ASNs) > 0 {
+		return filterKey{}, false
+	}
+	text, ok := memoText(f)
+	if !ok {
+		return filterKey{}, false
+	}
+	return filterKey{text: text, afi: e.AFI, depth: e.maxDepth(), prefixes: e.maxPrefixes(),
+		visited: e.maxVisited(), conjuncts: e.maxConjuncts()}, true
+}
+
+// normalize is NormalizeFilter, also returning the largest disjunction built
+// and whether the answer read Expander.Peer.
+func (e *Expander) normalize(ctx context.Context, f policy.Filter) (NormalFilter, int, bool, error) {
 	n := &normalizer{ev: newFilterEval(e, ctx), inline: map[string]bool{}, memo: map[string][]nconj{}, height: map[string]int{}}
 	n.ev.anyAll = true
 	// noEx is the same Expander with Exclude cleared. It evaluates negated
@@ -114,11 +165,12 @@ func (e *Expander) normalize(ctx context.Context, f policy.Filter) (NormalFilter
 	n.noEx = newFilterEval(&noExclude, ctx)
 	n.noEx.anyAll = true
 	cs, err := n.norm(f, false, 0)
+	used := func() bool { return n.ev.usedPeer || n.noEx.usedPeer }
 	if err != nil {
-		return NormalFilter{}, n.peak, err
+		return NormalFilter{}, n.peak, used(), err
 	}
 	nf, err := n.finish(cs)
-	return nf, n.peak, err
+	return nf, n.peak, used(), err
 }
 
 // nconj is a conjunct being built.
@@ -451,10 +503,11 @@ func (n *normalizer) path(x policy.FilterPathRE) (PathMatch, error) {
 	}
 	re := x.Regexp
 	if re.UsesPeer() {
-		if n.ev.e.Peer == 0 {
+		peer := n.ev.peer()
+		if peer == 0 {
 			return PathMatch{}, unboundPeer(filterText(x))
 		}
-		re = re.Bind(n.ev.e.Peer)
+		re = re.Bind(peer)
 	}
 	pm := PathMatch{RE: re, Sets: map[types.SetName]ASNSet{}}
 	ev := n.noEx
@@ -539,7 +592,19 @@ func (n *normalizer) finish(cs []nconj) (NormalFilter, error) {
 	ev := n.ev
 	all := ev.everything()
 	var nf NormalFilter
-	seen := map[string]bool{}
+	// keys holds the text of each kept conjunct once it has been needed: a
+	// conjunct whose text repeats an earlier one's is dropped, but only two
+	// with the same counts can print the same, so a conjunct's text (its
+	// ranges sorted and printed) is built only then.
+	keys := map[int]string{}
+	key := func(i int, c Conjunct) string {
+		k, ok := keys[i]
+		if !ok {
+			k = c.String()
+			keys[i] = k
+		}
+		return k
+	}
 	for _, c := range cs {
 		pos := c.pos
 		if pos == nil {
@@ -583,12 +648,29 @@ func (n *normalizer) finish(cs []nconj) (NormalFilter, error) {
 			Paths:       c.paths,
 			Communities: c.comms,
 			any:         covers(pos, all),
+			space:       &spaceOnce{},
 		}
-		key := conj.String()
-		if seen[key] {
+		dup, text := false, ""
+		for i, kept := range nf.Conjuncts {
+			// Conjunct.String prints the prefix list only when !any, and the
+			// negated list always: equal text needs these counts equal.
+			if kept.any == conj.any && (conj.any || kept.Prefixes.Len() == conj.Prefixes.Len()) &&
+				kept.NotPrefixes.Len() == conj.NotPrefixes.Len() {
+				if text == "" {
+					text = conj.String()
+				}
+				if key(i, kept) == text {
+					dup = true
+					break
+				}
+			}
+		}
+		if dup {
 			continue
 		}
-		seen[key] = true
+		if text != "" {
+			keys[len(nf.Conjuncts)] = text
+		}
 		nf.Conjuncts = append(nf.Conjuncts, conj)
 	}
 	nf.missing = mergedMissing(n.ev.missing, n.noEx.missing)

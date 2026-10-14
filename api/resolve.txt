@@ -15,6 +15,7 @@ func ExpandableClass(class string) bool
 func LoadDump(r io.Reader, sourcePrecedence ...string) (*MemSource, error)
 func NewASNSet(asns ...types.ASN) ASNSet
 func NewCache(src Source, ttl time.Duration) *Cache
+func NewFilterMemo(maxRanges int) *FilterMemo
 func NewMemSource(objs []object.Object, sourcePrecedence ...string) *MemSource
 type ASNSet struct
 func (ASNSet) Has(a types.ASN) bool
@@ -101,6 +102,7 @@ type Expander struct
 	Concurrency int
 	Exclude Exclusion
 	Peer types.ASN
+	Memo *FilterMemo
 func (*Expander) EvalFilter(ctx context.Context, f policy.Filter) (RangeSet, error)
 func (*Expander) ExpandAS(ctx context.Context, ref types.SetRef) (ASNSet, error)
 func (*Expander) ExpandFilterSet(ctx context.Context, ref types.SetRef) (RangeSet, error)
@@ -109,6 +111,14 @@ func (*Expander) ExpandPrefixRanges(ctx context.Context, ref types.SetRef) (Rang
 func (*Expander) ExpandPrefixes(ctx context.Context, ref types.SetRef) (PrefixSet, error)
 func (*Expander) ExpandRouters(ctx context.Context, ref types.SetRef) (Routers, error)
 func (*Expander) NormalizeFilter(ctx context.Context, f policy.Filter) (NormalFilter, error)
+type FilterMemo struct
+func (*FilterMemo) Stats() FilterMemoStats
+type FilterMemoStats struct
+	Hits int
+	Misses int
+	PeerDependent int
+	Entries int
+	Held int
 type Limit uint8
 func (Limit) String() string
 type MemSource struct

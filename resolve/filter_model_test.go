@@ -797,3 +797,54 @@ func TestModelNormalizeExclude(t *testing.T) {
 		t.Fatal("Exclude never left out a route the model accepts")
 	}
 }
+
+// The memo answers as NormalizeFilter does, over the model's random filters
+// (sets, filter-sets, PeerAS, set templates, regexps naming the peer, NOT,
+// AND, OR), for peers bound and not and both families, interleaved, with
+// one memo per registry.
+func TestModelFilterMemo(t *testing.T) {
+	ctx := context.Background()
+	hits, peerDep := 0, 0
+	seeds, _ := resolve.ModelSeeds(200)
+	for seed := uint64(0); seed < seeds; seed++ {
+		r := rand.New(rand.NewPCG(seed, 29))
+		m := withTemplateSets(r, randomModel(r, false))
+		o := newOracle(m)
+		g := newFilterGen(r, o)
+		texts := append(m.texts(r), g.filterSets(3)...)
+		src := resolve.NewMemSource(decodeAll(t, texts), "RIPE", "RADB")
+		memo := resolve.NewFilterMemo(1 << 16)
+		var fs []policy.Filter
+		for i := 0; i < 8; i++ {
+			fs = append(fs, mustParseFilter(t, fmt.Sprintf("seed %d", seed), g.filter(3).text()))
+		}
+		for round := 0; round < 3; round++ {
+			for _, f := range fs {
+				for _, peer := range []types.ASN{0, types.ASN(firstAS), types.ASN(firstAS + 1)} {
+					for _, afi := range []types.AFI{types.AFIv4, types.AFIAny} {
+						plain := resolve.Expander{Src: src, Peer: peer, AFI: afi}
+						withMemo := plain
+						withMemo.Memo = memo
+						want, werr := plain.NormalizeFilter(ctx, f)
+						got, gerr := withMemo.NormalizeFilter(ctx, f)
+						label := fmt.Sprintf("seed %d %v peer %d %v", seed, f, peer, afi)
+						if fmt.Sprint(gerr) != fmt.Sprint(werr) || got.String() != want.String() || fmt.Sprint(got.Missing()) != fmt.Sprint(want.Missing()) {
+							t.Fatalf("%s: memo %q %v %v, plain %q %v %v", label, got, got.Missing(), gerr, want, want.Missing(), werr)
+						}
+						for i := range want.Conjuncts {
+							if !got.Conjuncts[i].Space().Equal(want.Conjuncts[i].Space()) {
+								t.Fatalf("%s: conjunct %d's space differs", label, i)
+							}
+						}
+					}
+				}
+			}
+		}
+		st := memo.Stats()
+		hits += st.Hits
+		peerDep += st.PeerDependent
+	}
+	if hits == 0 || peerDep == 0 {
+		t.Fatalf("hits %d, peer-dependent %d: the model exercised neither", hits, peerDep)
+	}
+}
