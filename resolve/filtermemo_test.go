@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"reflect"
 	"sync"
 	"testing"
@@ -415,5 +416,148 @@ func TestFilterMemoKeyedByLimits(t *testing.T) {
 	}
 	if st := memo.Stats(); st.Hits != 1 || st.Entries != 1 {
 		t.Fatalf("stats %+v: zero limits and explicit defaults should share one entry", st)
+	}
+}
+
+// sameASNs fails unless two ExpandAS answers are the same ASNs, missing sets
+// and error.
+func sameASNs(t *testing.T, label string, got ASNSet, gerr error, want ASNSet, werr error) {
+	t.Helper()
+	if fmt.Sprint(gerr) != fmt.Sprint(werr) || got.String() != want.String() || fmt.Sprint(got.Missing()) != fmt.Sprint(want.Missing()) {
+		t.Fatalf("%s: memo %v %v %v, plain %v %v %v", label, got, got.Missing(), gerr, want, want.Missing(), werr)
+	}
+}
+
+// ExpandAS answers from the memo too: peval tests a peering's as-set once per
+// call, and a lint makes six calls per peer.
+func TestFilterMemoExpandASHit(t *testing.T) {
+	src, memo := memoCorpus(t), NewFilterMemo(1<<10)
+	e := &Expander{Src: src, Memo: memo}
+	ref := types.Ref(mustSet(t, "AS-A"))
+	first, err1 := e.ExpandAS(context.Background(), ref)
+	again, err2 := e.ExpandAS(context.Background(), ref)
+	sameASNs(t, "AS-A", again, err2, first, err1)
+	if st := memo.Stats(); st.Hits != 1 || st.Misses != 1 || st.Entries != 1 || st.Held != 2 {
+		t.Fatalf("stats %+v, want 1 hit, 1 miss, 1 entry holding 2", st)
+	}
+}
+
+// A filter naming a set and the set's expansion are two answers: neither is
+// served for the other.
+func TestFilterMemoExpandASKeyedApartFromFilters(t *testing.T) {
+	src, memo := memoCorpus(t), NewFilterMemo(1<<10)
+	e := &Expander{Src: src, Memo: memo}
+	if _, err := e.NormalizeFilter(context.Background(), mustFilter(t, "AS-A")); err != nil {
+		t.Fatal(err)
+	}
+	got, gerr := e.ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-A")))
+	want, werr := (&Expander{Src: src}).ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-A")))
+	sameASNs(t, "AS-A", got, gerr, want, werr)
+	if st := memo.Stats(); st.Hits != 0 || st.Entries != 2 {
+		t.Fatalf("stats %+v, want 2 entries and no hit", st)
+	}
+}
+
+// Over random as-set graphs (cycles, scoped members, missing sets), one memo
+// shared by every call gives each call the answer a plain Expander gives,
+// under the default limits and tight ones, whatever was asked before.
+func TestFilterMemoExpandASMatchesPlain(t *testing.T) {
+	limits := []Expander{{}, {MaxDepth: 1}, {MaxVisited: 2}, {MaxDepth: 2, MaxVisited: 3}}
+	for seed := uint64(0); seed < 100; seed++ {
+		r := rand.New(rand.NewPCG(seed, 0x3e3))
+		src := randomGraph(r, 6).corpus(t, r)
+		memo := NewFilterMemo(1 << 10)
+		for round := 0; round < 2; round++ {
+			for _, i := range r.Perm(7) { // AS-S6 is missing
+				ref := types.Ref(mustSet(t, fmt.Sprintf("AS-S%d", i)))
+				for _, l := range limits {
+					plain := l
+					plain.Src = src
+					withMemo := plain
+					withMemo.Memo = memo
+					want, werr := plain.ExpandAS(context.Background(), ref)
+					got, gerr := withMemo.ExpandAS(context.Background(), ref)
+					sameASNs(t, fmt.Sprintf("seed %d %s under %+v", seed, ref, l), got, gerr, want, werr)
+				}
+			}
+		}
+		if st := memo.Stats(); st.Hits == 0 {
+			t.Fatalf("seed %d: stats %+v, want hits on the second round", seed, st)
+		}
+	}
+}
+
+func TestFilterMemoExpandASIgnoredWithExclude(t *testing.T) {
+	src, memo := memoCorpus(t), NewFilterMemo(1<<10)
+	ref := types.Ref(mustSet(t, "AS-A"))
+	if _, err := (&Expander{Src: src, Memo: memo}).ExpandAS(context.Background(), ref); err != nil {
+		t.Fatal(err)
+	}
+	ex := Exclusion{ASNs: []types.ASN{65001}}
+	want, werr := (&Expander{Src: src, Exclude: ex}).ExpandAS(context.Background(), ref)
+	got, gerr := (&Expander{Src: src, Memo: memo, Exclude: ex}).ExpandAS(context.Background(), ref)
+	sameASNs(t, "AS-A excluding AS65001", got, gerr, want, werr)
+	if st := memo.Stats(); st.Hits != 0 || st.Misses != 1 {
+		t.Fatalf("stats %+v: the Exclude call touched the memo", st)
+	}
+}
+
+// A set reaching AS-ANY is an *AnySetError every time: stored.
+func TestFilterMemoExpandASStoresDeterministicError(t *testing.T) {
+	src := corpus(t, asSet("AS-TOP", "AS65001", "AS-ANY"))
+	memo := NewFilterMemo(1 << 10)
+	e := &Expander{Src: src, Memo: memo}
+	ref := types.Ref(mustSet(t, "AS-TOP"))
+	_, err1 := e.ExpandAS(context.Background(), ref)
+	_, err2 := e.ExpandAS(context.Background(), ref)
+	var as *AnySetError
+	if !errors.As(err1, &as) || fmt.Sprint(err1) != fmt.Sprint(err2) {
+		t.Fatalf("%v, then %v; want the same *AnySetError twice", err1, err2)
+	}
+	if st := memo.Stats(); st.Hits != 1 {
+		t.Fatalf("stats %+v, want the second call answered from the memo", st)
+	}
+}
+
+// A Source failure, a context error and a missing top set are not stored.
+func TestFilterMemoExpandASFailuresNotStored(t *testing.T) {
+	src := &downSource{Source: memoCorpus(t), down: true}
+	memo := NewFilterMemo(1 << 10)
+	e := &Expander{Src: src, Memo: memo}
+	ref := types.Ref(mustSet(t, "AS-A"))
+	if _, err := e.ExpandAS(context.Background(), ref); err == nil {
+		t.Fatal("a failing Source expanded AS-A")
+	}
+	src.mu.Lock()
+	src.down = false
+	src.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := e.ExpandAS(ctx, ref); err == nil {
+		t.Fatal("a cancelled context expanded AS-A")
+	}
+	if _, err := e.ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-NONE"))); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("AS-NONE: %v, want ErrNotFound", err)
+	}
+	if got, err := e.ExpandAS(context.Background(), ref); err != nil || got.String() != "[AS65001]" {
+		t.Fatalf("after the Source recovered: %v %v", got, err)
+	}
+	if st := memo.Stats(); st.Entries != 1 || st.Hits != 0 {
+		t.Fatalf("stats %+v, want only the last answer stored", st)
+	}
+}
+
+// An expansion heavier than a quarter of the bound is computed, not stored.
+func TestFilterMemoExpandASOversizeNotStored(t *testing.T) {
+	src := corpus(t, asSet("AS-BIG", "AS1", "AS2", "AS3"), asSet("AS-SMALL", "AS1", "AS2"))
+	memo := NewFilterMemo(12)
+	e := &Expander{Src: src, Memo: memo}
+	for _, name := range []string{"AS-SMALL", "AS-BIG", "AS-BIG"} { // weights 3 (a quarter of 12) and 4
+		if _, err := e.ExpandAS(context.Background(), types.Ref(mustSet(t, name))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if st := memo.Stats(); st.Entries != 1 || st.Held != 3 || st.Misses != 3 {
+		t.Fatalf("stats %+v, want AS-SMALL alone stored and AS-BIG missing twice", st)
 	}
 }
