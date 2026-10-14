@@ -578,3 +578,52 @@ func TestFilterMemoExpandASWeighsMissing(t *testing.T) {
 		t.Fatalf("stats %+v, want AS-M held at weight 5 (1 + 1 ASN + 3 missing)", st)
 	}
 }
+
+// Expansions never evict a filter, nor filters an expansion: the two are
+// bounded apart. Sharing one bound, RIPE's AS202827 filled the memo with its
+// filters, and the IXP sets its peerings expand pushed them out, so it
+// normalized them again and again: alone, it took 24.7 s, where v0.27.1 had
+// taken 16.0 s; bounded apart, 6.1 s.
+func TestFilterMemoExpansionsDoNotEvictFilters(t *testing.T) {
+	src := corpus(t, asSet("AS-A", "AS1", "AS2"), asSet("AS-B", "AS3", "AS4"), asSet("AS-C", "AS5", "AS6"), asSet("AS-D", "AS7", "AS8"))
+	memo := NewFilterMemo(12)
+	e := &Expander{Src: src, Memo: memo}
+	f := mustFilter(t, "{10.1.0.0/16, 10.2.0.0/16}")
+	if _, err := e.NormalizeFilter(context.Background(), f); err != nil { // weight 3
+		t.Fatal(err)
+	}
+	for _, name := range []string{"AS-A", "AS-B", "AS-C", "AS-D"} { // weight 3 each: 12 in all
+		if _, err := e.ExpandAS(context.Background(), types.Ref(mustSet(t, name))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := memo.Stats().Hits
+	if _, err := e.NormalizeFilter(context.Background(), f); err != nil {
+		t.Fatal(err)
+	}
+	if st := memo.Stats(); st.Hits != before+1 {
+		t.Fatalf("stats %+v: the expansions evicted the filter", st)
+	}
+}
+
+func TestFilterMemoFiltersDoNotEvictExpansions(t *testing.T) {
+	src := corpus(t, asSet("AS-SMALL", "AS1", "AS2"))
+	memo := NewFilterMemo(12)
+	e := &Expander{Src: src, Memo: memo}
+	ref := types.Ref(mustSet(t, "AS-SMALL"))
+	if _, err := e.ExpandAS(context.Background(), ref); err != nil { // weight 3
+		t.Fatal(err)
+	}
+	for _, s := range []string{"{10.1.0.0/16, 10.2.0.0/16}", "{10.3.0.0/16, 10.4.0.0/16}", "{10.5.0.0/16, 10.6.0.0/16}", "{10.7.0.0/16, 10.8.0.0/16}"} {
+		if _, err := e.NormalizeFilter(context.Background(), mustFilter(t, s)); err != nil { // weight 3 each: 12 in all
+			t.Fatal(err)
+		}
+	}
+	before := memo.Stats().Hits
+	if _, err := e.ExpandAS(context.Background(), ref); err != nil {
+		t.Fatal(err)
+	}
+	if st := memo.Stats(); st.Hits != before+1 {
+		t.Fatalf("stats %+v: the filters evicted AS-SMALL's expansion", st)
+	}
+}

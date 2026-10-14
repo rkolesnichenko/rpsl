@@ -30,19 +30,36 @@ import (
 // (*SetTooLargeError, *NotEnumerableError, *AnySetError); a context error, a
 // Source failure or a missing top set never is. A filter answer weighs one
 // plus its conjuncts' Prefixes and NotPrefixes ranges and the ASNs in its
-// AS-path tests' Sets, an expansion one plus its ASNs and missing sets; the
-// memo holds at most maxRanges of weight in all, evicting the least recently
-// used, and does not store an answer heavier than a quarter of that. A
-// NormalFilter or ASNSet it returns is shared: the caller must not modify it.
+// AS-path tests' Sets, an expansion one plus its ASNs and missing sets. The
+// memo holds at most maxRanges of filter weight and, apart, at most maxRanges
+// of expansion weight, so neither kind evicts the other; each is evicted least
+// recently used first, and it does not store an answer heavier than a quarter
+// of maxRanges. A NormalFilter or ASNSet it returns is shared: the caller must not modify it.
 // It never notices a change in the Source: build a new one for a new
 // snapshot. Safe for concurrent use.
 type FilterMemo struct {
 	mu      sync.Mutex
 	max     int
-	held    int
-	entries map[filterKey]*list.Element // of *filterAnswer
-	lru     list.List                   // front: most recently used
+	entries map[filterKey]*list.Element // of *filterAnswer, in either pool
+	filters memoPool                    // NormalizeFilter's answers
+	asns    memoPool                    // ExpandAS's answers
 	stats   FilterMemoStats
+}
+
+// memoPool is one kind of answer, bounded apart from the other: sharing one
+// bound, the IXP sets a lint's peerings expand evicted its filters, and big
+// filters the expansions.
+type memoPool struct {
+	held int
+	lru  list.List // front: most recently used
+}
+
+// pool returns the pool an answer for k lives in.
+func (m *FilterMemo) pool(k filterKey) *memoPool {
+	if k.asns {
+		return &m.asns
+	}
+	return &m.filters
 }
 
 // FilterMemoStats is a FilterMemo's counters, for measurement and tests.
@@ -70,9 +87,10 @@ type filterAnswer struct {
 	weight int
 }
 
-// NewFilterMemo returns a FilterMemo holding answers of at most maxRanges
-// weight in all (see FilterMemo). It stores no answer heavier than
-// maxRanges/4, so below 4 it stores nothing.
+// NewFilterMemo returns a FilterMemo holding NormalizeFilter answers of at
+// most maxRanges weight in all, and ExpandAS answers of at most maxRanges
+// apart (see FilterMemo). It stores no answer heavier than maxRanges/4, so
+// below 4 it stores nothing.
 func NewFilterMemo(maxRanges int) *FilterMemo {
 	return &FilterMemo{max: maxRanges, entries: map[filterKey]*list.Element{}}
 }
@@ -82,7 +100,7 @@ func (m *FilterMemo) Stats() FilterMemoStats {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := m.stats
-	s.Entries, s.Held = len(m.entries), m.held
+	s.Entries, s.Held = len(m.entries), m.filters.held+m.asns.held
 	return s
 }
 
@@ -96,7 +114,7 @@ func (m *FilterMemo) get(k filterKey) (*filterAnswer, bool) {
 		return nil, false
 	}
 	m.stats.Hits++
-	m.lru.MoveToFront(el)
+	m.pool(k).lru.MoveToFront(el)
 	return el.Value.(*filterAnswer), true
 }
 
@@ -129,7 +147,7 @@ func (m *FilterMemo) putASNs(k filterKey, s ASNSet, err error) {
 
 // store adds a, unless its error does not follow from the inputs alone or it
 // weighs over a quarter of the bound, evicting the least recently used
-// answers to stay within the bound.
+// answers of its pool to keep the pool within the bound.
 func (m *FilterMemo) store(a *filterAnswer) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -142,14 +160,15 @@ func (m *FilterMemo) store(a *filterAnswer) {
 	if a.weight > m.max/4 {
 		return
 	}
-	m.entries[a.key] = m.lru.PushFront(a)
-	m.held += a.weight
-	for m.held > m.max {
-		back := m.lru.Back()
+	p := m.pool(a.key)
+	m.entries[a.key] = p.lru.PushFront(a)
+	p.held += a.weight
+	for p.held > m.max {
+		back := p.lru.Back()
 		old := back.Value.(*filterAnswer)
-		m.lru.Remove(back)
+		p.lru.Remove(back)
 		delete(m.entries, old.key)
-		m.held -= old.weight
+		p.held -= old.weight
 	}
 }
 
