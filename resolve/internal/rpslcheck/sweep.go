@@ -20,23 +20,6 @@ import (
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
-// parallel runs fn(i) for i in [0, n), at most conc at once, and returns
-// when all have; fn writes its result into its own slot, so the order of
-// the results never depends on conc.
-func parallel(n, conc int, fn func(i int)) {
-	sem := make(chan struct{}, conc)
-	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(i int) {
-			defer func() { <-sem; wg.Done() }()
-			fn(i)
-		}(i)
-	}
-	wg.Wait()
-}
-
 // streamWindow is how many results a sweep's phase may hold while they wait
 // for an earlier one still running: a slow aut-num or pair stops new work
 // once this many after it are done, so what is held is bounded whatever
@@ -112,6 +95,8 @@ dispatch:
 	return !stopped && next == n
 }
 
+// lintResult is one aut-num's phase-1 result. It is held only until the
+// aut-num is written; then only its peers and via are kept.
 type lintResult struct {
 	issues   []consist.Issue
 	linted   bool        // issues are the aut-num's lint
@@ -171,6 +156,12 @@ func (b budget) overError() string { return fmt.Sprintf("over its time budget of
 // peer list comes first, so a lint that runs out never drops a pair. The
 // pairs are each aut-num's Forward peers — and its ViaSets with setPeers;
 // without it, a ViaSets peer no pair covers is counted, not checked.
+//
+// Each result is written as soon as it and every one before it are done
+// (ordered), and then dropped, so a sweep holds at most streamWindow
+// results per phase. A sweep that stops early — an aut-num's or a pair's
+// error, or the run's own deadline — exits with exitFailed after the
+// results already written.
 func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFamily, sample int, seed uint64, conc int, checkTimeout time.Duration, setPeers bool, aspas *rpki.ASPAs, w *writer, stderr io.Writer) int {
 	pi, ok := src.(resolve.PolicyIndex)
 	if !ok {
@@ -193,12 +184,30 @@ func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFam
 	if !w.json {
 		w.only = ast.Warning
 	}
+	t := newTotals()
+	t.autnums = len(ases)
+	// failed records that an emit has said on stderr why the sweep stops;
+	// when ordered stops without one, the run's own context ended.
+	failed := false
+	fail := func(format string, args ...any) bool {
+		fmt.Fprintf(stderr, format, args...)
+		failed = true
+		return false
+	}
+	stopped := func() int {
+		if !failed {
+			fmt.Fprintf(stderr, "rpslcheck: %v\n", ctx.Err())
+		}
+		return exitFailed
+	}
 	// Phase 1: list each aut-num's forward peers, then lint it, each under
 	// its own budget: the pairs never depend on whether the lint finished.
-	lints := make([]lintResult, len(ases))
-	parallel(len(ases), conc, func(i int) {
-		lr := &lints[i]
-		pb := newBudget(ctx, checkTimeout)
+	// Each aut-num is written as soon as it and every one before it are
+	// done; only its peers are kept.
+	peers := make([][]types.ASN, len(ases))
+	via := make([][]types.ASN, len(ases))
+	if !ordered(ctx, len(ases), conc, streamWindow, func(wctx context.Context, i int) (lr lintResult) {
+		pb := newBudget(wctx, checkTimeout)
 		pl, err := c.Peers(pb.ctx, ases[i])
 		over := pb.over(ctx, err)
 		pb.cancel()
@@ -207,13 +216,13 @@ func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFam
 			lr.timeouts = append(lr.timeouts, "peers: "+pb.overError())
 		case err != nil && !isLimit(err):
 			lr.err = err
-			return
+			return lr
 		case setPeers:
 			lr.peers = slices.Concat(pl.Forward, pl.ViaSets)
 		default:
 			lr.peers, lr.via = pl.Forward, pl.ViaSets
 		}
-		lb := newBudget(ctx, checkTimeout)
+		lb := newBudget(wctx, checkTimeout)
 		defer lb.cancel()
 		issues, err := c.Lint(lb.ctx, ases[i])
 		switch {
@@ -224,30 +233,23 @@ func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFam
 		default:
 			lr.issues, lr.linted = ofFamilies(issues, afs), true
 		}
-	})
-	if err := ctx.Err(); err != nil { // the run's own deadline, or cancelled
-		fmt.Fprintf(stderr, "rpslcheck: %v\n", err)
-		return exitFailed
-	}
-	t := newTotals()
-	t.autnums = len(ases)
-	// Phase 2: each unordered pair once, in each family, in order.
-	type pairKey struct{ a, b types.ASN }
-	seen := map[pairKey]bool{}
-	var pairs []consist.Pair
-	for i, as := range ases {
-		if err := lints[i].err; err != nil {
-			fmt.Fprintf(stderr, "rpslcheck: %s: %v\n", as, err)
-			return exitFailed
+		return lr
+	}, func(i int, lr lintResult) bool {
+		as := ases[i]
+		if err := ctx.Err(); err != nil { // the run's own deadline, or cancelled
+			return fail("rpslcheck: %v\n", err)
 		}
-		if lints[i].linted {
+		if lr.err != nil {
+			return fail("rpslcheck: %s: %v\n", as, lr.err)
+		}
+		if lr.linted {
 			an, _ := src.AutNum(ctx, as, "")
-			if w.lint(as, an, lints[i].issues) {
+			if w.lint(as, an, lr.issues) {
 				t.warned = true
 			}
-			t.addIssues(as, lints[i].issues)
+			t.addIssues(as, lr.issues)
 		}
-		for _, why := range lints[i].timeouts {
+		for _, why := range lr.timeouts {
 			t.timeouts++
 			if w.json {
 				w.emit(struct {
@@ -257,7 +259,17 @@ func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFam
 				}{"timeout", as.String(), why})
 			}
 		}
-		for _, peer := range lints[i].peers {
+		peers[i], via[i] = lr.peers, lr.via
+		return true
+	}) {
+		return stopped()
+	}
+	// Phase 2: each unordered pair once, in each family, in order.
+	type pairKey struct{ a, b types.ASN }
+	seen := map[pairKey]bool{}
+	var pairs []consist.Pair
+	for i, as := range ases {
+		for _, peer := range peers[i] {
 			k := pairKey{min(as, peer), max(as, peer)}
 			if seen[k] {
 				continue
@@ -269,7 +281,7 @@ func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFam
 		}
 	}
 	for i, as := range ases {
-		for _, peer := range lints[i].via {
+		for _, peer := range via[i] {
 			if !seen[pairKey{min(as, peer), max(as, peer)}] {
 				t.viaSets++
 			}
@@ -281,21 +293,21 @@ func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFam
 		}
 		return cmp.Compare(x.B, y.B)
 	})
-	// Phase 3: check them.
-	checks := make([]checkResult, len(pairs))
-	parallel(len(pairs), conc, func(i int) {
-		bg := newBudget(ctx, checkTimeout)
+	// Phase 3: check them, each pair written as soon as it and every one
+	// before it are done.
+	if !ordered(ctx, len(pairs), conc, streamWindow, func(wctx context.Context, i int) (cr checkResult) {
+		bg := newBudget(wctx, checkTimeout)
 		defer bg.cancel()
-		checks[i].rep, checks[i].err = c.Check(bg.ctx, pairs[i])
-		if bg.over(ctx, checks[i].err) {
-			checks[i].over = bg.overError()
+		cr.rep, cr.err = c.Check(bg.ctx, pairs[i])
+		if bg.over(ctx, cr.err) {
+			cr.over = bg.overError()
 		}
-	})
-	if err := ctx.Err(); err != nil {
-		fmt.Fprintf(stderr, "rpslcheck: %v\n", err)
-		return exitFailed
-	}
-	for i, cr := range checks {
+		return cr
+	}, func(i int, cr checkResult) bool {
+		if err := ctx.Err(); err != nil {
+			return fail("rpslcheck: %v\n", err)
+		}
+		p := pairs[i]
 		switch {
 		case cr.over != "":
 			t.timeouts++
@@ -306,9 +318,9 @@ func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFam
 					B     string `json:"b"`
 					AF    string `json:"af"`
 					Error string `json:"error"`
-				}{"timeout", pairs[i].A.String(), pairs[i].B.String(), pairs[i].AF.String(), cr.over})
+				}{"timeout", p.A.String(), p.B.String(), p.AF.String(), cr.over})
 			}
-			continue
+			return true
 		case isLimit(cr.err) || notDecidable(cr.err):
 			t.limits++ // a limit, or a filter that cannot be evaluated for the pair
 			if w.json {
@@ -318,18 +330,20 @@ func runSweep(ctx context.Context, src resolve.PolicySource, afs []types.AddrFam
 					B     string `json:"b"`
 					AF    string `json:"af"`
 					Error string `json:"error"`
-				}{"limit", pairs[i].A.String(), pairs[i].B.String(), pairs[i].AF.String(), cr.err.Error()})
+				}{"limit", p.A.String(), p.B.String(), p.AF.String(), cr.err.Error()})
 			}
-			continue
+			return true
 		case cr.err != nil:
-			fmt.Fprintf(stderr, "rpslcheck: %s and %s, %s: %v\n", pairs[i].A, pairs[i].B, pairs[i].AF, cr.err)
-			return exitFailed
+			return fail("rpslcheck: %s and %s, %s: %v\n", p.A, p.B, p.AF, cr.err)
 		}
 		t.pairs++
 		if w.report(ctx, src, cr.rep) {
 			t.warned = true
 		}
 		t.addReport(cr.rep)
+		return true
+	}) {
+		return stopped()
 	}
 	t.write(w)
 	if t.warned {
