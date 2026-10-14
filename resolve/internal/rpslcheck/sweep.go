@@ -37,6 +37,81 @@ func parallel(n, conc int, fn func(i int)) {
 	wg.Wait()
 }
 
+// streamWindow is how many results a sweep's phase may hold while they wait
+// for an earlier one still running: a slow aut-num or pair stops new work
+// once this many after it are done, so what is held is bounded whatever
+// -check-timeout is.
+const streamWindow = 1024
+
+// ordered runs work(ctx, i) for i in [0, n), at most conc at once and none
+// window or more past the first result not yet emitted. It passes each
+// result to emit in index order, as soon as it and every result before it
+// are done, so what it emits never depends on conc or window.
+//
+// When emit returns false, ordered cancels the ctx it gave the work still
+// running, starts no more, waits for the running work to end, and returns
+// false. It returns true only when it emitted all n results: false without
+// emit stopping it means ctx ended before every index started. emit is
+// called under ordered's mutex, one call at a time. conc and window must be
+// at least 1.
+func ordered[R any](ctx context.Context, n, conc, window int, work func(ctx context.Context, i int) R, emit func(i int, r R) bool) bool {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var (
+		mu      sync.Mutex
+		wg      sync.WaitGroup
+		next    int // the first index not yet emitted
+		stopped bool
+		slots   = make([]R, window) // index i waits in slots[i%window]
+		done    = make([]bool, window)
+		running = make(chan struct{}, conc)   // a token per work running
+		held    = make(chan struct{}, window) // a token per index started and not yet emitted
+	)
+dispatch:
+	for i := 0; i < n; i++ {
+		if ctx.Err() != nil {
+			break
+		}
+		select {
+		case held <- struct{}{}:
+		case <-ctx.Done():
+			break dispatch
+		}
+		select {
+		case running <- struct{}{}:
+		case <-ctx.Done():
+			break dispatch
+		}
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			r := work(ctx, i)
+			<-running
+			mu.Lock()
+			defer mu.Unlock()
+			if stopped {
+				return
+			}
+			slots[i%window], done[i%window] = r, true
+			for next < n && done[next%window] {
+				k := next % window
+				r := slots[k]
+				var zero R
+				slots[k], done[k] = zero, false
+				if !emit(next, r) {
+					stopped = true
+					cancel()
+					return
+				}
+				next++
+				<-held // after emit: no index starts window past what was emitted
+			}
+		}(i)
+	}
+	wg.Wait()
+	return !stopped && next == n
+}
+
 type lintResult struct {
 	issues   []consist.Issue
 	linted   bool        // issues are the aut-num's lint
