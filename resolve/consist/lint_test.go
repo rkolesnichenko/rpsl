@@ -881,28 +881,34 @@ func (s setCountingSource) GetSet(ctx context.Context, ref types.SetRef) (object
 	return s.PolicySource.GetSet(ctx, ref)
 }
 
-// With a Memo, Lint expands a peering's as-set a fixed number of times,
-// whatever its number of peers: peval tests whether each session's peer is in
-// AS-IXP, six calls per peer, and expanding it on every call made a lint of
-// an aut-num with an IXP peering take minutes (RIPE's AS212895: 2m23s).
+// Lint expands a peering's as-set a fixed number of times, whatever its
+// number of peers, with a Memo or without one (a memo for the call alone):
+// peval tests whether each session's peer is in AS-IXP, six calls per peer,
+// and expanding it on every call made a lint of an aut-num with an IXP
+// peering take minutes (RIPE's AS212895: 2m23s).
 func TestLintExpandsEachPeeringSetOnce(t *testing.T) {
-	reads := map[int]int{}
-	for _, n := range []int{2, 50} {
-		var b strings.Builder
-		b.WriteString(lintDump(n))
-		b.WriteString("\nas-set: AS-IXP\nmembers: AS100, AS101\nsource: RIPE\n")
-		dump := strings.Replace(b.String(), "as-name: BIG\n", "as-name: BIG\nimport: from AS-IXP accept AS-IXP\n", 1)
-		l := &resolve.DumpLoader{Sources: []string{"RIPE"}, KeepPolicy: true}
-		if err := l.Read(strings.NewReader(dump)); err != nil {
-			t.Fatal(err)
+	for _, withMemo := range []bool{true, false} {
+		reads := map[int]int{}
+		for _, n := range []int{2, 50} {
+			var b strings.Builder
+			b.WriteString(lintDump(n))
+			b.WriteString("\nas-set: AS-IXP\nmembers: AS100, AS101\nsource: RIPE\n")
+			dump := strings.Replace(b.String(), "as-name: BIG\n", "as-name: BIG\nimport: from AS-IXP accept AS-IXP\n", 1)
+			l := &resolve.DumpLoader{Sources: []string{"RIPE"}, KeepPolicy: true}
+			if err := l.Read(strings.NewReader(dump)); err != nil {
+				t.Fatal(err)
+			}
+			src := setCountingSource{l.Source(), &sync.Mutex{}, map[string]int{}}
+			c := &Checker{Eval: peval.Evaluator{Src: src}}
+			if withMemo {
+				c.Memo = NewMemo()
+			}
+			lint(t, c, 1)
+			reads[n] = src.n["AS-IXP"]
 		}
-		src := setCountingSource{l.Source(), &sync.Mutex{}, map[string]int{}}
-		c := &Checker{Eval: peval.Evaluator{Src: src}, Memo: NewMemo()}
-		lint(t, c, 1)
-		reads[n] = src.n["AS-IXP"]
-	}
-	if reads[2] == 0 || reads[50] != reads[2] {
-		t.Fatalf("AS-IXP read %d times with 2 peers, %d with 50; want the same, more than none", reads[2], reads[50])
+		if reads[2] == 0 || reads[50] != reads[2] {
+			t.Errorf("Memo %v: AS-IXP read %d times with 2 peers, %d with 50; want the same, more than none", withMemo, reads[2], reads[50])
+		}
 	}
 }
 
@@ -980,5 +986,20 @@ func TestCoverMatchesNaive(t *testing.T) {
 	}
 	if shadows < 500 {
 		t.Fatalf("only %d shadowed clauses in 6000: the test draws too few", shadows)
+	}
+}
+
+// Without a Checker.Memo, a filter memo set on Eval.Expander.Memo is used,
+// not replaced by the call's own.
+func TestLintKeepsExpanderMemo(t *testing.T) {
+	l := &resolve.DumpLoader{Sources: []string{"RIPE"}, KeepPolicy: true}
+	if err := l.Read(strings.NewReader(lintDump(2))); err != nil {
+		t.Fatal(err)
+	}
+	fm := resolve.NewFilterMemo(1 << 10)
+	c := &Checker{Eval: peval.Evaluator{Src: l.Source(), Expander: resolve.Expander{Memo: fm}}}
+	lint(t, c, 1)
+	if st := fm.Stats(); st.Misses == 0 {
+		t.Fatalf("stats %+v: Lint did not use Eval.Expander.Memo", st)
 	}
 }

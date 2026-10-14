@@ -63,14 +63,16 @@ type Checker struct {
 	// Memo, when set, shares decoded aut-nums and inet-rtrs and normalized
 	// filters across this Checker's calls (Check, Lint, Peers); see Memo.
 	// Its filter memo replaces Eval.Expander.Memo. nil: each call stands
-	// alone. Results are the same either way.
+	// alone, with a memo of its own (Eval.Expander.Memo, when set, is kept).
+	// Results are the same either way.
 	Memo *Memo
 }
 
 // eval is c.Eval with Expander.Exclude cleared and Src memoizing its
 // aut-nums and inet-rtrs: through c.Memo, shared by every call, when set
 // (and Expander.Memo set to its filter memo); otherwise a per-call
-// policyMemo. Every evaluation consist makes goes through it.
+// policyMemo, and, unless Eval.Expander.Memo is set, a per-call filter memo
+// of callMemoRanges. Every evaluation consist makes goes through it.
 func (c *Checker) eval() *peval.Evaluator {
 	e := c.Eval
 	e.Expander.Exclude = resolve.Exclusion{}
@@ -81,9 +83,19 @@ func (c *Checker) eval() *peval.Evaluator {
 		e.Expander.Memo = c.Memo.filters
 	default:
 		e.Src = &policyMemo{PolicySource: e.Src, autNums: map[policyKey]autNumAnswer{}, rtrs: map[policyKey]inetRtrAnswer{}}
+		if e.Expander.Memo == nil {
+			e.Expander.Memo = resolve.NewFilterMemo(callMemoRanges)
+		}
 	}
 	return &e
 }
+
+// callMemoRanges bounds the filter memo a call makes for itself when the
+// Checker has no Memo: Lint evaluates each policy six times per peer, and
+// without one it expanded a peering's as-set on every evaluation (RIPE's
+// AS212895: 105 s of a 115 s lint). It holds an as-set of up to 65,536 ASNs
+// (a quarter), and lives as long as the call.
+const callMemoRanges = 1 << 18
 
 // policyMemo is a PolicySource answering each aut-num and inet-rtr once.
 // peval reads Local's aut-num on every call, and a Corpus with KeepPolicy
