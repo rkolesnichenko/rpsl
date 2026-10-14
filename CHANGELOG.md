@@ -9,6 +9,18 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Changed
+
+- `rpslcheck -sweep` writes each aut-num's lint and each pair's report as soon
+  as it and every one before it are done, instead of holding them until the
+  phase ends; at most 1,024 wait at once, whatever `-check-timeout` is. The
+  output is unchanged. A full sweep of RIPE's dumps (`-c 4 -json`, GOMAXPROCS 4,
+  GOMEMLIMIT=5GiB) took 47 minutes with 6,089 MB max RSS; before, it took 100
+  minutes and 6,264 MB without the memo and did not fit under 7 GB with it.
+- A sweep that stops early (an aut-num's or a pair's error, `-timeout`, an
+  interrupt) leaves the results it had already written on stdout. It still
+  exits 3, and its JSON has no `totals` record.
+
 ## [0.27.0] - 2026-10-14
 
 ### Added
