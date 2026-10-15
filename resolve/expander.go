@@ -60,10 +60,10 @@ type Expander struct {
 	// them unbound: such a term is a *NotEnumerableError wrapping
 	// ErrUnboundPeer. It binds inside filter-sets too. AS0 is never a peer.
 	Peer types.ASN
-	// Memo, when set, answers NormalizeFilter from a FilterMemo shared with
-	// other Expanders (see FilterMemo for which may share one). It is
-	// ignored when Exclude is set. EvalFilter and set expansion do not read
-	// it.
+	// Memo, when set, answers NormalizeFilter and ExpandAS from a FilterMemo
+	// shared with other Expanders (see FilterMemo for which may share one).
+	// It is ignored when Exclude is set. EvalFilter and the other expansions
+	// do not read it.
 	Memo *FilterMemo
 }
 
@@ -162,8 +162,22 @@ func (e *Expander) afiAllows(p netip.Prefix) bool {
 // ASNSet.Missing. AFI only filters prefixes; ExpandAS is family-agnostic.
 // A scoped ref (RIPE::AS-FOO) looks the named set up in that registry only; the
 // scope does not cascade to what it lists.
+//
+// With Expander.Memo set and no Exclude, an answer may come from the memo; it
+// is the answer ExpandAS would compute (see FilterMemo).
 func (e *Expander) ExpandAS(ctx context.Context, ref types.SetRef) (ASNSet, error) {
+	memo := e.Memo != nil && len(e.Exclude.Sets) == 0 && len(e.Exclude.ASNs) == 0
+	var k filterKey
+	if memo {
+		k = filterKey{asns: true, text: ref.String(), depth: e.maxDepth(), visited: e.maxVisited()}
+		if a, ok := e.Memo.get(k); ok {
+			return a.asns, a.err
+		}
+	}
 	out, _, err := e.expandAS(ctx, ref)
+	if memo && (err == nil || ctx.Err() == nil) {
+		e.Memo.putASNs(k, out, err)
+	}
 	return out, err
 }
 

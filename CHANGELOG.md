@@ -9,6 +9,49 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Changed
+
+- `resolve`: `Expander.ExpandAS` answers from `Expander.Memo` when one is set
+  and `Exclude` is not, keyed by the set reference and the effective `MaxDepth`
+  and `MaxVisited`, apart from every filter's answer. An expansion weighs one
+  plus its ASNs and missing sets. `FilterMemo` bounds expansions apart from
+  filters, each at `maxRanges`, so neither kind evicts the other; its
+  worst-case size doubles. Sharing one bound, the IXP sets an aut-num's
+  peerings expand evicted its filters: RIPE's AS202827, linted alone, took
+  24.7 s where v0.27.1 took 16.0 s; bounded apart, 5.5 s.
+- `resolve/consist`: `Lint` no longer expands a peering's as-set for each of
+  the six evaluations it makes per peer: the filter memo holds the expansion
+  (with `Checker.Memo`, across calls; without, for each evaluator, while it
+  fits). `lint/shadowed` keeps each clause signature's cover up to date
+  instead of rebuilding it for every clause, which was quadratic in the
+  clauses. A `Checker` without `Memo` now memoizes for itself, with a filter
+  memo of 1<<18 per pool for each evaluator (its memory was not measured). No
+  result changes.
+
+  Measured (GOMAXPROCS 4): `BenchmarkLintIXP` (new; an aut-num with 100 peers,
+  all in a 5,100-AS set, importing 200 prefix lists from it) went from
+  2,309 ms and 2,796 MB per op to 59.5 ms and 79 MB with `Memo`, 60.3 ms and
+  81 MB without. `BenchmarkLint` is unchanged. A full RIPE sweep
+  (`rpslcheck -sweep -c 4 -json`, `GOMEMLIMIT=5GiB`) went from 2,689 s to
+  2,092 s and from 6 lints over their 60 s budget to 3; max RSS was 6,339 MB
+  and 6,680 MB. Its output is byte-identical apart from those lints: the three
+  that now finish add their 47,037 issues.
+
+  Linted alone, with a fresh `Memo`, AS47147 went from 4m02s to 42.1 s,
+  AS212895 from 2m16s to 5.5 s, AS30781 from 1m11s to 9.2 s and AS1101 from
+  12.8 s to 4.7 s. Without `Memo` the gain is smaller, since the per-call
+  memo cannot hold these aut-nums' IXP filters: AS47147 from 7m16s to 5m09s,
+  AS212895 from 2m47s to 5.6 s, AS1101 from 49.9 s to 42.7 s.
+
+  Three lints still run out of their budget in the sweep. AS1101 takes 4.7 s
+  alone, but its first session's IXP filters weigh 1,518,917 of the filter
+  pool's 2,097,152, and beside other workers' lints they are evicted between
+  its sessions: before the pools were split, a sweep of RIPE's aut-nums up to
+  AS3000 took it 49.1 s, and 7.4 s with a 16x bound. AS47147 (42.1 s alone)
+  spends its time in `lint/shadowed`'s prefix-space unions and subset tests
+  over its large IXP clauses. AS31117 takes 7.6 s alone, mostly in the same
+  place; why it runs past 60 s in the sweep was not determined.
+
 ## [0.27.1] - 2026-10-14
 
 ### Changed

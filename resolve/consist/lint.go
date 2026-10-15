@@ -482,7 +482,7 @@ func (l *linter) policy(kind string, p peval.Policy, peer types.ASN, af types.Ad
 			l.add(RuleMissingSet, "", -1, fmt.Sprintf("an %s peering names %s, which is not in the source", kind, m), peer, &af)
 		}
 	}
-	var earlier []conj
+	var cov cover
 	for _, cl := range p.Clauses {
 		if peer == anyPeer && (l.peerDependent(cl.Term.Filter) || dep[clauseKey(cl)]) {
 			continue // PeerAS toward the sentinel is no AS: the term's routes are unknown
@@ -492,35 +492,66 @@ func (l *linter) policy(kind string, p peval.Policy, peer types.ASN, af types.Ad
 			l.add(RuleEmpty, kind, cl.Index, fmt.Sprintf("%s term %s accepts no route", kind, cl.Term), peer, &af)
 			continue
 		}
-		if shadowed(cs, earlier) {
+		if cov.shadowed(cs) {
 			l.add(RuleShadowed, kind, cl.Index, fmt.Sprintf("%s term %s never decides: earlier terms accept every route it accepts", kind, cl.Term), peer, &af)
 		}
-		earlier = append(earlier, cs...)
+		cov.add(cs)
 	}
 }
 
-// shadowed reports whether every route cs accepts is accepted by earlier:
-// per signature T of cs, its space lies in the union of the earlier
-// conjuncts whose tests are a subset of T (a route passing T passes them).
-func shadowed(cs, earlier []conj) bool {
+// cover is the conjuncts of a policy's earlier clauses, for lint/shadowed.
+// Per signature asked about, it keeps the union of the earlier conjuncts
+// whose tests are a subset of it, brought up to date when next asked, so a
+// policy of n clauses merges each conjunct into each signature's union once
+// rather than rebuilding every union for every clause (quadratic: RIPE's
+// AS47147 spent 122 s of a 200 s lint there).
+type cover struct {
+	earlier []conj
+	bySig   map[string]*sigCover
+}
+
+// sigCover is the union of earlier[:n]'s conjuncts whose tests are a subset
+// of sig.
+type sigCover struct {
+	sig   []string
+	space types.PrefixSpace
+	n     int
+}
+
+// shadowed reports whether every route cs accepts is accepted by the earlier
+// conjuncts: per signature T of cs, its space lies in the union of the
+// earlier conjuncts whose tests are a subset of T (a route passing T passes
+// them).
+func (c *cover) shadowed(cs []conj) bool {
 	bySig := map[string][]conj{}
 	for _, cj := range cs {
 		k := strings.Join(cj.sig, "\x00")
 		bySig[k] = append(bySig[k], cj)
 	}
-	for _, g := range bySig {
-		var cover []conj
-		for _, e := range earlier {
-			if subset(e.sig, g[0].sig) {
-				cover = append(cover, e)
+	for k, g := range bySig {
+		sc := c.bySig[k]
+		if sc == nil {
+			if c.bySig == nil {
+				c.bySig = map[string]*sigCover{}
+			}
+			sc = &sigCover{sig: g[0].sig}
+			c.bySig[k] = sc
+		}
+		for _, e := range c.earlier[sc.n:] {
+			if subset(e.sig, sc.sig) {
+				sc.space = sc.space.Union(e.space)
 			}
 		}
-		if !union(g).Subset(union(cover)) {
+		sc.n = len(c.earlier)
+		if !union(g).Subset(sc.space) {
 			return false
 		}
 	}
 	return true
 }
+
+// add makes cs earlier conjuncts.
+func (c *cover) add(cs []conj) { c.earlier = append(c.earlier, cs...) }
 
 // defaults lints one evaluated default policy; dep as for policy.
 func (l *linter) defaults(d peval.Defaults, peer types.ASN, af types.AddrFamily, dep map[string]bool) {

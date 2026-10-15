@@ -14,14 +14,17 @@ import (
 // The defaults NewMemo uses, from RIPE measurements: 1<<21 ranges is the
 // largest bound that kept the memo's cost within 1 GB on a 2,000-aut-num
 // sample sweep, and 256 aut-nums answered 92.8% of that sample's lookups
-// from the memo.
+// from the memo. That bound was measured for filters alone; since v0.27.2
+// expansions have a pool of their own with the same bound, whose memory was
+// not measured apart.
 const (
 	defaultMemoAutNums = 256
 	defaultMemoRanges  = 1 << 21
 )
 
 // Memo shares work between a Checker's calls: decoded aut-nums and
-// inet-rtrs (a bounded LRU) and normalized filters (a resolve.FilterMemo).
+// inet-rtrs (a bounded LRU), and normalized filters and expanded as-sets (a
+// resolve.FilterMemo).
 // It changes no answer. It holds data read from Checker.Eval.Src, so it
 // serves one Checker, or Checkers with the same Eval; it never notices a
 // change in the Source, so build a new one for a new snapshot. Safe for
@@ -39,7 +42,7 @@ type Memo struct {
 // MemoOptions bounds a Memo. A zero field takes its default.
 type MemoOptions struct {
 	AutNums int // decoded aut-nums and inet-rtrs held (default 256)
-	Ranges  int // the filter memo's bound, in prefix ranges and path-set ASNs (default 1<<21, 2,097,152; see resolve.FilterMemo)
+	Ranges  int // the filter memo's bound, in prefix ranges and path-set ASNs, and apart in expanded as-sets' ASNs and missing sets (default 1<<21, 2,097,152; see resolve.FilterMemo)
 }
 
 // MemoStats is a Memo's counters, for measurement and tests.

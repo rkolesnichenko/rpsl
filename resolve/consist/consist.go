@@ -60,17 +60,20 @@ type Checker struct {
 	// representative session (Lint).
 	SetPeers bool
 
-	// Memo, when set, shares decoded aut-nums and inet-rtrs and normalized
-	// filters across this Checker's calls (Check, Lint, Peers); see Memo.
+	// Memo, when set, shares decoded aut-nums and inet-rtrs, normalized
+	// filters and expanded as-sets across this Checker's calls (Check, Lint,
+	// Peers); see Memo.
 	// Its filter memo replaces Eval.Expander.Memo. nil: each call stands
-	// alone. Results are the same either way.
+	// alone, with a memo of its own (Eval.Expander.Memo, when set, is kept).
+	// Results are the same either way.
 	Memo *Memo
 }
 
 // eval is c.Eval with Expander.Exclude cleared and Src memoizing its
 // aut-nums and inet-rtrs: through c.Memo, shared by every call, when set
 // (and Expander.Memo set to its filter memo); otherwise a per-call
-// policyMemo. Every evaluation consist makes goes through it.
+// policyMemo, and, unless Eval.Expander.Memo is set, a per-call filter memo
+// of callMemoRanges. Every evaluation consist makes goes through it.
 func (c *Checker) eval() *peval.Evaluator {
 	e := c.Eval
 	e.Expander.Exclude = resolve.Exclusion{}
@@ -81,9 +84,21 @@ func (c *Checker) eval() *peval.Evaluator {
 		e.Expander.Memo = c.Memo.filters
 	default:
 		e.Src = &policyMemo{PolicySource: e.Src, autNums: map[policyKey]autNumAnswer{}, rtrs: map[policyKey]inetRtrAnswer{}}
+		if e.Expander.Memo == nil {
+			e.Expander.Memo = resolve.NewFilterMemo(callMemoRanges)
+		}
 	}
 	return &e
 }
+
+// callMemoRanges bounds each pool of the filter memo eval makes when the
+// Checker has no Memo: Lint evaluates each policy six times per peer, and without one it
+// expanded a peering's as-set on every evaluation (RIPE's AS212895 took
+// 2m23s). It stores an expansion of up to 65,535 ASNs and missing sets (a
+// quarter of the pool's bound) and lives as long as the evaluator: Check makes one
+// per side, Peers one, and Lint one for its sessions and one each for its
+// peer list, set walk and router walk.
+const callMemoRanges = 1 << 18
 
 // policyMemo is a PolicySource answering each aut-num and inet-rtr once.
 // peval reads Local's aut-num on every call, and a Corpus with KeepPolicy

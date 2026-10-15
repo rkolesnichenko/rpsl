@@ -11,34 +11,55 @@ import (
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
-// FilterMemo shares NormalizeFilter's answers between Expanders that differ
-// only in AFI, limits and Peer: the same Src (and so the same snapshot), and
-// no Exclude (an Expander with Exclude set ignores it). Concurrency never
-// changes an answer, so it may differ too. An answer is keyed by the filter's
-// whole structure — a rendering that keeps every grouping, operator and
-// spelling the normal form can depend on or carry (memoText) — with the AFI
-// and the effective MaxDepth, MaxPrefixes, MaxVisited and MaxConjuncts (zero
-// and the default are one key). A filter holding a node that rendering does
-// not know is never looked up or stored. An answer whose normalization read
-// Peer — PeerAS, a set template, a regexp naming the peer, at any depth,
-// inside filter-sets too, bound or not — is never stored. So a hit is the
-// answer NormalizeFilter computes for that filter. Successes are stored, and
-// the errors that follow from the filter and the registry alone
-// (*SetTooLargeError, *NotEnumerableError, *AnySetError); a context error or
-// a Source failure never is. Each answer weighs one plus its conjuncts'
-// Prefixes and NotPrefixes ranges and the ASNs in its AS-path tests' Sets;
-// the memo holds at most maxRanges of weight in all, evicting the least
-// recently used, and does not store an answer heavier than a quarter of
-// that. A NormalFilter it returns is shared: the caller must not modify it.
-// It never notices a change in the Source: build a new one for a new
-// snapshot. Safe for concurrent use.
+// FilterMemo shares NormalizeFilter's and ExpandAS's answers between
+// Expanders that differ only in AFI, limits and Peer: the same Src (and so
+// the same snapshot), and no Exclude (an Expander with Exclude set ignores
+// it). Concurrency never changes an answer, so it may differ too. A
+// NormalizeFilter answer is keyed by the filter's whole structure — a
+// rendering that keeps every grouping, operator and spelling the normal form
+// can depend on or carry (memoText) — with the AFI and the effective
+// MaxDepth, MaxPrefixes, MaxVisited and MaxConjuncts (zero and the default
+// are one key). A filter holding a node that rendering does not know is never
+// looked up or stored. An answer whose normalization read Peer — PeerAS, a
+// set template, a regexp naming the peer, at any depth, inside filter-sets
+// too, bound or not — is never stored. An ExpandAS answer, which reads
+// neither the AFI nor Peer, is keyed by the set reference and the effective
+// MaxDepth and MaxVisited, apart from every filter's. So a hit is the answer
+// NormalizeFilter or ExpandAS computes. Successes are stored, and the errors
+// that follow from the filter or set and the registry alone
+// (*SetTooLargeError, *NotEnumerableError, *AnySetError); a context error, a
+// Source failure or a missing top set never is. A filter answer weighs one
+// plus its conjuncts' Prefixes and NotPrefixes ranges and the ASNs in its
+// AS-path tests' Sets, an expansion one plus its ASNs and missing sets. The
+// memo holds at most maxRanges of filter weight and, apart, at most maxRanges
+// of expansion weight, so neither kind evicts the other; each is evicted least
+// recently used first, and it does not store an answer heavier than a quarter
+// of maxRanges. A NormalFilter or ASNSet it returns is shared: the caller must
+// not modify it. It never notices a change in the Source: build a new one for
+// a new snapshot. Safe for concurrent use.
 type FilterMemo struct {
 	mu      sync.Mutex
 	max     int
-	held    int
-	entries map[filterKey]*list.Element // of *filterAnswer
-	lru     list.List                   // front: most recently used
+	entries map[filterKey]*list.Element // of *filterAnswer, in either pool
+	filters memoPool                    // NormalizeFilter's answers
+	asns    memoPool                    // ExpandAS's answers
 	stats   FilterMemoStats
+}
+
+// memoPool is one kind of answer, bounded apart from the other: sharing one
+// bound, the IXP sets a lint's peerings expand evicted its filters, and big
+// filters the expansions.
+type memoPool struct {
+	held int
+	lru  list.List // front: most recently used
+}
+
+// pool returns the pool an answer for k lives in.
+func (m *FilterMemo) pool(k filterKey) *memoPool {
+	if k.asns {
+		return &m.asns
+	}
+	return &m.filters
 }
 
 // FilterMemoStats is a FilterMemo's counters, for measurement and tests.
@@ -49,8 +70,10 @@ type FilterMemoStats struct {
 }
 
 // filterKey is what an answer depends on, besides Src: the filter's
-// memoText, the AFI and the effective limits.
+// memoText, the AFI and the effective limits; for an ExpandAS answer (asns),
+// the set reference's text, MaxDepth and MaxVisited.
 type filterKey struct {
+	asns                                bool
 	text                                string
 	afi                                 types.AFI
 	depth, prefixes, visited, conjuncts int
@@ -59,13 +82,15 @@ type filterKey struct {
 type filterAnswer struct {
 	key    filterKey
 	nf     NormalFilter
+	asns   ASNSet
 	err    error
 	weight int
 }
 
-// NewFilterMemo returns a FilterMemo holding answers of at most maxRanges
-// weight in all (see FilterMemo). It stores no answer heavier than
-// maxRanges/4, so below 4 it stores nothing.
+// NewFilterMemo returns a FilterMemo holding NormalizeFilter answers of at
+// most maxRanges weight in all, and ExpandAS answers of at most maxRanges
+// apart (see FilterMemo). It stores no answer heavier than maxRanges/4, so
+// below 4 it stores nothing.
 func NewFilterMemo(maxRanges int) *FilterMemo {
 	return &FilterMemo{max: maxRanges, entries: map[filterKey]*list.Element{}}
 }
@@ -75,7 +100,7 @@ func (m *FilterMemo) Stats() FilterMemoStats {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := m.stats
-	s.Entries, s.Held = len(m.entries), m.held
+	s.Entries, s.Held = len(m.entries), m.filters.held+m.asns.held
 	return s
 }
 
@@ -89,24 +114,19 @@ func (m *FilterMemo) get(k filterKey) (*filterAnswer, bool) {
 		return nil, false
 	}
 	m.stats.Hits++
-	m.lru.MoveToFront(el)
+	m.pool(k).lru.MoveToFront(el)
 	return el.Value.(*filterAnswer), true
 }
 
-// put stores an answer computed for k, unless it read the peer, is an error
-// that does not follow from the inputs alone, or is too heavy.
+// put stores a NormalizeFilter answer computed for k, unless it read the
+// peer, is an error that does not follow from the inputs alone, or is too
+// heavy.
 func (m *FilterMemo) put(k filterKey, nf NormalFilter, err error, usedPeer bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	if usedPeer {
+		m.mu.Lock()
 		m.stats.PeerDependent++
+		m.mu.Unlock()
 		return
-	}
-	if err != nil && !memoizable(err) {
-		return
-	}
-	if _, ok := m.entries[k]; ok {
-		return // another goroutine computed it too
 	}
 	w := 1
 	for _, c := range nf.Conjuncts {
@@ -117,17 +137,38 @@ func (m *FilterMemo) put(k filterKey, nf NormalFilter, err error, usedPeer bool)
 			}
 		}
 	}
-	if w > m.max/4 {
+	m.store(&filterAnswer{key: k, nf: nf, err: err, weight: w})
+}
+
+// putASNs stores an ExpandAS answer computed for k, as put does.
+func (m *FilterMemo) putASNs(k filterKey, s ASNSet, err error) {
+	m.store(&filterAnswer{key: k, asns: s, err: err, weight: 1 + s.Len() + len(s.Missing())})
+}
+
+// store adds a, unless its error does not follow from the inputs alone or it
+// weighs over a quarter of the bound, evicting the least recently used
+// answers of its pool to keep the pool within the bound.
+func (m *FilterMemo) store(a *filterAnswer) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if a.err != nil && !memoizable(a.err) {
 		return
 	}
-	m.entries[k] = m.lru.PushFront(&filterAnswer{key: k, nf: nf, err: err, weight: w})
-	m.held += w
-	for m.held > m.max {
-		back := m.lru.Back()
+	if _, ok := m.entries[a.key]; ok {
+		return // another goroutine computed it too
+	}
+	if a.weight > m.max/4 {
+		return
+	}
+	p := m.pool(a.key)
+	m.entries[a.key] = p.lru.PushFront(a)
+	p.held += a.weight
+	for p.held > m.max {
+		back := p.lru.Back()
 		old := back.Value.(*filterAnswer)
-		m.lru.Remove(back)
+		p.lru.Remove(back)
 		delete(m.entries, old.key)
-		m.held -= old.weight
+		p.held -= old.weight
 	}
 }
 

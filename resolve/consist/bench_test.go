@@ -112,3 +112,51 @@ func BenchmarkCheckProvider(b *testing.B) {
 		})
 	}
 }
+
+// ixpDump is lintDump(n) with an IXP's shape added: AS-IXP holds AS1's n
+// peers and 5,000 other ASes, and AS1 imports k prefix lists from AS-IXP.
+// Every session's peer is in AS-IXP, so each evaluation tests the set, and
+// each import session holds k clauses for lint/shadowed.
+func ixpDump(n, k int) string {
+	var b strings.Builder
+	b.WriteString("as-set: AS-IXP\nmembers: ")
+	for i := 2; i < n+2; i++ {
+		fmt.Fprintf(&b, "AS%d, ", i)
+	}
+	for i := 0; i < 5000; i++ {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "AS%d", 100000+i)
+	}
+	b.WriteString("\nsource: RIPE\n\n")
+	var terms strings.Builder
+	for j := 0; j < k; j++ {
+		fmt.Fprintf(&terms, "import: from AS-IXP accept {10.%d.%d.0/24}\n", j/250, j%250)
+	}
+	b.WriteString(strings.Replace(lintDump(n), "as-name: BIG\n", "as-name: BIG\n"+terms.String(), 1))
+	return b.String()
+}
+
+// BenchmarkLintIXP lints ixpDump(100, 200), with a Checker.Memo and
+// without one: before v0.27.2 each of the 600 evaluations expanded AS-IXP
+// again, and lint/shadowed rebuilt its cover for each of the 200 clauses.
+func BenchmarkLintIXP(b *testing.B) {
+	l := &resolve.DumpLoader{Sources: []string{"RIPE"}, KeepPolicy: true}
+	if err := l.Read(strings.NewReader(ixpDump(100, 200))); err != nil {
+		b.Fatal(err)
+	}
+	for _, memo := range []bool{true, false} {
+		b.Run(fmt.Sprintf("Memo=%v", memo), func(b *testing.B) {
+			for range b.N {
+				c := &Checker{Eval: peval.Evaluator{Src: l.Source()}}
+				if memo {
+					c.Memo = NewMemo()
+				}
+				if _, err := c.Lint(context.Background(), 1); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}

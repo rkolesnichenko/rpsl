@@ -3,6 +3,7 @@ package consist
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -21,6 +22,13 @@ func keepPolicySource(t *testing.T, n int) resolve.PolicySource {
 		t.Fatal(err)
 	}
 	return l.Source()
+}
+
+// unmemoized is a Checker over src that memoizes no filter or expansion: a
+// Checker without a Memo gives each call a memo of its own, so a baseline
+// needs a filter memo that stores nothing (eval keeps a set one).
+func unmemoized(src resolve.PolicySource) *Checker {
+	return &Checker{Eval: peval.Evaluator{Src: src, Expander: resolve.Expander{Memo: resolve.NewFilterMemo(0)}}}
 }
 
 // A bounded LRU still reads AS1 once when its checks run consecutively, as
@@ -83,7 +91,7 @@ func TestMemoSourceFailureNotStored(t *testing.T) {
 	src.mu.Lock()
 	src.down = false
 	src.mu.Unlock()
-	want, _ := (&Checker{Eval: peval.Evaluator{Src: src}}).Check(context.Background(), Pair{A: 1, B: 2, AF: v4})
+	want, _ := unmemoized(src).Check(context.Background(), Pair{A: 1, B: 2, AF: v4})
 	got, err := c.Check(context.Background(), Pair{A: 1, B: 2, AF: v4})
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("after recovery: %+v %v, want %+v", got, err, want)
@@ -102,7 +110,7 @@ func TestMemoCheckAfterTimeout(t *testing.T) {
 	// Its answer does not matter (MemSource.AutNum ignores the context, so
 	// it may even succeed); what it leaves in the memo does.
 	c.Check(ctx, Pair{A: 1, B: 2, AF: v4})
-	want, werr := (&Checker{Eval: peval.Evaluator{Src: src}}).Check(context.Background(), Pair{A: 1, B: 2, AF: v4})
+	want, werr := unmemoized(src).Check(context.Background(), Pair{A: 1, B: 2, AF: v4})
 	got, gerr := c.Check(context.Background(), Pair{A: 1, B: 2, AF: v4})
 	if werr != nil || gerr != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("after a cancelled check: %+v %v, want %+v %v", got, gerr, want, werr)
@@ -112,7 +120,7 @@ func TestMemoCheckAfterTimeout(t *testing.T) {
 // Many goroutines through one Memo, against the same checks without it.
 func TestMemoConcurrent(t *testing.T) {
 	src := keepPolicySource(t, 30)
-	plain := &Checker{Eval: peval.Evaluator{Src: src}}
+	plain := unmemoized(src)
 	c := &Checker{Eval: peval.Evaluator{Src: src}, Memo: NewMemo()}
 	var wg sync.WaitGroup
 	for g := 0; g < 8; g++ {
@@ -134,4 +142,57 @@ func TestMemoConcurrent(t *testing.T) {
 		}(g)
 	}
 	wg.Wait()
+}
+
+// peerDump is AS1 with n peers AS2..AS(n+1), each in AS-IXP and with a route
+// of its own: AS1 imports PeerAS from AS-IXP and announces itself to it, and
+// each peer imports AS1 and announces itself. A memo serving one peer's
+// answer to another would change both Lint and Check.
+func peerDump(n int) string {
+	var b strings.Builder
+	b.WriteString("as-set: AS-IXP\nmembers: ")
+	for i := 2; i < n+2; i++ {
+		if i > 2 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "AS%d", i)
+	}
+	b.WriteString("\nsource: RIPE\n\nroute: 10.0.1.0/24\norigin: AS1\nsource: RIPE\n")
+	b.WriteString("\naut-num: AS1\nas-name: IXP-MEMBER\nimport: from AS-IXP accept PeerAS\nimport: from AS-IXP accept PeerAS AND {10.0.0.0/8^+}\nexport: to AS-IXP announce AS1\nsource: RIPE\n")
+	for i := 2; i < n+2; i++ {
+		fmt.Fprintf(&b, "\nroute: 10.%d.0.0/16\norigin: AS%d\nsource: RIPE\n", i, i)
+		fmt.Fprintf(&b, "\naut-num: AS%d\nas-name: PEER\nimport: from AS1 accept AS1\nexport: to AS1 announce AS%d\nsource: RIPE\n", i, i)
+	}
+	return b.String()
+}
+
+// Lint and Check give the same answers with a Memo, with a call's own memo
+// (no Memo) and with no memo at all, over peers whose filters differ only by
+// PeerAS: the case where sharing an answer between the peers of one call
+// would go wrong.
+func TestMemoMatchesUnmemoized(t *testing.T) {
+	l := &resolve.DumpLoader{Sources: []string{"RIPE"}, KeepPolicy: true}
+	if err := l.Read(strings.NewReader(peerDump(6))); err != nil {
+		t.Fatal(err)
+	}
+	src := l.Source()
+	base := unmemoized(src)
+	want, err := base.Lint(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []*Checker{{Eval: peval.Evaluator{Src: src}, Memo: NewMemo()}, {Eval: peval.Evaluator{Src: src}}} {
+		got, err := c.Lint(context.Background(), 1)
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("Memo %v: Lint %+v %v, want %+v", c.Memo != nil, got, err, want)
+		}
+		for peer := types.ASN(2); peer < 8; peer++ {
+			p := Pair{A: 1, B: peer, AF: v4}
+			w, werr := base.Check(context.Background(), p)
+			g, gerr := c.Check(context.Background(), p)
+			if werr != nil || gerr != nil || !reflect.DeepEqual(g, w) {
+				t.Fatalf("Memo %v: Check %v: %+v %v, want %+v %v", c.Memo != nil, p, g, gerr, w, werr)
+			}
+		}
+	}
 }
