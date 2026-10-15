@@ -107,7 +107,10 @@ func NewFilterMemo(maxRanges int) *FilterMemo {
 // each by its own rules. A hit in the layer does not touch shared. Use one
 // for one call's evaluations, so that what shared evicts while the call runs
 // is not computed again; shared must serve the same snapshot (see
-// FilterMemo). A nil shared makes it NewFilterMemo(maxRanges).
+// FilterMemo). A nil shared makes it NewFilterMemo(maxRanges). Its Stats
+// count its own lookups: a lookup answered from shared is a hit in both, and
+// an answer that read the peer counts as PeerDependent in every memo of the
+// chain.
 func NewFilterMemoOver(shared *FilterMemo, maxRanges int) *FilterMemo {
 	m := NewFilterMemo(maxRanges)
 	m.shared = shared

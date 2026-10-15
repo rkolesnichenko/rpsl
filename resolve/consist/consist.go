@@ -74,13 +74,16 @@ type Checker struct {
 // and inet-rtrs, and a filter memo of the call's own. With c.Memo, Src reads
 // through it, and the filter memo is a layer over c.Memo's (see
 // resolve.NewFilterMemoOver), bounded as c.Memo's is: the call keeps what it
-// computes or fetches until it returns, so other calls evicting it from the
-// shared memo cannot make it compute an answer twice (beside three other
-// lints, RIPE's AS31117 took 2m21s that way; 7.7 s alone). Without c.Memo,
-// a per-call policyMemo, and, unless Eval.Expander.Memo is set, a per-call
-// filter memo bounded as a default Memo is: Lint evaluates each policy six
-// times per peer, and an IXP lint's answers fill most of that (AS31117's 13
-// filters weigh 1,928,317). The evaluator, and so the call's memo, lives for
+// computes or fetches until it returns, so other calls evicting an answer
+// from the shared memo do not make it compute that answer again while the
+// answer fits the call's bound (before, beside three other lints, RIPE's
+// AS31117 took 2m21s; 7.7 s alone). Lint's peer list, set walk and router
+// walk are calls of their own, so an answer one of them computed may be
+// computed once more by Lint's sessions after the shared memo evicted it.
+// Without c.Memo, a per-call policyMemo, and, unless Eval.Expander.Memo is
+// set, a per-call filter memo bounded as a default Memo is: Lint evaluates
+// each policy six times per peer, and an IXP lint's answers fill most of
+// that (AS31117's 13 filters weigh 1,928,317). The evaluator, and so the call's memo, lives for
 // one call: Check makes one per side, Peers one, and Lint one for its
 // sessions and one each for its peer list, set walk and router walk. Every
 // evaluation consist makes goes through it.

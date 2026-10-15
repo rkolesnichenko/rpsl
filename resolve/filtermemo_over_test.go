@@ -101,6 +101,13 @@ func TestFilterMemoOverKeepsEvictedFilter(t *testing.T) {
 	if n := src.count("AS-A"); n != before {
 		t.Fatalf("AS-A fetched %d times, want %d: the layer did not keep the filter", n, before)
 	}
+	// shared really had evicted it: a fresh layer fetches AS-A again.
+	if _, err := (&Expander{Src: src, Memo: NewFilterMemoOver(shared, 12)}).NormalizeFilter(context.Background(), f); err != nil {
+		t.Fatal(err)
+	}
+	if n := src.count("AS-A"); n != before+1 {
+		t.Fatalf("AS-A fetched %d times by a fresh layer, want %d: shared still held the filter, so the test proves nothing", n, before+1)
+	}
 }
 
 // Layers share through shared: B is answered with what A computed.
@@ -165,6 +172,43 @@ func TestFilterMemoOverStoresOnlyWhatSharedWould(t *testing.T) {
 			_, err := (&Expander{Src: memoCorpus(t), Memo: layer}).NormalizeFilter(context.Background(), mustFilter(t, "{10.7.0.0/16, 10.8.0.0/16, 10.9.0.0/16}")) // weight 4
 			return err
 		}, 0},
+		// The same for ExpandAS's answers (the expansion pool).
+		{"ExpandAS cancelled context", func(t *testing.T, layer *FilterMemo) error {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if _, err := (&Expander{Src: memoCorpus(t), Memo: layer}).ExpandAS(ctx, types.Ref(mustSet(t, "AS-A"))); err == nil {
+				return errors.New("a cancelled context expanded AS-A")
+			}
+			return nil
+		}, 0},
+		{"ExpandAS Source failure", func(t *testing.T, layer *FilterMemo) error {
+			src := &downSource{Source: memoCorpus(t), down: true}
+			if _, err := (&Expander{Src: src, Memo: layer}).ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-A"))); err == nil {
+				return errors.New("a failing Source expanded AS-A")
+			}
+			return nil
+		}, 0},
+		{"ExpandAS missing set", func(t *testing.T, layer *FilterMemo) error {
+			_, err := (&Expander{Src: memoCorpus(t), Memo: layer}).ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-NONE")))
+			if !errors.Is(err, ErrNotFound) {
+				return fmt.Errorf("got %v, want ErrNotFound", err)
+			}
+			return nil
+		}, 0},
+		{"ExpandAS deterministic error", func(t *testing.T, layer *FilterMemo) error {
+			src := corpus(t, asSet("AS-TOP", "AS-A"), asSet("AS-A", "AS1"))
+			_, err := (&Expander{Src: src, Memo: layer, MaxVisited: 1}).ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-TOP")))
+			var tl *SetTooLargeError
+			if !errors.As(err, &tl) {
+				return fmt.Errorf("got %v, want a *SetTooLargeError", err)
+			}
+			return nil
+		}, 1},
+		{"ExpandAS over a quarter of the bound", func(t *testing.T, layer *FilterMemo) error {
+			src := corpus(t, asSet("AS-BIG", "AS1", "AS2", "AS3"))
+			_, err := (&Expander{Src: src, Memo: layer}).ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-BIG"))) // weight 4
+			return err
+		}, 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -209,6 +253,9 @@ func TestFilterMemoOverIgnoredWithExclude(t *testing.T) {
 	layer := NewFilterMemoOver(shared, 1<<10)
 	e := &Expander{Src: src, Memo: layer, Exclude: Exclusion{ASNs: []types.ASN{2}}}
 	if _, err := e.ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-A"))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.NormalizeFilter(context.Background(), mustFilter(t, "AS-A")); err != nil {
 		t.Fatal(err)
 	}
 	if l, s := layer.Stats(), shared.Stats(); l != (FilterMemoStats{}) || s != (FilterMemoStats{}) {

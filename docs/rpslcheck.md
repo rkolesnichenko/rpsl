@@ -204,10 +204,10 @@ and the lint computed them again: AS31117 took 7.7 s alone and 2m21s beside
 three other IXP lints (AS1101, AS47147, AS202827), and over all of RIPE
 (`-sweep -c 4 -json`, GOMAXPROCS 4, `GOMEMLIMIT=5GiB`) AS1101 and AS31117 ran
 out of the default 60 s. Now AS31117 takes 11.0 s beside the same three, and
-no lint in that sweep runs out of time. AS47147 comes closest: its large IXP
-clauses make `lint/shadowed` costly (50.3 s beside the other three). The sweep
-took 2,008 s with 6,773 MB max RSS (v0.27.2, same dumps and machine: 2,142 s,
-5,884 MB).
+no lint in that sweep runs out of time. AS47147, whose large IXP clauses make
+`lint/shadowed` costly, took 50.3 s beside the other three. The sweep took
+2,008 s with 6,773 MB max RSS (v0.27.2, same dumps and machine: 2,142 s,
+5,962 MB).
 
 `rpslcheck` shares a `consist.Memo` across a run's checks in every mode (decoded
 aut-nums, normalized filters and expanded as-sets; each call keeps what it uses,
@@ -225,7 +225,7 @@ memory, not time: on the same sample it took max RSS from 3,997 and 3,896 MB to
 byte-identical JSON. With it, a full RIPE sweep (`-sweep -c 4 -json`, GOMAXPROCS
 4, `GOMEMLIMIT=5GiB`) finished in 47 minutes with 6,089 MB max RSS at v0.27.1
 (2,689 s and 6,339 MB in a later run), and in 2,092 s with 6,680 MB at
-v0.27.2 (2,142 s and 5,884 MB in a later run). Before, the sweep held every lint until linting ended: with the memo it did not fit under
+v0.27.2 (2,142 s and 5,962 MB in a later run). Before, the sweep held every lint until linting ended: with the memo it did not fit under
 7 GB, and without it, it took 100 minutes and 6,264 MB. The time saved is the
 memo's. A sweep that stops before
 its end — an aut-num's or a pair's error, `-timeout`, an interrupt — exits 3 and

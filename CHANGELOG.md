@@ -28,11 +28,13 @@ same version (see [RELEASING.md](RELEASING.md)).
   sweep (its entry says AS31117's cause was not determined). Full RIPE sweep
   (`rpslcheck -sweep -c 4 -json`, GOMAXPROCS 4, `GOMEMLIMIT=5GiB`), against
   v0.27.2 on the same dumps: lint timeouts 3 → 0, 2,142 s → 2,008 s, max RSS
-  5,884 → 6,773 MB; the output is identical apart from the three lints that
-  now finish, which add their 49,502 issues. A `Checker` without `Memo`
-  bounds each call's filter memo at 1<<21 per pool instead of 1<<18, and
-  stores answers up to a quarter of that: AS31117 alone, 75 s → 7.7 s.
-  `Memo.Stats` counts one shared lookup per call per key, so its hit rate is
+  5,962 → 6,773 MB; the output is identical apart from the three lints that
+  now finish, which add their 49,502 issues. Each call in flight may keep up
+  to `MemoOptions.Ranges` per pool beyond the shared memo. A `Checker`
+  without `Memo` bounds each call's filter memo at 1<<21 per pool instead of
+  1<<18, and stores answers up to a quarter of that: AS31117 alone, 75 s →
+  7.7 s. `Memo.Stats` counts about one shared lookup per call per key (a call
+  looks again only for what its own layer could not keep), so its hit rate is
   not comparable with earlier releases'. No result changes.
 
 ## [0.27.2] - 2026-10-15
