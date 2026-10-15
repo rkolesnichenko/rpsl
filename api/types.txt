@@ -82,6 +82,7 @@ func (PrefixSpace) Minus(t PrefixSpace) PrefixSpace
 func (PrefixSpace) Ranges() iter.Seq[PrefixRange]
 func (PrefixSpace) String() string
 func (PrefixSpace) Subset(t PrefixSpace) bool
+func (PrefixSpace) SubsetOfUnion(ts ...PrefixSpace) bool
 func (PrefixSpace) Union(t PrefixSpace) PrefixSpace
 type RangeOp uint8
 type RangeOperator struct
