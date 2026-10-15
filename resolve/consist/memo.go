@@ -37,6 +37,7 @@ type Memo struct {
 	hits    int
 	misses  int
 	filters *resolve.FilterMemo
+	ranges  int // filters' bound, which each call's layer over it takes too
 }
 
 // MemoOptions bounds a Memo. A zero field takes its default.
@@ -73,7 +74,7 @@ func NewMemoWith(o MemoOptions) *Memo {
 	if o.Ranges <= 0 {
 		o.Ranges = defaultMemoRanges
 	}
-	return &Memo{max: o.AutNums, objects: map[memoKey]*list.Element{}, filters: resolve.NewFilterMemo(o.Ranges)}
+	return &Memo{max: o.AutNums, ranges: o.Ranges, objects: map[memoKey]*list.Element{}, filters: resolve.NewFilterMemo(o.Ranges)}
 }
 
 // Stats returns the counters so far.
