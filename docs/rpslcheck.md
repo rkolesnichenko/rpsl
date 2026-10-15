@@ -197,15 +197,21 @@ loads one), an aut-num with N peers, one import and one export each, took
 16 ms at N=250, 55 ms at N=500 and 184 ms at N=1000. A sweep's
 `-check-timeout` bounds it. Since v0.27.2 the shared memo holds a peering's
 expanded as-set, so it is not expanded again for each evaluation, and
-`lint/shadowed` is no longer quadratic in an aut-num's clauses. Over all of RIPE
-(`-sweep -c 4 -json`, GOMAXPROCS 4, `GOMEMLIMIT=5GiB`), three lints still run
-out of the default 60 s: AS1101, whose IXP filters other workers' lints evict
-from the shared memo between its sessions (4.7 s alone); AS47147, whose large
-IXP clauses make `lint/shadowed` costly (42.1 s alone); and AS31117 (7.6 s
-alone, why it runs past 60 s in a sweep was not determined).
+`lint/shadowed` is no longer quadratic in an aut-num's clauses. Since v0.28.0
+each call keeps the filter answers it uses until it returns. Before, other
+workers' lints evicted them from the shared memo between a lint's sessions,
+and the lint computed them again: AS31117 took 7.7 s alone and 2m21s beside
+three other IXP lints (AS1101, AS47147, AS202827), and over all of RIPE
+(`-sweep -c 4 -json`, GOMAXPROCS 4, `GOMEMLIMIT=5GiB`) AS1101 and AS31117 ran
+out of the default 60 s. Now AS31117 takes 11.0 s beside the same three, and
+no lint in that sweep runs out of time. AS47147 comes closest: its large IXP
+clauses make `lint/shadowed` costly (50.3 s beside the other three). The sweep
+took 2,008 s with 6,773 MB max RSS (v0.27.2, same dumps and machine: 2,142 s,
+5,884 MB).
 
 `rpslcheck` shares a `consist.Memo` across a run's checks in every mode (decoded
-aut-nums, normalized filters and expanded as-sets; it changes no answer).
+aut-nums, normalized filters and expanded as-sets; each call keeps what it uses,
+and it changes no answer).
 Measured at v0.27.0, before it held expansions, on RIPE's nine dumps with
 `-sweep -sample 2000 -c 4`, GOMAXPROCS 4: 280.5 s and 3,247 MB max RSS without
 the memo, 155.7 s and 4,023 MB with it, byte-identical JSON.
@@ -219,7 +225,7 @@ memory, not time: on the same sample it took max RSS from 3,997 and 3,896 MB to
 byte-identical JSON. With it, a full RIPE sweep (`-sweep -c 4 -json`, GOMAXPROCS
 4, `GOMEMLIMIT=5GiB`) finished in 47 minutes with 6,089 MB max RSS at v0.27.1
 (2,689 s and 6,339 MB in a later run), and in 2,092 s with 6,680 MB at
-v0.27.2. Before, the sweep held every lint until linting ended: with the memo it did not fit under
+v0.27.2 (2,142 s and 5,884 MB in a later run). Before, the sweep held every lint until linting ended: with the memo it did not fit under
 7 GB, and without it, it took 100 minutes and 6,264 MB. The time saved is the
 memo's. A sweep that stops before
 its end — an aut-num's or a pair's error, `-timeout`, an interrupt — exits 3 and

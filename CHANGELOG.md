@@ -9,6 +9,32 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Added
+
+- `resolve`: `NewFilterMemoOver(shared, maxRanges)`, a `FilterMemo` layered
+  over a shared one for one call: it answers from itself, then from
+  `shared`, and stores what is computed in both, so what `shared` evicts
+  while the call runs is not computed again.
+
+### Changed
+
+- `resolve/consist`: each call (`Lint`, a `Check` side, `Peers`) keeps the
+  filter answers it uses in a layer over `Checker.Memo`'s, bounded as the
+  memo is. In a `-c 4` sweep other workers' lints evicted a lint's large IXP
+  filters between its sessions, and it recomputed them: beside three other
+  IXP lints (AS1101, AS47147, AS202827), RIPE's AS31117 took 2m21s (7.7 s
+  alone); now 11.0 s, and AS1101's lints beside it take 5.6–6.7 s where they
+  ran out of 60 s. This is why AS1101 and AS31117 ran past 60 s in v0.27.2's
+  sweep (its entry says AS31117's cause was not determined). Full RIPE sweep
+  (`rpslcheck -sweep -c 4 -json`, GOMAXPROCS 4, `GOMEMLIMIT=5GiB`), against
+  v0.27.2 on the same dumps: lint timeouts 3 → 0, 2,142 s → 2,008 s, max RSS
+  5,884 → 6,773 MB; the output is identical apart from the three lints that
+  now finish, which add their 49,502 issues. A `Checker` without `Memo`
+  bounds each call's filter memo at 1<<21 per pool instead of 1<<18, and
+  stores answers up to a quarter of that: AS31117 alone, 75 s → 7.7 s.
+  `Memo.Stats` counts one shared lookup per call per key, so its hit rate is
+  not comparable with earlier releases'. No result changes.
+
 ## [0.27.2] - 2026-10-15
 
 ### Changed
