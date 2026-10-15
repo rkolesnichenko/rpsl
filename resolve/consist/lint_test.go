@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
@@ -1002,4 +1003,104 @@ func TestLintKeepsExpanderMemo(t *testing.T) {
 	if st := fm.Stats(); st.Misses == 0 {
 		t.Fatalf("stats %+v: Lint did not use Eval.Expander.Memo", st)
 	}
+}
+
+// scattered returns n exact /24s, for i = start..start+n-1, spread over the
+// IPv4 space by a multiplicative hash so that neighbours never merge into
+// one range.
+func scattered(start, n int) []types.PrefixRange {
+	rs := make([]types.PrefixRange, 0, n)
+	for i := start; i < start+n; i++ {
+		a := uint32(i) * 2654435761 &^ 0xff
+		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{byte(a >> 24), byte(a >> 16), byte(a >> 8), 0}), 24)
+		r, _ := types.NewPrefixRange(p, 24, 24)
+		rs = append(rs, r)
+	}
+	return rs
+}
+
+// A signature's cover keeps its first coverKeep large spaces apart and
+// folds later large ones, and every small one, into one union; verdicts
+// stay exact either way.
+func TestCoverKeepsLargeApart(t *testing.T) {
+	large := func(i int) types.PrefixSpace { return types.SpaceOf(scattered(i*2000, coverLarge+100)...) }
+	small := func(i int) types.PrefixSpace { return types.SpaceOf(scattered(1_000_000+i, 1)...) }
+	if !rangesAtLeast(large(0), coverLarge) || rangesAtLeast(small(0), 2) {
+		t.Fatal("fixture: large(i) must hold at least coverLarge ranges, small(i) one")
+	}
+	var cov cover
+	for i := 0; i < coverKeep+4; i++ {
+		cs := []conj{{space: large(i)}, {space: small(i)}}
+		if cov.shadowed(cs) {
+			t.Fatalf("clause %d: shadowed, want not (each brings new ranges)", i)
+		}
+		cov.add(cs)
+	}
+	if !cov.shadowed([]conj{{space: large(coverKeep + 2)}}) || !cov.shadowed([]conj{{space: large(3).Union(small(7))}}) {
+		t.Fatal("an earlier large space is not covered")
+	}
+	if cov.shadowed([]conj{{space: large(coverKeep + 4)}}) {
+		t.Fatal("a new large space is covered")
+	}
+	sc := cov.bySig[""]
+	if len(sc.large) != coverKeep {
+		t.Fatalf("%d large spaces kept apart, want %d", len(sc.large), coverKeep)
+	}
+	if !large(coverKeep).Subset(sc.folded) || !small(0).Subset(sc.folded) || large(0).Subset(sc.folded) {
+		t.Fatal("folded holds the wrong spaces: want large ones past coverKeep and every small one, not the first large")
+	}
+}
+
+// cover answers as shadowedNaive does over random sequences mixing large
+// spaces (over coverLarge ranges, overlapping), parts of earlier large ones
+// and small ones, under random signatures over two tests.
+func TestCoverMatchesNaiveLarge(t *testing.T) {
+	tests := []string{"<^AS1>", "community(65000:1)"}
+	shadows, not, kept := 0, 0, 0
+	for seed := uint64(0); seed < 20; seed++ {
+		r := rand.New(rand.NewPCG(seed, 0x1a))
+		var cov cover
+		var earlier []conj
+		var bigs [][]types.PrefixRange
+		for range 24 {
+			var sig []string
+			for _, x := range tests {
+				if r.IntN(3) == 0 {
+					sig = append(sig, x)
+				}
+			}
+			var rs []types.PrefixRange
+			switch k := r.IntN(5); {
+			case k < 2: // a new large space
+				rs = scattered(r.IntN(8)*700, coverLarge+r.IntN(400))
+				bigs = append(bigs, rs)
+			case k == 2 && len(bigs) > 0: // part of an earlier large one
+				b := bigs[r.IntN(len(bigs))]
+				rs = b[:len(b)/2+r.IntN(len(b)/2)]
+			default:
+				rs = scattered(r.IntN(6000), 1+r.IntN(3))
+			}
+			cs := []conj{{sig: sig, space: types.SpaceOf(rs...)}}
+			want := shadowedNaive(cs, earlier)
+			if got := cov.shadowed(cs); got != want {
+				t.Fatalf("seed %d after %d conjuncts: cover %v, naive %v", seed, len(earlier), got, want)
+			}
+			if want {
+				shadows++
+			} else {
+				not++
+			}
+			for _, sc := range cov.bySig {
+				if len(sc.large) > 0 {
+					kept++
+				}
+			}
+			cov.add(cs)
+			earlier = append(earlier, cs...)
+		}
+	}
+	if shadows == 0 || not == 0 || kept == 0 {
+		t.Fatalf("shadowed %d, not %d, covers holding a large space %d: the test draws too few of one", shadows, not, kept)
+	}
+	t.Logf("shadowed %d, not %d, covers holding a large space %d", shadows, not, kept)
 }
