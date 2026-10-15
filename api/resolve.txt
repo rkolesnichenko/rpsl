@@ -16,6 +16,7 @@ func LoadDump(r io.Reader, sourcePrecedence ...string) (*MemSource, error)
 func NewASNSet(asns ...types.ASN) ASNSet
 func NewCache(src Source, ttl time.Duration) *Cache
 func NewFilterMemo(maxRanges int) *FilterMemo
+func NewFilterMemoOver(shared *FilterMemo, maxRanges int) *FilterMemo
 func NewMemSource(objs []object.Object, sourcePrecedence ...string) *MemSource
 type ASNSet struct
 func (ASNSet) Has(a types.ASN) bool
