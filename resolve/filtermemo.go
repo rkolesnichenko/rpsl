@@ -37,9 +37,14 @@ import (
 // of maxRanges. A NormalFilter or ASNSet it returns is shared: the caller must
 // not modify it. It never notices a change in the Source: build a new one for
 // a new snapshot. Safe for concurrent use.
+//
+// NewFilterMemoOver layers one over another, for one call: a layer keeps
+// what its call uses for as long as the call runs, whatever the memo under
+// it evicts meanwhile.
 type FilterMemo struct {
 	mu      sync.Mutex
 	max     int
+	shared  *FilterMemo                 // the memo this one is layered over (NewFilterMemoOver), or nil
 	entries map[filterKey]*list.Element // of *filterAnswer, in either pool
 	filters memoPool                    // NormalizeFilter's answers
 	asns    memoPool                    // ExpandAS's answers
@@ -95,6 +100,23 @@ func NewFilterMemo(maxRanges int) *FilterMemo {
 	return &FilterMemo{max: maxRanges, entries: map[filterKey]*list.Element{}}
 }
 
+// NewFilterMemoOver returns a FilterMemo bounded as NewFilterMemo(maxRanges)
+// is, layered over shared: a lookup it cannot answer itself is answered from
+// shared when shared holds the key, and the answer is then kept in the layer
+// too; an answer computed through it is stored in the layer and in shared,
+// each by its own rules. A hit in the layer does not touch shared. Use one
+// for one call's evaluations, so that what shared evicts while the call runs
+// is not computed again; shared must serve the same snapshot (see
+// FilterMemo). A nil shared makes it NewFilterMemo(maxRanges). Its Stats
+// count its own lookups: a lookup answered from shared is a hit in both, and
+// an answer that read the peer counts as PeerDependent in every memo of the
+// chain.
+func NewFilterMemoOver(shared *FilterMemo, maxRanges int) *FilterMemo {
+	m := NewFilterMemo(maxRanges)
+	m.shared = shared
+	return m
+}
+
 // Stats returns the counters so far.
 func (m *FilterMemo) Stats() FilterMemoStats {
 	m.mu.Lock()
@@ -104,18 +126,32 @@ func (m *FilterMemo) Stats() FilterMemoStats {
 	return s
 }
 
-// get returns the stored answer for k, if any, and counts the lookup.
+// get returns the stored answer for k, if any — the layer's own, or else
+// shared's, which the layer then keeps — and counts the lookup. It never
+// holds the layer's lock and shared's together.
 func (m *FilterMemo) get(k filterKey) (*filterAnswer, bool) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	el, ok := m.entries[k]
-	if !ok {
-		m.stats.Misses++
-		return nil, false
+	if el, ok := m.entries[k]; ok {
+		m.stats.Hits++
+		m.pool(k).lru.MoveToFront(el)
+		a := el.Value.(*filterAnswer)
+		m.mu.Unlock()
+		return a, true
 	}
-	m.stats.Hits++
-	m.pool(k).lru.MoveToFront(el)
-	return el.Value.(*filterAnswer), true
+	m.mu.Unlock()
+	if m.shared != nil {
+		if a, ok := m.shared.get(k); ok {
+			m.mu.Lock()
+			m.stats.Hits++
+			m.keep(a)
+			m.mu.Unlock()
+			return a, true
+		}
+	}
+	m.mu.Lock()
+	m.stats.Misses++
+	m.mu.Unlock()
+	return nil, false
 }
 
 // put stores a NormalizeFilter answer computed for k, unless it read the
@@ -123,9 +159,11 @@ func (m *FilterMemo) get(k filterKey) (*filterAnswer, bool) {
 // heavy.
 func (m *FilterMemo) put(k filterKey, nf NormalFilter, err error, usedPeer bool) {
 	if usedPeer {
-		m.mu.Lock()
-		m.stats.PeerDependent++
-		m.mu.Unlock()
+		for x := m; x != nil; x = x.shared {
+			x.mu.Lock()
+			x.stats.PeerDependent++
+			x.mu.Unlock()
+		}
 		return
 	}
 	w := 1
@@ -145,15 +183,24 @@ func (m *FilterMemo) putASNs(k filterKey, s ASNSet, err error) {
 	m.store(&filterAnswer{key: k, asns: s, err: err, weight: 1 + s.Len() + len(s.Missing())})
 }
 
-// store adds a, unless its error does not follow from the inputs alone or it
-// weighs over a quarter of the bound, evicting the least recently used
-// answers of its pool to keep the pool within the bound.
+// store adds a, unless its error does not follow from the inputs alone, to
+// m (see keep) and then to shared.
 func (m *FilterMemo) store(a *filterAnswer) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	if a.err != nil && !memoizable(a.err) {
 		return
 	}
+	m.mu.Lock()
+	m.keep(a)
+	m.mu.Unlock()
+	if m.shared != nil {
+		m.shared.store(a)
+	}
+}
+
+// keep adds a to m's own pool, unless m holds its key already or it weighs
+// over a quarter of the bound, evicting the least recently used answers of
+// the pool to keep it within the bound. m.mu is held.
+func (m *FilterMemo) keep(a *filterAnswer) {
 	if _, ok := m.entries[a.key]; ok {
 		return // another goroutine computed it too
 	}

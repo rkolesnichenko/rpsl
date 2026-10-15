@@ -16,7 +16,9 @@ import (
 // sample sweep, and 256 aut-nums answered 92.8% of that sample's lookups
 // from the memo. That bound was measured for filters alone; since v0.27.2
 // expansions have a pool of their own with the same bound, whose memory was
-// not measured apart.
+// not measured apart. Since v0.28.0 each call in flight keeps up to as much
+// again in its own layer (see Checker.Memo), and a Checker without a Memo
+// gives each call a filter memo of this bound.
 const (
 	defaultMemoAutNums = 256
 	defaultMemoRanges  = 1 << 21
@@ -37,12 +39,13 @@ type Memo struct {
 	hits    int
 	misses  int
 	filters *resolve.FilterMemo
+	ranges  int // filters' bound, which each call's layer over it takes too
 }
 
 // MemoOptions bounds a Memo. A zero field takes its default.
 type MemoOptions struct {
 	AutNums int // decoded aut-nums and inet-rtrs held (default 256)
-	Ranges  int // the filter memo's bound, in prefix ranges and path-set ASNs, and apart in expanded as-sets' ASNs and missing sets (default 1<<21, 2,097,152; see resolve.FilterMemo)
+	Ranges  int // the filter memo's bound, in prefix ranges and path-set ASNs, and apart in expanded as-sets' ASNs and missing sets (default 1<<21, 2,097,152; see resolve.FilterMemo); it also bounds each call's own layer over it (see Checker.Memo)
 }
 
 // MemoStats is a Memo's counters, for measurement and tests.
@@ -73,7 +76,7 @@ func NewMemoWith(o MemoOptions) *Memo {
 	if o.Ranges <= 0 {
 		o.Ranges = defaultMemoRanges
 	}
-	return &Memo{max: o.AutNums, objects: map[memoKey]*list.Element{}, filters: resolve.NewFilterMemo(o.Ranges)}
+	return &Memo{max: o.AutNums, ranges: o.Ranges, objects: map[memoKey]*list.Element{}, filters: resolve.NewFilterMemo(o.Ranges)}
 }
 
 // Stats returns the counters so far.

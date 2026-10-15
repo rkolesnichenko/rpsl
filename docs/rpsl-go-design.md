@@ -1152,12 +1152,16 @@ effective `MaxDepth` and `MaxVisited`; expansions are bounded apart from filters
 same bound, since sharing one let a lint's IXP expansions evict its filters. `consist.Memo`
 adds the decoded aut-nums and inet-rtrs (a least-recently-used set of 256) and is set as
 `Checker.Memo`, which replaces `Eval.Expander.Memo` with its own filter memo; one `Memo` serves
-one snapshot. The default bound is 1<<21 ranges per pool. Over all of RIPE (39,918 aut-nums),
+one snapshot. The default bound is 1<<21 ranges per pool. Since v0.28.0 each call (`Lint`, a
+`Check` side, `Peers`) reads that filter memo through a layer of its own
+(`resolve.NewFilterMemoOver`), bounded as the memo is, which keeps what the call uses until it
+returns: in a `-c 4` sweep other workers' lints evicted a lint's large IXP filters between its
+sessions, and it computed them again, so AS1101 and AS31117 ran out of 60 s; now no lint does. Over all of RIPE (39,918 aut-nums),
 `TestRealDataConsist` took 1h43m17s without the memo and 55m39s with it, with every pair and
 direction count identical (the lint counts differ only by the lints that ran out of their 60 s
 budget: 44 without the memo, 11 with it). A `Checker` without a `Memo` gets a
-filter memo of its own for each evaluator (1<<18 per pool), so its evaluations share an
-expansion of up to 65,535 ASNs while it stays in the pool.
+filter memo of its own for each evaluator (1<<21 per pool since v0.28.0, 1<<18 before), so its
+evaluations share an expansion of up to 524,287 ASNs while it stays in the pool.
 
 ### 8.13 An IRRd-compatible server (`resolve/irrdq`, `resolve/irrdserver`, `rpsld`)
 

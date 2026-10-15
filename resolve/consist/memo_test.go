@@ -196,3 +196,157 @@ func TestMemoMatchesUnmemoized(t *testing.T) {
 		}
 	}
 }
+
+// getSetCounter counts GetSet calls per set reference.
+type getSetCounter struct {
+	resolve.PolicySource
+	mu sync.Mutex
+	n  map[string]int
+}
+
+func (s *getSetCounter) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error) {
+	s.mu.Lock()
+	s.n[ref.String()]++
+	s.mu.Unlock()
+	return s.PolicySource.GetSet(ctx, ref)
+}
+
+func (s *getSetCounter) count(name string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.n[name]
+}
+
+func setDump(t *testing.T, text string) *getSetCounter {
+	t.Helper()
+	l := &resolve.DumpLoader{Sources: []string{"RIPE"}, KeepPolicy: true}
+	if err := l.Read(strings.NewReader(text)); err != nil {
+		t.Fatal(err)
+	}
+	return &getSetCounter{PolicySource: l.Source(), n: map[string]int{}}
+}
+
+// A call keeps what it computed when other calls evict it from the shared
+// Memo: in a -c 4 sweep, other workers' lints evicted AS31117's IXP filters
+// between its sessions, and it recomputed them until it ran out of time
+// (2m21s beside three other lints, 7.7 s alone).
+func TestEvalKeepsWhatTheMemoEvicts(t *testing.T) {
+	var b strings.Builder
+	for _, n := range []string{"A", "B", "C", "D", "E"} {
+		fmt.Fprintf(&b, "as-set: AS-%s\nmembers: AS1, AS2\nsource: RIPE\n\n", n) // expansions of weight 3
+	}
+	src := setDump(t, b.String())
+	c := &Checker{Eval: peval.Evaluator{Src: src}, Memo: NewMemoWith(MemoOptions{Ranges: 12})}
+	expander := func() resolve.Expander {
+		ev := c.eval()
+		e := ev.Expander
+		e.Src = ev.Src
+		return e
+	}
+	mine, other := expander(), expander()
+	ref := types.Ref(mustSetName(t, "AS-A"))
+	if _, err := mine.ExpandAS(context.Background(), ref); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"AS-B", "AS-C", "AS-D", "AS-E"} {
+		if _, err := other.ExpandAS(context.Background(), types.Ref(mustSetName(t, n))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := mine.ExpandAS(context.Background(), ref); err != nil {
+		t.Fatal(err)
+	}
+	if n := src.count("AS-A"); n != 1 {
+		t.Fatalf("AS-A fetched %d times by one call, want once", n)
+	}
+	fresh := expander()
+	if _, err := fresh.ExpandAS(context.Background(), ref); err != nil {
+		t.Fatal(err)
+	}
+	if n := src.count("AS-A"); n != 2 {
+		t.Fatalf("AS-A fetched %d times after a new call, want twice: the shared Memo still held it, so the test proves nothing", n)
+	}
+}
+
+// Without a Memo, a call keeps an answer an IXP lint needs: a 70,000-AS
+// expansion is over a quarter of the old 1<<18 bound, so it was expanded
+// again on every evaluation (AS31117 without a Memo took 75 s; with one, 7.7 s).
+func TestEvalWithoutMemoKeepsLargeAnswers(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("as-set: AS-BIG\n")
+	for i := 0; i < 70000; i += 1000 {
+		b.WriteString("members: ")
+		for j := i; j < i+1000; j++ {
+			if j > i {
+				b.WriteString(", ")
+			}
+			fmt.Fprintf(&b, "AS%d", 100000+j)
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("source: RIPE\n")
+	src := setDump(t, b.String())
+	ev := (&Checker{Eval: peval.Evaluator{Src: src}}).eval()
+	e := ev.Expander
+	e.Src = ev.Src
+	ref := types.Ref(mustSetName(t, "AS-BIG"))
+	for i := 0; i < 2; i++ {
+		got, err := e.ExpandAS(context.Background(), ref)
+		if err != nil || got.Len() != 70000 {
+			t.Fatalf("AS-BIG: %d ASNs, %v; want 70,000", got.Len(), err)
+		}
+	}
+	if n := src.count("AS-BIG"); n != 1 {
+		t.Fatalf("AS-BIG fetched %d times by one call, want once", n)
+	}
+}
+
+// Review focus 4: many calls at once over a Memo far too small for them
+// (every call's answers evicted by the others), the sweep's shape: every
+// Check and Lint equals the unmemoized one.
+func TestMemoConcurrentEvicting(t *testing.T) {
+	src := keepPolicySource(t, 30)
+	plain := unmemoized(src)
+	wantLint := map[types.ASN][]Issue{}
+	for as := types.ASN(1); as < 10; as++ {
+		w, err := plain.Lint(context.Background(), as)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantLint[as] = w
+	}
+	c := &Checker{Eval: peval.Evaluator{Src: src}, Memo: NewMemoWith(MemoOptions{Ranges: 16})}
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for peer := types.ASN(2); peer < 32; peer++ {
+				p := Pair{A: 1, B: peer, AF: v4}
+				want, werr := plain.Check(context.Background(), p)
+				got, gerr := c.Check(context.Background(), p)
+				if werr != nil || gerr != nil || !reflect.DeepEqual(got, want) {
+					t.Errorf("%v: %+v %v, want %+v %v", p, got, gerr, want, werr)
+					return
+				}
+			}
+			for as := types.ASN(1); as < 10; as++ {
+				got, err := c.Lint(context.Background(), as)
+				if err != nil || !reflect.DeepEqual(got, wantLint[as]) {
+					t.Errorf("Lint %s: %+v %v, want %+v", as, got, err, wantLint[as])
+					return
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+}
+
+func mustSetName(t *testing.T, s string) types.SetName {
+	t.Helper()
+	n, err := types.ParseSetName(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
