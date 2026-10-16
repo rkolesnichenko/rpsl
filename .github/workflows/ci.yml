@@ -96,3 +96,21 @@ jobs:
         env:
           FUZZTIME: 15s
           FUZZ_SHARD: ${{ matrix.shard }}/2
+
+  # The one context branch protection requires: it fails unless every job
+  # above succeeded, so adding, renaming or resharding a job cannot drop it
+  # from the merge gate. always() runs it when a job it needs failed, which
+  # a plain needs: would skip, and a skipped required check counts as passed.
+  ci-ok:
+    name: ci ok
+    needs: [check, fuzz]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every check and fuzz job succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for r in $RESULTS; do [ "$r" = success ] || exit 1; done
