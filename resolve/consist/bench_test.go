@@ -160,3 +160,39 @@ func BenchmarkLintIXP(b *testing.B) {
 		})
 	}
 }
+
+// benchCover runs lint/shadowed's cover over one session's clauses, as
+// linter.policy does: ask about each clause, then add it.
+func benchCover(b *testing.B, clauses []types.PrefixSpace) {
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var cov cover
+		for _, s := range clauses {
+			cs := []conj{{space: s}}
+			cov.shadowed(cs)
+			cov.add(cs)
+		}
+	}
+}
+
+// BenchmarkShadowedLarge is one of RIPE's AS47147's IPv6 import sessions in
+// shape: six large, heavily overlapping spaces (its IXP route-server sets)
+// between small ones.
+func BenchmarkShadowedLarge(b *testing.B) {
+	var cl []types.PrefixSpace
+	for i := 0; i < 6; i++ {
+		cl = append(cl, types.SpaceOf(scattered(i*5000, 40_000)...), types.SpaceOf(scattered(1_000_000+i, 1)...))
+	}
+	benchCover(b, cl)
+}
+
+// BenchmarkShadowedManySmall is a long policy of small clauses, the shape
+// v0.27.2 made linear: it must stay so.
+func BenchmarkShadowedManySmall(b *testing.B) {
+	cl := make([]types.PrefixSpace, 20_000)
+	for i := range cl {
+		cl[i] = types.SpaceOf(scattered(i, 1)...)
+	}
+	benchCover(b, cl)
+}

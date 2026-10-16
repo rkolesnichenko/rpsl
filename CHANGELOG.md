@@ -9,6 +9,27 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Added
+
+- `types`: `PrefixSpace.SubsetOfUnion(ts...)` reports whether a space lies
+  in the union of others without building the union.
+
+### Changed
+
+- `types`: `PrefixSpace.Subset` stops at the first prefix the other space
+  lacks, and below a node the other space covers whole, and allocates
+  nothing, instead of building the whole difference.
+- `resolve/consist`: `lint/shadowed` keeps up to 16 large earlier spaces
+  (at least 1,024 ranges) apart from the union of the rest and tests a clause
+  with `SubsetOfUnion`, so it does not union the first 16 large spaces.
+  RIPE's AS47147, whose IPv6 import sessions hold several IXP route-server
+  sets of 41-46k ranges each, lints in 16.1 s alone where v0.28.0 took
+  43.5 s, and 24.1 s beside three other IXP lints (v0.28.0: 59.0 s);
+  AS31117 7.7 → 2.3 s, AS202827 5.6 → 3.0 s, AS1101 4.7 → 2.1 s. Full RIPE
+  sweep (`rpslcheck -sweep -c 4 -json`, GOMAXPROCS 4, `GOMEMLIMIT=5GiB`),
+  against v0.28.0 on the same dumps: 2,028 s → 2,013 s, max RSS 6,570 →
+  6,438 MB, output identical. No result changes.
+
 ## [0.28.0] - 2026-10-15
 
 ### Added

@@ -325,7 +325,13 @@ func FuzzPrefixSpace(f *testing.F) {
 		if len(data) > 0 {
 			depth = 1 + int(data[0]%5)
 		}
-		checkExpr(t, "fuzz", randomExpr(r, depth), randomExpr(r, 2))
+		e, other := randomExpr(r, depth), randomExpr(r, 2)
+		checkExpr(t, "fuzz", e, other)
+		// SubsetOfUnion of other split in two answers as Subset of it whole.
+		s, o, h := e.space(t), other.space(t), randomExpr(r, 2).space(t)
+		if got, want := s.SubsetOfUnion(o.Intersect(h), o.Minus(h)), s.Subset(o); got != want {
+			t.Fatalf("fuzz: %v SubsetOfUnion(%v split by %v) = %v, Subset %v", e, other, h, got, want)
+		}
 	})
 }
 

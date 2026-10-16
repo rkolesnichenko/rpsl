@@ -500,22 +500,65 @@ func (l *linter) policy(kind string, p peval.Policy, peer types.ASN, af types.Ad
 }
 
 // cover is the conjuncts of a policy's earlier clauses, for lint/shadowed.
-// Per signature asked about, it keeps the union of the earlier conjuncts
-// whose tests are a subset of it, brought up to date when next asked, so a
-// policy of n clauses merges each conjunct into each signature's union once
-// rather than rebuilding every union for every clause (quadratic: RIPE's
-// AS47147 spent 122 s of a 200 s lint there).
+// Per signature asked about, it keeps the earlier conjuncts whose tests are
+// a subset of it, brought up to date when next asked, so a policy of n
+// clauses takes each conjunct into each signature's cover once rather than
+// rebuilding every cover for every clause (quadratic: RIPE's AS47147 spent
+// 122 s of a 200 s lint there). A clause is then tested against the cover
+// without building its union: building it cost AS47147 most of the rest
+// (its IXP route-server sets, 41-46k ranges each, in most of its sessions).
 type cover struct {
 	earlier []conj
 	bySig   map[string]*sigCover
 }
 
-// sigCover is the union of earlier[:n]'s conjuncts whose tests are a subset
-// of sig.
+// The cover's bounds, from AS47147's sessions: a union with a small space
+// is cheap (shared subtrees), with a large overlapping one costly, and a
+// test walks every space kept apart, so only the large ones are, and at
+// most coverKeep of them (past that they fold, as small ones do).
+const (
+	coverLarge = 1024 // ranges: a space with at least this many is large
+	coverKeep  = 16
+)
+
+// sigCover is earlier[:n]'s conjuncts whose tests are a subset of sig:
+// the first coverKeep large spaces in large, the rest folded into one
+// union.
 type sigCover struct {
-	sig   []string
-	space types.PrefixSpace
-	n     int
+	sig    []string
+	folded types.PrefixSpace
+	large  []types.PrefixSpace
+	n      int
+}
+
+// take adds an earlier conjunct's space.
+func (sc *sigCover) take(s types.PrefixSpace) {
+	if len(sc.large) < coverKeep && rangesAtLeast(s, coverLarge) {
+		sc.large = append(sc.large, s)
+		return
+	}
+	sc.folded = sc.folded.Union(s)
+}
+
+// covers reports whether every prefix in s is in the cover.
+func (sc *sigCover) covers(s types.PrefixSpace) bool {
+	if len(sc.large) == 0 {
+		return s.Subset(sc.folded)
+	}
+	ts := make([]types.PrefixSpace, 0, len(sc.large)+1)
+	return s.SubsetOfUnion(append(append(ts, sc.folded), sc.large...)...)
+}
+
+// rangesAtLeast reports whether s holds at least n ranges, counting no
+// further.
+func rangesAtLeast(s types.PrefixSpace, n int) bool {
+	c := 0
+	for range s.Ranges() {
+		if c++; c >= n {
+			return true
+		}
+	}
+	return false
 }
 
 // shadowed reports whether every route cs accepts is accepted by the earlier
@@ -539,11 +582,11 @@ func (c *cover) shadowed(cs []conj) bool {
 		}
 		for _, e := range c.earlier[sc.n:] {
 			if subset(e.sig, sc.sig) {
-				sc.space = sc.space.Union(e.space)
+				sc.take(e.space)
 			}
 		}
 		sc.n = len(c.earlier)
-		if !union(g).Subset(sc.space) {
+		if !sc.covers(union(g)) {
 			return false
 		}
 	}
