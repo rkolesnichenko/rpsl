@@ -9,6 +9,8 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-10-16
+
 ### Added
 
 - `types`: `PrefixSpace.SubsetOfUnion(ts...)` reports whether a space lies
@@ -1308,7 +1310,8 @@ The first release. There is no earlier version to migrate from.
   values do; a few common RP-attributes have typed helpers.
 - **`rdap` is not a `Source`.** RDAP serves registration data, not IRR sets.
 
-[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.28.0...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.29.0...HEAD
+[0.29.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.27.2...v0.28.0
 [0.27.2]: https://github.com/rkolesnichenko/rpsl/compare/v0.27.1...v0.27.2
 [0.27.1]: https://github.com/rkolesnichenko/rpsl/compare/v0.27.0...v0.27.1
