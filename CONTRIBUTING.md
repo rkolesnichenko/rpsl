@@ -38,7 +38,7 @@ structural invariants — with:
 
 ```sh
 scripts/check.sh
-FUZZTIME=15s scripts/check.sh   # also runs every fuzz target (as CI does)
+FUZZTIME=15s scripts/check.sh   # also runs every fuzz target (scripts/fuzz.sh, its own CI job)
 ```
 
 Per-target subsets you'll reach for often:

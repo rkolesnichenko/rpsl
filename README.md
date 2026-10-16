@@ -361,7 +361,7 @@ covers only the root; run everything with:
 
 ```sh
 scripts/check.sh               # every module: build, vet, test -race; gofmt; invariants
-FUZZTIME=15s scripts/check.sh  # ... plus every fuzz target (what CI runs)
+FUZZTIME=15s scripts/check.sh  # ... plus every fuzz target (scripts/fuzz.sh, its own CI job)
 ```
 
 - **Lossless round-trip** — `go test -run TestRoundTrip .` for single objects,
