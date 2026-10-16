@@ -85,6 +85,9 @@ func subsetNode(a, b *spaceNode, d, width int, inA, inB lenMask) bool {
 		fb = fb.or(b.mask)
 	}
 	fa, fb = fa.and(geMask[d]), fb.and(geMask[d])
+	if covered(a, fa, fb, d, width) {
+		return true
+	}
 	if leaf(a) && leaf(b) {
 		return fa.andNot(fb).isZero()
 	}
@@ -97,6 +100,14 @@ func subsetNode(a, b *spaceNode, d, width int, inA, inB lenMask) bool {
 			subsetNode(kid(a, 1), kid(b, 1), d+1, width, ia, ib)
 	}
 	return true
+}
+
+// covered reports whether the other side already holds every prefix a
+// can below this node: every length from d to width, or, a being a leaf
+// (so the same lengths at every depth below), every length a holds. The
+// walks stop there instead of visiting the other side's subtrees.
+func covered(a *spaceNode, fa, fb lenMask, d, width int) bool {
+	return window(d, width).andNot(fb).isZero() || leaf(a) && fa.andNot(fb).isZero()
 }
 
 // subsetUnion is subsetNode against the union of bs, nodes at depth d. bs
@@ -122,6 +133,9 @@ func subsetUnion(a *spaceNode, bs []*spaceNode, d, width int, inA, inB lenMask, 
 		leaves = leaves && leaf(b)
 	}
 	fa, fb = fa.and(geMask[d]), fb.and(geMask[d])
+	if covered(a, fa, fb, d, width) {
+		return true
+	}
 	if leaves {
 		return fa.andNot(fb).isZero()
 	}

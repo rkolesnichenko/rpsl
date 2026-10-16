@@ -3,6 +3,7 @@ package types
 import (
 	"math/rand/v2"
 	"testing"
+	"time"
 )
 
 // SubsetOfUnion answers as Minus of the union does, and Subset as Minus:
@@ -101,6 +102,41 @@ func TestSubsetAllocatesNothing(t *testing.T) {
 	}{{"true", func() { _ = y.Subset(x) }}, {"false", func() { _ = x.Subset(y) }}} {
 		if n := testing.AllocsPerRun(10, c.f); n != 0 {
 			t.Errorf("Subset answering %s: %v allocations, want 0", c.name, n)
+		}
+	}
+}
+
+// Where the other side already holds every prefix below a node, the walks
+// stop there rather than visiting the node's whole subtree: an earlier ANY
+// beside the cover's kept large spaces made each later clause's test walk
+// all of them (64 ms where Subset of the built union took 29 ns).
+func TestSubsetStopsWhereCovered(t *testing.T) {
+	anyV4 := spaceOf(t, "0.0.0.0/0^+")
+	ts := []PrefixSpace{anyV4}
+	for k := range 16 {
+		ts = append(ts, SpaceOf(benchRanges(40_000, 24, 24+k%8)...))
+	}
+	wide := spaceOf(t, "0.0.0.0/0^8-24")
+	large := SpaceOf(benchRanges(40_000, 24, 26)...)
+	for _, c := range []struct {
+		name string
+		f    func() bool
+	}{
+		{"SubsetOfUnion, a broad s", func() bool { return wide.SubsetOfUnion(ts...) }},
+		{"SubsetOfUnion, a large s", func() bool { return large.SubsetOfUnion(ts...) }},
+		{"Subset, a large s in ANY", func() bool { return large.Subset(anyV4) }},
+	} {
+		best := time.Hour
+		for range 3 {
+			start := time.Now()
+			if !c.f() {
+				t.Fatalf("%s: false, want true", c.name)
+			}
+			best = min(best, time.Since(start))
+		}
+		// The walk stops at the root: microseconds, even under -race.
+		if best > time.Millisecond {
+			t.Errorf("%s: took %v, want it to stop where covered (under 1ms)", c.name, best)
 		}
 	}
 }
