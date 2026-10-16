@@ -17,10 +17,11 @@ same version (see [RELEASING.md](RELEASING.md)).
 ### Changed
 
 - `types`: `PrefixSpace.Subset` stops at the first prefix the other space
-  lacks and allocates nothing, instead of building the whole difference.
+  lacks, and below a node the other space covers whole, and allocates
+  nothing, instead of building the whole difference.
 - `resolve/consist`: `lint/shadowed` keeps up to 16 large earlier spaces
   (at least 1,024 ranges) apart from the union of the rest and tests a clause
-  with `SubsetOfUnion`, so it never unions two large overlapping spaces.
+  with `SubsetOfUnion`, so it does not union the first 16 large spaces.
   RIPE's AS47147, whose IPv6 import sessions hold several IXP route-server
   sets of 41-46k ranges each, lints in 16.1 s alone where v0.28.0 took
   43.5 s, and 24.1 s beside three other IXP lints (v0.28.0: 59.0 s);

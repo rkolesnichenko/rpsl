@@ -1103,7 +1103,7 @@ peering's expanded as-set, so it is not expanded again for each evaluation, and
 instead of rebuilding it per clause, which was quadratic in the clauses.
 Since v0.29.0 a cover keeps up to 16 large spaces (at least 1,024 ranges) apart
 from the union of the rest, and a clause is tested against them with
-`PrefixSpace.SubsetOfUnion`, never building a union of two large spaces:
+`PrefixSpace.SubsetOfUnion`, never building a union of those 16:
 AS47147's lint went from 43.5 s to 16.1 s.
 
 **ASPA rules (`Checker.ASPAs`, v0.25.0).** With a `*rpki.ASPAs` set, `Lint` also

@@ -203,12 +203,13 @@ workers' lints evicted them from the shared memo between a lint's sessions,
 and the lint computed them again: AS31117 took 7.7 s alone and 2m21s beside
 three other IXP lints (AS1101, AS47147, AS202827), and over all of RIPE
 (`-sweep -c 4 -json`, GOMAXPROCS 4, `GOMEMLIMIT=5GiB`) AS1101 and AS31117 ran
-out of the default 60 s. Now AS31117 takes 11.0 s beside the same three, and
-no lint in that sweep runs out of time. Since v0.29.0 `lint/shadowed` tests a
-clause against the earlier ones without building their union: AS47147, whose
-IPv6 sessions hold several IXP route-server sets of 41-46k ranges each, lints
-in 16.1 s alone (v0.28.0: 43.5 s) and 24.1 s beside the other three (v0.28.0:
-59.0 s). At v0.29.0 the sweep took 2,013 s with 6,438 MB max RSS (v0.28.0,
+out of the default 60 s. At v0.28.0 AS31117 took 11.0 s beside the same
+three, and no lint in that sweep ran out of time. Since v0.29.0
+`lint/shadowed` tests a clause against the earlier ones without building their
+union: AS47147, whose IPv6 sessions hold several IXP route-server sets of
+41-46k ranges each, lints in 16.1 s alone (v0.28.0: 43.5 s) and 24.1 s beside
+the other three (v0.28.0: 59.0 s), and AS31117 beside it in 2.9-3.8 s. At
+v0.29.0 the sweep took 2,013 s with 6,438 MB max RSS (v0.28.0,
 same dumps and machine: 2,028 s, 6,570 MB).
 
 `rpslcheck` shares a `consist.Memo` across a run's checks in every mode (decoded
