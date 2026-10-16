@@ -262,7 +262,8 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
 
 - **`go test ./...` only covers the ROOT module** (rpsl, object, policy, auth). Run everything
   (all six modules incl. examples/bulk-ripe under -race, gofmt, invariants) with
-  `scripts/check.sh`; `FUZZTIME=15s scripts/check.sh` also runs every fuzz target;
+  `scripts/check.sh`; `FUZZTIME=15s scripts/check.sh` also runs every fuzz target (`scripts/fuzz.sh`,
+  which CI runs as its own job in two shards, `FUZZ_SHARD=i/2`);
   on a developer machine run it with `GOMAXPROCS=4` under a memory guard (measured: 8.7 GB peak at the default GOMAXPROCS of 14, in FuzzTranslateRegexp; 4.5 GB with 4).
   The slowest `resolve` model tests draw a quarter of their seeds under `-race` (`modelSeeds`); check.sh's
   coverage pass, without `-race`, draws them all and checks the seed-calibrated floors.
@@ -280,7 +281,7 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   FuzzParseNotification, FuzzReadDelta, FuzzVerifyJWS (resolve/nrtm4); FuzzCorpusDelete, FuzzNormalizeFilter (resolve);
   FuzzTranslateRegexp (resolve/rtconfig); FuzzParseTemplate (resolve/internal/rpslconf);
   FuzzSession (resolve/irrdq); FuzzSourceSpec (resolve/internal/rpsld).
-  Verify the count with `grep -o '"[^"]* Fuzz[A-Za-z]*"' scripts/check.sh | wc -l`.
+  Verify the count with `grep -o '"[^"]* Fuzz[A-Za-z]*"' scripts/fuzz.sh | wc -l`.
 - Never slice a string at an offset found in a transformed copy of it (`strings.ToUpper` can
   lengthen UTF-8): v0.19.0 panicked on "ɐ" (2 bytes) → "Ɐ" (3). Match case-insensitively in place.
 - Opt-in: `RPSL_REALDATA=$PWD/.data go test -run TestRealData ./examples/bulk-ripe/bulk`

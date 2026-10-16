@@ -66,5 +66,28 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
       - name: scripts/check.sh
         run: scripts/check.sh
+
+  # Every fuzz target for 15s, beside the check jobs rather than after them:
+  # 45 targets in one job took 742s, longer than a whole check. Two shards
+  # finish within the checks. The fuzz targets need no external tools.
+  fuzz:
+    name: fuzz (shard ${{ matrix.shard }}/2)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: stable
+          cache-dependency-path: "**/go.mod"
+      - name: scripts/fuzz.sh
+        run: scripts/fuzz.sh
         env:
-          FUZZTIME: ${{ matrix.go == 'stable' && '15s' || '' }}
+          FUZZTIME: 15s
+          FUZZ_SHARD: ${{ matrix.shard }}/2

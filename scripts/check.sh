@@ -5,6 +5,7 @@
 #   scripts/check.sh                 # build, vet, race tests, gofmt, invariants,
 #                                    # every benchmark once
 #   FUZZTIME=15s scripts/check.sh    # ... plus every fuzz target for 15s each
+#                                    # (scripts/fuzz.sh, which CI runs as its own job)
 #
 # staticcheck and govulncheck run when installed (CI installs them), and the
 # bgpq4 differential in resolve when bgpq4 is (CI installs it too).
@@ -81,41 +82,8 @@ for tool in staticcheck govulncheck; do
 	done
 done
 
-# fuzz runs one fuzz target. The Go fuzzing harness sometimes ends a run that
-# found nothing with "context deadline exceeded" when a worker is slow to stop
-# at -fuzztime; a real crash always prints "Failing input written to". So a run
-# that fails that way without a failing input is retried once.
-fuzz() {
-	out=$(cd "$1" && go test -run='^$' -fuzz="^$3\$" -fuzztime="$FUZZTIME" "$2" 2>&1)
-	rc=$?
-	printf '%s\n' "$out"
-	if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "context deadline exceeded" &&
-		! printf '%s' "$out" | grep -q "Failing input written"; then
-		step "fuzz $3: harness deadline without a failing input; retrying once"
-		(cd "$1" && go test -run='^$' -fuzz="^$3\$" -fuzztime="$FUZZTIME" "$2")
-		rc=$?
-	fi
-	return "$rc"
-}
-
 if [ -n "${FUZZTIME:-}" ]; then
-	# module-dir package fuzz-target
-	for t in "lexer . FuzzTokenize" "ast . FuzzAttributeList" "ast . FuzzEdit" "ast . FuzzFormat" \
-		"types . FuzzParseSetName" "types . FuzzParseRangeOperator" "types . FuzzParsePrefixRange" \
-		"types . FuzzParseRouterID" "types . FuzzParseSetRef" "types . FuzzPrefixSpace" \
-		". . FuzzParseStream" ". . FuzzDecode" ". ./object FuzzParseSrcMember" ". ./policy FuzzParseImport" ". ./policy FuzzParseASPathRegexp" \
-		". ./policy FuzzParseFilter" ". ./policy FuzzParsePeering" ". ./policy FuzzFilterString" ". ./policy FuzzParseMPFilter" \
-		". ./policy FuzzParseInject" ". ./policy FuzzParseComponents" ". ./policy FuzzParseAggrMtd" \
-		". ./policy FuzzParseIfaddr" ". ./policy FuzzParseInterface" ". ./policy FuzzParsePeer" \
-		". ./policy FuzzParseRPAttribute" ". ./policy FuzzParseTypedef" ". ./policy FuzzParseProtocol" \
-		"resolve ./irrd FuzzReadFrame" "resolve ./irrd FuzzParseMembers" "resolve ./irrd FuzzParseRegistries" "resolve ./whois FuzzScanResponse" \
-		"resolve ./internal/filtergen FuzzAggregate" "resolve ./rpki FuzzReadJSON" "resolve ./rpki FuzzApplySLURM" "resolve ./rpki FuzzReadASPAs" \
-		"resolve ./nrtm4 FuzzParseNotification" "resolve ./nrtm4 FuzzReadDelta" "resolve ./nrtm4 FuzzVerifyJWS" "resolve . FuzzCorpusDelete" "resolve . FuzzNormalizeFilter" \
-		"resolve ./rtconfig FuzzTranslateRegexp" "resolve ./internal/rpslconf FuzzParseTemplate" "resolve ./irrdq FuzzSession" "resolve ./internal/rpsld FuzzSourceSpec"; do
-		set -- $t
-		step "fuzz $3 ($FUZZTIME)"
-		fuzz "$1" "$2" "$3" || bad "fuzz $3"
-	done
+	scripts/fuzz.sh || bad "fuzz"
 fi
 
 echo
