@@ -85,7 +85,12 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: stable
-          cache-dependency-path: "**/go.mod"
+          # fuzz.sh in the key gives this job a cache of its own: with the
+          # check job's key, a shard finishing first would save
+          # fuzz-instrumented builds the race and coverage builds cannot use.
+          cache-dependency-path: |
+            **/go.mod
+            scripts/fuzz.sh
       - name: scripts/fuzz.sh
         run: scripts/fuzz.sh
         env:

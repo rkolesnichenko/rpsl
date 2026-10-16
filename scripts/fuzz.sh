@@ -11,9 +11,10 @@ FUZZTIME=${FUZZTIME:-15s}
 FUZZ_SHARD=${FUZZ_SHARD:-1/1}
 shard=${FUZZ_SHARD%%/*}
 shards=${FUZZ_SHARD#*/}
-# Digits, one slash, digits: "2" alone is not shard 2 of 2.
+# Digits, one slash, digits: "2" alone is not shard 2 of 2. No leading zero,
+# which $(( )) would read as octal.
 case "$FUZZ_SHARD" in
-*[!0-9/]* | */*/* | /* | */) echo "fuzz: FUZZ_SHARD must be i/n, not $FUZZ_SHARD"; exit 2 ;;
+*[!0-9/]* | */*/* | /* | */ | 0* | */0*) echo "fuzz: FUZZ_SHARD must be i/n, not $FUZZ_SHARD"; exit 2 ;;
 */*) ;;
 *) echo "fuzz: FUZZ_SHARD must be i/n, not $FUZZ_SHARD"; exit 2 ;;
 esac
@@ -44,6 +45,7 @@ fuzz() {
 
 # module-dir package fuzz-target; shard i of n takes targets i, i+n, i+2n, ...
 i=0
+ran=0
 for t in "lexer . FuzzTokenize" "ast . FuzzAttributeList" "ast . FuzzEdit" "ast . FuzzFormat" \
 	"types . FuzzParseSetName" "types . FuzzParseRangeOperator" "types . FuzzParsePrefixRange" \
 	"types . FuzzParseRouterID" "types . FuzzParseSetRef" "types . FuzzPrefixSpace" \
@@ -58,10 +60,16 @@ for t in "lexer . FuzzTokenize" "ast . FuzzAttributeList" "ast . FuzzEdit" "ast 
 	"resolve ./rtconfig FuzzTranslateRegexp" "resolve ./internal/rpslconf FuzzParseTemplate" "resolve ./irrdq FuzzSession" "resolve ./internal/rpsld FuzzSourceSpec"; do
 	i=$((i + 1))
 	[ $(((i - 1) % shards + 1)) -eq "$shard" ] || continue
+	ran=$((ran + 1))
 	set -- $t
 	step "fuzz $3 ($FUZZTIME)"
 	fuzz "$1" "$2" "$3" || bad "fuzz $3"
 done
+# A shard past the last target would otherwise pass having fuzzed nothing.
+if [ "$ran" -eq 0 ]; then
+	echo "fuzz: shard $FUZZ_SHARD runs no target (there are $i)"
+	exit 2
+fi
 
 echo
 if [ "$fail" -ne 0 ]; then echo "fuzz: FAILED"; exit 1; fi
