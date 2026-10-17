@@ -757,6 +757,9 @@ func TestRtconfigDivergences(t *testing.T) {
 				out, code, errOut := runRpslconf(addr, "RADB", tmpl, "-config", v)
 				switch {
 				case c.set == "" && v != "cisco":
+					if code != 0 || errOut != "" || strings.TrimSpace(out) == "" {
+						t.Errorf("rpslconf %s, the literal <AS-ANY$>: exit %d, %q\n%s; want a configuration", v, code, errOut, out)
+					}
 				case c.set == "":
 					if d, ok := decide(t, "rpslconf", v, out, nb, false, routes); code != 0 || !ok || !d[0].ok || !d[1].ok {
 						t.Errorf("rpslconf, the literal <AS-ANY$>: exit %d, %s; decisions %v", code, errOut, d)
@@ -929,14 +932,19 @@ func TestPevalDivergences(t *testing.T) {
 	// matches no path. rpsl keeps each set by name: in a regexp it is every AS.
 	t.Run("D19", func(t *testing.T) {
 		addr := irrtest.New("as-set: AS-X\nmembers: AS-ANY, AS9\nsource: RADB\n", "as-set: AS-ONLY\nmembers: AS-ANY\nsource: RADB\n").IRRd(t)
-		for _, c := range []struct{ filter, theirs, ours string }{
-			{"<AS-X$>", "(< AS9 $>)", "<AS-X $>"},
-			{"<AS-ONLY$>", "Warning: key not found error for query !iAS-ONLY,1.\n\n(<[E] $>)", "<AS-ONLY $>"},
-			{"<AS-ANY$>", "Warning: key not found error for query !iAS-ANY,1.\n\n(<[E] $>)", "<AS-ANY $>"},
+		// The warning goes to stderr, unbuffered, and the Linux build's echo
+		// and answer to stdout, buffered: they may come in either order, so
+		// each is looked for on its own.
+		for _, c := range []struct{ filter, warning, theirs, ours string }{
+			{"<AS-X$>", "", "(< AS9 $>)", "<AS-X $>"},
+			{"<AS-ONLY$>", "!iAS-ONLY,1", "(<[E] $>)", "<AS-ONLY $>"},
+			{"<AS-ANY$>", "!iAS-ANY,1", "(<[E] $>)", "<AS-ANY $>"},
 		} {
 			out, err := rawAt(addr, c.filter, 10*time.Second)
-			if got := pevalAnswer(out, c.filter); err != nil || got != c.theirs {
-				t.Errorf("D19 is gone: peval says %q for %s, %v; want %q", got, c.filter, err, c.theirs)
+			warned := strings.Contains(out, "key not found error for query ")
+			if err != nil || !strings.HasSuffix(pevalAnswer(out, c.filter), c.theirs) || warned != (c.warning != "") ||
+				c.warning != "" && !strings.Contains(out, "key not found error for query "+c.warning) {
+				t.Errorf("D19 is gone: peval says %q for %s, %v; want %q (a key-not-found warning: %q)", out, c.filter, err, c.theirs, c.warning)
 			}
 			o, code, errOut := runRpslconf(addr, "RADB", "", "-e", "afi ipv4.unicast "+c.filter)
 			if code != 0 || strings.TrimSpace(o) != c.ours {

@@ -474,10 +474,10 @@ func TestPeersAS0(t *testing.T) {
 	}
 }
 
-// A session whose filter cannot be normalized — AS1887's shape: an AS-path
-// regexp names a set that reaches AS-ANY — is a lint/undecided issue with
-// no attribute, and the other sessions are still linted; Check still
-// returns the error.
+// A session whose filter cannot be normalized — a set reaching AS-ANY in
+// filter position, or a cycle of filter-sets through a regexp — is a
+// lint/undecided issue with no attribute, and the other sessions are still
+// linted; Check still returns the error.
 func TestLintFilterNotEvaluable(t *testing.T) {
 	for _, c := range []struct {
 		name    string
@@ -555,10 +555,11 @@ func TestLintAnySet(t *testing.T) {
 		{"export: to AS2 announce <AS-R$>", "export", v4},
 		{"import: from AS2 accept {10.0.0.0/8^+} AND NOT <AS-R>", "import", v4},
 		{"mp-import: afi ipv6.unicast from AS2 accept <AS-R$>", "mp-import", v6},
+		{"default: to AS2 networks <AS-R$>", "default", v4},
 	} {
 		t.Run(c.line, func(t *testing.T) {
 			ch := checker(t, append([]string{autNum(1, c.line), autNum(2)}, sets...)...)
-			if _, err := ch.Check(context.Background(), Pair{A: 1, B: 2, AF: c.af}); err != nil {
+			if _, err := ch.Check(context.Background(), Pair{A: 1, B: 2, AF: c.af}); c.attr != "default" && err != nil {
 				t.Errorf("Check: %v; want it decided", err)
 			}
 			is := lint(t, ch, 1)
@@ -578,6 +579,24 @@ func TestLintAnySet(t *testing.T) {
 			if g.Attr != c.attr || g.Index != 0 || g.Message != msg || g.Severity != ast.Warning || g.Span.StartLine != 3 ||
 				!slices.Equal(g.Peers, []types.ASN{2}) || !slices.Equal(g.AFs, []types.AddrFamily{c.af}) {
 				t.Errorf("issue %s, want %s %s#0 L3: %q [AS2] [%v], a Warning", issueText(g), RuleAnySet, c.attr, msg, c.af)
+			}
+		})
+	}
+}
+
+// Neither a literal AS-ANY in a regexp nor an ordinary set whose name has an
+// AS-ANY component (AS1:AS-ANY) is a set reaching AS-ANY: no lint/any-set.
+func TestLintAnySetNotForLiteralOrHierarchical(t *testing.T) {
+	for _, line := range []string{"import: from AS2 accept <AS-ANY$>", "import: from AS2 accept <AS1:AS-ANY$>"} {
+		t.Run(line, func(t *testing.T) {
+			ch := checker(t, autNum(1, line), autNum(2), asSetText("AS1:AS-ANY", "AS9"))
+			if _, err := ch.Check(context.Background(), Pair{A: 1, B: 2, AF: v4}); err != nil {
+				t.Errorf("Check: %v; want it decided", err)
+			}
+			for _, i := range lint(t, ch, 1) {
+				if i.Rule == RuleAnySet || i.Rule == RuleUndecided {
+					t.Errorf("issue %s", issueText(i))
+				}
 			}
 		})
 	}
