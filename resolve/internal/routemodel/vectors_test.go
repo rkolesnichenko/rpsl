@@ -19,8 +19,10 @@ import (
 // an oracle: a regexp body (without < >), the sets it names with their
 // members, the names of those that reach AS-ANY and so hold every AS
 // (resolve.ASNSet.Any; absent when none), an AS path, and the answer. A set
-// in "any_sets" is never in "sets": a reader that does not know "any_sets"
-// then fails on a set it was not given rather than reading it as empty. The
+// in "any_sets" is never in "sets". routemodel, given no ASNSet for a set a
+// regexp names, fails ("was not expanded") rather than reading it as empty;
+// another reader that does not know "any_sets" may read the absent set as
+// matching nothing and answer wrongly. The
 // literal AS-ANY is in neither; routemodel treats it as any AS. An error
 // answer carries "err" and no "match".
 type vector struct {
@@ -252,7 +254,7 @@ func TestWriteVectors(t *testing.T) {
 		}
 	}
 	for _, c := range matchPathCases {
-		v := makeVector(t, c.re, false, c.path)
+		v := makeVector(t, c.re, c.sets, c.path)
 		if v.Match == nil || *v.Match != c.want {
 			t.Fatalf("<%s> on %v: vector %+v disagrees with TestMatchPath's %v", c.re, c.path, v, c.want)
 		}

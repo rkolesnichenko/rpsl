@@ -188,9 +188,8 @@ func TestRealDataConsist(t *testing.T) {
 			}
 			for _, is := range issues {
 				count("lint: "+is.Rule, 1)
-				if is.Rule == RuleAnySet {
-					t.Logf("%s: %s: %s", as, is.Rule, is.Message)
-				}
+				// Every lint/any-set issue is kept (and logged once, at the
+				// end); other rules keep five examples.
 				if strings.HasPrefix(is.Rule, "lint/aspa-") || is.Rule == RuleAnySet {
 					mu.Lock()
 					if len(examples[is.Rule]) < 5 || is.Rule == RuleAnySet {

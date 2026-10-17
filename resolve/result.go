@@ -30,7 +30,8 @@ func NewAnyASNSet() ASNSet { return ASNSet{any: true} }
 
 // Any reports whether the set is every AS: an as-set that reaches AS-ANY,
 // named in an AS-path regexp. Has is then true for every AS, and List, Len and
-// Missing give nothing.
+// Missing give nothing: a set missing below it is not reported, since nothing
+// it could add changes every AS.
 func (s ASNSet) Any() bool { return s.any }
 
 // Missing lists the nested sets that were referenced but not found, sorted by

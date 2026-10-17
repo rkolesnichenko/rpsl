@@ -160,21 +160,22 @@ func TestASPAMissingProvider(t *testing.T) {
 	}
 }
 
-// A negated AS-path regexp naming a set that reaches AS-ANY: the ASPA rules
-// read conjunct structure only, so an any-set path is not recognised as
-// what it means. "ANY AND NOT <AS-R>", with AS-R every AS, rejects every
-// route with a path — nothing is imported in fact — yet the conjunct is ANY
-// with only a negated test, a full table, and the import is reported. This
-// pins that answer; the export form names no positive as-set, so it gives no
+// An AS-path regexp naming a set that reaches AS-ANY (ruling F1). "ANY AND
+// NOT <AS-R>", with AS-R every AS, rejects every route with a path, so the
+// conjunct is not a full table and the import gives no issue. The positive
+// form "accept <AS-R$>" (RIPE AS8308's) gives none either: the rule reads
+// structure only and a positive test never counts, so this is a known false
+// negative. The export form names no positive as-set, so it gives no
 // lint/aspa-* issue.
 func TestASPAAnySetPath(t *testing.T) {
 	anyR := asSetText("AS-R", "AS-ANY")
-	ch := checker(t, autNum(1, "import: from AS9 accept ANY AND NOT <AS-R>", "export: to AS9 announce AS1"), autNum(9), anyR)
-	want := []string{"lint/aspa-missing-provider import 0 [AS9] [ipv4.unicast]: imports a full table from AS9, but AS1's ASPA does not list it as a provider"}
-	if got := lintASPA(t, ch, 1, newASPAs(t, aspa(1, 3)), RuleASPAMissingProvider); !slices.Equal(got, want) {
-		t.Errorf("import: got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	for _, imp := range []string{"import: from AS9 accept ANY AND NOT <AS-R>", "import: from AS9 accept <AS-R$>"} {
+		ch := checker(t, autNum(1, imp, "export: to AS9 announce AS1"), autNum(9), anyR)
+		if got := lintASPA(t, ch, 1, newASPAs(t, aspa(1, 3)), RuleASPAMissingProvider); len(got) != 0 {
+			t.Errorf("%s: got\n%s\nwant none", imp, strings.Join(got, "\n"))
+		}
 	}
-	ch = checker(t, autNum(1, "import: from AS9 accept AS9", "export: to AS9 announce ANY AND NOT <AS-R>"), autNum(9), anyR)
+	ch := checker(t, autNum(1, "import: from AS9 accept AS9", "export: to AS9 announce ANY AND NOT <AS-R>"), autNum(9), anyR)
 	if got := lintASPA(t, ch, 1, newASPAs(t, aspa(1, 9))); len(got) != 0 {
 		t.Errorf("export: got\n%s\nwant none", strings.Join(got, "\n"))
 	}

@@ -177,6 +177,8 @@ func (m *FilterMemo) put(k filterKey, nf NormalFilter, err error, usedPeer bool)
 		w += c.Prefixes.Len() + c.NotPrefixes.Len()
 		for _, p := range c.Paths {
 			for _, s := range p.Sets {
+				// An any-set (s.Any()) weighs 0: it holds no members,
+				// so the answer keeps nothing for it beyond the map entry.
 				w += s.Len()
 			}
 		}

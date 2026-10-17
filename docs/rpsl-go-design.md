@@ -1117,7 +1117,9 @@ members and ASPA provider lists, never an AS path. `lint/aspa-missing-provider`
 (Warning): the aut-num imports a full table from a real peer its ASPA does not list
 (or its ASPA is AS0). A full table is a conjunct of a decided clause accepting the
 family's whole space less negated prefixes, with no positive AS-path or community
-test, and accepting at least one prefix; the clause counts only if its own peering
+test and no negated AS-path test naming a set that reaches `AS-ANY` (`ANY AND NOT
+<AS-R>`, `AS-R` every AS, rejects every route with a path), and accepting at least
+one prefix; the clause counts only if its own peering
 names the peer, so a peering reaching `AS-ANY` anywhere on its positive side (in
 `OR`, `AND`, or left of `EXCEPT`) — written, through an as-set's expansion, or in a
 peering-set — names no peer and never counts; a set template is instantiated for

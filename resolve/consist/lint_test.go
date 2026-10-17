@@ -559,6 +559,7 @@ func TestLintAnySet(t *testing.T) {
 	} {
 		t.Run(c.line, func(t *testing.T) {
 			ch := checker(t, append([]string{autNum(1, c.line), autNum(2)}, sets...)...)
+			// Check compares import/export only; default: is lint-only.
 			if _, err := ch.Check(context.Background(), Pair{A: 1, B: 2, AF: c.af}); c.attr != "default" && err != nil {
 				t.Errorf("Check: %v; want it decided", err)
 			}

@@ -230,7 +230,7 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   - A direction where neither side has any term is `Direction.NoPolicy` ("no policy either way"), never "consistent".
   - "Announces" means "permits announcing" (policy text, not a RIB).
   - `Corpus.IndexPeers` keeps AS numbers only, never decoded policies.
-  - The ASPA rules (`Checker.ASPAs`) read conjunct structure, peerings, set members and ASPA provider lists only; "full table" is AnyPrefix, non-empty, with only negated tests; never a path. A clause counts only if its own peering names the peer: a peering reaching AS-ANY on its positive side (OR, AND, left of EXCEPT) — written, through an as-set, or in a peering-set — names none; a set template is instantiated for the peer. Stale-provider is silent when a peering reaches a missing set (`peerInfo.missing`, never `PeerList.Skipped`).
+  - The ASPA rules (`Checker.ASPAs`) read conjunct structure, peerings, set members and ASPA provider lists only; "full table" is AnyPrefix, non-empty, with only negated tests, none naming a set that reaches AS-ANY; never a path. A clause counts only if its own peering names the peer: a peering reaching AS-ANY on its positive side (OR, AND, left of EXCEPT) — written, through an as-set, or in a peering-set — names none; a set template is instantiated for the peer. Stale-provider is silent when a peering reaches a missing set (`peerInfo.missing`, never `PeerList.Skipped`).
   - **`Checker.Memo` is result-neutral.** `resolve.FilterMemo` never stores an answer whose normalization read `Expander.Peer` (every read goes through `filterEval.peer`; `TestPeerReadsGoThroughAccessor`), nor a context or Source error; a `Memo` serves one snapshot. Each call reads it through its own `resolve.NewFilterMemoOver` layer (`Checker.eval`), so another call's eviction does not make it compute an answer again while the answer fits the layer's bound. `rpslcheck` always sets it.
 
 - **The server (`resolve/irrdq`) answers as IRRd 4.5.3 does.**
@@ -306,7 +306,9 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   `RPSL_LIVE=1 go test -run TestLiveRIPE ./resolve/nrtm4` (RIPE's NRTMv4 signature and newest delta),
   `RPSL_LIVE_NRTM=1 … -run TestLiveRIPEMirror` (a full RIPE mirror, ~400 MB);
   `RPSL_REALDATA=$PWD/.data go test -run TestRealDataPeval ./resolve` (a sample of RIPE's
-  aut-nums, import/export evaluated toward every named peer in both families);
+  aut-nums, import/export evaluated toward every named peer in both families;
+  `RPSL_PEVAL_AS=AS8308,AS1887` adds those aut-nums to the sample with every peer they name and
+  logs each of their sessions);
   `RPSL_REALDATA=$PWD/.data go test -run TestRealDataConsist ./resolve/consist` (a full RIPE
   sweep: every aut-num linted, every forward-reachable pair checked in both families, each
   `Lint`/`Peers` call and each `Check` under its own time budget; `RPSL_CONSIST_SAMPLE=N` sweeps

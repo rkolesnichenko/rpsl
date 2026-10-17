@@ -354,6 +354,10 @@ func sameAlt(as []types.ASN, q string, allowEmpty bool) string {
 
 // anySet reports whether the as-set name reaches AS-ANY: in a regexp it is
 // any AS (o.asns, which drops the AS-ANY member, would read it as empty).
+// It follows o.reach, which honours o.exS, while the engine clears Exclude
+// for every set a regexp names: an oracle answering for path sets must be
+// built without exclusion (newOracle, never o.excluding), as both Exclude
+// models (TestModelNormalizeExclude, TestModelPolicyExclude) build theirs.
 func (o *oracle) anySet(name string) bool {
 	_, reaches := o.reach(name)
 	return reaches
@@ -792,8 +796,8 @@ func checkEvalFilterAgrees(t *testing.T, label string, e *resolve.Expander, f po
 // depth-4 tree hits only some of the time, and even then only when the
 // resulting prefix sets are not disjoint or empty. 700 seeds is the smallest
 // round multiple of the original 300 found to reliably clear the floor below
-// (a run of 300 lands at 27-29, and even a structural upper bound that assumes
-// every leaf nonempty tops out at 47); the floor itself is unchanged.
+// (with withAnySets, seeds 0-299 give 33 such filters and 0-699 give 66); the
+// floor itself is unchanged.
 func TestModelMaxConjuncts(t *testing.T) {
 	ctx := context.Background()
 	checked := 0
@@ -837,7 +841,7 @@ func TestModelNormalizeExclude(t *testing.T) {
 	seeds, _ := resolve.ModelSeeds(500)
 	for seed := uint64(0); seed < seeds; seed++ {
 		r := rand.New(rand.NewPCG(seed, 19))
-		m := randomModel(r, false)
+		m := withAnySets(r, randomModel(r, false))
 		o := newOracle(m)
 		g := newFilterGen(r, o)
 		texts := append(m.texts(r), g.filterSets(3)...)

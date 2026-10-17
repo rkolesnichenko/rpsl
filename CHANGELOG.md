@@ -13,8 +13,10 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 - `resolve`: `ASNSet.Any()` and `NewAnyASNSet()`: the set of every AS, what
   an as-set reaching `AS-ANY` denotes in an AS-path regexp
-  (`PathMatch.Sets`). `Has` is true for every AS; `List` and `Len` give
-  nothing, so a reader checks `Any()` first.
+  (`PathMatch.Sets`). `Has` is true for every AS, but `List()` is empty and
+  `Len()` is 0. **Code reading `PathMatch.Sets` must check `Any()` first**: a
+  reader that takes `Len() == 0` (or an empty `List()`) to mean "matches no
+  AS" now reads every AS as none.
 - `resolve/rtconfig`: `CauseAnySet` ("an AS-path set that reaches AS-ANY"):
   every vendor refuses a regexp naming such a set, in either polarity,
   rather than write it (IRRToolSet drops the `AS-ANY` member: D19). A
@@ -42,6 +44,14 @@ same version (see [RELEASING.md](RELEASING.md)).
   them. A full lint sweep of RIPE's 39,918 aut-nums gives 4 `lint/any-set`
   issues (AS8308 1, AS1887 3) and no set reaching `AS-ANY` in filter
   position.
+  A set missing below a set that reaches `AS-ANY`, in a regexp, is not
+  reported missing (the any-set's `Missing()` is empty: nothing a missing set
+  could add changes every AS), so `lint/missing-set` does not name it.
+- `resolve/consist`: lint's ASPA full-table rule (`lint/aspa-missing-provider`)
+  does not count a conjunct whose negated AS-path test names a set reaching
+  `AS-ANY` (`ANY AND NOT <AS-R>` rejects every route with a path). A positive
+  test over such a set (`accept <AS-R$>`) never counted, so that import is
+  not reported either: a known false negative.
 - The filter, policy, consistency and printer models draw as-sets reaching
   `AS-ANY` in AS-path regexps (never in filter position), and routemodel's
   vectors (version 2) carry `any_sets`.

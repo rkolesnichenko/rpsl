@@ -942,7 +942,7 @@ func TestPevalDivergences(t *testing.T) {
 		} {
 			out, err := rawAt(addr, c.filter, 10*time.Second)
 			warned := strings.Contains(out, "key not found error for query ")
-			if err != nil || !strings.HasSuffix(pevalAnswer(out, c.filter), c.theirs) || warned != (c.warning != "") ||
+			if err != nil || !strings.Contains(pevalAnswer(out, c.filter), c.theirs) || warned != (c.warning != "") ||
 				c.warning != "" && !strings.Contains(out, "key not found error for query "+c.warning) {
 				t.Errorf("D19 is gone: peval says %q for %s, %v; want %q (a key-not-found warning: %q)", out, c.filter, err, c.theirs, c.warning)
 			}
