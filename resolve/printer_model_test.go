@@ -199,4 +199,13 @@ func TestPrintersMatchPeval(t *testing.T) {
 	if nextHops[rtconfig.IOS][false]+nextHops[rtconfig.Junos][false]+nextHops[rtconfig.IOSXR][false] == 0 {
 		t.Errorf("no accepted route compared with an IPv6 next-hop")
 	}
+	// A regexp naming a set reaching AS-ANY (withAnySets) is refused with
+	// CauseAnySet, counted with the other refusals above, never written.
+	anySet := 0
+	for _, v := range rtconfig.Vendors() {
+		anySet += refused[v][rtconfig.CauseAnySet]
+	}
+	if anySet == 0 {
+		t.Errorf("no vendor refused a set reaching AS-ANY (%s)", rtconfig.CauseAnySet)
+	}
 }

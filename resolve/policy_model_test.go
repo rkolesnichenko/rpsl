@@ -676,7 +676,7 @@ func randomPolicy(t *testing.T, r *rand.Rand, seed uint64) ([]string, *policyGen
 // with its set templates' as-sets, two filter-sets, the routers and two
 // peering-sets. It returns the objects' RPSL and the generator.
 func newPolicyIRR(r *rand.Rand, actions []string) ([]string, *policyGen) {
-	m := withTemplateSets(r, randomModel(r, false))
+	m := withAnySets(r, withTemplateSets(r, randomModel(r, false)))
 	fg := newFilterGen(r, newOracle(m))
 	pg := &policyGen{fg: fg, prngs: map[string][]*mPeering{}, asSets: fg.asSets, actions: actions}
 	texts := append(m.texts(r), fg.filterSets(2)...)
@@ -942,13 +942,14 @@ func TestModelPolicyBackends(t *testing.T) {
 		}
 		checkPolicyModel(t, fmt.Sprintf("corpus seed %d", seed), pg, pol, &peval.Evaluator{Src: l.Source()}, r, kcs["corpus"])
 		db := irrtest.New(texts...).WithSources("RIPE", "RADB")
-		ir := &irrd.Source{Addr: db.IRRd(t), Sources: []string{"RIPE", "RADB"}, Pipeline: 8, Timeout: 5 * time.Second}
+		// SrcMembers: the model reads src-members: (oracle.noSrc unset).
+		ir := &irrd.Source{Addr: db.IRRd(t), Sources: []string{"RIPE", "RADB"}, Pipeline: 8, SrcMembers: true, Timeout: 5 * time.Second}
 		checkPolicyModel(t, fmt.Sprintf("irrd seed %d", seed), pg, pol, &peval.Evaluator{Src: ir}, r, kcs["irrd"])
 		ir.Close()
 		wh := &whois.Source{Addr: db.Whois(t), Sources: []string{"RIPE", "RADB"}, Timeout: 5 * time.Second}
 		checkPolicyModel(t, fmt.Sprintf("whois seed %d", seed), pg, pol, &peval.Evaluator{Src: wh}, r, kcs["whois"])
 		rs := rpsldtest.Serve(t, rpsldtest.Snapshot(t, texts, irrdq.SnapshotOptions{}, "RIPE", "RADB"))
-		rp := &irrd.Source{Addr: rs, Sources: []string{"RIPE", "RADB"}, Pipeline: 8, Timeout: 5 * time.Second}
+		rp := &irrd.Source{Addr: rs, Sources: []string{"RIPE", "RADB"}, Pipeline: 8, SrcMembers: true, Timeout: 5 * time.Second}
 		checkPolicyModel(t, fmt.Sprintf("rpsld seed %d", seed), pg, pol, &peval.Evaluator{Src: rp}, r, kcs["rpsld"])
 		rp.Close()
 		rw := &whois.Source{Addr: rs, Sources: []string{"RIPE", "RADB"}, Timeout: 5 * time.Second}
