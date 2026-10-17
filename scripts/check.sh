@@ -24,7 +24,9 @@ gofiles() {
 }
 
 step gofmt
-unformatted=$(gofiles | xargs -0 gofmt -l)
+# xargs exits non-zero when gofmt does (a file that does not parse), so the
+# capture's status is tested, not only its output.
+unformatted=$(gofiles | xargs -0 gofmt -l) || bad "gofmt failed (a file does not parse?)"
 [ -z "$unformatted" ] || bad "not gofmt-clean: $unformatted"
 
 for m in $modules; do
@@ -54,7 +56,10 @@ for spec in "types:" "lexer:" "ast:lexer"; do
 	leaf=${spec%%:*}
 	allowed="rpsl/$leaf\$"
 	[ -z "${spec#*:}" ] || allowed="$allowed|rpsl/${spec#*:}\$"
-	others=$(cd "$leaf" && go list -deps ./... | grep rkolesnichenko | grep -Ev "$allowed")
+	# go list's status is tested on its own: through a pipe, a failing go list
+	# would leave an empty list and pass.
+	deps=$(cd "$leaf" && go list -deps ./...) || { bad "go list $leaf"; continue; }
+	others=$(printf '%s\n' "$deps" | grep rkolesnichenko | grep -Ev "$allowed")
 	[ -z "$others" ] || bad "$leaf depends on $others"
 done
 
@@ -62,7 +67,11 @@ step "tools: scripts/mkproxy builds and vets"
 (cd scripts/mkproxy && GOWORK=off go build -o /dev/null . && GOWORK=off go vet .) || bad "scripts/mkproxy"
 
 step "engine purity: resolve, resolve/peval, resolve/rtconfig, resolve/consist, resolve/irrdq and resolve/rpki do not import net"
-if (cd resolve && go list -deps . ./peval ./rtconfig ./consist ./irrdq ./rpki) | grep -qx net; then bad "resolve, resolve/peval, resolve/rtconfig, resolve/consist, resolve/irrdq or resolve/rpki imports net"; fi
+if deps=$(cd resolve && go list -deps . ./peval ./rtconfig ./consist ./irrdq ./rpki); then
+	if printf '%s\n' "$deps" | grep -qx net; then bad "resolve, resolve/peval, resolve/rtconfig, resolve/consist, resolve/irrdq or resolve/rpki imports net"; fi
+else
+	bad "go list resolve"
+fi
 
 step "api surface: api/ matches the public API, and the API conventions hold"
 go run ./internal/apisurface -check ||
