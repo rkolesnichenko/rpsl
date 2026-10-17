@@ -424,7 +424,7 @@ func TestLintMissingAutNum(t *testing.T) {
 }
 
 func TestRules(t *testing.T) {
-	want := []string{RuleShadowed, RuleEmpty, RuleMissingSet, RuleMissingRouter, RuleNoAutNum, RuleUndecided, RuleLimit,
+	want := []string{RuleShadowed, RuleEmpty, RuleMissingSet, RuleAnySet, RuleMissingRouter, RuleNoAutNum, RuleUndecided, RuleLimit,
 		RuleASPAMissingProvider, RuleASPAStaleProvider, RuleASPACustomerSet}
 	if !slices.Equal(Rules(), want) {
 		t.Errorf("Rules %v", Rules())
@@ -484,11 +484,14 @@ func TestLintFilterNotEvaluable(t *testing.T) {
 		objects []string
 		wantErr func(error) bool
 	}{
+		// In filter position a set reaching AS-ANY stays an error: there it
+		// means every registered route, which no Source enumerates. In an
+		// AS-path regexp it is every AS and decides (TestLintAnySet).
 		{
-			name: "AS-ANY inside a regexp's set",
+			name: "AS-ANY inside a filter-position set",
 			objects: []string{
-				autNum(1, "export: to AS2 announce <AS1:AS-CUST:AS-RCVD> OR <AS1:AS-PEERS:AS-RCVD$>", "import: from AS3 accept AS-NOPE"),
-				autNum(2, "import: from AS1 accept <AS1:AS-PEERS:AS-RCVD$>"), autNum(3),
+				autNum(1, "export: to AS2 announce <AS1:AS-CUST:AS-RCVD> OR AS1:AS-PEERS:AS-RCVD", "import: from AS3 accept AS-NOPE"),
+				autNum(2, "import: from AS1 accept AS1:AS-PEERS:AS-RCVD"), autNum(3),
 				"as-set: AS1:AS-CUST:AS-RCVD\nmembers: AS1\nmnt-by: MNT-A\nsource: RIPE\n",
 				"as-set: AS1:AS-PEERS:AS-RCVD\nmembers: AS1:AS-PEERS:AS2\nmnt-by: MNT-A\nsource: RIPE\n",
 				"as-set: AS1:AS-PEERS:AS2\nmembers: AS-ANY\nmnt-by: MNT-A\nsource: RIPE\n",
@@ -530,6 +533,51 @@ func TestLintFilterNotEvaluable(t *testing.T) {
 			// The session toward AS3 is still linted: its missing filter set.
 			if !slices.ContainsFunc(is, func(i Issue) bool { return i.Rule == RuleEmpty && slices.Equal(i.Peers, []types.ASN{3}) }) {
 				t.Errorf("issues\n%v\nwant AS3's session linted", is)
+			}
+		})
+	}
+}
+
+// An AS-path regexp naming a set that reaches AS-ANY decides — the set is
+// every AS — and Lint names it: one lint/any-set Warning per term and set,
+// against the term's attribute, for the sessions that evaluate it, and no
+// lint/undecided. The set is named as the regexp names it, not by the chain
+// inside it (AS-R reaches AS-ANY through AS-MID).
+func TestLintAnySet(t *testing.T) {
+	const msg = "the AS-path regexp names AS-R, which reaches AS-ANY: it matches any AS"
+	sets := []string{asSetText("AS-R", "AS9, AS-MID"), asSetText("AS-MID", "AS-ANY")}
+	for _, c := range []struct {
+		line, attr string
+		af         types.AddrFamily
+	}{
+		{"import: from AS2 accept <AS-R$>", "import", v4},
+		{"import: from AS2 accept <AS-R$> OR <^AS2 AS-R>", "import", v4},
+		{"export: to AS2 announce <AS-R$>", "export", v4},
+		{"import: from AS2 accept {10.0.0.0/8^+} AND NOT <AS-R>", "import", v4},
+		{"mp-import: afi ipv6.unicast from AS2 accept <AS-R$>", "mp-import", v6},
+	} {
+		t.Run(c.line, func(t *testing.T) {
+			ch := checker(t, append([]string{autNum(1, c.line), autNum(2)}, sets...)...)
+			if _, err := ch.Check(context.Background(), Pair{A: 1, B: 2, AF: c.af}); err != nil {
+				t.Errorf("Check: %v; want it decided", err)
+			}
+			is := lint(t, ch, 1)
+			var got []Issue
+			for _, i := range is {
+				switch i.Rule {
+				case RuleAnySet:
+					got = append(got, i)
+				case RuleUndecided:
+					t.Errorf("a lint/undecided: %s", issueText(i))
+				}
+			}
+			if len(got) != 1 {
+				t.Fatalf("issues\n%v\nwant one %s", is, RuleAnySet)
+			}
+			g := got[0]
+			if g.Attr != c.attr || g.Index != 0 || g.Message != msg || g.Severity != ast.Warning || g.Span.StartLine != 3 ||
+				!slices.Equal(g.Peers, []types.ASN{2}) || !slices.Equal(g.AFs, []types.AddrFamily{c.af}) {
+				t.Errorf("issue %s, want %s %s#0 L3: %q [AS2] [%v], a Warning", issueText(g), RuleAnySet, c.attr, msg, c.af)
 			}
 		})
 	}

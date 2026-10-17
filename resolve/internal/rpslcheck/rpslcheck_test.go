@@ -157,9 +157,11 @@ func TestNote(t *testing.T) {
 	}
 }
 
-// A pair whose filter cannot be evaluated (a regexp's set reaching AS-ANY,
-// AS1887's shape) is counted beside the limits, and the sweep goes on; a
-// single check of it still fails.
+// A pair whose filter cannot be evaluated (a set reaching AS-ANY in filter
+// position: every registered route, which no source enumerates) is counted
+// beside the limits, and the sweep goes on; a single check of it still
+// fails. In an AS-path regexp (AS1887's shape) such a set is every AS and
+// decides (consist's TestLintAnySet).
 func TestSweepCountsUndecidable(t *testing.T) {
 	const dump = "../../testdata/rpslcheck/undecidable.rpsl"
 	out, errw, code := run(t, "-dump", dump, "-sweep")

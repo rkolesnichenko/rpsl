@@ -137,6 +137,13 @@ code):
   directly is reported against its attribute, whether or not any session
   reaches it; a set missing inside one that exists (a member of an as-set,
   say) is reported for the sessions that expand it.
+- **`lint/any-set`** (Warning) — an AS-path regexp names a set that reaches
+  `AS-ANY` (directly or through nested sets): the regexp is decided, the set
+  matching any AS, so `<AS-X$>` accepts any non-empty path. The issue is
+  against the term's attribute and names the set as the regexp does, once
+  per term and set. Fix: the set's maintainer listed `AS-ANY`; name the ASes,
+  or accept that any AS matches. (In filter position, `accept AS-X`, such a
+  set is still not decidable: `lint/undecided`.)
 - **`lint/missing-router`** (Warning) — a peering names an inet-rtr the source
   does not have.
 - **`lint/no-aut-num`** (Warning) — a peering names an AS whose aut-num the
@@ -146,8 +153,10 @@ code):
 - **`lint/undecided`** (Info) — a term `peval` cannot decide for a session (a
   router not given, a peering regexp, another protocol); the message gives
   the reason. A session whose filter cannot be evaluated at all — it names a
-  set that reaches `AS-ANY` (inside an AS-path regexp, say), or has no normal
-  form, such as a cycle of filter-sets through a regexp — is reported the
+  set that reaches `AS-ANY` in filter position (`accept AS-X`: every
+  registered route, which no source enumerates; inside an AS-path regexp the
+  set is any AS, `lint/any-set`), or has no normal form, such as a cycle of
+  filter-sets through a regexp — is reported the
   same way, against no attribute, with the error as its message; the other
   sessions are still linted. `Check` returns that error.
 - Sessions run toward every AS the aut-num's peerings name and every aut-num

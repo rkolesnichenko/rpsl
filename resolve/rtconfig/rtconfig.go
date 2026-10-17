@@ -194,11 +194,12 @@ const (
 	CauseDefault         = "a default: the vendor has no configuration for"
 	CauseNetworks        = "networks the vendor has no configuration for"
 	CauseListShape       = "a filter that is not a single list of that kind"
+	CauseAnySet          = "an AS-path set that reaches AS-ANY"
 )
 
 // Causes returns every Cause constant, for the documentation contract.
 func Causes() []string {
 	return []string{CauseVia, CauseSAFI, CauseTwoPaths, CauseNegatedClass, CauseSameAS, CausePathShape,
 		CauseCommunityForm, CauseCommunityEquals, CauseAction, CauseActionValue, CausePref,
-		CauseDefault, CauseNetworks, CauseListShape}
+		CauseDefault, CauseNetworks, CauseListShape, CauseAnySet}
 }

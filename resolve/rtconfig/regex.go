@@ -47,6 +47,10 @@ type translator struct {
 func (t translator) refuse(cause string) error { return unsupported(t.v, cause, "<"+t.term+">") }
 
 // members is what one position may hold: AS numbers, or any AS (all true).
+// A set that reaches AS-ANY (resolve.ASNSet.Any) is refused, CauseAnySet: it
+// lists no AS, so writing its List() would match no AS — under NOT, every
+// route — and no printer writes "any AS" for a set. A literal AS-ANY is any
+// AS, as ever.
 func (t translator) members(e policy.ASPathExpr) (asns []types.ASN, all bool, err error) {
 	switch x := e.(type) {
 	case policy.ASPathASN:
@@ -58,15 +62,23 @@ func (t translator) members(e policy.ASPathExpr) (asns []types.ASN, all bool, er
 			return nil, true, nil
 		}
 		s := t.sets[x.Name]
+		if s.Any() {
+			return nil, false, t.refuse(CauseAnySet)
+		}
 		return s.List(), false, nil
 	case policy.ASPathClass:
 		if x.Negated {
 			return nil, false, t.refuse(CauseNegatedClass)
 		}
-		seen := map[types.ASN]bool{}
+		// Every item is read, even after one that is any AS, so a set
+		// reaching AS-ANY anywhere in the class is refused.
+		seen, anyAS := map[types.ASN]bool{}, false
 		for _, it := range x.Items {
 			var got []types.ASN
 			if r, ok := it.(policy.ASPathASNRange); ok {
+				if anyAS {
+					continue // as before: a range after AS-ANY is not checked
+				}
 				if r.Hi < r.Lo || r.Hi-r.Lo >= maxClassRange {
 					return nil, false, t.refuse(CausePathShape)
 				}
@@ -82,7 +94,8 @@ func (t translator) members(e policy.ASPathExpr) (asns []types.ASN, all bool, er
 					return nil, false, err
 				}
 				if any {
-					return nil, true, nil
+					anyAS = true
+					continue
 				}
 				got = as
 			}
@@ -92,6 +105,9 @@ func (t translator) members(e policy.ASPathExpr) (asns []types.ASN, all bool, er
 					asns = append(asns, a)
 				}
 			}
+		}
+		if anyAS {
+			return nil, true, nil
 		}
 		slices.Sort(asns)
 		return asns, false, nil

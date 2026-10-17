@@ -289,8 +289,10 @@ func (c *Checker) session(local, peer types.ASN, lrtr, prtr netip.Addr, af types
 // since nothing was compared. The error is an invalid
 // Pair (an AS unset, A equal to B, or AF not ipv4.unicast or ipv6.unicast),
 // a limit, a filter that cannot be evaluated for the session (wrapping a
-// *resolve.AnySetError or *resolve.NotEnumerableError: Lint reports it as
-// lint/undecided), a cancelled context, or a Source failure.
+// *resolve.AnySetError — a set reaching AS-ANY in filter position; in an
+// AS-path regexp such a set is any AS and decides — or a
+// *resolve.NotEnumerableError: Lint reports it as lint/undecided), a
+// cancelled context, or a Source failure.
 func (c *Checker) Check(ctx context.Context, p Pair) (Report, error) {
 	switch {
 	case p.A == 0 || p.B == 0:

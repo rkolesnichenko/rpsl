@@ -2,6 +2,7 @@ package resolve_test
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -39,9 +40,9 @@ import (
 // server, and cfgsim runs the same routes through both; decision and
 // attributes must agree for cisco, junos and ciscoxr. rtconfig reads aut-nums
 // with IRRd 2/3's "!man", which the server answers (WithLegacyClasses).
-// Where rtconfig is wrong — D1–D16, testdata/rtconfig/divergences.md — the
-// random policies keep clear and a test here pins it, so a change on either
-// side fails. rtconfig and peval come from PATH (scripts/build-irrtoolset.sh;
+// Where rtconfig is wrong, or differs on purpose — D1–D20,
+// testdata/rtconfig/divergences.md — the random policies keep clear and a
+// test here pins it, so a change on either side fails. rtconfig and peval come from PATH (scripts/build-irrtoolset.sh;
 // CI builds them); the goldens keep TestRtconfigGoldens comparing without.
 
 // squeezeBlank collapses runs of blank lines to one, as the goldens are kept.
@@ -712,6 +713,86 @@ func TestRtconfigDivergences(t *testing.T) {
 			t.Errorf("rpslconf: exit %d, %s; decisions %v", code, errOut, d)
 		}
 	})
+	// D19: IRRToolSet asks for "!iAS-X,1", which drops AS-X's AS-ANY member,
+	// so its rtconfig writes AS-X's other members only (`_9$`); a set holding
+	// nothing else, or a literal AS-ANY, comes back "key not found" and is
+	// written `_()$`, which on IOS matches every path. In a regexp, rpsl reads
+	// such a set as every AS, which no printer writes: rpslconf refuses it.
+	t.Run("D19", func(t *testing.T) {
+		addr := irrtest.New(
+			"aut-num: AS1\nas-name: ONE\nimport: from AS2 10.0.0.2 at 10.0.0.1 accept <AS-X$>\n"+
+				"import: from AS3 10.0.0.3 at 10.0.0.1 accept <AS-ONLY$>\n"+
+				"import: from AS4 10.0.0.4 at 10.0.0.1 accept <AS-ANY$>\nsource: RADB\n",
+			"as-set: AS-X\nmembers: AS-ANY, AS9\nsource: RADB\n",
+			"as-set: AS-ONLY\nmembers: AS-ANY\nsource: RADB\n").
+			WithLegacyClasses().IRRd(t)
+		for _, c := range []struct {
+			peer      types.ASN
+			set       string // "": the literal AS-ANY, which rpslconf writes
+			wrote     string // rtconfig's cisco as-path list entry
+			warning   bool   // rtconfig warns "key not found" for the set
+			acceptsAS types.ASN
+		}{
+			{2, "AS-X", "permit _9$", false, 9},
+			{3, "AS-ONLY", "permit _()$", true, 0},
+			{4, "", "permit _()$", true, 0},
+		} {
+			nb := netip.MustParseAddr(fmt.Sprintf("10.0.0.%d", c.peer))
+			tmpl := fmt.Sprintf("@RtConfig import AS1 10.0.0.1 AS%d 10.0.0.%d\n", c.peer, c.peer)
+			routes := []routemodel.Route{rmRoute("10.9.0.0/16", []types.ASN{c.peer, 9}), rmRoute("10.7.0.0/16", []types.ASN{c.peer, 7})}
+			theirsOut := theirs(t, addr, nil, tmpl)
+			query := "!i" + c.set + ",1"
+			if c.set == "" {
+				query = "!iAS-ANY,1"
+			}
+			if !strings.Contains(theirsOut, c.wrote) || strings.Contains(theirsOut, "key not found error for query "+query) != c.warning {
+				t.Errorf("D19 is gone: rtconfig writes for AS%d's <%s$>\n%s", c.peer, cmp.Or(c.set, "AS-ANY"), theirsOut)
+			}
+			d, ok := decide(t, "rtconfig", "cisco", theirsOut, nb, false, routes)
+			// AS-X: AS7 refused; AS-ONLY and AS-ANY: every path accepted.
+			if !ok || !d[0].ok || d[1].ok != (c.acceptsAS == 0) {
+				t.Errorf("D19 is gone: rtconfig's policy for AS%d decides %v", c.peer, d)
+			}
+			for _, v := range []string{"cisco", "junos", "ciscoxr", "bird"} {
+				out, code, errOut := runRpslconf(addr, "RADB", tmpl, "-config", v)
+				switch {
+				case c.set == "" && v != "cisco":
+				case c.set == "":
+					if d, ok := decide(t, "rpslconf", v, out, nb, false, routes); code != 0 || !ok || !d[0].ok || !d[1].ok {
+						t.Errorf("rpslconf, the literal <AS-ANY$>: exit %d, %s; decisions %v", code, errOut, d)
+					}
+				case code != 1 || !strings.Contains(errOut, c.set) || !strings.Contains(errOut, rtconfig.CauseAnySet) || strings.TrimSpace(out) != "":
+					t.Errorf("rpslconf %s, <%s$>: exit %d, %q\n%s; want refused with %q", v, c.set, code, errOut, out, rtconfig.CauseAnySet)
+				}
+			}
+		}
+	})
+	// D20: a peering through a set reaching AS-ANY. IRRToolSet's
+	// isPeeringMatching treats only a literal AS-ANY as every AS; the set's
+	// "!iAS-PEERS,1" drops the member, so AS2 is no peer of it, and rtconfig
+	// writes no policy for the session (as D13). peval's inASSet reads the set
+	// as every AS, so rpslconf writes AS1's policy toward AS2.
+	t.Run("D20", func(t *testing.T) {
+		addr := irrtest.New("aut-num: AS1\nas-name: ONE\nimport: from AS-PEERS accept ANY\nsource: RADB\n",
+			"as-set: AS-PEERS\nmembers: AS-ANY, AS9\nsource: RADB\n").WithLegacyClasses().IRRd(t)
+		r := []routemodel.Route{rmRoute("10.2.0.0/16", []types.ASN{2})}
+		for _, c := range []struct {
+			peer   types.ASN
+			theirs bool // rtconfig attaches a policy
+		}{{2, false}, {9, true}} {
+			tmpl := fmt.Sprintf("@RtConfig import AS1 10.0.0.1 AS%d 10.0.0.%d\n", c.peer, c.peer)
+			nb := netip.MustParseAddr(fmt.Sprintf("10.0.0.%d", c.peer))
+			out := theirs(t, addr, nil, tmpl)
+			warned := strings.Contains(out, fmt.Sprintf("AS1 has no import/mp-import policy for AS%d", c.peer))
+			if d, ok := decide(t, "rtconfig", "cisco", out, nb, false, r); ok != c.theirs || warned == c.theirs || ok && !d[0].ok {
+				t.Errorf("D20 is gone: rtconfig toward AS%d: attached %v, decisions %v\n%s", c.peer, ok, d, out)
+			}
+			ours, code, errOut := runRpslconf(addr, "RADB", tmpl)
+			if d, ok := decide(t, "rpslconf", "cisco", ours, nb, false, r); code != 0 || !ok || !d[0].ok {
+				t.Errorf("rpslconf toward AS%d: exit %d, %s; attached %v, decisions %v\n%s", c.peer, code, errOut, ok, d, ours)
+			}
+		}
+	})
 }
 
 // d17Arches are the architectures D17 was seen on, with the Linux build (for
@@ -737,9 +818,10 @@ func TestPevalDivergences(t *testing.T) {
 	}
 	// AS65001's one small route keeps D17's answer short.
 	addr := irrtest.New(append(goldenObjects(t), "route: 10.0.0.0/30\norigin: AS65001\nmnt-by: MNT-X\nsource: RADB\n")...).IRRd(t)
-	host, port, _ := net.SplitHostPort(addr)
-	// raw is all peval writes for filter; theirs, its answer (pevalAnswer).
-	raw := func(filter string, timeout time.Duration) (string, error) {
+	// rawAt is all peval writes for filter over the IRRd at addr; raw, over
+	// the golden objects' server; theirs, its answer (pevalAnswer).
+	rawAt := func(addr, filter string, timeout time.Duration) (string, error) {
+		host, port, _ := net.SplitHostPort(addr)
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, bin)
@@ -753,6 +835,7 @@ func TestPevalDivergences(t *testing.T) {
 		}
 		return out.String(), err
 	}
+	raw := func(filter string, timeout time.Duration) (string, error) { return rawAt(addr, filter, timeout) }
 	theirs := func(filter string, timeout time.Duration) (string, error) {
 		out, err := raw(filter, timeout)
 		return pevalAnswer(out, filter), err
@@ -837,6 +920,27 @@ func TestPevalDivergences(t *testing.T) {
 		for _, d := range diags {
 			if d.Severity >= ast.Error {
 				t.Errorf("rpslconf's %q does not parse back: %v", out, d)
+			}
+		}
+	})
+	// D19's peval half: IRRToolSet's "!iAS-X,1" drops AS-X's AS-ANY member,
+	// so peval writes AS-X's other members; a set holding only AS-ANY, and a
+	// literal AS-ANY, come back "key not found" and as an empty class, which
+	// matches no path. rpsl keeps each set by name: in a regexp it is every AS.
+	t.Run("D19", func(t *testing.T) {
+		addr := irrtest.New("as-set: AS-X\nmembers: AS-ANY, AS9\nsource: RADB\n", "as-set: AS-ONLY\nmembers: AS-ANY\nsource: RADB\n").IRRd(t)
+		for _, c := range []struct{ filter, theirs, ours string }{
+			{"<AS-X$>", "(< AS9 $>)", "<AS-X $>"},
+			{"<AS-ONLY$>", "Warning: key not found error for query !iAS-ONLY,1.\n\n(<[E] $>)", "<AS-ONLY $>"},
+			{"<AS-ANY$>", "Warning: key not found error for query !iAS-ANY,1.\n\n(<[E] $>)", "<AS-ANY $>"},
+		} {
+			out, err := rawAt(addr, c.filter, 10*time.Second)
+			if got := pevalAnswer(out, c.filter); err != nil || got != c.theirs {
+				t.Errorf("D19 is gone: peval says %q for %s, %v; want %q", got, c.filter, err, c.theirs)
+			}
+			o, code, errOut := runRpslconf(addr, "RADB", "", "-e", "afi ipv4.unicast "+c.filter)
+			if code != 0 || strings.TrimSpace(o) != c.ours {
+				t.Errorf("rpslconf -e %s: exit %d, %q, %s; want %q", c.filter, code, o, errOut, c.ours)
 			}
 		}
 	})

@@ -2,6 +2,7 @@ package rtconfig
 const BIRD2 Vendor
 const CauseAction = "an action other than pref, med, community, aspath.prepend and next-hop"
 const CauseActionValue = "an action value the vendor cannot set"
+const CauseAnySet = "an AS-path set that reaches AS-ANY"
 const CauseCommunityEquals = "an exact community match (community == {…})"
 const CauseCommunityForm = "a community that is neither a:b nor a well-known one"
 const CauseDefault = "a default: the vendor has no configuration for"

@@ -1,3 +1,5 @@
+# AS65001 announces a set reaching AS-ANY in filter position: not decidable.
+
 route: 10.1.0.0/16
 origin: AS65001
 mnt-by: MNT-A
@@ -20,7 +22,7 @@ source: RIPE
 
 aut-num: AS65001
 as-name: ONE
-export: to AS65002 announce <AS65001:AS-PEERS:AS-RCVD$>
+export: to AS65002 announce AS65001:AS-PEERS:AS-RCVD
 import: from AS65002 accept AS65002
 mnt-by: MNT-A
 source: RIPE

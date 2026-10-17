@@ -160,6 +160,26 @@ func TestASPAMissingProvider(t *testing.T) {
 	}
 }
 
+// A negated AS-path regexp naming a set that reaches AS-ANY: the ASPA rules
+// read conjunct structure only, so an any-set path is not recognised as
+// what it means. "ANY AND NOT <AS-R>", with AS-R every AS, rejects every
+// route with a path — nothing is imported in fact — yet the conjunct is ANY
+// with only a negated test, a full table, and the import is reported. This
+// pins that answer; the export form names no positive as-set, so it gives no
+// lint/aspa-* issue.
+func TestASPAAnySetPath(t *testing.T) {
+	anyR := asSetText("AS-R", "AS-ANY")
+	ch := checker(t, autNum(1, "import: from AS9 accept ANY AND NOT <AS-R>", "export: to AS9 announce AS1"), autNum(9), anyR)
+	want := []string{"lint/aspa-missing-provider import 0 [AS9] [ipv4.unicast]: imports a full table from AS9, but AS1's ASPA does not list it as a provider"}
+	if got := lintASPA(t, ch, 1, newASPAs(t, aspa(1, 3)), RuleASPAMissingProvider); !slices.Equal(got, want) {
+		t.Errorf("import: got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	ch = checker(t, autNum(1, "import: from AS9 accept AS9", "export: to AS9 announce ANY AND NOT <AS-R>"), autNum(9), anyR)
+	if got := lintASPA(t, ch, 1, newASPAs(t, aspa(1, 9))); len(got) != 0 {
+		t.Errorf("export: got\n%s\nwant none", strings.Join(got, "\n"))
+	}
+}
+
 // Without ASPAs, Lint is unchanged: no lint/aspa-* issue, whatever the policy.
 func TestASPARulesOffWithoutASPAs(t *testing.T) {
 	ch := checker(t, autNum(1, "import: from AS2 accept ANY"), autNum(2))

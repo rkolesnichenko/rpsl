@@ -449,6 +449,7 @@ A printer never approximates: a construct a vendor's configuration cannot expres
 | `a default: the vendor has no configuration for` | every vendor but IOS; on IOS, a default with actions, or with networks other than exact IPv4 prefixes (D6) |
 | `networks the vendor has no configuration for` | Junos and BIRD |
 | `a filter that is not a single list of that kind` | access_list of a filter with a regexp or community test, or of several conjuncts |
+| `an AS-path set that reaches AS-ANY` | an AS-path regexp naming a set whose members reach `AS-ANY` (directly or nested), in either polarity: peval reads it as any AS, which no printer writes for a set (IRRToolSet drops the `AS-ANY` member: D19). A literal `AS-ANY` in a regexp is written as any AS |
 
 ## Terms peval cannot decide
 
@@ -497,9 +498,11 @@ A throwaway spike (design §3) ran IRRToolSet 5.1.3's `rtconfig` and `peval`
 against the same IRR data and found them wrong in several places; writing
 this release's plan found three more, and the rtconfig and peval
 differentials (`resolve/rtconfig_irrtoolset_test.go`,
-`resolve/peval_irrtoolset_test.go`) found four after that. `rpslconf` does
-not reproduce any of them; each is a pinned divergence, not an oversight,
-listed here in numeric order regardless of which mode it belongs to.
+`resolve/peval_irrtoolset_test.go`) found four after that; reading a set
+that reaches `AS-ANY` as any AS, in an AS-path regexp and in a peering,
+differs on purpose (D19, D20). `rpslconf` does not reproduce any of them; each is a pinned
+divergence, not an oversight, listed here in numeric order regardless of
+which mode it belongs to.
 
 - **D1 — NOT over an AS-derived term.** `AS-FOO AND NOT AS10` and `NOT AS10`
   both print `NOT ANY` from IRRToolSet's `peval` — it drops the term instead
@@ -598,6 +601,21 @@ listed here in numeric order regardless of which mode it belongs to.
   sometimes writes the deny set with no members, so the clause accepts the
   routes it should refuse. `rpslconf` writes the same configuration every
   run. D18 does not show on every run, so no test can pin it.
+- **D19 — a set reaching AS-ANY in an AS-path regexp.** IRRToolSet asks the
+  server for `!iAS-X,1`, which drops an `AS-ANY` member: for AS-X with
+  members `AS-ANY, AS9`, `rtconfig` writes `<AS-X$>` as `_9$` and `peval`
+  prints `(< AS9 $>)`. A set holding only `AS-ANY`, and a literal
+  `<AS-ANY$>`, come back "key not found": `peval` prints an empty class
+  (`(<[E] $>)`), which matches no path, and `rtconfig`'s IOS list is
+  `_()$`, which matches every path. rpsl reads such a set, in a regexp, as
+  any AS (RFC 2622 §5.3): `rpslconf -e` keeps `<AS-X $>`, and template mode
+  refuses it (`an AS-path set that reaches AS-ANY`) rather than write a
+  list for it. A literal `AS-ANY` is still written as any AS.
+- **D20 — a peering through a set reaching AS-ANY.** IRRToolSet takes only a
+  literal `AS-ANY` in a peering as every AS, and `!iAS-PEERS,1` drops the
+  member, so for `import: from AS-PEERS accept ANY` (members `AS-ANY, AS9`)
+  `rtconfig` writes no policy toward AS2. `peval` reads the set as every AS,
+  so `rpslconf` writes AS1's policy toward AS2.
 
 Each is listed, with the input that shows it, in
 [`resolve/testdata/rtconfig/divergences.md`](../resolve/testdata/rtconfig/divergences.md),
