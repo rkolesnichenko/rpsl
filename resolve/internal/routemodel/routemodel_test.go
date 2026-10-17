@@ -18,26 +18,30 @@ func re(t *testing.T, s string) *policy.ASPathRE {
 	return r
 }
 
+// matchPathCases is TestMatchPath's table; TestWriteVectors writes it into
+// the vectors file as well.
+var matchPathCases = []struct {
+	re   string
+	path []types.ASN
+	want bool
+}{
+	{"AS1", []types.ASN{2, 1, 3}, true}, // unanchored: anywhere
+	{"^AS1", []types.ASN{2, 1}, false},
+	{"^AS2 AS1$", []types.ASN{2, 1}, true},
+	{"^AS2 .* AS3$", []types.ASN{2, 9, 9, 3}, true},
+	{"^AS2+$", []types.ASN{2, 2, 2}, true},
+	{"^AS2+$", []types.ASN{2, 3}, false},
+	{"[AS1 - AS3]", []types.ASN{7, 2}, true},
+	{"^[^AS1 AS2]$", []types.ASN{3}, true},
+	{"^[^AS1 AS2]$", []types.ASN{2}, false},
+	{"^.~*$", []types.ASN{5, 5, 5}, true},
+	{"^.~*$", []types.ASN{5, 6}, false},
+	{"^AS1{2,3}$", []types.ASN{1, 1, 1, 1}, false},
+	{"^(AS1 | AS2 AS3)$", []types.ASN{2, 3}, true},
+}
+
 func TestMatchPath(t *testing.T) {
-	for _, c := range []struct {
-		re   string
-		path []types.ASN
-		want bool
-	}{
-		{"AS1", []types.ASN{2, 1, 3}, true}, // unanchored: anywhere
-		{"^AS1", []types.ASN{2, 1}, false},
-		{"^AS2 AS1$", []types.ASN{2, 1}, true},
-		{"^AS2 .* AS3$", []types.ASN{2, 9, 9, 3}, true},
-		{"^AS2+$", []types.ASN{2, 2, 2}, true},
-		{"^AS2+$", []types.ASN{2, 3}, false},
-		{"[AS1 - AS3]", []types.ASN{7, 2}, true},
-		{"^[^AS1 AS2]$", []types.ASN{3}, true},
-		{"^[^AS1 AS2]$", []types.ASN{2}, false},
-		{"^.~*$", []types.ASN{5, 5, 5}, true},
-		{"^.~*$", []types.ASN{5, 6}, false},
-		{"^AS1{2,3}$", []types.ASN{1, 1, 1, 1}, false},
-		{"^(AS1 | AS2 AS3)$", []types.ASN{2, 3}, true},
-	} {
+	for _, c := range matchPathCases {
 		got, err := MatchPath(resolve.PathMatch{RE: re(t, c.re)}, c.path)
 		if err != nil || got != c.want {
 			t.Errorf("<%s> on %v = %v, %v; want %v", c.re, c.path, got, err, c.want)
