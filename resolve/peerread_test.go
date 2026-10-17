@@ -22,6 +22,8 @@ func TestNormalizeReportsPeerRead(t *testing.T) {
 		"filter-set: FLTR-OUTER\nfilter: FLTR-INNER AND {10.0.0.0/8^+}\nsource: TEST\n",
 		"filter-set: FLTR-PLAIN\nfilter: AS-A\nsource: TEST\n",
 		"as-set: AS65001:AS-T:AS65002\nmembers: AS65001\nsource: TEST\n",
+		"as-set: AS65001:AS-ANYT:AS65002\nmembers: AS-ANY\nsource: TEST\n",
+		"as-set: AS-REACH\nmembers: AS-ANY\nsource: TEST\n",
 	)
 	for _, c := range []struct {
 		filter string
@@ -38,6 +40,9 @@ func TestNormalizeReportsPeerRead(t *testing.T) {
 		{"FLTR-INNER", true},
 		{"FLTR-OUTER", true},
 		{"AS-A OR NOT PeerAS", true},
+		{"<AS-REACH>", false},
+		{"<AS65001:AS-ANYT:PeerAS>", true},
+		{"<^AS65001 AS65001:AS-ANYT:PeerAS$>", true},
 	} {
 		f, _ := policy.ParseFilter(c.filter)
 		for _, peer := range []types.ASN{0, 65002} {

@@ -14,11 +14,13 @@ func Expandable(o object.Object) bool
 func ExpandableClass(class string) bool
 func LoadDump(r io.Reader, sourcePrecedence ...string) (*MemSource, error)
 func NewASNSet(asns ...types.ASN) ASNSet
+func NewAnyASNSet() ASNSet
 func NewCache(src Source, ttl time.Duration) *Cache
 func NewFilterMemo(maxRanges int) *FilterMemo
 func NewFilterMemoOver(shared *FilterMemo, maxRanges int) *FilterMemo
 func NewMemSource(objs []object.Object, sourcePrecedence ...string) *MemSource
 type ASNSet struct
+func (ASNSet) Any() bool
 func (ASNSet) Has(a types.ASN) bool
 func (ASNSet) Len() int
 func (ASNSet) List() []types.ASN

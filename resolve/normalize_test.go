@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/policy"
 	"github.com/rkolesnichenko/rpsl/types"
 )
@@ -379,5 +381,212 @@ func TestNormalizeTestCapAfterIntersection(t *testing.T) {
 	}
 	if peak > 2 {
 		t.Errorf("peak %d counts a conjunct that was dropped", peak)
+	}
+}
+
+// ---- a set reaching AS-ANY in an AS-path regexp ----
+
+// anyCorpus holds sets that reach AS-ANY, directly and through nesting, and
+// an object named AS-ANY, which is never read.
+func anyCorpus(t *testing.T) *MemSource {
+	return corpus(t,
+		"route: 10.1.0.0/16\norigin: AS1\nsource: TEST\n",
+		asSet("AS-R", "AS-MID"),
+		asSet("AS-MID", "AS-ANY, AS-GONE"),
+		asSet("AS-FIN", "AS1, AS2"),
+		asSet("AS9:AS-T:AS3", "AS-ANY"),
+		routeSet("RS-X", "AS-R^24, 10.0.0.0/8"),
+		asSet("AS208301:AS-ANY", "AS7"),
+		asSet("AS-ANY", "AS8"),
+	)
+}
+
+// getSetByRef counts GetSet calls by reference.
+type getSetByRef struct {
+	Source
+	mu    sync.Mutex
+	calls map[string]int
+}
+
+func (c *getSetByRef) GetSet(ctx context.Context, ref types.SetRef) (object.NamedSet, error) {
+	c.mu.Lock()
+	c.calls[ref.String()]++
+	c.mu.Unlock()
+	return c.Source.GetSet(ctx, ref)
+}
+
+func TestASNSetAny(t *testing.T) {
+	s := NewAnyASNSet()
+	if !s.Any() || !s.Has(0) || !s.Has(1) || !s.Has(4294967295) {
+		t.Errorf("NewAnyASNSet: Any %v, Has(0) %v, Has(1) %v, Has(4294967295) %v; want all true",
+			s.Any(), s.Has(0), s.Has(1), s.Has(4294967295))
+	}
+	if s.Len() != 0 || len(s.List()) != 0 || len(s.Missing()) != 0 {
+		t.Errorf("NewAnyASNSet: Len %d, List %v, Missing %v; want none", s.Len(), s.List(), s.Missing())
+	}
+	if got := s.String(); got != "[AS-ANY]" {
+		t.Errorf("NewAnyASNSet().String() = %q, want [AS-ANY]", got)
+	}
+	if (ASNSet{}).Any() || NewASNSet(1).Any() {
+		t.Error("the zero ASNSet or NewASNSet(1) reports Any")
+	}
+}
+
+// pathSetOf returns the Sets entry for name of the only PathMatch in nf.
+func pathSetOf(t *testing.T, nf NormalFilter, name string) (ASNSet, bool) {
+	t.Helper()
+	var pms []PathMatch
+	for _, c := range nf.Conjuncts {
+		pms = append(pms, c.Paths...)
+	}
+	if len(pms) != 1 {
+		t.Fatalf("%s: %d AS-path tests, want 1", nf, len(pms))
+	}
+	s, ok := pms[0].Sets[mustSet(t, name)]
+	return s, ok
+}
+
+// In an AS-path regexp, a set that reaches AS-ANY is every AS: an entry whose
+// Any() is true, with nothing missing, and AS-ANY itself is never fetched.
+func TestNormalizeAnySetPath(t *testing.T) {
+	src := &getSetByRef{Source: anyCorpus(t), calls: map[string]int{}}
+	ctx := context.Background()
+	for _, c := range []struct{ filter, set string }{
+		{"<AS-R$>", "AS-R"},
+		{"<AS-MID>", "AS-MID"},
+		{"<[AS-R AS1]>", "AS-R"},
+		{"<AS-R~*>", "AS-R"},
+		{"<^AS1 AS-R$>", "AS-R"},
+		{"NOT <AS-R>", "AS-R"},
+		{"<[^AS-R]>", "AS-R"},
+		{"<AS9:AS-T:PeerAS>", "AS9:AS-T:AS3"},
+	} {
+		e := &Expander{Src: src, Peer: 3}
+		nf, err := e.NormalizeFilter(ctx, mustFilter(t, c.filter))
+		if err != nil {
+			t.Errorf("%s: %v", c.filter, err)
+			continue
+		}
+		s, ok := pathSetOf(t, nf, c.set)
+		if !ok || !s.Any() {
+			t.Errorf("%s: Sets[%s] = %v (present %v), want Any", c.filter, c.set, s, ok)
+		}
+		for _, m := range nf.Missing() {
+			if m.String() == "AS-GONE" {
+				t.Errorf("%s: Missing() = %v lists AS-GONE", c.filter, nf.Missing())
+			}
+		}
+	}
+	e := &Expander{Src: src}
+	nf, err := e.NormalizeFilter(ctx, mustFilter(t, "<AS208301:AS-ANY>"))
+	if err != nil {
+		t.Fatalf("<AS208301:AS-ANY>: %v", err)
+	}
+	if s, ok := pathSetOf(t, nf, "AS208301:AS-ANY"); !ok || s.Any() || !s.Has(7) {
+		t.Errorf("<AS208301:AS-ANY>: Sets entry %v (present %v), want an ordinary set holding AS7", s, ok)
+	}
+	nf, err = e.NormalizeFilter(ctx, mustFilter(t, "<AS-ANY>"))
+	if err != nil {
+		t.Fatalf("<AS-ANY>: %v", err)
+	}
+	if _, ok := pathSetOf(t, nf, "AS-ANY"); ok {
+		t.Error("<AS-ANY>: the literal AS-ANY has a Sets entry")
+	}
+	if n := src.calls["AS-ANY"]; n != 0 {
+		t.Errorf("GetSet(AS-ANY) called %d times; the object named AS-ANY must never be read", n)
+	}
+	if src.calls["AS-MID"] == 0 {
+		t.Error("GetSet(AS-MID) never called: the counter is not counting")
+	}
+}
+
+// Outside an AS-path regexp, and in every enumerating API, a set reaching
+// AS-ANY is the same *AnySetError as before.
+func TestAnySetStaysAnErrorOutsideRegexp(t *testing.T) {
+	src := anyCorpus(t)
+	ctx := context.Background()
+	const want = "resolve: AS-ANY denotes the whole IRR and cannot be expanded"
+	check := func(label string, err error) {
+		t.Helper()
+		var ae *AnySetError
+		if !errors.As(err, &ae) || err.Error() != want {
+			t.Errorf("%s: err %v, want *AnySetError %q", label, err, want)
+		}
+	}
+	for _, f := range []string{"AS-R", "NOT AS-R", "AS-R^24", "AS9:AS-T:PeerAS", "RS-X"} {
+		_, err := (&Expander{Src: src, Peer: 3}).NormalizeFilter(ctx, mustFilter(t, f))
+		check("NormalizeFilter("+f+")", err)
+	}
+	e := &Expander{Src: src}
+	_, err := e.ExpandAS(ctx, types.Ref(mustSet(t, "AS-R")))
+	check("ExpandAS(AS-R)", err)
+	_, err = e.ExpandPrefixes(ctx, types.Ref(mustSet(t, "RS-X")))
+	check("ExpandPrefixes(RS-X)", err)
+	_, err = e.EvalFilter(ctx, mustFilter(t, "AS-R"))
+	check("EvalFilter(AS-R)", err)
+}
+
+// A regexp and a negated literal naming the same set share an evaluator: the
+// any-set the regexp gets must never reach the literal, in either order.
+func TestNormalizeAnySetCacheIsolation(t *testing.T) {
+	src := anyCorpus(t)
+	for _, f := range []string{"<AS-R$> OR NOT AS-R", "NOT AS-R OR <AS-R$>"} {
+		nf, err := (&Expander{Src: src}).NormalizeFilter(context.Background(), mustFilter(t, f))
+		var ae *AnySetError
+		if !errors.As(err, &ae) {
+			t.Errorf("%s = %q, %v; want *AnySetError", f, nf, err)
+		}
+	}
+	// A set that does not reach AS-ANY is still expanded once for both, as
+	// before: fetched once, and charged once against MaxVisited.
+	for _, f := range []string{"<AS-FIN$> OR NOT AS-FIN", "NOT AS-FIN OR <AS-FIN$>"} {
+		counted := &getSetByRef{Source: src, calls: map[string]int{}}
+		if _, err := (&Expander{Src: counted}).NormalizeFilter(context.Background(), mustFilter(t, f)); err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
+		if n := counted.calls["AS-FIN"]; n != 1 {
+			t.Errorf("%s: GetSet(AS-FIN) called %d times, want once", f, n)
+		}
+	}
+}
+
+// A graph that reaches AS-ANY shallow and goes on deeper is held to MaxDepth
+// and MaxVisited all the way down.
+func TestAnySetLimits(t *testing.T) {
+	src := corpus(t,
+		asSet("AS-R", "AS-MID, AS-C1"),
+		asSet("AS-MID", "AS-ANY, AS-GONE"),
+		asSet("AS-C1", "AS-C2"),
+		asSet("AS-C2", "AS-C3"),
+		asSet("AS-C3", "AS-C4"),
+		asSet("AS-C4", "AS5"),
+	)
+	ctx := context.Background()
+	f := mustFilter(t, "<AS-R>")
+	var tl *SetTooLargeError
+	_, err := (&Expander{Src: src, MaxDepth: 3}).NormalizeFilter(ctx, f)
+	if !errors.As(err, &tl) || tl.Limit != LimitDepth {
+		t.Errorf("MaxDepth 3: err %v, want *SetTooLargeError{LimitDepth}", err)
+	}
+	nf, err := (&Expander{Src: src, MaxDepth: 4}).NormalizeFilter(ctx, f)
+	if err != nil {
+		t.Fatalf("MaxDepth 4: %v", err)
+	}
+	if s, ok := pathSetOf(t, nf, "AS-R"); !ok || !s.Any() {
+		t.Errorf("MaxDepth 4: Sets[AS-R] = %v, want Any", s)
+	}
+	// AS-R, AS-MID, AS-C1, AS-ANY, AS-GONE, AS-C2, AS-C3, AS-C4: 8 distinct
+	// sets. Discovery refuses the eighth (its error names the top set, the
+	// evaluator's would not); with 8 the expansion is charged 8 and fits.
+	_, err = (&Expander{Src: src, MaxVisited: 7}).NormalizeFilter(ctx, f)
+	if !errors.As(err, &tl) || tl.Limit != LimitVisited || tl.Name.String() != "AS-R" || tl.Count != 8 {
+		t.Errorf("MaxVisited 7: err %v, want *SetTooLargeError{LimitVisited} for AS-R reaching 8", err)
+	}
+	nf, err = (&Expander{Src: src, MaxVisited: 8}).NormalizeFilter(ctx, f)
+	if err != nil {
+		t.Fatalf("MaxVisited 8: %v", err)
+	}
+	if s, ok := pathSetOf(t, nf, "AS-R"); !ok || !s.Any() {
+		t.Errorf("MaxVisited 8: Sets[AS-R] = %v, want Any", s)
 	}
 }

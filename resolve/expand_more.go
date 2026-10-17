@@ -33,7 +33,7 @@ func (e *Expander) ExpandRouters(ctx context.Context, ref types.SetRef) (Routers
 	if ref.Name().Class() != types.ClassRtrSet {
 		return Routers{}, fmt.Errorf("resolve: ExpandRouters %s: %w", ref, ErrSetClass)
 	}
-	g, err := e.discover(ctx, ref)
+	g, err := e.discover(ctx, ref, false)
 	if err != nil {
 		return Routers{}, err
 	}
@@ -73,7 +73,7 @@ func (e *Expander) ExpandPeerings(ctx context.Context, ref types.SetRef) (Peerin
 	if ref.Name().Class() != types.ClassPeeringSet {
 		return Peerings{}, fmt.Errorf("resolve: ExpandPeerings %s: %w", ref, ErrSetClass)
 	}
-	g, err := e.discover(ctx, ref)
+	g, err := e.discover(ctx, ref, false)
 	if err != nil {
 		return Peerings{}, err
 	}
@@ -202,7 +202,8 @@ type filterEval struct {
 	active   map[string]bool               // filter-sets on the path being evaluated
 	cyclic   bool                          // this pass took a back-edge
 	ranges   map[string]RangeSet           // route-set and as-set expansions
-	asns     map[string]ASNSet             // as-set expansions in AS expressions
+	asns     map[string]ASNSet             // as-set expansions in AS expressions; never an any-set
+	pathASNs map[string]ASNSet             // as-set expansions in AS-path regexps that reached AS-ANY (pathSet)
 	ex       excluded                      // what the expansion leaves out
 	anyAll   bool                          // AS-ANY and RS-ANY denote every route (NormalizeFilter) rather than an AnySetError
 	usedPeer bool                          // Expander.Peer was read (peer): the answer depends on it
@@ -211,11 +212,12 @@ type filterEval struct {
 func newFilterEval(e *Expander, ctx context.Context) *filterEval {
 	return &filterEval{
 		e: e, ctx: ctx,
-		sets:   map[string]object.FilterGroup{},
-		active: map[string]bool{},
-		ranges: map[string]RangeSet{},
-		asns:   map[string]ASNSet{},
-		ex:     e.excluded(),
+		sets:     map[string]object.FilterGroup{},
+		active:   map[string]bool{},
+		ranges:   map[string]RangeSet{},
+		asns:     map[string]ASNSet{},
+		pathASNs: map[string]ASNSet{},
+		ex:       e.excluded(),
 	}
 }
 
@@ -568,7 +570,7 @@ func (ev *filterEval) asSet(n types.SetName) (ASNSet, error) {
 	if s, ok := ev.asns[n.String()]; ok {
 		return s, nil
 	}
-	s, reached, err := ev.e.expandAS(ev.ctx, types.Ref(n))
+	s, reached, err := ev.e.expandAS(ev.ctx, types.Ref(n), false)
 	if err != nil {
 		return ASNSet{}, err
 	}
@@ -576,6 +578,37 @@ func (ev *filterEval) asSet(n types.SetName) (ASNSet, error) {
 		return ASNSet{}, err
 	}
 	ev.asns[n.String()] = s
+	return s, nil
+}
+
+// pathSet expands an as-set named in an AS-path regexp, once per call,
+// charging it as asSet does: a set that reaches AS-ANY is the set of every AS
+// (ASNSet.Any) rather than an *AnySetError. An any-set is kept apart, in
+// pathASNs, and never in asns: a regexp and a negated AS literal share an
+// evaluator, and an any-set read by asExpr would make NOT AS-X a complement
+// of nothing, accepting every route. Any other answer is the one asSet
+// computes (the same graph, never having met AS-ANY), so it is shared through
+// asns as before: a set named both in a regexp and in a literal is fetched
+// and charged once, as it was.
+func (ev *filterEval) pathSet(n types.SetName) (ASNSet, error) {
+	if s, ok := ev.asns[n.String()]; ok {
+		return s, nil
+	}
+	if s, ok := ev.pathASNs[n.String()]; ok {
+		return s, nil
+	}
+	s, reached, err := ev.e.expandAS(ev.ctx, types.Ref(n), true)
+	if err != nil {
+		return ASNSet{}, err
+	}
+	if err := ev.visit(reached); err != nil {
+		return ASNSet{}, err
+	}
+	if s.Any() {
+		ev.pathASNs[n.String()] = s
+	} else {
+		ev.asns[n.String()] = s
+	}
 	return s, nil
 }
 
