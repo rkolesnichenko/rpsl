@@ -37,10 +37,14 @@ import (
 // out never drops its pairs), each Check 60s, each verify 30s (running out
 // of it is counted as a verify timeout). A limit, a timeout or a pair whose
 // filter cannot be evaluated is counted, and goes no further (a pair
-// counted so is not among "pairs"); any other error fails. A direction with
-// no policy either way is counted apart from the consistent ones. With
-// RPSL_CONSIST_ASPA=1 it lints with NTT's ASPAs (rpki/vrps.json) too, and
-// logs five examples of each lint/aspa-* rule.
+// counted so is not among "pairs"); any other error fails. A filter that
+// cannot be evaluated is counted as "not decidable: any set" (a set
+// reaching AS-ANY in filter position) or "not decidable: other". A
+// direction with no policy either way is counted apart from the consistent
+// ones. Every lint/any-set issue is logged as it is found, and the
+// counts every 2,000 aut-nums. With RPSL_CONSIST_ASPA=1 it
+// lints with NTT's ASPAs (rpki/vrps.json) too, and logs five examples of
+// each lint/aspa-* rule.
 func TestRealDataConsist(t *testing.T) {
 	dir := os.Getenv("RPSL_REALDATA")
 	if dir == "" {
@@ -117,7 +121,7 @@ func TestRealDataConsist(t *testing.T) {
 		}
 		t.Logf("ASPAs: %d customers", c.ASPAs.Len())
 	}
-	examples := map[string][]string{} // lint/aspa-* rule -> up to five "AS: message"
+	examples := map[string][]string{} // lint/any-set and lint/aspa-* rules -> up to five "AS: message"
 	// Each unordered pair a peering names, from either side, is checked
 	// once, by whichever side claims it first: the set of pairs does not
 	// depend on the order, and a pair only one side names is checked too.
@@ -143,13 +147,25 @@ func TestRealDataConsist(t *testing.T) {
 	viaSets := map[types.ASN][]types.ASN{}
 	count := func(k string, n int) { mu.Lock(); stats[k] += n; mu.Unlock() }
 	start := time.Now()
+	// Progress every 2,000 aut-nums, so a run cut short by its timeout
+	// still leaves counts and a rate in the log.
+	swept := 0
+	progress := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if swept++; swept%2000 == 0 {
+			t.Logf("progress: %d/%d aut-nums in %s; pairs %d, lint/any-set %d, not decidable: any set %d, other %d",
+				swept, len(ases), time.Since(start).Round(time.Second), stats["pairs"], stats["lint: "+RuleAnySet],
+				stats["not decidable: any set"], stats["not decidable: other"])
+		}
+	}
 	sem := make(chan struct{}, runtime.GOMAXPROCS(0))
 	var wg sync.WaitGroup
 	for _, as := range ases {
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(as types.ASN) {
-			defer func() { <-sem; wg.Done() }()
+			defer func() { progress(); <-sem; wg.Done() }()
 			// Each call has a budget of its own — Peers, Lint, each Check,
 			// each verify — so one slow call never starves the rest, and the
 			// pairs never depend on whether the lint finished.
@@ -172,9 +188,12 @@ func TestRealDataConsist(t *testing.T) {
 			}
 			for _, is := range issues {
 				count("lint: "+is.Rule, 1)
-				if strings.HasPrefix(is.Rule, "lint/aspa-") {
+				if is.Rule == RuleAnySet {
+					t.Logf("%s: %s: %s", as, is.Rule, is.Message)
+				}
+				if strings.HasPrefix(is.Rule, "lint/aspa-") || is.Rule == RuleAnySet {
 					mu.Lock()
-					if len(examples[is.Rule]) < 5 {
+					if len(examples[is.Rule]) < 5 || is.Rule == RuleAnySet {
 						examples[is.Rule] = append(examples[is.Rule], fmt.Sprintf("%s: %s", as, is.Message))
 					}
 					mu.Unlock()
@@ -249,6 +268,9 @@ func TestRealDataConsist(t *testing.T) {
 			}
 		}
 	}
+	for _, k := range []string{"lint: " + RuleAnySet, "not decidable: any set", "not decidable: other"} {
+		stats[k] += 0 // reported even when none
+	}
 	keys := make([]string, 0, len(stats))
 	for k := range stats {
 		keys = append(keys, k)
@@ -259,7 +281,7 @@ func TestRealDataConsist(t *testing.T) {
 		fmt.Fprintf(&b, "  %-60s %d\n", k, stats[k])
 	}
 	t.Logf("%d aut-nums swept in %s:\n%s", len(ases), time.Since(start).Round(time.Second), b.String())
-	for _, r := range []string{RuleASPAMissingProvider, RuleASPAStaleProvider, RuleASPACustomerSet} {
+	for _, r := range []string{RuleAnySet, RuleASPAMissingProvider, RuleASPAStaleProvider, RuleASPACustomerSet} {
 		for _, e := range examples[r] {
 			t.Logf("%s example: %s", r, e)
 		}
@@ -267,7 +289,8 @@ func TestRealDataConsist(t *testing.T) {
 }
 
 // counted counts a limit, a timeout or a filter that cannot be evaluated
-// for a session (Check's error; Lint reports it as lint/undecided) and
+// for a session (Check's error; Lint reports it as lint/undecided), the
+// last split into "any set" (*resolve.AnySetError) and "other", and
 // reports true; nil is true too; any other error is false.
 func counted(err error, count func(string, int)) bool {
 	var tl *resolve.SetTooLargeError
@@ -284,7 +307,14 @@ func counted(err error, count func(string, int)) bool {
 		count("limit: flatten", 1)
 		return true
 	case notDecidable(err):
-		count("not decidable", 1)
+		// A set reaching AS-ANY in filter position, apart from the rest
+		// (a regexp naming one is decided, and linted lint/any-set).
+		var anyErr *resolve.AnySetError
+		if errors.As(err, &anyErr) {
+			count("not decidable: any set", 1)
+		} else {
+			count("not decidable: other", 1)
+		}
 		return true
 	}
 	return false

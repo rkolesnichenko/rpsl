@@ -54,3 +54,73 @@ in filter position. RADB, APNIC, AFRINIC, LACNIC, ALTDB and NTTCOM have none.
    ordinary set; an object named AS-ANY in a Source is never read.
 8. **Release**: rpsl v0.30.0 (API addition and behaviour change). routecheck v0.2 then requires it, checks
    `Any()` in its test oracle, names the set in an Accepted verdict, and reworks its R19 tests.
+
+## Measured
+
+Re-measured on 2026-10-17 over the RIPE dumps in `.data/ripe` (dated 2026-09-27), with shell
+one-liners (perl in paragraph mode, continuation lines folded), not a script in the repo.
+
+**As-sets whose `members:`/`mp-members:` list `AS-ANY`** (a member token, comments dropped):
+
+    gzcat ripe.db.as-set.gz | LC_ALL=C perl -00 -ne 's/\n[ \t+]/ /g; my ($n)=/^as-set:\s*(\S+)/mi;
+      for my $l (grep { /^(mp-)?members:/i } split /\n/) { (my $v=$l)=~s/^[^:]*://; $v=~s/#.*//;
+      for my $m (split /[\s,]+/, $v) { print "$n\t$m\n" if uc($m) eq "AS-ANY" } }'
+    AS1887:AS-Peerings:AS8501	AS-ANY
+    AS25192:AS-IX	AS-ANY
+    AS200070:AS-IX	AS-ANY
+
+**As-sets reaching `AS-ANY`**, directly or by nesting (a fixpoint over every as-set's members):
+
+    AS1887:AS-PEERINGS:AS-RECEIVED
+    AS1887:AS-PEERINGS:AS8501
+    AS200070:AS-IX
+    AS25192:AS-IX
+    reaching: 4 of 26766 as-sets
+
+3 direct and 1 by nesting (AS1887:AS-Peerings:AS-Received, whose `members:` names
+AS1887:AS-Peerings:AS8501), as above.
+
+**Where the four are named.** Every RIPE dump file, every line naming one of the four: 5 lines in
+`ripe.db.as-set.gz` (the four `as-set:` lines and the nesting `members:` line), 7 in
+`ripe.db.aut-num.gz`, none elsewhere. The aut-num lines:
+
+    AS8308	import: from AS1887 action pref=150; accept <AS1887:AS-Peerings:AS8501$>
+    AS1887	export: to AS8308 announce <AS1887:AS-Customers:AS-Received> OR <AS1887:AS-Peerings:AS-Received$>
+    AS1887	import: from AS8501 action pref=150; accept <AS1887:AS-Peerings:AS8501$>
+    AS25192	mp-import: afi any.unicast from AS25192:AS-IX accept ANY
+    AS25192	mp-export: afi any.unicast to AS25192:AS-IX announce AS-CZNIC
+    AS200070	mp-import: afi any.unicast from AS200070:AS-IX accept ANY
+    AS200070	mp-export: afi any.unicast to AS200070:AS-IX announce AS-CZNIC
+
+So 3 uses by name in AS-path regexps in 2 aut-nums (AS8308, AS1887), the peerings of 2 aut-nums
+(AS25192, AS200070), and none in filter position: the figures above hold. One more use the name
+search does not see: AS1887's `import: from AS1887:AS-Peerings action pref=150; accept
+<AS1887:AS-Peerings:PeerAS$>` is a set template that, toward AS8501, is AS1887:AS-Peerings:AS8501.
+It is the only template in RIPE's aut-nums that can be bound to one of the four
+(`AS1887:AS-PEERINGS:PEERAS` or `PEERAS:AS-IX`, searched the same way).
+
+**peval over the dumps** (`TestRealDataPeval`, `RPSL_PEVAL_AS=8308,1887`: the 301 sampled aut-nums
+and the two forced in with every peer they name; GOMAXPROCS 4, `GOMEMLIMIT=6GiB`). Before, main's
+code (12ed509) with this branch's test (its count of `Any()` sets stubbed to 0, since main's
+`ASNSet` has none), `.data/peval-anyset-before.log`; after, this branch,
+`.data/peval-anyset-after.log`:
+
+| | before | after |
+|---|---|---|
+| sessions evaluated | 3,493 | 3,496 |
+| clauses | 1,987 | 1,993 |
+| `*AnySetError` ("any set") | 3 | 0 |
+| regexps naming a set reaching AS-ANY | — | 4 (in 4 attributes, by 0-based `Clause.Index`: AS8308 import #3, AS1887 import #1 (the template) and #4, AS1887 export #2) |
+| refused `an AS-path set that reaches AS-ANY`, per vendor | — | 3 (cisco, junos, ciscoxr, bird) |
+
+The three sessions that failed before: AS8308 import from AS1887, AS1887 export to AS8308, AS1887
+import from AS8501 (by the template), all IPv4. After, AS8308's import from AS1887 has 2 clauses.
+
+**consist over the dumps** (`TestRealDataConsist`, the full sweep of 39,918 RIPE aut-nums,
+`.data/consist-anyset-2.log`; GOMAXPROCS 4, `GOMEMLIMIT=6GiB`, `RPSL_CONSIST_MEMO=1`, which is
+result-neutral and what `rpslcheck` always sets). `lint/any-set`: 4 issues, AS8308 1
+(AS1887:AS-PEERINGS:AS8501) and AS1887 3 (AS1887:AS-PEERINGS:AS8501 twice — the literal import and
+the template bound for AS8501 — and AS1887:AS-PEERINGS:AS-RECEIVED), one per regexp use above.
+"not decidable: any set" 0, as the dump has no use in filter position; "not decidable: other" 0;
+477,028 pairs checked. A first attempt at background priority without the memo
+(`.data/consist-anyset.log`) hit `go test`'s 90-minute timeout before the sweep finished.

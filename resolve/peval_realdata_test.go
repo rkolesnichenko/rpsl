@@ -29,8 +29,13 @@ import (
 // cause. Nothing may panic or fail except by a limit, a timeout, a filter
 // that cannot be normalized, or a construct a vendor cannot express
 // (*rtconfig.UnsupportedError); a rendered configuration cfgsim cannot parse
-// is a failure. The report counts clauses, Undecided terms by cause,
-// failures by kind, and renders/refusals by vendor and cause.
+// is a failure. A *resolve.AnySetError (a set reaching AS-ANY in filter
+// position) is counted as "any set". RPSL_PEVAL_AS (comma-separated AS
+// numbers) adds those aut-nums to the sample with every peer their
+// policies name, and logs each of their sessions. The report counts
+// clauses, Undecided terms by cause, failures by kind, renders/refusals by
+// vendor and cause, and the AS-path regexps naming a set that reaches
+// AS-ANY (a PathMatch with an ASNSet whose Any() is true).
 func TestRealDataPeval(t *testing.T) {
 	dir := os.Getenv("RPSL_REALDATA")
 	if dir == "" {
@@ -43,6 +48,19 @@ func TestRealDataPeval(t *testing.T) {
 		peers []types.ASN
 	}
 	var targets []target
+	forced := map[types.ASN]bool{}
+	for _, f := range strings.Split(os.Getenv("RPSL_PEVAL_AS"), ",") {
+		if f = strings.TrimSpace(f); f == "" {
+			continue
+		}
+		as, err := types.ParseASN(f)
+		if err != nil {
+			if as, err = types.ParseASN("AS" + f); err != nil {
+				t.Fatalf("RPSL_PEVAL_AS: %q: %v", f, err)
+			}
+		}
+		forced[as] = true
+	}
 	for _, f := range files {
 		base := filepath.Base(f)
 		wanted := strings.Contains(base, ".route") || strings.Contains(base, "-set") ||
@@ -77,7 +95,11 @@ func TestRealDataPeval(t *testing.T) {
 		read(nil)
 		if strings.Contains(base, ".aut-num") {
 			read(func(an *object.AutNum) {
-				if peers := namedPeers(an, 5); len(peers) > 0 {
+				n := 5
+				if forced[an.AS] {
+					n = 0 // every peer it names
+				}
+				if peers := namedPeers(an, n); len(peers) > 0 {
 					targets = append(targets, target{an.AS, peers})
 				}
 			})
@@ -94,9 +116,30 @@ func TestRealDataPeval(t *testing.T) {
 		gens[vendor] = &rtconfig.Generator{Vendor: vendor}
 	}
 	stats := map[string]int{}
+	anyUses := map[string]bool{} // "ASn import|export #index" with a regexp naming a set reaching AS-ANY
 	start := time.Now()
+	// The forced aut-nums first, then the sample less them: each once.
+	var order []target
+	found := map[types.ASN]bool{}
+	for _, tg := range targets {
+		if forced[tg.as] {
+			order = append(order, tg)
+			found[tg.as] = true
+		}
+	}
+	for as := range forced {
+		if !found[as] {
+			t.Errorf("RPSL_PEVAL_AS: AS%d is not a RIPE aut-num naming a peer", as)
+		}
+	}
+	sampled := 0
 	for i := 0; i < len(targets); i += step {
-		tg := targets[i]
+		if !forced[targets[i].as] {
+			order = append(order, targets[i])
+			sampled++
+		}
+	}
+	for _, tg := range order {
 		for _, peer := range tg.peers {
 			for _, af := range families {
 				for _, export := range []bool{false, true} {
@@ -112,10 +155,30 @@ func TestRealDataPeval(t *testing.T) {
 					cancel()
 					var tl *resolve.SetTooLargeError
 					var ne *resolve.NotEnumerableError
+					var ae *resolve.AnySetError
+					if forced[tg.as] {
+						dir := "import from"
+						if export {
+							dir = "export to"
+						}
+						if err != nil {
+							t.Logf("forced AS%d %s AS%d %v: %v", tg.as, dir, peer, af, err)
+						} else {
+							t.Logf("forced AS%d %s AS%d %v: %d clauses, %d undecided, %d regexps naming a set reaching AS-ANY",
+								tg.as, dir, peer, af, len(p.Clauses), len(p.Undecided), anySetPaths(p, nil))
+						}
+					}
 					switch {
 					case err == nil:
 						stats["evaluated"]++
 						stats["clauses"] += len(p.Clauses)
+						kind := "import"
+						if export {
+							kind = "export"
+						}
+						stats["regexps naming a set reaching AS-ANY"] += anySetPaths(p, func(index int) {
+							anyUses[fmt.Sprintf("AS%d %s #%d", tg.as, kind, index)] = true
+						})
 						for _, u := range p.Undecided {
 							stats["undecided: "+u.Why]++
 						}
@@ -144,6 +207,8 @@ func TestRealDataPeval(t *testing.T) {
 						stats["limit: "+tl.Limit.String()]++
 					case errors.As(err, &ne):
 						stats["not enumerable: "+ne.Why]++
+					case errors.As(err, &ae):
+						stats["any set"]++
 					case errors.Is(err, context.DeadlineExceeded):
 						stats["timeout"]++
 					case errors.Is(err, policy.ErrFlattenTooLarge):
@@ -155,6 +220,8 @@ func TestRealDataPeval(t *testing.T) {
 			}
 		}
 	}
+	stats["any set"] += 0 // reported even when none
+	stats["regexps naming a set reaching AS-ANY"] += 0
 	keys := make([]string, 0, len(stats))
 	for k := range stats {
 		keys = append(keys, k)
@@ -164,11 +231,40 @@ func TestRealDataPeval(t *testing.T) {
 	for _, k := range keys {
 		fmt.Fprintf(&b, "  %-60s %d\n", k, stats[k])
 	}
-	t.Logf("%d aut-nums sampled of %d, in %s:\n%s", (len(targets)+step-1)/step, len(targets), time.Since(start).Round(time.Second), b.String())
+	t.Logf("%d aut-nums sampled of %d (and %d forced), in %s:\n%s", sampled, len(targets), len(order)-sampled, time.Since(start).Round(time.Second), b.String())
+	uses := make([]string, 0, len(anyUses))
+	for u := range anyUses {
+		uses = append(uses, u)
+	}
+	sort.Strings(uses)
+	t.Logf("attributes with a regexp naming a set reaching AS-ANY (%d): %s", len(uses), strings.Join(uses, ", "))
 }
 
-// namedPeers returns up to n AS numbers the aut-num's import: and export:
-// peerings name directly, in order.
+// anySetPaths counts the AS-path tests in p's clauses that name a set
+// reaching AS-ANY (an ASNSet whose Any() is true), calling at, when not
+// nil, with each such clause's attribute index.
+func anySetPaths(p peval.Policy, at func(index int)) int {
+	n := 0
+	for _, cl := range p.Clauses {
+		for _, cj := range cl.Filter.Conjuncts {
+			for _, pm := range cj.Paths {
+				for _, set := range pm.Sets {
+					if set.Any() {
+						n++
+						if at != nil {
+							at(cl.Index)
+						}
+						break
+					}
+				}
+			}
+		}
+	}
+	return n
+}
+
+// namedPeers returns up to n AS numbers (all of them when n is 0) the
+// aut-num's import: and export: peerings name directly, in order.
 func namedPeers(an *object.AutNum, n int) []types.ASN {
 	seen := map[types.ASN]bool{}
 	var out []types.ASN
@@ -178,7 +274,7 @@ func namedPeers(an *object.AutNum, n int) []types.ASN {
 		case policy.Factor:
 			for _, pa := range x.Peers {
 				if p, ok := pa.Peering.(policy.PeeringAS); ok {
-					if a, ok := p.AS.(policy.ASNum); ok && !seen[a.AS] && len(out) < n {
+					if a, ok := p.AS.(policy.ASNum); ok && !seen[a.AS] && (n == 0 || len(out) < n) {
 						seen[a.AS] = true
 						out = append(out, a.AS)
 					}
