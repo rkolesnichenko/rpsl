@@ -82,6 +82,34 @@ func withTemplateSets(r *rand.Rand, m model) model {
 	return m
 }
 
+// withAnySets adds two as-sets reaching AS-ANY, which a regexp may name
+// (filterGen.pathSets) and a filter never does (filterGen.sets): AS-REACH
+// holds AS-ANY, and sometimes one of the model's AS numbers or as-sets;
+// AS-HOP reaches it through AS-REACH, beside one of the model's AS numbers.
+// randomModel draws AS-ANY too seldom for regexps to name a set reaching it
+// often enough (TestModelNormalizeFilter's floor).
+func withAnySets(r *rand.Rand, m model) model {
+	reach := &mSet{name: "AS-REACH", class: types.ClassAsSet, source: "RIPE",
+		members: []mMember{{kind: "set", set: "AS-ANY", text: "AS-ANY"}}}
+	switch r.IntN(3) {
+	case 0:
+		as := types.ASN(firstAS + r.IntN(4))
+		reach.members = append(reach.members, mMember{kind: "as", as: as, text: as.String()})
+	case 1:
+		for _, s := range m.sets {
+			if s.class == types.ClassAsSet {
+				reach.members = append(reach.members, mMember{kind: "set", set: s.name, text: s.name})
+				break
+			}
+		}
+	}
+	as := types.ASN(firstAS + r.IntN(4))
+	hop := &mSet{name: "AS-HOP", class: types.ClassAsSet, source: "RIPE",
+		members: []mMember{{kind: "as", as: as, text: as.String()}, {kind: "set", set: "AS-REACH", text: "AS-REACH"}}}
+	m.sets = append(m.sets, reach, hop)
+	return m
+}
+
 type mFilter struct {
 	kind string // "any", "pfx", "as", "set", "peer", "re", "comm", "fltr", "tmpl", "and", "or", "not"
 	pfx  netip.Prefix
@@ -217,6 +245,9 @@ func (m *mRE) goRE(o *oracle, peer types.ASN, path []types.ASN) string {
 	case "asn":
 		return tok(m.as)
 	case "set":
+		if o.anySet(m.set) {
+			return `<\d+>`
+		}
 		return alt(o.asns(m.set))
 	case "any":
 		return `<\d+>`
@@ -230,7 +261,7 @@ func (m *mRE) goRE(o *oracle, peer types.ASN, path []types.ASN) string {
 		return "$"
 	case "class":
 		if !m.neg {
-			if m.clsAny {
+			if m.clsAny || m.clsSet != "" && o.anySet(m.clsSet) {
 				return `<\d+>`
 			}
 			members := append([]types.ASN(nil), m.cls...)
@@ -268,8 +299,9 @@ func (m *mRE) goRE(o *oracle, peer types.ASN, path []types.ASN) string {
 
 // atomMatchesAS reports whether the single-AS atom m (an "asn", "any",
 // "peer", "set", "tmpl" or "class" mRE — never "alt"/"seq"/a quantifier)
-// accepts a, straight from the model (o.asns, the literal peer and AS
-// values), never from parsed text or engine code.
+// accepts a, straight from the model (o.asns, o.anySet, the literal peer and
+// AS values), never from parsed text or engine code. A set reaching AS-ANY
+// accepts every AS.
 func atomMatchesAS(m *mRE, o *oracle, peer, a types.ASN) bool {
 	switch m.kind {
 	case "asn":
@@ -279,11 +311,11 @@ func atomMatchesAS(m *mRE, o *oracle, peer, a types.ASN) bool {
 	case "peer":
 		return a == peer
 	case "set":
-		return containsASN(o.asns(m.set), a)
+		return o.anySet(m.set) || containsASN(o.asns(m.set), a)
 	case "tmpl":
 		return containsASN(o.asns(templateSet(peer)), a)
 	case "class":
-		in := containsASN(m.cls, a) || m.clsAny || (m.clsSet != "" && containsASN(o.asns(m.clsSet), a))
+		in := containsASN(m.cls, a) || m.clsAny || (m.clsSet != "" && (o.anySet(m.clsSet) || containsASN(o.asns(m.clsSet), a)))
 		return in != m.neg
 	}
 	return false
@@ -318,6 +350,44 @@ func sameAlt(as []types.ASN, q string, allowEmpty bool) string {
 		return "(?:<never>)"
 	}
 	return "(?:" + strings.Join(alts, "|") + ")"
+}
+
+// anySet reports whether the as-set name reaches AS-ANY: in a regexp it is
+// any AS (o.asns, which drops the AS-ANY member, would read it as empty).
+// It follows o.reach, which honours o.exS, while the engine clears Exclude
+// for every set a regexp names: an oracle answering for path sets must be
+// built without exclusion (newOracle, never o.excluding), as both Exclude
+// models (TestModelNormalizeExclude, TestModelPolicyExclude) build theirs.
+func (o *oracle) anySet(name string) bool {
+	_, reaches := o.reach(name)
+	return reaches
+}
+
+// namesAnySet reports whether the regexp m names a set reaching AS-ANY, as an
+// atom or a class member.
+func (m *mRE) namesAnySet(o *oracle) bool {
+	if m.kind == "set" && o.anySet(m.set) || m.kind == "class" && m.clsSet != "" && o.anySet(m.clsSet) {
+		return true
+	}
+	for _, s := range m.subs {
+		if s.namesAnySet(o) {
+			return true
+		}
+	}
+	return false
+}
+
+// anySetREs counts f's regexps that name a set reaching AS-ANY (those of
+// the filter-sets f names aside).
+func (f *mFilter) anySetREs(o *oracle) int {
+	n := 0
+	if f.kind == "re" && f.re.namesAnySet(o) {
+		n++
+	}
+	for _, s := range f.subs {
+		n += s.anySetREs(o)
+	}
+	return n
 }
 
 func containsASN(list []types.ASN, a types.ASN) bool {
@@ -358,16 +428,25 @@ type filterGen struct {
 	r      *rand.Rand
 	o      *oracle
 	sets   []string // set names a filter may name: the model's (none reaching AS-ANY) and one missing
-	asSets []string // as-set names a regexp may name
-	fltrs  []mFltr
-	memo   map[string][]netip.Prefix
-	v4only bool // prefix lists from IPv4 only (legacy import:)
+	asSets []string // as-set names a peering may name (none reaching AS-ANY)
+	// pathSets are the as-set names a regexp atom or class may name: asSets
+	// and the model's as-sets reaching AS-ANY, which a regexp reads as any AS
+	// (path position only: in filter position NormalizeFilter refuses them).
+	// Without such a set (randomModel(r, true)) it equals asSets, so the
+	// IRRToolSet differentials draw what they drew before.
+	pathSets []string
+	fltrs    []mFltr
+	memo     map[string][]netip.Prefix
+	v4only   bool // prefix lists from IPv4 only (legacy import:)
 }
 
 func newFilterGen(r *rand.Rand, o *oracle) *filterGen {
 	g := &filterGen{r: r, o: o, sets: []string{"RS-MISSING"}, memo: map[string][]netip.Prefix{}}
 	for name, s := range o.sets {
-		if _, anySet := o.reach(name); anySet {
+		if s.class == types.ClassAsSet {
+			g.pathSets = append(g.pathSets, name)
+		}
+		if o.anySet(name) {
 			continue
 		}
 		g.sets = append(g.sets, name)
@@ -377,6 +456,7 @@ func newFilterGen(r *rand.Rand, o *oracle) *filterGen {
 	}
 	slices.Sort(g.sets)
 	slices.Sort(g.asSets)
+	slices.Sort(g.pathSets)
 	return g
 }
 
@@ -478,8 +558,8 @@ func (g *filterGen) reAtom(depth int) *mRE {
 		a = g.reClass()
 	case 5:
 		a = &mRE{kind: "any"}
-		if len(g.asSets) > 0 {
-			a = &mRE{kind: "set", set: g.asSets[r.IntN(len(g.asSets))]}
+		if len(g.pathSets) > 0 {
+			a = &mRE{kind: "set", set: g.pathSets[r.IntN(len(g.pathSets))]}
 		}
 	default:
 		a = &mRE{kind: "tmpl"}
@@ -526,8 +606,8 @@ func (g *filterGen) reClass() *mRE {
 	c := &mRE{kind: "class", cls: []types.ASN{types.ASN(firstAS + r.IntN(4)), types.ASN(firstAS + r.IntN(4))}, neg: r.IntN(2) == 0}
 	switch r.IntN(4) {
 	case 0:
-		if len(g.asSets) > 0 {
-			c.clsSet = g.asSets[r.IntN(len(g.asSets))]
+		if len(g.pathSets) > 0 {
+			c.clsSet = g.pathSets[r.IntN(len(g.pathSets))]
 		}
 	case 1:
 		c.clsAny = true
@@ -632,10 +712,11 @@ func mustParseFilter(t *testing.T, label, s string) policy.Filter {
 
 func TestModelNormalizeFilter(t *testing.T) {
 	ctx := context.Background()
-	seeds, _ := resolve.ModelSeeds(400)
+	anyREs := 0 // regexps naming a set reaching AS-ANY
+	seeds, full := resolve.ModelSeeds(400)
 	for seed := uint64(0); seed < seeds; seed++ {
 		r := rand.New(rand.NewPCG(seed, 11))
-		m := withTemplateSets(r, randomModel(r, false))
+		m := withAnySets(r, withTemplateSets(r, randomModel(r, false)))
 		o := newOracle(m)
 		g := newFilterGen(r, o)
 		texts := append(m.texts(r), g.filterSets(3)...)
@@ -644,6 +725,7 @@ func TestModelNormalizeFilter(t *testing.T) {
 		e := &resolve.Expander{Src: src, Peer: peer}
 		for i := 0; i < 12; i++ {
 			f := g.filter(3)
+			anyREs += f.anySetREs(o)
 			label := fmt.Sprintf("seed %d: %s", seed, f.text())
 			pf := mustParseFilter(t, label, f.text())
 			nf, err := e.NormalizeFilter(ctx, pf)
@@ -667,6 +749,10 @@ func TestModelNormalizeFilter(t *testing.T) {
 			}
 			checkEvalFilterAgrees(t, label, e, pf, nf)
 		}
+	}
+	t.Logf("%d regexps named a set reaching AS-ANY", anyREs)
+	if full && anyREs < 50 {
+		t.Fatalf("only %d regexps named a set reaching AS-ANY, want 50", anyREs)
 	}
 }
 
@@ -710,14 +796,14 @@ func checkEvalFilterAgrees(t *testing.T, label string, e *resolve.Expander, f po
 // depth-4 tree hits only some of the time, and even then only when the
 // resulting prefix sets are not disjoint or empty. 700 seeds is the smallest
 // round multiple of the original 300 found to reliably clear the floor below
-// (a run of 300 lands at 27-29, and even a structural upper bound that assumes
-// every leaf nonempty tops out at 47); the floor itself is unchanged.
+// (with withAnySets, seeds 0-299 give 33 such filters and 0-699 give 66); the
+// floor itself is unchanged.
 func TestModelMaxConjuncts(t *testing.T) {
 	ctx := context.Background()
 	checked := 0
 	for seed := uint64(0); seed < 700; seed++ {
 		r := rand.New(rand.NewPCG(seed, 13))
-		m := withTemplateSets(r, randomModel(r, false))
+		m := withAnySets(r, withTemplateSets(r, randomModel(r, false)))
 		o := newOracle(m)
 		g := newFilterGen(r, o)
 		src := resolve.NewMemSource(decodeAll(t, m.texts(r)), "RIPE", "RADB")
@@ -755,7 +841,7 @@ func TestModelNormalizeExclude(t *testing.T) {
 	seeds, _ := resolve.ModelSeeds(500)
 	for seed := uint64(0); seed < seeds; seed++ {
 		r := rand.New(rand.NewPCG(seed, 19))
-		m := randomModel(r, false)
+		m := withAnySets(r, randomModel(r, false))
 		o := newOracle(m)
 		g := newFilterGen(r, o)
 		texts := append(m.texts(r), g.filterSets(3)...)
@@ -808,7 +894,7 @@ func TestModelFilterMemo(t *testing.T) {
 	seeds, _ := resolve.ModelSeeds(200)
 	for seed := uint64(0); seed < seeds; seed++ {
 		r := rand.New(rand.NewPCG(seed, 29))
-		m := withTemplateSets(r, randomModel(r, false))
+		m := withAnySets(r, withTemplateSets(r, randomModel(r, false)))
 		o := newOracle(m)
 		g := newFilterGen(r, o)
 		texts := append(m.texts(r), g.filterSets(3)...)

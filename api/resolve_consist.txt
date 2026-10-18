@@ -7,6 +7,7 @@ const NotImported Kind = iota
 const RuleASPACustomerSet = "lint/aspa-customer-set"
 const RuleASPAMissingProvider = "lint/aspa-missing-provider"
 const RuleASPAStaleProvider = "lint/aspa-stale-provider"
+const RuleAnySet = "lint/any-set"
 const RuleEmpty = "lint/empty"
 const RuleLimit = "lint/limit"
 const RuleMissingRouter = "lint/missing-router"

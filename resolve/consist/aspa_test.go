@@ -160,6 +160,27 @@ func TestASPAMissingProvider(t *testing.T) {
 	}
 }
 
+// An AS-path regexp naming a set that reaches AS-ANY (ruling F1). "ANY AND
+// NOT <AS-R>", with AS-R every AS, rejects every route with a path, so the
+// conjunct is not a full table and the import gives no issue. The positive
+// form "accept <AS-R$>" (RIPE AS8308's) gives none either: the rule reads
+// structure only and a positive test never counts, so this is a known false
+// negative. The export form names no positive as-set, so it gives no
+// lint/aspa-* issue.
+func TestASPAAnySetPath(t *testing.T) {
+	anyR := asSetText("AS-R", "AS-ANY")
+	for _, imp := range []string{"import: from AS9 accept ANY AND NOT <AS-R>", "import: from AS9 accept <AS-R$>"} {
+		ch := checker(t, autNum(1, imp, "export: to AS9 announce AS1"), autNum(9), anyR)
+		if got := lintASPA(t, ch, 1, newASPAs(t, aspa(1, 3)), RuleASPAMissingProvider); len(got) != 0 {
+			t.Errorf("%s: got\n%s\nwant none", imp, strings.Join(got, "\n"))
+		}
+	}
+	ch := checker(t, autNum(1, "import: from AS9 accept AS9", "export: to AS9 announce ANY AND NOT <AS-R>"), autNum(9), anyR)
+	if got := lintASPA(t, ch, 1, newASPAs(t, aspa(1, 9))); len(got) != 0 {
+		t.Errorf("export: got\n%s\nwant none", strings.Join(got, "\n"))
+	}
+}
+
 // Without ASPAs, Lint is unchanged: no lint/aspa-* issue, whatever the policy.
 func TestASPARulesOffWithoutASPAs(t *testing.T) {
 	ch := checker(t, autNum(1, "import: from AS2 accept ANY"), autNum(2))

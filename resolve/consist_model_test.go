@@ -709,7 +709,8 @@ func TestModelConsistBackends(t *testing.T) {
 		cm.checkNamedBy(t, label+" corpus", src)
 		cm.check(t, "corpus "+label, &consist.Checker{Eval: peval.Evaluator{Src: src}, MaxRanges: 1 << 16}, r, kc)
 		db := irrtest.New(cm.texts...).WithSources("RIPE", "RADB")
-		ir := &irrd.Source{Addr: db.IRRd(t), Sources: []string{"RIPE", "RADB"}, Pipeline: 8, Timeout: 5 * time.Second}
+		// SrcMembers: the model reads src-members: (oracle.noSrc unset).
+		ir := &irrd.Source{Addr: db.IRRd(t), Sources: []string{"RIPE", "RADB"}, Pipeline: 8, SrcMembers: true, Timeout: 5 * time.Second}
 		cm.check(t, "irrd "+label, &consist.Checker{Eval: peval.Evaluator{Src: ir}, MaxRanges: 1 << 16}, r, kc)
 		ir.Close()
 		wh := &whois.Source{Addr: db.Whois(t), Sources: []string{"RIPE", "RADB"}, Timeout: 5 * time.Second}
@@ -717,7 +718,7 @@ func TestModelConsistBackends(t *testing.T) {
 		// rpsld's legs draw their own samples, so r's later draws stay as they were.
 		rr := rand.New(rand.NewPCG(seed, 43))
 		rs := rpsldtest.Serve(t, rpsldtest.Snapshot(t, cm.texts, irrdq.SnapshotOptions{}, "RIPE", "RADB"))
-		rp := &irrd.Source{Addr: rs, Sources: []string{"RIPE", "RADB"}, Pipeline: 8, Timeout: 5 * time.Second}
+		rp := &irrd.Source{Addr: rs, Sources: []string{"RIPE", "RADB"}, Pipeline: 8, SrcMembers: true, Timeout: 5 * time.Second}
 		cm.check(t, "rpsld "+label, &consist.Checker{Eval: peval.Evaluator{Src: rp}, MaxRanges: 1 << 16}, rr, kr)
 		rp.Close()
 		rw := &whois.Source{Addr: rs, Sources: []string{"RIPE", "RADB"}, Timeout: 5 * time.Second}

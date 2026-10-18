@@ -168,11 +168,12 @@ severities as [`docs/diagnostics.md`](diagnostics.md):
 | `lint/shadowed` | Warning | Every route a term accepts is accepted by an earlier decided term (same AS-path/community signature), so the later term's actions never apply. Partial shadowing is not reported. |
 | `lint/empty` | Info | A term's filter, or a `default:`'s `networks` filter, accepts no route. |
 | `lint/missing-set` | Warning | A filter, a peering or a router expression names a set the source does not have. |
+| `lint/any-set` | Warning | An AS-path regexp names a set that reaches `AS-ANY`: the term is decided, the set matching any AS. The set's maintainer listed `AS-ANY`; name the ASes, or accept that any AS matches. |
 | `lint/missing-router` | Warning | A peering names an inet-rtr the source does not have. |
 | `lint/no-aut-num` | Warning | A peering names an AS whose aut-num the source does not have (an AS named only through a set: with `-set-peers`, or as its peering's representative). |
-| `lint/undecided` | Info | A term `peval` cannot decide for a session, or a session whose filter cannot be evaluated at all (it names a set reaching `AS-ANY`, or has no normal form); the other sessions are still linted. |
+| `lint/undecided` | Info | A term `peval` cannot decide for a session, or a session whose filter cannot be evaluated at all (it names a set reaching `AS-ANY` in filter position, or has no normal form); the other sessions are still linted. |
 | `lint/limit` | Warning | A session's evaluation hit a limit; the other sessions are still linted. |
-| `lint/aspa-missing-provider` | Warning | With `-rpki`: the aut-num takes a full table from a peer, and its ASPA does not list that peer, or is AS0. A full table is a conjunct accepting the family's whole space less negated prefixes, with no positive AS-path or community test, that accepts at least one prefix; the clause counts only if its own peering names the peer, and a peering reaching `AS-ANY` on its positive side (`OR`, `AND`, left of `EXCEPT`) — written, through an as-set, or in a peering-set — names no peer; a set template names the peer only if its instantiation for that peer lists it. |
+| `lint/aspa-missing-provider` | Warning | With `-rpki`: the aut-num takes a full table from a peer, and its ASPA does not list that peer, or is AS0. A full table is a conjunct accepting the family's whole space less negated prefixes, with no positive AS-path or community test and no negated AS-path test naming a set that reaches `AS-ANY`, that accepts at least one prefix; the clause counts only if its own peering names the peer, and a peering reaching `AS-ANY` on its positive side (`OR`, `AND`, left of `EXCEPT`) — written, through an as-set, or in a peering-set — names no peer; a set template names the peer only if its instantiation for that peer lists it. |
 | `lint/aspa-stale-provider` | Info | With `-rpki`: the aut-num's ASPA lists a provider none of its peerings names (silent when a peering could name any AS, or reaches a set the source does not have). |
 | `lint/aspa-customer-set` | Warning | With `-rpki`: the aut-num announces an as-set whose direct member AS has an ASPA not naming it, or an AS0 one. |
 
@@ -400,7 +401,8 @@ the JSON `totals` record both carry:
 - one row per lint rule;
 - `pairs over a limit or not decidable` — a pair whose check hit an
   `Expander` limit, or whose filter could not be evaluated for the session
-  at all (`*resolve.AnySetError`, `*resolve.NotEnumerableError`);
+  at all (`*resolve.AnySetError`: a set reaching `AS-ANY` in filter
+  position; `*resolve.NotEnumerableError`);
 - `checks over their time budget` — a peer list, a lint or a check that ran past
   `-check-timeout` (never guessed at, never counted as consistent: see
   "On real data" below);

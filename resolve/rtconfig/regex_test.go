@@ -1,11 +1,15 @@
 package rtconfig
 
 import (
+	"bytes"
+	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/rkolesnichenko/rpsl/policy"
 	"github.com/rkolesnichenko/rpsl/resolve"
+	"github.com/rkolesnichenko/rpsl/resolve/peval"
 	"github.com/rkolesnichenko/rpsl/types"
 )
 
@@ -97,4 +101,66 @@ func TestTranslatePathRefuses(t *testing.T) {
 			t.Errorf("%v <%s>: err %v, want cause %q", c.v, c.re, err, c.cause)
 		}
 	}
+}
+
+// anySetText is an as-set reaching AS-ANY: in an AS-path regexp it is every
+// AS (resolve.ASNSet.Any), which no printer writes.
+const anySetText = "as-set: AS-R\nmembers: AS-ANY, AS9\nsource: TEST\n"
+
+// A regexp naming a set that reaches AS-ANY is refused with CauseAnySet,
+// in both polarities, on every vendor, and nothing is written: an any-set
+// lists no AS, so writing its List() would give "_0" — under NOT, a list
+// that permits every route.
+func TestTranslateAnySet(t *testing.T) {
+	asR, err := types.ParseSetName("AS-R")
+	if err != nil {
+		t.Fatal(err)
+	}
+	anyR := map[types.SetName]resolve.ASNSet{asR: resolve.NewAnyASNSet()}
+	for _, v := range Vendors() {
+		for _, re := range []string{"AS-R$", "[AS-R AS1]", "^AS1 AS-R$", "[AS-ANY AS-R]"} {
+			r, err := policy.ParseASPathRegexp(re)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, neg := range []bool{false, true} {
+				m := resolve.PathMatch{RE: r, Sets: anyR, Negated: neg}
+				g := &Generator{Vendor: v}
+				got, err := g.translatePath(m, re)
+				var ue *UnsupportedError
+				if !errors.As(err, &ue) || ue.Cause != CauseAnySet || !strings.Contains(ue.Term, "AS-R") {
+					t.Errorf("%v <%s>: %q, %v; want refused with %q naming AS-R", v, re, got, err, CauseAnySet)
+				}
+				var b bytes.Buffer
+				if err := g.WriteASPathList(&b, m); !errors.As(err, &ue) || ue.Cause != CauseAnySet || b.Len() != 0 {
+					t.Errorf("%v WriteASPathList <%s> (negated %v): %v, wrote %q", v, re, neg, err, b.String())
+				}
+			}
+		}
+		for _, imp := range []string{"from AS2 accept <AS-R$>", "from AS2 accept <[AS-R AS1]>", "from AS2 accept ANY AND NOT <AS-R>",
+			"from AS2 accept AS2 AND NOT <^AS2 AS-R>"} {
+			s, p := anySetPolicy(t, imp)
+			if !p.Clauses[0].Filter.Conjuncts[0].Paths[0].Sets[asR].Any() {
+				t.Fatalf("%s: AS-R is not any: %+v", imp, p.Clauses[0].Filter)
+			}
+			g := &Generator{Vendor: v}
+			var b bytes.Buffer
+			var ue *UnsupportedError
+			if err := g.WriteImport(&b, s, p); !errors.As(err, &ue) || ue.Cause != CauseAnySet || b.Len() != 0 {
+				t.Errorf("%v WriteImport %q: %v, wrote %q; want refused with %q, nothing written", v, imp, err, b.String(), CauseAnySet)
+			}
+		}
+	}
+}
+
+// anySetPolicy is fixturePolicy with AS-R (anySetText) in the source.
+func anySetPolicy(t *testing.T, imp string) (peval.Session, peval.Policy) {
+	t.Helper()
+	an := "aut-num: AS1\nas-name: ONE\nimport: " + imp + "\nsource: TEST\n"
+	ev := &peval.Evaluator{Src: fixtureSource(t, an, anySetText)}
+	p, err := ev.Import(context.Background(), v4Session)
+	if err != nil {
+		t.Fatalf("peval %q: %v", imp, err)
+	}
+	return v4Session, p
 }

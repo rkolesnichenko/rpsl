@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/rkolesnichenko/rpsl/resolve/rtconfig"
 )
 
 var policyTexts = append(append([]string(nil), texts...),
@@ -118,6 +120,31 @@ func TestTemplateModeErrors(t *testing.T) {
 		code, _, errOut := runIn(t, c.template, "-dump", dump)
 		if code != 1 || !strings.Contains(errOut, c.inErr) {
 			t.Errorf("%q: exit %d, stderr %q; want 1 and %q", c.template, code, errOut, c.inErr)
+		}
+	}
+}
+
+// A policy whose AS-path regexp names a set reaching AS-ANY is refused,
+// whatever the vendor and the regexp's polarity: the refusal names the set
+// and rtconfig.CauseAnySet, the exit status is 1, and no configuration is
+// written for it.
+func TestTemplateModeAnySet(t *testing.T) {
+	name := filepath.Join(t.TempDir(), "irr.db")
+	texts := append(append([]string(nil), policyTexts...),
+		"aut-num: AS4\nas-name: FOUR\n"+
+			"import: from AS2 10.0.0.2 at 10.0.0.4 accept <AS-R$>\n"+
+			"import: from AS3 10.0.0.3 at 10.0.0.4 accept ANY AND NOT <^AS3 AS-R>\nsource: RIPE\n",
+		"as-set: AS-R\nmembers: AS9, AS-ANY\nsource: RIPE\n")
+	if err := os.WriteFile(name, []byte(strings.Join(texts, "\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []string{"cisco", "junos", "ciscoxr", "bird"} {
+		for _, tmpl := range []string{"@RtConfig import AS4 10.0.0.4 AS2 10.0.0.2\n", "@RtConfig import AS4 10.0.0.4 AS3 10.0.0.3\n",
+			"@RtConfig aspath_access_list filter <AS-R$>\n"} {
+			code, out, errOut := runIn(t, tmpl, "-dump", name, "-config", v)
+			if code != 1 || !strings.Contains(errOut, "AS-R") || !strings.Contains(errOut, rtconfig.CauseAnySet) || strings.TrimSpace(out) != "" {
+				t.Errorf("%s %q: exit %d, stderr %q, stdout %q; want 1, the set and %q, nothing written", v, tmpl, code, errOut, out, rtconfig.CauseAnySet)
+			}
 		}
 	}
 }

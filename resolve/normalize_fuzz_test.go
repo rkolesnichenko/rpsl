@@ -25,6 +25,8 @@ var fuzzTexts = []string{
 	"route-set: RS-B\nmembers: 10.9.0.0/16^+, AS-A\nsource: TEST\n",
 	"filter-set: FLTR-RE\nfilter: AS-A AND <^AS65001>\nsource: TEST\n",
 	"filter-set: FLTR-LOOP\nfilter: <AS65001> OR FLTR-LOOP\nsource: TEST\n",
+	"as-set: AS-REACH\nmembers: AS-A, AS-ANY\nsource: TEST\n",
+	"route-set: RS-REACH\nmembers: AS-REACH^24, 10.9.0.0/16\nsource: TEST\n",
 }
 
 var fuzzRoutes = func() []routemodel.Route {
@@ -40,7 +42,9 @@ var fuzzRoutes = func() []routemodel.Route {
 }()
 
 // FuzzNormalizeFilter: NormalizeFilter never panics, keeps within its caps,
-// and its String() reads back to a filter accepting the same routes.
+// and its String() reads back to a filter accepting the same routes. A filter
+// that names sets only inside AS-path regexps is never an *AnySetError: there
+// a set reaching AS-ANY (AS-REACH) is every AS.
 func FuzzNormalizeFilter(f *testing.F) {
 	for _, s := range []string{
 		"ANY", "NOT ANY", "AS65001 AND <^AS65001 .* $>", "(<AS-A> OR community(1:1)) AND NOT {10.0.0.0/8^+}",
@@ -48,6 +52,7 @@ func FuzzNormalizeFilter(f *testing.F) {
 		"community == {1:1, 1:2}", "RS-B^24-32 AND NOT <AS65002>", "AS-ANY",
 		"<[^AS65001 AS65002]>", "<AS65001~+ AS65002~{1,2}>",
 		"CommunitY(>)", // an error: its recovered test's argument holds a stray '>'
+		"<AS-REACH>", "NOT <AS-REACH>", "<[^AS-REACH]>", "AS-REACH", "RS-REACH AND {10.0.0.0/8^+}",
 	} {
 		f.Add(s)
 	}
@@ -85,6 +90,10 @@ func FuzzNormalizeFilter(f *testing.F) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		nf, err := e.NormalizeFilter(ctx, pf)
+		var anyErr *resolve.AnySetError
+		if errors.As(err, &anyErr) && !setRefOutsideRegexp(pf) {
+			t.Fatalf("%q: %v, though it names sets only in AS-path regexps", s, err)
+		}
 		if err != nil {
 			return
 		}
@@ -122,4 +131,46 @@ func FuzzNormalizeFilter(f *testing.F) {
 			}
 		}
 	})
+}
+
+// setRefOutsideRegexp reports whether f names a set — an as-set, route-set or
+// filter-set, or a template of one — anywhere but inside an AS-path regexp, or
+// holds a node it does not know.
+func setRefOutsideRegexp(f policy.Filter) bool {
+	switch x := f.(type) {
+	case nil, policy.FilterAny, policy.FilterPeerAS, policy.FilterPrefixList,
+		policy.FilterPathRE, policy.FilterCommunity:
+		return false
+	case policy.FilterASExpr:
+		return asExprNamesSet(x.AS)
+	case policy.FilterAnd:
+		for _, t := range x.Terms {
+			if setRefOutsideRegexp(t) {
+				return true
+			}
+		}
+		return false
+	case policy.FilterOr:
+		for _, t := range x.Terms {
+			if setRefOutsideRegexp(t) {
+				return true
+			}
+		}
+		return false
+	case policy.FilterNot:
+		return setRefOutsideRegexp(x.Inner)
+	}
+	return true // FilterSetRef, FilterSetTemplate, or a node unknown here
+}
+
+// asExprNamesSet reports whether an AS expression names an as-set or a
+// template of one, or holds a node it does not know.
+func asExprNamesSet(e policy.ASExpr) bool {
+	switch x := e.(type) {
+	case nil, policy.ASNum:
+		return false
+	case policy.ASExprBinary:
+		return asExprNamesSet(x.L) || asExprNamesSet(x.R)
+	}
+	return true
 }

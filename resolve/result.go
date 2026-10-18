@@ -11,10 +11,28 @@ import (
 )
 
 // ASNSet is a deduplicated set of ASNs produced by ExpandAS.
+//
+// An ASNSet may instead be the set of every AS (Any): what an as-set that
+// reaches AS-ANY denotes in an AS-path regexp (PathMatch.Sets), and what
+// NewAnyASNSet returns. Such a set holds every AS — Has is true for each — but
+// lists none: List is empty, Len is 0 and Missing is empty. ExpandAS never
+// returns one (a set reaching AS-ANY is an *AnySetError there), so a reader of
+// PathMatch.Sets checks Any before List or Len.
 type ASNSet struct {
 	m       map[types.ASN]struct{}
 	missing []types.SetRef
+	any     bool
 }
+
+// NewAnyASNSet returns the set of every AS (see Any): for code that builds a
+// PathMatch by hand.
+func NewAnyASNSet() ASNSet { return ASNSet{any: true} }
+
+// Any reports whether the set is every AS: an as-set that reaches AS-ANY,
+// named in an AS-path regexp. Has is then true for every AS, and List, Len and
+// Missing give nothing: a set missing below it is not reported, since nothing
+// it could add changes every AS.
+func (s ASNSet) Any() bool { return s.any }
 
 // Missing lists the nested sets that were referenced but not found, sorted by
 // String(); a scoped reference prints as RIPE::AS-FOO. They expanded to nothing
@@ -35,13 +53,20 @@ func NewASNSet(asns ...types.ASN) ASNSet {
 
 func (s *ASNSet) add(a types.ASN) { s.m[a] = struct{}{} }
 
-// Has reports membership.
-func (s ASNSet) Has(a types.ASN) bool { _, ok := s.m[a]; return ok }
+// Has reports membership: true for every AS when Any.
+func (s ASNSet) Has(a types.ASN) bool {
+	if s.any {
+		return true
+	}
+	_, ok := s.m[a]
+	return ok
+}
 
-// Len reports the number of distinct ASNs.
+// Len reports the number of distinct ASNs listed: 0 when Any.
 func (s ASNSet) Len() int { return len(s.m) }
 
-// List returns the ASNs in ascending order (deterministic for tests/output).
+// List returns the ASNs in ascending order (deterministic for tests/output):
+// none when Any.
 func (s ASNSet) List() []types.ASN {
 	out := make([]types.ASN, 0, len(s.m))
 	for a := range s.m {
@@ -144,8 +169,14 @@ func (s RangeSet) List() []types.PrefixRange {
 	return out
 }
 
-// String lists the ASNs in ascending order, e.g. "[AS1 AS2]".
-func (s ASNSet) String() string { return listString(s.List()) }
+// String lists the ASNs in ascending order, e.g. "[AS1 AS2]", or is
+// "[AS-ANY]" when Any.
+func (s ASNSet) String() string {
+	if s.any {
+		return "[AS-ANY]"
+	}
+	return listString(s.List())
+}
 
 // String lists the prefixes in List order.
 func (s PrefixSet) String() string { return listString(s.List()) }

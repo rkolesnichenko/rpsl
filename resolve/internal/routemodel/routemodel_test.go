@@ -24,25 +24,47 @@ var matchPathCases = []struct {
 	re   string
 	path []types.ASN
 	want bool
+	sets bool // the regexp names vectorSets and vectorAnySets (AS-ALL: every AS)
 }{
-	{"AS1", []types.ASN{2, 1, 3}, true}, // unanchored: anywhere
-	{"^AS1", []types.ASN{2, 1}, false},
-	{"^AS2 AS1$", []types.ASN{2, 1}, true},
-	{"^AS2 .* AS3$", []types.ASN{2, 9, 9, 3}, true},
-	{"^AS2+$", []types.ASN{2, 2, 2}, true},
-	{"^AS2+$", []types.ASN{2, 3}, false},
-	{"[AS1 - AS3]", []types.ASN{7, 2}, true},
-	{"^[^AS1 AS2]$", []types.ASN{3}, true},
-	{"^[^AS1 AS2]$", []types.ASN{2}, false},
-	{"^.~*$", []types.ASN{5, 5, 5}, true},
-	{"^.~*$", []types.ASN{5, 6}, false},
-	{"^AS1{2,3}$", []types.ASN{1, 1, 1, 1}, false},
-	{"^(AS1 | AS2 AS3)$", []types.ASN{2, 3}, true},
+	{"AS1", []types.ASN{2, 1, 3}, true, false}, // unanchored: anywhere
+	{"^AS1", []types.ASN{2, 1}, false, false},
+	{"^AS2 AS1$", []types.ASN{2, 1}, true, false},
+	{"^AS2 .* AS3$", []types.ASN{2, 9, 9, 3}, true, false},
+	{"^AS2+$", []types.ASN{2, 2, 2}, true, false},
+	{"^AS2+$", []types.ASN{2, 3}, false, false},
+	{"[AS1 - AS3]", []types.ASN{7, 2}, true, false},
+	{"^[^AS1 AS2]$", []types.ASN{3}, true, false},
+	{"^[^AS1 AS2]$", []types.ASN{2}, false, false},
+	{"^.~*$", []types.ASN{5, 5, 5}, true, false},
+	{"^.~*$", []types.ASN{5, 6}, false, false},
+	{"^AS1{2,3}$", []types.ASN{1, 1, 1, 1}, false, false},
+	{"^(AS1 | AS2 AS3)$", []types.ASN{2, 3}, true, false},
+	// AS-ALL reaches AS-ANY: a negated class over it holds no AS, so it
+	// matches no one-AS path; the positive class matches any.
+	{"[^AS-ALL]", []types.ASN{7}, false, true},
+	{"[AS-ALL]", []types.ASN{7}, true, true},
 }
 
 func TestMatchPath(t *testing.T) {
 	for _, c := range matchPathCases {
-		got, err := MatchPath(resolve.PathMatch{RE: re(t, c.re)}, c.path)
+		pm := resolve.PathMatch{RE: re(t, c.re)}
+		if c.sets {
+			pm.Sets = map[types.SetName]resolve.ASNSet{}
+			add := func(name string, s resolve.ASNSet) {
+				sn, err := types.ParseSetName(name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				pm.Sets[sn] = s
+			}
+			for name, members := range vectorSets {
+				add(name, resolve.NewASNSet(members...))
+			}
+			for _, name := range vectorAnySets {
+				add(name, resolve.NewAnyASNSet())
+			}
+		}
+		got, err := MatchPath(pm, c.path)
 		if err != nil || got != c.want {
 			t.Errorf("<%s> on %v = %v, %v; want %v", c.re, c.path, got, err, c.want)
 		}

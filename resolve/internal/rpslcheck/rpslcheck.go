@@ -313,8 +313,9 @@ func isLimit(err error) bool {
 }
 
 // notDecidable reports whether err is a filter that cannot be evaluated for
-// a session: it names a set reaching AS-ANY, or has no normal form. A sweep
-// counts such a pair with the limits; a single check fails on it.
+// a session: it names a set reaching AS-ANY in filter position (in an
+// AS-path regexp such a set is any AS and decides), or has no normal form. A
+// sweep counts such a pair with the limits; a single check fails on it.
 func notDecidable(err error) bool {
 	var anyErr *resolve.AnySetError
 	var ne *resolve.NotEnumerableError

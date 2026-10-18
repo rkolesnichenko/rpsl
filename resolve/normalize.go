@@ -72,11 +72,15 @@ func (c Conjunct) computeSpace() types.PrefixSpace {
 // PathMatch is an AS-path regexp a route's path must match (or, Negated, must
 // not). RE has PeerAS and set templates bound. Sets holds every as-set RE
 // names, expanded, so a printer can write the regexp without a registry;
-// AS-ANY, which matches any AS, has no entry. The regexp is never evaluated
-// here (design §13). Sets is always expanded with Expander.Exclude cleared, in
-// either polarity: a set can reject even inside a regexp that is not negated
-// ("[^AS-A]" matches an AS not in AS-A), so an excluded member left out of it
-// would widen what the filter accepts (see NormalizeFilter).
+// AS-ANY, which matches any AS, has no entry. A set reaching AS-ANY has an
+// entry whose Any() is true: it matches any one AS where RE names it, and it
+// is not the filter ANY (<AS-X$> still needs a non-empty path, <^AS-X$> a
+// path of one AS). A reader checks Any() before List or Len, which give
+// nothing for it. The regexp is never evaluated here (design §13). Sets is
+// always expanded with Expander.Exclude cleared, in either polarity: a set can
+// reject even inside a regexp that is not negated ("[^AS-A]" matches an AS
+// not in AS-A), so an excluded member left out of it would widen what the
+// filter accepts (see NormalizeFilter).
 type PathMatch struct {
 	Negated bool
 	RE      *policy.ASPathRE
@@ -94,12 +98,17 @@ type CommunityMatch struct {
 // folds into prefix ranges, through the same evaluation as EvalFilter; AS-path
 // regexps and community tests stay symbolic and are never evaluated (design
 // §13). NOT is pushed to the leaves. AS-ANY and RS-ANY in filter position
-// denote every route, as ANY does (RFC 2622 §5.1, §5.2). A filter-set that
-// holds a regexp or a community test is inlined, once per polarity however
-// often f names it; referenced with a range operator, or on a cycle of
-// filter-sets, it is a *NotEnumerableError naming it. A term naming the peer
-// with no Peer bound is a *NotEnumerableError wrapping ErrUnboundPeer. An
-// AS-path regexp that did not parse is a *NotEnumerableError too.
+// denote every route, as ANY does: RFC 2622 §5.3 makes them every AS and
+// route registered in the IRR, which a Source cannot enumerate, so this is a
+// widening approximation of "registered routes". A set that reaches AS-ANY
+// or RS-ANY through its members is an *AnySetError in filter position, as in
+// EvalFilter; named in an AS-path regexp, an as-set that reaches AS-ANY is
+// every AS (see PathMatch). A filter-set that holds a regexp or a community
+// test is inlined, once per polarity however often f names it; referenced
+// with a range operator, or on a cycle of filter-sets, it is a
+// *NotEnumerableError naming it. A term naming the peer with no Peer bound is
+// a *NotEnumerableError wrapping ErrUnboundPeer. An AS-path regexp that did
+// not parse is a *NotEnumerableError too.
 //
 // Expander.Exclude only ever narrows what f accepts, so it applies to one
 // thing: a positive prefix literal, evaluated with it as EvalFilter would. A
@@ -496,7 +505,9 @@ func (m CommunityMatch) key() string {
 // path binds an AS-path regexp to the peer and expands the as-sets it names,
 // always with Exclude cleared (see the PathMatch doc): a set can sit on the
 // rejecting side of a regexp even when the regexp is not negated ("[^AS-A]"),
-// so leaving a member out would widen what the regexp accepts.
+// so leaving a member out would widen what the regexp accepts. A set that
+// reaches AS-ANY is stored as the set of every AS (filterEval.pathSet), with
+// no missing sets.
 func (n *normalizer) path(x policy.FilterPathRE) (PathMatch, error) {
 	if x.Regexp == nil {
 		return PathMatch{}, &NotEnumerableError{Term: filterText(x), Why: "the AS-path regexp did not parse"}
@@ -515,7 +526,7 @@ func (n *normalizer) path(x policy.FilterPathRE) (PathMatch, error) {
 		if isAnySet(name) {
 			continue
 		}
-		s, err := ev.asSet(name)
+		s, err := ev.pathSet(name)
 		if err != nil {
 			if !errors.Is(err, ErrNotFound) {
 				return PathMatch{}, err

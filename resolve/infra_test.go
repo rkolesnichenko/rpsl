@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"net/netip"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -28,7 +29,9 @@ func TestConcurrencyDoesNotChangeResults(t *testing.T) {
 	for seed := uint64(0); seed < 200; seed++ {
 		r := rand.New(rand.NewPCG(seed, 0x5eed))
 		g := randomGraph(r, 6)
-		src := g.corpus(t, r)
+		// AS-REACH reaches AS-ANY two levels down, beside the random graph, which
+		// it also reaches; nothing in the graph reaches it.
+		src := g.corpus(t, r, asSet("AS-REACH", "AS-S0, AS-HOP"), asSet("AS-HOP", "AS-S3, AS-ANY, AS-NONE"))
 		top := mustSet(t, "AS-S0")
 		// Every other seed leaves a random set out, so exclusion is covered too.
 		var ex Exclusion
@@ -51,7 +54,56 @@ func TestConcurrencyDoesNotChangeResults(t *testing.T) {
 				t.Fatalf("seed %d: concurrency %d Missing %v, serial %v", seed, n, got.Missing(), serial.Missing())
 			}
 		}
+		// An AS-path regexp naming a set that reaches AS-ANY, and one that does
+		// not, normalizes alike however many fetches run together.
+		f := mustFilter(t, "<AS-REACH AS-S0> OR <[^AS-HOP]>")
+		want, err := (&Expander{Src: src, Exclude: ex}).NormalizeFilter(context.Background(), f)
+		if err != nil {
+			t.Fatalf("seed %d: NormalizeFilter: %v", seed, err)
+		}
+		reach := false
+		for _, c := range want.Conjuncts {
+			for _, p := range c.Paths {
+				if s, ok := p.Sets[mustSet(t, "AS-REACH")]; ok {
+					reach = s.Any()
+				}
+			}
+		}
+		if !reach {
+			t.Fatalf("seed %d: %s: Sets[AS-REACH] is not Any", seed, pathSetsText(want))
+		}
+		for _, n := range []int{2, 8, 64} {
+			got, err := (&Expander{Src: src, Concurrency: n, Exclude: ex}).NormalizeFilter(context.Background(), f)
+			if err != nil {
+				t.Fatalf("seed %d, concurrency %d: NormalizeFilter: %v", seed, n, err)
+			}
+			if a, b := pathSetsText(got), pathSetsText(want); a != b {
+				t.Fatalf("seed %d: concurrency %d normalized to %s, serial to %s", seed, n, a, b)
+			}
+		}
 	}
+}
+
+// pathSetsText renders a normal form with every AS-path test's sets and the
+// missing sets, for comparing two normal forms in full.
+func pathSetsText(nf NormalFilter) string {
+	var b strings.Builder
+	b.WriteString(nf.String())
+	for _, c := range nf.Conjuncts {
+		for _, p := range c.Paths {
+			names := make([]types.SetName, 0, len(p.Sets))
+			for n := range p.Sets {
+				names = append(names, n)
+			}
+			sort.Slice(names, func(i, j int) bool { return names[i].String() < names[j].String() })
+			for _, n := range names {
+				s := p.Sets[n]
+				fmt.Fprintf(&b, " %s=%v any=%v missing=%v", n, s, s.Any(), s.Missing())
+			}
+		}
+	}
+	fmt.Fprintf(&b, " missing=%v", nf.Missing())
+	return b.String()
 }
 
 // The same holds for prefix expansion, where the routes of each AS are fetched

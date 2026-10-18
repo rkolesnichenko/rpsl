@@ -103,7 +103,8 @@ func (g graph) oracle() (asns []uint32, maxDist int) {
 // corpus builds the graph as RPSL, listing each set's members in an order
 // drawn from r (so the same graph can be presented in different orders). Every
 // set is in RIPE, and a scoped edge is in src-members: as well as members:.
-func (g graph) corpus(t *testing.T, r *rand.Rand) *MemSource {
+// The extra objects are added as they are.
+func (g graph) corpus(t *testing.T, r *rand.Rand, extra ...string) *MemSource {
 	var texts []string
 	for i := range g.asns {
 		var members, src []string
@@ -129,7 +130,7 @@ func (g graph) corpus(t *testing.T, r *rand.Rand) *MemSource {
 		b.WriteString("source: RIPE\n")
 		texts = append(texts, b.String())
 	}
-	return corpus(t, texts...)
+	return corpus(t, append(texts, extra...)...)
 }
 
 func TestPropertyExpansionMatchesOracle(t *testing.T) {

@@ -16,18 +16,29 @@ import (
 )
 
 // vector is one line of the vectors file routecheck's pathre package reads as
-// an oracle: a regexp body (without < >), the sets it names (AS-ANY is never
-// listed; routemodel treats it as any AS), an AS path, and the answer. An
-// error answer carries "err" and no "match".
+// an oracle: a regexp body (without < >), the sets it names with their
+// members, the names of those that reach AS-ANY and so hold every AS
+// (resolve.ASNSet.Any; absent when none), an AS path, and the answer. A set
+// in "any_sets" is never in "sets". routemodel, given no ASNSet for a set a
+// regexp names, fails ("was not expanded") rather than reading it as empty;
+// another reader that does not know "any_sets" may read the absent set as
+// matching nothing and answer wrongly. The
+// literal AS-ANY is in neither; routemodel treats it as any AS. An error
+// answer carries "err" and no "match".
 type vector struct {
-	RE    string              `json:"re"`
-	Sets  map[string][]uint32 `json:"sets"`
-	Path  []uint32            `json:"path"`
-	Match *bool               `json:"match,omitempty"`
-	Err   string              `json:"err,omitempty"`
+	RE      string              `json:"re"`
+	Sets    map[string][]uint32 `json:"sets"`
+	AnySets []string            `json:"any_sets,omitempty"`
+	Path    []uint32            `json:"path"`
+	Match   *bool               `json:"match,omitempty"`
+	Err     string              `json:"err,omitempty"`
 }
 
+// vectorsVersion is the vectors file's format: 2 added "any_sets".
+const vectorsVersion = 2
+
 type vectorHeader struct {
+	Version   int    `json:"version"`
 	Generator string `json:"generator"`
 	Commit    string `json:"rpsl_commit"`
 	Seed      int    `json:"seed"`
@@ -37,6 +48,9 @@ var vectorSets = map[string][]types.ASN{
 	"AS-A":     {64501, 64502},
 	"AS-EMPTY": {},
 }
+
+// vectorAnySets are the sets that reach AS-ANY: in a regexp, any AS.
+var vectorAnySets = []string{"AS-ALL"}
 
 func asnsToUint(p []types.ASN) []uint32 {
 	out := make([]uint32, len(p))
@@ -67,6 +81,14 @@ func makeVector(t *testing.T, body string, withSets bool, path []types.ASN) vect
 			pm.Sets[sn] = resolve.NewASNSet(members...)
 			v.Sets[name] = asnsToUint(members)
 		}
+		for _, name := range vectorAnySets {
+			sn, err := types.ParseSetName(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pm.Sets[sn] = resolve.NewAnyASNSet()
+			v.AnySets = append(v.AnySets, name)
+		}
 	}
 	got, err := MatchPath(pm, path)
 	switch {
@@ -88,7 +110,7 @@ func (g vecGen) n(k int) int { return g.r.IntN(k) }
 
 func (g vecGen) as() string { return fmt.Sprintf("AS%d", 64500+g.n(6)) }
 
-func (g vecGen) set() string { return []string{"AS-A", "AS-EMPTY", "AS-ANY"}[g.n(3)] }
+func (g vecGen) set() string { return []string{"AS-A", "AS-EMPTY", "AS-ANY", "AS-ALL"}[g.n(4)] }
 
 func (g vecGen) classItem() string {
 	switch g.n(4) {
@@ -232,7 +254,7 @@ func TestWriteVectors(t *testing.T) {
 		}
 	}
 	for _, c := range matchPathCases {
-		v := makeVector(t, c.re, false, c.path)
+		v := makeVector(t, c.re, c.sets, c.path)
 		if v.Match == nil || *v.Match != c.want {
 			t.Fatalf("<%s> on %v: vector %+v disagrees with TestMatchPath's %v", c.re, c.path, v, c.want)
 		}
@@ -262,7 +284,7 @@ func TestWriteVectors(t *testing.T) {
 	}
 	w := bufio.NewWriter(f)
 	enc := json.NewEncoder(w)
-	if err := enc.Encode(vectorHeader{"rpsl resolve/internal/routemodel TestWriteVectors", commit, 1}); err != nil {
+	if err := enc.Encode(vectorHeader{vectorsVersion, "rpsl resolve/internal/routemodel TestWriteVectors", commit, 1}); err != nil {
 		t.Fatal(err)
 	}
 	for _, v := range vs {

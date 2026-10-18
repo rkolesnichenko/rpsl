@@ -627,3 +627,58 @@ func TestFilterMemoFiltersDoNotEvictExpansions(t *testing.T) {
 		t.Fatalf("stats %+v: the filters evicted AS-SMALL's expansion", st)
 	}
 }
+
+// A memo shared by NormalizeFilter and ExpandAS keeps their answers apart for
+// a set reaching AS-ANY, in either order and through a layer: ExpandAS stays
+// an *AnySetError, an AS-path regexp naming the set stays any.
+func TestFilterMemoAnySetBothOrders(t *testing.T) {
+	src := anyCorpus(t)
+	ctx := context.Background()
+	ref := types.Ref(mustSet(t, "AS-R"))
+	f := mustFilter(t, "<AS-R>")
+	normAny := func(label string, e *Expander) {
+		t.Helper()
+		nf, err := e.NormalizeFilter(ctx, f)
+		if err != nil {
+			t.Errorf("%s: NormalizeFilter(<AS-R>): %v", label, err)
+			return
+		}
+		if s, ok := pathSetOf(t, nf, "AS-R"); !ok || !s.Any() {
+			t.Errorf("%s: NormalizeFilter(<AS-R>) Sets[AS-R] = %v, want Any", label, s)
+		}
+	}
+	expandErr := func(label string, e *Expander) {
+		t.Helper()
+		s, err := e.ExpandAS(ctx, ref)
+		var ae *AnySetError
+		if !errors.As(err, &ae) || s.Any() {
+			t.Errorf("%s: ExpandAS(AS-R) = %v, %v; want *AnySetError", label, s, err)
+		}
+	}
+	// Unlayered, one Expander holds one memo; layered, each call gets its own
+	// layer over one shared memo, as Checker.eval does.
+	for _, layered := range []bool{false, true} {
+		for _, order := range []string{"A", "B"} {
+			shared := NewFilterMemo(1 << 14)
+			e := func() *Expander {
+				if layered {
+					return &Expander{Src: src, Memo: NewFilterMemoOver(shared, 1<<14)}
+				}
+				return &Expander{Src: src, Memo: shared}
+			}
+			label := fmt.Sprintf("layered %v, order %s", layered, order)
+			for pass := 0; pass < 2; pass++ {
+				if order == "A" {
+					normAny(label, e())
+					expandErr(label, e())
+				} else {
+					expandErr(label, e())
+					normAny(label, e())
+				}
+			}
+			if st := shared.Stats(); st.Hits == 0 {
+				t.Errorf("%s: the shared memo was never hit (%+v)", label, st)
+			}
+		}
+	}
+}

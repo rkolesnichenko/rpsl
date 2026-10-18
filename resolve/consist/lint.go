@@ -24,6 +24,7 @@ const (
 	RuleShadowed      = "lint/shadowed"       // every route a term accepts, an earlier decided term accepts
 	RuleEmpty         = "lint/empty"          // a term's filter, or a default's networks, accepts no route
 	RuleMissingSet    = "lint/missing-set"    // a filter or peering names a set the Source does not have
+	RuleAnySet        = "lint/any-set"        // an AS-path regexp names a set reaching AS-ANY: it matches any AS
 	RuleMissingRouter = "lint/missing-router" // a peering names an inet-rtr the Source does not have
 	RuleNoAutNum      = "lint/no-aut-num"     // a peering names an AS whose aut-num the Source does not have
 	RuleUndecided     = "lint/undecided"      // a term peval cannot decide; the message gives the reason
@@ -31,7 +32,7 @@ const (
 )
 
 var ruleSeverity = map[string]ast.Severity{
-	RuleShadowed: ast.Warning, RuleEmpty: ast.Info, RuleMissingSet: ast.Warning, RuleMissingRouter: ast.Warning,
+	RuleShadowed: ast.Warning, RuleEmpty: ast.Info, RuleMissingSet: ast.Warning, RuleAnySet: ast.Warning, RuleMissingRouter: ast.Warning,
 	RuleNoAutNum: ast.Warning, RuleUndecided: ast.Info, RuleLimit: ast.Warning,
 	RuleASPAMissingProvider: ast.Warning, RuleASPAStaleProvider: ast.Info, RuleASPACustomerSet: ast.Warning,
 }
@@ -39,7 +40,7 @@ var ruleSeverity = map[string]ast.Severity{
 // Rules returns every rule Lint reports, in documentation order; the
 // lint/aspa-* rules only with Checker.ASPAs.
 func Rules() []string {
-	return []string{RuleShadowed, RuleEmpty, RuleMissingSet, RuleMissingRouter, RuleNoAutNum, RuleUndecided, RuleLimit,
+	return []string{RuleShadowed, RuleEmpty, RuleMissingSet, RuleAnySet, RuleMissingRouter, RuleNoAutNum, RuleUndecided, RuleLimit,
 		RuleASPAMissingProvider, RuleASPAStaleProvider, RuleASPACustomerSet}
 }
 
@@ -82,9 +83,11 @@ var lintFamilies = []types.AddrFamily{{AFI: types.AFIv4, SAFI: types.SAFIUnicast
 // missing deeper, inside one that exists. It returns an error wrapping
 // resolve.ErrNotFound when as's own aut-num is not in the Source. A limit hit
 // in one session is a lint/limit issue, and a filter that cannot be
-// evaluated for a session (a set reaching AS-ANY inside it, or no normal
-// form: *resolve.AnySetError, *resolve.NotEnumerableError) a lint/undecided
-// issue with the error as its message; the other sessions are still linted.
+// evaluated for a session (a set reaching AS-ANY in filter position, or no
+// normal form: *resolve.AnySetError, *resolve.NotEnumerableError) a
+// lint/undecided issue with the error as its message; the other sessions are
+// still linted. A set reaching AS-ANY inside an AS-path regexp is any AS: the
+// term decides, and each such set is a lint/any-set issue.
 func (c *Checker) Lint(ctx context.Context, as types.ASN) ([]Issue, error) {
 	ev := c.eval()
 	an, err := ev.Src.AutNum(ctx, as, ev.Source)
@@ -340,8 +343,9 @@ func (l *linter) failed(err error, peer types.ASN, af types.AddrFamily) (bool, e
 }
 
 // notDecidable reports whether err is a session's filter that cannot be
-// evaluated for it: one naming a set that reaches AS-ANY
-// (*resolve.AnySetError), or one with no normal form
+// evaluated for it: one naming a set that reaches AS-ANY in filter position
+// (*resolve.AnySetError; in an AS-path regexp such a set decides, as any
+// AS), or one with no normal form
 // (*resolve.NotEnumerableError), such as a cycle of filter-sets through an
 // AS-path regexp. Lint reports such a session as lint/undecided; Check
 // returns the error.
@@ -476,6 +480,7 @@ func (l *linter) policy(kind string, p peval.Policy, peer types.ASN, af types.Ad
 				l.add(RuleMissingSet, kind, cl.Index, fmt.Sprintf("the filter names %s, which is not in the source", m), peer, &af)
 			}
 		}
+		l.anySets(kind, cl.Index, cl.Filter, peer, af)
 	}
 	for _, m := range p.Missing() {
 		if !inClause[m.String()] && l.deeper(m, peer, kind, -1) {
@@ -496,6 +501,28 @@ func (l *linter) policy(kind string, p peval.Policy, peer types.ASN, af types.Ad
 			l.add(RuleShadowed, kind, cl.Index, fmt.Sprintf("%s term %s never decides: earlier terms accept every route it accepts", kind, cl.Term), peer, &af)
 		}
 		cov.add(cs)
+	}
+}
+
+// anySets reports each set an AS-path regexp of f names that reaches AS-ANY
+// (lint/any-set), once per set for kind's attribute index: the regexp is
+// decided, the set matching any AS, which its maintainer may not mean. The
+// set is named as the regexp names it (a template bound to the peer), not by
+// the chain inside it that reaches AS-ANY.
+func (l *linter) anySets(kind string, index int, f resolve.NormalFilter, peer types.ASN, af types.AddrFamily) {
+	var names []string
+	for _, cj := range f.Conjuncts {
+		for _, pm := range cj.Paths {
+			for n, s := range pm.Sets {
+				if s.Any() && !slices.Contains(names, n.String()) {
+					names = append(names, n.String())
+				}
+			}
+		}
+	}
+	slices.Sort(names)
+	for _, n := range names {
+		l.add(RuleAnySet, kind, index, fmt.Sprintf("the AS-path regexp names %s, which reaches AS-ANY: it matches any AS", n), peer, &af)
 	}
 }
 
@@ -606,6 +633,7 @@ func (l *linter) defaults(d peval.Defaults, peer types.ASN, af types.AddrFamily,
 		if dc.Networks == nil {
 			continue
 		}
+		l.anySets("default", dc.Index, *dc.Networks, peer, af)
 		for _, m := range dc.Networks.Missing() {
 			inClause[m.String()] = true
 			if l.deeper(m, peer, "default", dc.Index) {

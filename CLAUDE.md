@@ -137,6 +137,16 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
 - **Filters are only partly enumerable**: `EvalFilter` handles ANY, prefix lists, set and AS
   references, OR and AND (range intersection) and returns `*NotEnumerableError` for NOT,
   PeerAS, community tests and AS-path regexps. Never answer one of those with an empty set.
+- **A set reaching AS-ANY is every AS in an AS-path regexp, and nowhere else.** `NormalizeFilter`
+  gives it a `PathMatch.Sets` entry whose `Any()` is true (`Has` holds for every AS, `List`/`Len`
+  give nothing: read `Any()` first); in filter position and in `ExpandAS`/`ExpandPrefixes`/
+  `EvalFilter` it stays an `*AnySetError` (RFC 2622 §5.3's registered routes cannot be enumerated).
+  It is built path-only (`filterEval.pathSet`, discovery's anyLeaf mode) and cached apart, in
+  `pathASNs`, never in `asns` or the `FilterMemo` ExpandAS pool: a negated literal reading a shared
+  any-set would accept every route. Discovery still runs to the end under MaxDepth and MaxVisited
+  (over a limit is `*SetTooLargeError`); AS-ANY itself is never fetched and nothing is reported
+  missing. `rtconfig` refuses it (`CauseAnySet`, either polarity); `consist`'s Lint warns
+  (`lint/any-set`). IRRToolSet drops the member, so it differs (D19).
 - **`Expander.Exclude`** (bgpq4's EXCEPT): an excluded set is skipped in discovery (never
   fetched or Missing), an excluded AS is never fetched for routes; the named top set is always
   expanded. Checked against the model oracle over every backend. Exclusion never widens a
@@ -187,7 +197,8 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   - `EvalFilter` success ⇒ at most one pure conjunct.
   - Only test code matches a regexp against a path: `resolve/internal/routemodel` and the filter
     model's own Go translation (`goRE` in resolve/filter_model_test.go).
-  - The filter model runs over MemSource only, with no set reaching AS-ANY; the policy model
+  - The filter model runs over MemSource only; it names a set reaching AS-ANY in a regexp, never
+    in filter position (`withAnySets`, which the policy model draws too); the policy model
     covers import:, export:, import-via: and default:, each with its mp- form (MemSource,
     KeepPolicy Corpus, irrd, whois). export-via: has table tests only.
 - **Router configuration (`resolve/rtconfig`) never approximates.**
@@ -219,7 +230,7 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   - A direction where neither side has any term is `Direction.NoPolicy` ("no policy either way"), never "consistent".
   - "Announces" means "permits announcing" (policy text, not a RIB).
   - `Corpus.IndexPeers` keeps AS numbers only, never decoded policies.
-  - The ASPA rules (`Checker.ASPAs`) read conjunct structure, peerings, set members and ASPA provider lists only; "full table" is AnyPrefix, non-empty, with only negated tests; never a path. A clause counts only if its own peering names the peer: a peering reaching AS-ANY on its positive side (OR, AND, left of EXCEPT) — written, through an as-set, or in a peering-set — names none; a set template is instantiated for the peer. Stale-provider is silent when a peering reaches a missing set (`peerInfo.missing`, never `PeerList.Skipped`).
+  - The ASPA rules (`Checker.ASPAs`) read conjunct structure, peerings, set members and ASPA provider lists only; "full table" is AnyPrefix, non-empty, with only negated tests, none naming a set that reaches AS-ANY; never a path. A clause counts only if its own peering names the peer: a peering reaching AS-ANY on its positive side (OR, AND, left of EXCEPT) — written, through an as-set, or in a peering-set — names none; a set template is instantiated for the peer. Stale-provider is silent when a peering reaches a missing set (`peerInfo.missing`, never `PeerList.Skipped`).
   - **`Checker.Memo` is result-neutral.** `resolve.FilterMemo` never stores an answer whose normalization read `Expander.Peer` (every read goes through `filterEval.peer`; `TestPeerReadsGoThroughAccessor`), nor a context or Source error; a `Memo` serves one snapshot. Each call reads it through its own `resolve.NewFilterMemoOver` layer (`Checker.eval`), so another call's eviction does not make it compute an answer again while the answer fits the layer's bound. `rpslcheck` always sets it.
 
 - **The server (`resolve/irrdq`) answers as IRRd 4.5.3 does.**
@@ -295,7 +306,9 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   `RPSL_LIVE=1 go test -run TestLiveRIPE ./resolve/nrtm4` (RIPE's NRTMv4 signature and newest delta),
   `RPSL_LIVE_NRTM=1 … -run TestLiveRIPEMirror` (a full RIPE mirror, ~400 MB);
   `RPSL_REALDATA=$PWD/.data go test -run TestRealDataPeval ./resolve` (a sample of RIPE's
-  aut-nums, import/export evaluated toward every named peer in both families);
+  aut-nums, import/export evaluated toward every named peer in both families;
+  `RPSL_PEVAL_AS=AS8308,AS1887` adds those aut-nums to the sample with every peer they name and
+  logs each of their sessions);
   `RPSL_REALDATA=$PWD/.data go test -run TestRealDataConsist ./resolve/consist` (a full RIPE
   sweep: every aut-num linted, every forward-reachable pair checked in both families, each
   `Lint`/`Peers` call and each `Check` under its own time budget; `RPSL_CONSIST_SAMPLE=N` sweeps
@@ -321,7 +334,7 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   `brew install irrtoolset` also gives both binaries, but its `rtconfig`'s arm64 build ignores
   its command line and always writes Cisco — the differential probes each vendor by its output
   and compares only the ones a given build actually produces. `RPSL_RTCONFIG_UPDATE=1` rewrites the rtconfig goldens
-  (resolve/testdata/rtconfig/golden) from a live `rtconfig`; divergences D1–D18 are recorded (all but the run-to-run D18 pinned) in
+  (resolve/testdata/rtconfig/golden) from a live `rtconfig`; divergences D1–D20 are recorded (all but the run-to-run D18 pinned) in
   resolve/testdata/rtconfig/divergences.md. `bird -p` (resolve/internal/cfgsim.BIRDSyntax) checks
   a BIRD writer's output against the real parser when `bird` is installed; it is skipped otherwise.
 - `rpslcheck` (resolve/cmd/rpslcheck; logic in resolve/internal/rpslcheck, the comparison in

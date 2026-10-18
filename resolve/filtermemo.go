@@ -77,6 +77,12 @@ type FilterMemoStats struct {
 // filterKey is what an answer depends on, besides Src: the filter's
 // memoText, the AFI and the effective limits; for an ExpandAS answer (asns),
 // the set reference's text, MaxDepth and MaxVisited.
+//
+// The ExpandAS pool is read only by ExpandAS. NormalizeFilter's evaluator
+// expands sets through filterEval.asSet and filterEval.pathSet, which call
+// expandAS directly and must never read that pool: a set reaching AS-ANY is
+// every AS in an AS-path regexp and an *AnySetError in ExpandAS, so the two
+// answers for one set reference differ.
 type filterKey struct {
 	asns                                bool
 	text                                string
@@ -171,6 +177,8 @@ func (m *FilterMemo) put(k filterKey, nf NormalFilter, err error, usedPeer bool)
 		w += c.Prefixes.Len() + c.NotPrefixes.Len()
 		for _, p := range c.Paths {
 			for _, s := range p.Sets {
+				// An any-set (s.Any()) weighs 0: it holds no members,
+				// so the answer keeps nothing for it beyond the map entry.
 				w += s.Len()
 			}
 		}

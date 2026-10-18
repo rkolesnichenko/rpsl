@@ -7,9 +7,12 @@ spike (design doc §3) found ten IRRToolSet bugs running `rtconfig` and
 `peval` together against it (D1–D10); writing v0.22's plan found three more
 (D11–D13), and the rtconfig differential (`resolve/rtconfig_irrtoolset_test.go`)
 three after that (D14–D16), and running the peval differential against the
-Linux build one more (D17), and CI one more (D18). They are pinned here, and
-each but D18 by a test, so a fix on either side is caught instead of passing
-unnoticed; D18 does not show on every run, so no test can pin it.
+Linux build one more (D17), and CI one more (D18). Reading a set that
+reaches AS-ANY as every AS — in an AS-path regexp (v0.30.0) and, before
+that, in a peering — differs from IRRToolSet on purpose (D19, D20). They are
+pinned here, and each but D18 by a test, so a fix on either side is caught
+instead of passing unnoticed; D18 does not show on every run, so no test can
+pin it.
 
 | # | Input | rtconfig/peval does | Correct |
 | --- | --- | --- | --- |
@@ -31,6 +34,8 @@ unnoticed; D18 does not show on every run, so no test can pin it.
 | D16 | IOS-XR, a clause whose only AS-path regexp is negated (`NOT <AS65004>`) | an `as-path-set` holding `permit .*`, which is not RPL (its elements are `ios-regex`, `length`, …): the configuration does not load | `not as-path in …` alone |
 | D17 | peval, IPv4 routes under a range-operator window beyond /32 (`AS65001^127-128`, `^126`, `^40`) | the Linux build (`scripts/build-irrtoolset.sh`, -O0; seen on aarch64 and on x86-64, both in Docker, the latter emulated) enumerates prefixes: `({10.0.0.0/31, 10.0.0.2/31})` or `({10.0.0.0/32, …, 10.0.0.3/32})` for a /30, or invalid ones (`10.0.0.4/33`, `138.0.0.4/33`), differing from run to run, with no pattern (`^33` and `^65` come out right); the Homebrew bottle answers `NOT ANY` | `NOT ANY`: no IPv4 prefix is longer than /32 |
 | D18 | IOS-XR, a clause with `NOT community.contains(5:666)` (D11's shape) | the Linux build names the clause's community-sets from one run of one binary to the next (`commset51` in one, `commset21904` in another) and sometimes writes the deny set with no members (and an `end-set` with no set before it), so the clause accepts routes carrying 5:666: seen in CI on x86-64, the same cached binary right in one job and wrong in the next | the same sets every run, with their members |
+| D19 | an AS-path regexp naming a set that reaches AS-ANY (`<AS-X$>`, AS-X with members `AS-ANY, AS9`); a set holding only `AS-ANY`; a literal `<AS-ANY$>` | IRRToolSet asks for `!iAS-X,1`, which drops the `AS-ANY` member: rtconfig writes `_9$` (cisco), peval prints `(< AS9 $>)`. The set of `AS-ANY` alone and the literal come back "key not found error for query !iAS-ONLY,1" (`!iAS-ANY,1`): peval prints `(<[E] $>)`, an empty class that matches no path; rtconfig's IOS list is `_()$`, which matches every path | the set is every AS in a regexp (RFC 2622 §5.3, as a literal AS-ANY): peval keeps `<AS-X $>`; rtconfig refuses it (`an AS-path set that reaches AS-ANY`), in either polarity, rather than write it; the literal is written `_[0-9]+` |
+| D20 | a peering through a set that reaches AS-ANY (`from AS-PEERS`, members `AS-ANY, AS9`), toward AS2 | IRRToolSet's `isPeeringMatching` takes only a literal AS-ANY as every AS, and `!iAS-PEERS,1` drops the member: rtconfig warns "AS1 has no import/mp-import policy for AS2" and writes none | every AS (`peval.inASSet`): AS1's policy toward AS2 |
 
 ## Where each is pinned
 
@@ -55,6 +60,8 @@ Each test fails when its divergence goes away, on either side.
 | D15 | `TestRtconfigDivergences/D15` |
 | D16 | `TestRtconfigDivergences/D16` |
 | D17 | `TestPevalDivergences/D17`, on the Linux build (told by its echo, not by its answer) on the architectures seen (`d17Arches`: arm64, amd64), failing only when it answers `NOT ANY`, since its wrong answers vary; skipped on the bottle, which answers correctly; `pevalSafe` keeps it out of `TestPevalMatchesIRRToolSet` |
+| D19 | `TestRtconfigDivergences/D19` (rtconfig's cisco list and its decisions; rpslconf refuses for all four vendors, writes the literal as any AS); `TestPevalDivergences/D19`; `TestTranslateAnySet` (resolve/rtconfig); `TestTemplateModeAnySet` (resolve/internal/rpslconf) |
+| D20 | `TestRtconfigDivergences/D20` (no policy toward AS2, AS9's; rpslconf's policy toward both) |
 | D18 | not pinned: it does not happen on every run. `TestRtconfigGoldens` compares IOS-XR's live output with its golden apart from community-set blocks and numbers, stray `end-set` lines and blank lines (`withoutCommSets`), and logs a D18 difference instead of failing on it |
 
 ## rtconfig (`TestRtconfigMatches`, `TestRtconfigGoldens`)

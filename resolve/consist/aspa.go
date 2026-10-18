@@ -32,8 +32,11 @@ const (
 // fullTable reports whether a normalized import filter takes a full table:
 // some conjunct accepts the family's whole space (ANY) less any negated
 // prefixes, with only negated AS-path and community tests — a positive test
-// selects a peer's or a customer's routes, not a provider's table — and
-// accepts something.
+// selects a peer's or a customer's routes, not a provider's table — none of
+// them naming a set that reaches AS-ANY, and accepts something. A negated
+// AS-path test over such a set (ANY AND NOT <AS-R>, AS-R every AS) rejects
+// every route with a path; structure alone cannot say what the conjunct
+// accepts, so it does not count (ruling F1).
 func fullTable(f resolve.NormalFilter) bool {
 	for _, cj := range f.Conjuncts {
 		if cj.AnyPrefix() && onlyNegated(cj) && !cj.Space().IsEmpty() {
@@ -43,10 +46,17 @@ func fullTable(f resolve.NormalFilter) bool {
 	return false
 }
 
+// onlyNegated reports whether every AS-path and community test of cj is
+// negated and no AS-path test names a set that reaches AS-ANY.
 func onlyNegated(cj resolve.Conjunct) bool {
 	for _, p := range cj.Paths {
 		if !p.Negated {
 			return false
+		}
+		for _, set := range p.Sets {
+			if set.Any() {
+				return false
+			}
 		}
 	}
 	for _, c := range cj.Communities {

@@ -174,21 +174,29 @@ func (e *Expander) ExpandAS(ctx context.Context, ref types.SetRef) (ASNSet, erro
 			return a.asns, a.err
 		}
 	}
-	out, _, err := e.expandAS(ctx, ref)
+	out, _, err := e.expandAS(ctx, ref, false)
 	if memo && (err == nil || ctx.Err() == nil) {
 		e.Memo.putASNs(k, out, err)
 	}
 	return out, err
 }
 
-// expandAS is ExpandAS, also returning how many sets discovery reached.
-func (e *Expander) expandAS(ctx context.Context, ref types.SetRef) (ASNSet, int, error) {
+// expandAS is ExpandAS, also returning how many sets discovery reached. With
+// anyLeaf (an as-set named in an AS-path regexp), a set that reaches AS-ANY is
+// the set of every AS (ASNSet.Any), with nothing missing, rather than an
+// *AnySetError; see discover.
+func (e *Expander) expandAS(ctx context.Context, ref types.SetRef, anyLeaf bool) (ASNSet, int, error) {
 	if ref.Name().Class() != types.ClassAsSet {
 		return ASNSet{}, 0, fmt.Errorf("resolve: ExpandAS %s: %w", ref, ErrSetClass)
 	}
-	g, err := e.discover(ctx, ref)
+	g, err := e.discover(ctx, ref, anyLeaf)
 	if err != nil {
 		return ASNSet{}, 0, err
+	}
+	if len(g.any) > 0 {
+		// Every AS: nothing a missing set could have added changes that, so
+		// none is reported (as peval.inASSet does for a peering).
+		return NewAnyASNSet(), g.size(), nil
 	}
 	out := newASSet()
 	for _, nd := range g.nodes {
@@ -229,7 +237,7 @@ func (e *Expander) expandRanges(ctx context.Context, ref types.SetRef, maxRanges
 	if c := ref.Name().Class(); c != types.ClassAsSet && c != types.ClassRouteSet {
 		return RangeSet{}, 0, fmt.Errorf("resolve: expand prefixes of %s: %w", ref, ErrSetClass)
 	}
-	g, err := e.discover(ctx, ref)
+	g, err := e.discover(ctx, ref, false)
 	if err != nil {
 		return RangeSet{}, 0, err
 	}
@@ -287,12 +295,14 @@ type setGraph struct {
 	top     types.SetRef
 	nodes   map[types.SetRef]*setNode    // fetched sets, by the reference that reached them
 	missing []types.SetRef               // nested sets that were not found
+	any     []types.SetRef               // references to AS-ANY reached, never fetched (discover's anyLeaf only)
 	routes  map[types.ASN][]netip.Prefix // originated routes (prefix expansions only)
 	ex      excluded                     // what the expansion leaves out
 }
 
-// size is how many sets discovery reached: those fetched and those missing.
-func (g *setGraph) size() int { return len(g.nodes) + len(g.missing) }
+// size is how many sets discovery reached: those fetched, those missing and
+// the references to AS-ANY.
+func (g *setGraph) size() int { return len(g.nodes) + len(g.missing) + len(g.any) }
 
 type setNode struct {
 	set    object.NamedSet
@@ -305,7 +315,15 @@ type setNode struct {
 // reference scoped to a registry is its own node: RIPE::AS-X and AS-X are
 // fetched separately (the scope selects where, draft §2.3, and never
 // cascades: a node's nested references come from its own object).
-func (e *Expander) discover(ctx context.Context, top types.SetRef) (*setGraph, error) {
+//
+// A level holding a name that denotes the whole IRR (isAnySet) is an
+// *AnySetError, unless anyLeaf is set: then a nested reference to one passes
+// the same checks as any other (seen, MaxDepth, MaxVisited), is recorded in
+// the graph's any list and counted by size, and is never fetched — an object
+// in the Source under that name is never read — and discovery goes on to the
+// end, so a graph over a limit deeper down is still refused. Only an as-set's
+// expansion for an AS-path regexp sets it (expandAS).
+func (e *Expander) discover(ctx context.Context, top types.SetRef, anyLeaf bool) (*setGraph, error) {
 	g := &setGraph{top: top, nodes: map[types.SetRef]*setNode{}, ex: e.excluded()}
 	seen := map[types.SetRef]bool{top: true}
 	for level, depth := []types.SetRef{top}, 0; len(level) > 0; depth++ {
@@ -346,6 +364,10 @@ func (e *Expander) discover(ctx context.Context, top types.SetRef) (*setGraph, e
 					return nil, &SetTooLargeError{Name: top, Limit: LimitVisited, Max: e.maxVisited(), Count: len(seen) + 1}
 				}
 				seen[ref] = true
+				if anyLeaf && isAnySet(ref.Name()) {
+					g.any = append(g.any, ref)
+					continue
+				}
 				next = append(next, ref)
 			}
 		}
@@ -524,6 +546,11 @@ func nestable(parent, child types.SetClass) bool {
 }
 
 // isAnySet reports whether n is one of the names that denote the whole IRR.
+// AS-ANY and RS-ANY are RFC 2622 §5.3's; RTRS-ANY, PRNG-ANY and FLTR-ANY have
+// no basis in the RFC and are refused alike. It reads the name only, so a
+// registry scope on a reference to one (RIPE::AS-ANY) is ignored, and a
+// hierarchical name with an AS-ANY component (AS208301:AS-ANY) is an ordinary
+// set.
 func isAnySet(n types.SetName) bool {
 	switch n.String() {
 	case "AS-ANY", "RS-ANY", "RTRS-ANY", "PRNG-ANY", "FLTR-ANY":
