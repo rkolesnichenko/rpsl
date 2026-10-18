@@ -173,8 +173,9 @@ code):
   aut-num imports a full table from a peer — a decided `import:` or
   `mp-import:` clause whose own peering names the peer, and whose filter has
   a conjunct that accepts the family's whole space less any negated
-  prefixes, has no positive AS-path or community test, and accepts at least
-  one prefix — but its ASPA does not list that peer, or is an AS0 ASPA. A
+  prefixes, has no positive AS-path or community test and no negated AS-path
+  test naming a set that reaches `AS-ANY`, and accepts at least one prefix —
+  but its ASPA does not list that peer, or is an AS0 ASPA. A
   peering that reaches `AS-ANY` anywhere on its positive side (in an `OR` or
   `AND`, or left of an `EXCEPT`) — written, through an as-set's expansion, or
   in a peering-set — names no peer, so its clause never counts; a set
