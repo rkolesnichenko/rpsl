@@ -164,3 +164,56 @@ func anySetPolicy(t *testing.T, imp string) (peval.Session, peval.Policy) {
 	}
 	return v4Session, p
 }
+
+// A class holding any AS is any AS, whatever the order of its items: a range
+// after AS-ANY or "." used to be skipped unchecked while one before it was
+// checked. A set reaching AS-ANY anywhere in it is still refused.
+func TestTranslateClassAnyOrder(t *testing.T) {
+	asR, err := types.ParseSetName("AS-R")
+	if err != nil {
+		t.Fatal(err)
+	}
+	anyR := map[types.SetName]resolve.ASNSet{asR: resolve.NewAnyASNSet()}
+	write := func(v Vendor, re string, neg bool, sets map[types.SetName]resolve.ASNSet) (string, error) {
+		r, err := policy.ParseASPathRegexp(re)
+		if err != nil {
+			t.Fatalf("<%s>: %v", re, err)
+		}
+		m := resolve.PathMatch{RE: r, Sets: map[types.SetName]resolve.ASNSet{}, Negated: neg}
+		for k, s := range sets {
+			m.Sets[k] = s
+		}
+		var b bytes.Buffer
+		err = (&Generator{Vendor: v}).WriteASPathList(&b, m)
+		return b.String(), err
+	}
+	cause := func(err error) string {
+		var ue *UnsupportedError
+		if errors.As(err, &ue) {
+			return ue.Cause
+		}
+		return ""
+	}
+	for _, v := range Vendors() {
+		for _, neg := range []bool{false, true} {
+			want, err := write(v, "[AS-ANY]", neg, nil)
+			if err != nil {
+				t.Fatalf("%v neg=%v [AS-ANY]: %v", v, neg, err)
+			}
+			for _, re := range []string{"[AS-ANY AS1-AS5000]", "[AS1-AS5000 AS-ANY]", "[. AS1-AS5000]", "[AS1-AS5000 .]"} {
+				got, err := write(v, re, neg, nil)
+				if err != nil || got != want {
+					t.Errorf("%v neg=%v <%s> = %q, %v; want %q", v, neg, re, got, err, want)
+				}
+			}
+			if got, err := write(v, "[AS1-AS5000]", neg, nil); cause(err) != CausePathShape || got != "" {
+				t.Errorf("%v neg=%v [AS1-AS5000] = %q, %v; want %q", v, neg, got, err, CausePathShape)
+			}
+			for _, re := range []string{"[AS1-AS5000 AS-R]", "[AS-R AS1-AS5000]"} {
+				if got, err := write(v, re, neg, anyR); cause(err) != CauseAnySet || got != "" {
+					t.Errorf("%v neg=%v <%s> = %q, %v; want %q", v, neg, re, got, err, CauseAnySet)
+				}
+			}
+		}
+	}
+}
