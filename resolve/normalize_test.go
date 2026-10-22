@@ -634,13 +634,16 @@ func TestNormalizeVisitsShared(t *testing.T) {
 		}
 	}
 
-	// Exclude does not change what a negated literal's deny side holds.
-	nf, err := (&Expander{Src: src, Exclude: Exclusion{Sets: []types.SetName{mustSet(t, "AS-A5")}}}).
-		NormalizeFilter(ctx, mustFilter(t, "AS-A AND NOT AS-B"))
+	// A negated literal is evaluated with Exclude cleared, so excluding AS-B5
+	// leaves the deny side whole: it still holds 10.2.0.0/16 (AS2 sits below
+	// AS-B5). Applied to the deny side, the exclusion would cut the chain and the
+	// answer would be plain ANY.
+	nf, err := (&Expander{Src: src, Exclude: Exclusion{Sets: []types.SetName{mustSet(t, "AS-B5")}}}).
+		NormalizeFilter(ctx, mustFilter(t, "ANY AND NOT AS-B"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := nf.String(), "NOT ANY"; got != want {
-		t.Errorf("Exclude AS-A5: %q, want %q", got, want)
+	if got, want := nf.String(), "NOT {10.2.0.0/16}"; got != want {
+		t.Errorf("Exclude AS-B5: %q, want %q", got, want)
 	}
 }
