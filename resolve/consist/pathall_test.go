@@ -13,7 +13,11 @@ func TestRejectsEveryPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sets := map[types.SetName]resolve.ASNSet{asR: resolve.NewAnyASNSet()}
+	asS, err := types.ParseSetName("AS-S")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sets := map[types.SetName]resolve.ASNSet{asR: resolve.NewAnyASNSet(), asS: resolve.NewASNSet(1)}
 	for _, c := range []struct {
 		re   string
 		want bool

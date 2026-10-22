@@ -110,7 +110,7 @@ func onesAll(e policy.ASPathExpr, sets map[types.SetName]resolve.ASNSet) bool {
 		}
 		return false
 	case policy.ASPathSeq:
-		// One term matches the single AS and every other matches nothing.
+		// One term matches the single AS and every other term can match the empty path.
 		for i, t := range e.Terms {
 			if !onesAll(t, sets) {
 				continue
