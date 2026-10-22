@@ -21,23 +21,28 @@ bad() { echo "FAIL: $*"; fail=1; }
 # It writes the NUL-separated list to stdout and returns 1 when git fails, which
 # a pipeline's status (no pipefail in sh) would hide.
 gofiles() {
-	list=$(mktemp) || return 1
-	if git ls-files -z --cached --others --exclude-standard '*.go' > "$list"; then
-		xargs -0 sh -c 'for f; do [ -f "$f" ] && printf "%s\0" "$f"; done' _ < "$list"
-		rc=$?
+	gofiles_list=$(mktemp) || return 1
+	if git ls-files -z --cached --others --exclude-standard '*.go' > "$gofiles_list"; then
+		xargs -0 sh -c 'for f; do if [ -f "$f" ]; then printf "%s\0" "$f"; fi; done' _ < "$gofiles_list"
+		gofiles_rc=$?
 	else
-		rc=1
+		gofiles_rc=1
 	fi
-	rm -f "$list"
-	return $rc
+	rm -f "$gofiles_list"
+	return $gofiles_rc
 }
 
 step gofmt
 # xargs exits non-zero when gofmt does (a file that does not parse), so the
 # capture's status is tested, not only its output.
-files=$(mktemp) && gofiles > "$files" || bad "could not list Go files"
-unformatted=$(xargs -0 gofmt -l < "$files") || bad "gofmt failed (a file does not parse?)"
-rm -f "$files"
+gofmt_files=$(mktemp) || bad "could not list Go files"
+if gofiles > "$gofmt_files"; then
+	unformatted=$(xargs -0 gofmt -l < "$gofmt_files") || bad "gofmt failed (a file does not parse?)"
+else
+	bad "could not list Go files"
+	unformatted=
+fi
+rm -f "$gofmt_files"
 [ -z "$unformatted" ] || bad "not gofmt-clean: $unformatted"
 
 for m in $modules; do
