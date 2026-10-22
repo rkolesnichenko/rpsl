@@ -101,3 +101,40 @@ func TestAnySetPeeringAndRegexpAgree(t *testing.T) {
 		}
 	}
 }
+
+// failingClaims is a MemSource whose MembersByRef fails on one set.
+type failingClaims struct {
+	*resolve.MemSource
+	failOn string
+}
+
+var errFailingClaims = errors.New("failingClaims: MembersByRef failed")
+
+func (f failingClaims) MembersByRef(ctx context.Context, set object.NamedSet) ([]object.Object, error) {
+	if set.SetName().String() == f.failOn {
+		return nil, errFailingClaims
+	}
+	return f.MemSource.MembersByRef(ctx, set)
+}
+
+// A peering whose set reaches AS-ANY never needs the indirect members of the
+// sets discovery fetched on the way (AS-Y, beside AS-U, which reaches AS-ANY),
+// so a MembersByRef failing on one of them does not stop the clause being
+// decided.
+func TestAnySetPeeringIgnoresFailingClaims(t *testing.T) {
+	src := failingClaims{failOn: "AS-Y", MemSource: textSource(t,
+		"aut-num: AS1\nas-name: ONE\nimport: from AS-V accept ANY\nsource: TEST\n",
+		"as-set: AS-V\nmembers: AS-Y, AS-U\nsource: TEST\n",
+		"as-set: AS-U\nmembers: AS-ANY\nsource: TEST\n",
+		"as-set: AS-Y\nmembers: AS2\nmbrs-by-ref: ANY\nsource: TEST\n",
+		"aut-num: AS100\nas-name: HUNDRED\nmember-of: AS-Y\nmnt-by: MNT-A\nsource: TEST\n",
+		"mntner: MNT-A\nsource: TEST\n",
+	)}
+	p, err := (&Evaluator{Src: src}).Import(context.Background(), Session{Local: 1, Peer: 5, AF: v4})
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if len(p.Clauses) != 1 {
+		t.Fatalf("Import: %s; want one clause", summary(p))
+	}
+}

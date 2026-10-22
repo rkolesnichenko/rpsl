@@ -91,16 +91,17 @@ func TestDiscoverSkipsClaims(t *testing.T) {
 		}
 	}
 
-	// A MembersByRef that fails does not fail an answer that never needed it.
-	for _, c := range []struct{ top, failOn string }{{"AS-X", "AS-Z"}, {"AS-V", "AS-Y"}} {
-		nf, err := (&Expander{Src: claimsGraph(t, c.failOn)}).NormalizeFilter(ctx, mustFilter(t, "<"+c.top+">"))
-		if err != nil {
-			t.Errorf("<%s> with %s's claims failing: %v", c.top, c.failOn, err)
-			continue
-		}
-		if s, ok := pathSetOf(t, nf, c.top); !ok || !s.Any() {
-			t.Errorf("<%s> with %s's claims failing: Sets[%s] = %v (present %v), want Any", c.top, c.failOn, c.top, s, ok)
-		}
+	// A MembersByRef that fails does not fail an answer that never needed it:
+	// AS-Y, an mbrs-by-ref set, is fetched on the level that reaches AS-ANY
+	// (through AS-U), in a regexp as in a peering.
+	if nf, err := (&Expander{Src: claimsGraph(t, "AS-Y")}).NormalizeFilter(ctx, mustFilter(t, "<AS-V>")); err != nil {
+		t.Errorf("<AS-V> with AS-Y's claims failing: %v", err)
+	} else if s, ok := pathSetOf(t, nf, "AS-V"); !ok || !s.Any() {
+		t.Errorf("<AS-V> with AS-Y's claims failing: Sets[AS-V] = %v (present %v), want Any", s, ok)
+	}
+	var ae *AnySetError
+	if _, err := (&Expander{Src: claimsGraph(t, "AS-Y")}).ExpandAS(ctx, types.Ref(mustSet(t, "AS-V"))); !errors.As(err, &ae) || errors.Is(err, errClaims) {
+		t.Errorf("ExpandAS(AS-V) with AS-Y's claims failing: err %v, want *AnySetError", err)
 	}
 
 	// Refused at a limit: AS-W → AS-Y → AS-Z, where AS-Z at depth 2 is past
