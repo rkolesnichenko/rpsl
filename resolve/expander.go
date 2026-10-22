@@ -300,7 +300,7 @@ type setGraph struct {
 	routes  map[types.ASN][]netip.Prefix // originated routes (prefix expansions only)
 	ex      excluded                     // what the expansion leaves out
 	reached int                          // references that passed discovery's checks (see size)
-	levels  [][]types.SetRef             // the fetched sets, one breadth-first level each, in discovery order (fetchClaims)
+	order   []types.SetRef               // the fetched sets, in discovery order (fetchClaims)
 }
 
 // size is how many references passed discovery's checks: every set fetched
@@ -331,9 +331,9 @@ type setNode struct {
 // graph's any list and the graph is returned. Only an as-set's expansion for
 // an AS-path regexp sets anyLeaf (expandAS); both modes stop at the same
 // point, so a peering and a regexp naming one set agree on MaxDepth.
-// Claims are fetched in a second pass after discovery, one level at a time:
-// over a Source whose MembersByRef is a network query (whois) that adds about
-// one round trip per level.
+// Claims are fetched in one batch after discovery, up to Concurrency at a
+// time: over a Source whose MembersByRef is a network query (whois) that adds
+// about one round trip per Concurrency sets, not one per level.
 //
 // Sets are fetched without their indirect members. Only a discovery that ends
 // without refusing and without reaching AS-ANY fetches them (fetchClaims), so
@@ -393,7 +393,7 @@ func (e *Expander) discover(ctx context.Context, top types.SetRef, anyLeaf bool)
 				next = append(next, ref)
 			}
 		}
-		g.levels = append(g.levels, fetched)
+		g.order = append(g.order, fetched...)
 		if !anyRef.IsZero() {
 			if !anyLeaf {
 				return nil, &AnySetError{Name: anyRef.Name()}
@@ -424,23 +424,21 @@ type fetchResult struct {
 // graph is built identically however many fetches ran in parallel.
 func (e *Expander) fetchLevel(ctx context.Context, refs []types.SetRef) ([]fetchResult, error) {
 	out := make([]fetchResult, len(refs))
-	if e.each(len(refs), func(i int) { out[i] = e.fetchOne(ctx, refs[i]) }) {
-		return out, ctx.Err()
-	}
-	return out, nil
+	e.each(len(refs), func(i int) { out[i] = e.fetchOne(ctx, refs[i]) })
+	return out, ctx.Err()
 }
 
 // each calls do(i) for every i in [0, n), up to Concurrency at a time, and
-// returns once every call has, reporting whether they ran concurrently. Each
-// call writes only its own index, so what the caller reads afterwards does
-// not depend on the order they finished in.
-func (e *Expander) each(n int, do func(i int)) (concurrent bool) {
+// returns once every call has. Each call writes only its own index, so what
+// the caller reads afterwards does not depend on the order they finished in.
+// Checking ctx.Err() afterwards is the caller's job.
+func (e *Expander) each(n int, do func(i int)) {
 	c := e.concurrency()
 	if c <= 1 || n <= 1 {
 		for i := range n {
 			do(i)
 		}
-		return false
+		return
 	}
 	sem := make(chan struct{}, c)
 	var wg sync.WaitGroup
@@ -454,7 +452,6 @@ func (e *Expander) each(n int, do func(i int)) (concurrent bool) {
 		}()
 	}
 	wg.Wait()
-	return true
 }
 
 // fetchOne fetches one set, without its indirect members (see fetchClaims).
@@ -470,24 +467,27 @@ func (e *Expander) fetchOne(ctx context.Context, ref types.SetRef) fetchResult {
 }
 
 // fetchClaims fills in the indirect members each node of a discovered graph
-// honours, level by level in discovery order, a level's fetches running
-// together as in fetchLevel. It returns the first error in that order, and
-// the context's error if it was cancelled during a level, so a cancelled
-// expansion is never answered without its claims.
+// honours, in one batch: claims add no nested references, so nothing waits
+// between breadth-first levels. Only the sets with a mbrs-by-ref are asked
+// (claimsOf answers nil for the rest), up to Concurrency at a time as in
+// fetchLevel. It returns the context's error if it was cancelled meanwhile, so
+// a cancelled expansion is never answered without its claims, else the first
+// error in discovery order.
 func (e *Expander) fetchClaims(ctx context.Context, g *setGraph) error {
-	for _, level := range g.levels {
-		errs := make([]error, len(level))
-		e.each(len(level), func(i int) {
-			nd := g.nodes[level[i]]
-			nd.claims, errs[i] = e.claimsOf(ctx, nd.set)
-		})
-		if err := ctx.Err(); err != nil {
-			return err
+	var need []*setNode // in discovery order, so the first error is deterministic
+	for _, ref := range g.order {
+		if nd := g.nodes[ref]; len(nd.set.RefMntners()) > 0 {
+			need = append(need, nd)
 		}
-		for _, err := range errs {
-			if err != nil {
-				return err
-			}
+	}
+	errs := make([]error, len(need))
+	e.each(len(need), func(i int) { need[i].claims, errs[i] = e.claimsOf(ctx, need[i].set) })
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	for _, err := range errs {
+		if err != nil {
+			return err
 		}
 	}
 	return nil

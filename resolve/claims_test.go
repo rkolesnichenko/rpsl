@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/rkolesnichenko/rpsl/object"
 	"github.com/rkolesnichenko/rpsl/types"
@@ -152,7 +153,9 @@ func TestClaimsWithoutAnySet(t *testing.T) {
 }
 
 // A context cancelled while the claims are fetched is the answer, never an
-// expansion without them, however many fetches run together.
+// expansion without them. AS-W has one set with claims, so every run here
+// fetches them serially whatever Concurrency says;
+// TestClaimsPassHonoursCancelWideLevel covers lookups in flight together.
 func TestClaimsPassHonoursCancel(t *testing.T) {
 	for _, n := range []int{0, 8} {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -163,6 +166,70 @@ func TestClaimsPassHonoursCancel(t *testing.T) {
 			t.Errorf("concurrency %d: ExpandAS(AS-W) = %v, %v; want context.Canceled", n, asnList(got), err)
 		}
 		cancel()
+	}
+}
+
+// wideClaimsGraph is AS-TOP with three as-sets that each take claims from
+// MNT-A, and one claimant for the first.
+func wideClaimsGraph(t *testing.T) *claimCounter {
+	t.Helper()
+	return &claimCounter{MemSource: corpus(t,
+		asSet("AS-TOP", "AS-Y1, AS-Y2, AS-Y3"),
+		"as-set: AS-Y1\nmbrs-by-ref: MNT-A\nsource: TEST\n",
+		"as-set: AS-Y2\nmbrs-by-ref: MNT-A\nsource: TEST\n",
+		"as-set: AS-Y3\nmbrs-by-ref: MNT-A\nsource: TEST\n",
+		"aut-num: AS100\nas-name: HUNDRED\nmember-of: AS-Y1\nmnt-by: MNT-A\nsource: TEST\n",
+		"mntner: MNT-A\nsource: TEST\n",
+	)}
+}
+
+// inFlight makes src's MembersByRef calls overlap when they can, and returns
+// the most that were in progress at once.
+func inFlight(src *claimCounter) (peak func() int) {
+	var mu sync.Mutex
+	cur, top := 0, 0
+	src.onClaims = func() {
+		mu.Lock()
+		cur++
+		top = max(top, cur)
+		mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+		mu.Lock()
+		cur--
+		mu.Unlock()
+	}
+	return func() int { mu.Lock(); defer mu.Unlock(); return top }
+}
+
+// The three claim lookups of one level run together at Concurrency 8, and a
+// context cancelled by one of them is the answer. The first half proves the
+// second covers the parallel path.
+func TestClaimsPassHonoursCancelWideLevel(t *testing.T) {
+	ctx := context.Background()
+	top := types.Ref(mustSet(t, "AS-TOP"))
+
+	src := wideClaimsGraph(t)
+	peak := inFlight(src)
+	got, err := (&Expander{Src: src, Concurrency: 8}).ExpandAS(ctx, top)
+	if err != nil || !slices.Equal(asnList(got), []uint32{100}) {
+		t.Fatalf("ExpandAS(AS-TOP) = %v, %v; want [100]", asnList(got), err)
+	}
+	if n := src.count(); n != 3 {
+		t.Errorf("%d MembersByRef calls, want 3", n)
+	}
+	if p := peak(); p < 2 {
+		t.Fatalf("at most %d MembersByRef calls in flight at Concurrency 8, want more than 1: the test does not cover the parallel path", p)
+	} else {
+		t.Logf("max MembersByRef calls in flight: %d", p)
+	}
+
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	src = wideClaimsGraph(t)
+	src.onClaims = cancel
+	got, err = (&Expander{Src: src, Concurrency: 8}).ExpandAS(cctx, top)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("ExpandAS(AS-TOP) = %v, %v; want context.Canceled", asnList(got), err)
 	}
 }
 

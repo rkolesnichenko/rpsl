@@ -155,6 +155,7 @@ every mode keeps peering and regexp consistent. Only when discovery ends success
 AS-ANY reached does it fetch the claims, in a second pass:
 - over the nodes in discovery order;
 - level by level, under `Concurrency` like `fetchLevel`;
+  (Amended 2026-10-22 after the branch review: claims are fetched in one batch after discovery, up to Concurrency at a time, in discovery order (no per-level wait).)
 - with the same `claimClassOK`/`ClaimAllowed` filter.
 
 Claims never add nested references (`discover` takes them from `nestedRefs(res.set)` only), so the
