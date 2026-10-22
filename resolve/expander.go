@@ -300,6 +300,7 @@ type setGraph struct {
 	routes  map[types.ASN][]netip.Prefix // originated routes (prefix expansions only)
 	ex      excluded                     // what the expansion leaves out
 	reached int                          // references that passed discovery's checks (see size)
+	levels  [][]types.SetRef             // the fetched sets, one breadth-first level each, in discovery order (fetchClaims)
 }
 
 // size is how many references passed discovery's checks: every set fetched
@@ -310,7 +311,7 @@ func (g *setGraph) size() int { return g.reached }
 
 type setNode struct {
 	set    object.NamedSet
-	claims []object.Object // indirect members that pass ClaimAllowed and the class rule
+	claims []object.Object // indirect members that pass ClaimAllowed and the class rule; filled by fetchClaims
 }
 
 // discover fetches every set reachable from top breadth-first, so each set is
@@ -330,6 +331,12 @@ type setNode struct {
 // graph's any list and the graph is returned. Only an as-set's expansion for
 // an AS-path regexp sets anyLeaf (expandAS); both modes stop at the same
 // point, so a peering and a regexp naming one set agree on MaxDepth.
+//
+// Sets are fetched without their indirect members. Only a discovery that ends
+// without refusing and without reaching AS-ANY fetches them (fetchClaims), so
+// an answer that never needs the claims never asks for them and cannot fail
+// on them. Claims add no nested references, so the graph, the limits and the
+// answer are the same as fetching them with each set.
 func (e *Expander) discover(ctx context.Context, top types.SetRef, anyLeaf bool) (*setGraph, error) {
 	if isAnySet(top.Name()) {
 		return nil, &AnySetError{Name: top.Name()}
@@ -344,7 +351,7 @@ func (e *Expander) discover(ctx context.Context, top types.SetRef, anyLeaf bool)
 		if err != nil {
 			return nil, err
 		}
-		var next []types.SetRef
+		var next, fetched []types.SetRef
 		var anyRef types.SetRef // the first reference to AS-ANY this level reaches
 		for i, n := range level {
 			res := got[i]
@@ -358,7 +365,8 @@ func (e *Expander) discover(ctx context.Context, top types.SetRef, anyLeaf bool)
 				g.missing = append(g.missing, n)
 				continue
 			}
-			g.nodes[n] = &setNode{set: res.set, claims: res.claims}
+			g.nodes[n] = &setNode{set: res.set}
+			fetched = append(fetched, n)
 			for _, ref := range nestedRefs(res.set) {
 				if seen[ref] || g.ex.set(ref.Name()) {
 					continue
@@ -382,6 +390,7 @@ func (e *Expander) discover(ctx context.Context, top types.SetRef, anyLeaf bool)
 				next = append(next, ref)
 			}
 		}
+		g.levels = append(g.levels, fetched)
 		if !anyRef.IsZero() {
 			if !anyLeaf {
 				return nil, &AnySetError{Name: anyRef.Name()}
@@ -392,15 +401,19 @@ func (e *Expander) discover(ctx context.Context, top types.SetRef, anyLeaf bool)
 	}
 	sort.Slice(g.missing, func(i, j int) bool { return g.missing[i].String() < g.missing[j].String() })
 	g.reached = len(seen)
+	if len(g.any) == 0 {
+		if err := e.fetchClaims(ctx, g); err != nil {
+			return nil, err
+		}
+	}
 	return g, nil
 }
 
-// fetchResult is one set's worth of discovery: the set itself and the indirect
-// members whose claims it honours, or the error that stopped it.
+// fetchResult is one set's worth of discovery: the set itself, or the error
+// that stopped it.
 type fetchResult struct {
-	set    object.NamedSet
-	claims []object.Object
-	err    error
+	set object.NamedSet
+	err error
 }
 
 // fetchLevel fetches every set of one breadth-first level, up to Concurrency at
@@ -408,29 +421,40 @@ type fetchResult struct {
 // graph is built identically however many fetches ran in parallel.
 func (e *Expander) fetchLevel(ctx context.Context, refs []types.SetRef) ([]fetchResult, error) {
 	out := make([]fetchResult, len(refs))
-	if n := e.concurrency(); n > 1 && len(refs) > 1 {
-		sem := make(chan struct{}, n)
-		var wg sync.WaitGroup
-		for i, ref := range refs {
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(i int, ref types.SetRef) {
-				defer wg.Done()
-				defer func() { <-sem }()
-				out[i] = e.fetchOne(ctx, ref)
-			}(i, ref)
-		}
-		wg.Wait()
+	if e.each(len(refs), func(i int) { out[i] = e.fetchOne(ctx, refs[i]) }) {
 		return out, ctx.Err()
-	}
-	for i, ref := range refs {
-		out[i] = e.fetchOne(ctx, ref)
 	}
 	return out, nil
 }
 
-// fetchOne fetches one set and the indirect members it honours. Every claim is
-// re-checked here with ClaimAllowed, so a lenient Source cannot widen a set.
+// each calls do(i) for every i in [0, n), up to Concurrency at a time, and
+// returns once every call has, reporting whether they ran concurrently. Each
+// call writes only its own index, so what the caller reads afterwards does
+// not depend on the order they finished in.
+func (e *Expander) each(n int, do func(i int)) (concurrent bool) {
+	c := e.concurrency()
+	if c <= 1 || n <= 1 {
+		for i := range n {
+			do(i)
+		}
+		return false
+	}
+	sem := make(chan struct{}, c)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			do(i)
+		}()
+	}
+	wg.Wait()
+	return true
+}
+
+// fetchOne fetches one set, without its indirect members (see fetchClaims).
 func (e *Expander) fetchOne(ctx context.Context, ref types.SetRef) fetchResult {
 	set, err := e.Src.GetSet(ctx, ref)
 	if err == nil {
@@ -439,19 +463,50 @@ func (e *Expander) fetchOne(ctx context.Context, ref types.SetRef) fetchResult {
 	if err != nil {
 		return fetchResult{err: err}
 	}
-	var claims []object.Object
-	if len(set.RefMntners()) > 0 {
-		objs, err := e.Src.MembersByRef(ctx, set)
-		if err != nil {
-			return fetchResult{err: err}
+	return fetchResult{set: set}
+}
+
+// fetchClaims fills in the indirect members each node of a discovered graph
+// honours, level by level in discovery order, a level's fetches running
+// together as in fetchLevel. It returns the first error in that order, and
+// the context's error if it was cancelled during a level, so a cancelled
+// expansion is never answered without its claims.
+func (e *Expander) fetchClaims(ctx context.Context, g *setGraph) error {
+	for _, level := range g.levels {
+		errs := make([]error, len(level))
+		e.each(len(level), func(i int) {
+			nd := g.nodes[level[i]]
+			nd.claims, errs[i] = e.claimsOf(ctx, nd.set)
+		})
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		for _, o := range objs {
-			if claimClassOK(set, o) && ClaimAllowed(o, set) {
-				claims = append(claims, o)
+		for _, err := range errs {
+			if err != nil {
+				return err
 			}
 		}
 	}
-	return fetchResult{set: set, claims: claims}
+	return nil
+}
+
+// claimsOf returns the indirect members set honours. Every claim is re-checked
+// here with ClaimAllowed, so a lenient Source cannot widen a set.
+func (e *Expander) claimsOf(ctx context.Context, set object.NamedSet) ([]object.Object, error) {
+	if len(set.RefMntners()) == 0 {
+		return nil, nil
+	}
+	objs, err := e.Src.MembersByRef(ctx, set)
+	if err != nil {
+		return nil, err
+	}
+	var claims []object.Object
+	for _, o := range objs {
+		if claimClassOK(set, o) && ClaimAllowed(o, set) {
+			claims = append(claims, o)
+		}
+	}
+	return claims, nil
 }
 
 // checkSet returns set if it is the set ref asks for. A set of another name,
@@ -628,24 +683,7 @@ func (e *Expander) fetchRoutes(ctx context.Context, g *setGraph) error {
 	}
 	routes := make([][]netip.Prefix, len(need))
 	errs := make([]error, len(need))
-	if n := e.concurrency(); n > 1 && len(need) > 1 {
-		sem := make(chan struct{}, n)
-		var wg sync.WaitGroup
-		for i, as := range need {
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(i int, as types.ASN) {
-				defer wg.Done()
-				defer func() { <-sem }()
-				routes[i], errs[i] = e.Src.OriginatedRoutes(ctx, as, e.AFI)
-			}(i, as)
-		}
-		wg.Wait()
-	} else {
-		for i, as := range need {
-			routes[i], errs[i] = e.Src.OriginatedRoutes(ctx, as, e.AFI)
-		}
-	}
+	e.each(len(need), func(i int) { routes[i], errs[i] = e.Src.OriginatedRoutes(ctx, need[i], e.AFI) })
 	for i, as := range need {
 		if errs[i] != nil {
 			return errs[i]
