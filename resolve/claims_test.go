@@ -183,17 +183,26 @@ func wideClaimsGraph(t *testing.T) *claimCounter {
 	)}
 }
 
-// inFlight makes src's MembersByRef calls overlap when they can, and returns
-// the most that were in progress at once.
-func inFlight(src *claimCounter) (peak func() int) {
+// inFlight holds each of src's MembersByRef calls until n are in progress at
+// once (or 5s pass, so a serial pass still ends, with a peak of 1), and
+// returns the most that were in progress at once. The barrier, not timing,
+// makes the calls overlap.
+func inFlight(src *claimCounter, n int) (peak func() int) {
 	var mu sync.Mutex
 	cur, top := 0, 0
+	all := make(chan struct{})
 	src.onClaims = func() {
 		mu.Lock()
 		cur++
 		top = max(top, cur)
+		if cur == n {
+			close(all)
+		}
 		mu.Unlock()
-		time.Sleep(20 * time.Millisecond)
+		select {
+		case <-all:
+		case <-time.After(5 * time.Second):
+		}
 		mu.Lock()
 		cur--
 		mu.Unlock()
@@ -209,7 +218,7 @@ func TestClaimsPassHonoursCancelWideLevel(t *testing.T) {
 	top := types.Ref(mustSet(t, "AS-TOP"))
 
 	src := wideClaimsGraph(t)
-	peak := inFlight(src)
+	peak := inFlight(src, 3)
 	got, err := (&Expander{Src: src, Concurrency: 8}).ExpandAS(ctx, top)
 	if err != nil || !slices.Equal(asnList(got), []uint32{100}) {
 		t.Fatalf("ExpandAS(AS-TOP) = %v, %v; want [100]", asnList(got), err)
@@ -217,10 +226,8 @@ func TestClaimsPassHonoursCancelWideLevel(t *testing.T) {
 	if n := src.count(); n != 3 {
 		t.Errorf("%d MembersByRef calls, want 3", n)
 	}
-	if p := peak(); p < 2 {
-		t.Fatalf("at most %d MembersByRef calls in flight at Concurrency 8, want more than 1: the test does not cover the parallel path", p)
-	} else {
-		t.Logf("max MembersByRef calls in flight: %d", p)
+	if p := peak(); p != 3 {
+		t.Fatalf("at most %d MembersByRef calls in flight at Concurrency 8, want 3: the test does not cover the parallel path", p)
 	}
 
 	cctx, cancel := context.WithCancel(ctx)
