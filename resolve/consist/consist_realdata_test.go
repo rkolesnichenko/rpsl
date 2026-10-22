@@ -41,8 +41,8 @@ import (
 // cannot be evaluated is counted as "not decidable: any set" (a set
 // reaching AS-ANY in filter position) or "not decidable: other". A
 // direction with no policy either way is counted apart from the consistent
-// ones. Every lint/any-set issue is logged as it is found, and the
-// counts every 2,000 aut-nums. With RPSL_CONSIST_ASPA=1 it
+// ones. Every lint/any-set issue is kept and logged at the end (the
+// progress line every 2,000 aut-nums carries the count). With RPSL_CONSIST_ASPA=1 it
 // lints with NTT's ASPAs (rpki/vrps.json) too, and logs five examples of
 // each lint/aspa-* rule.
 func TestRealDataConsist(t *testing.T) {

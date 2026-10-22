@@ -18,15 +18,26 @@ bad() { echo "FAIL: $*"; fail=1; }
 
 # gofiles lists the Go files the next commit would hold — tracked or new, not
 # ignored — so tool state such as .claude/ and .data/ is never scanned.
+# It writes the NUL-separated list to stdout and returns 1 when git fails, which
+# a pipeline's status (no pipefail in sh) would hide.
 gofiles() {
-	git ls-files -z --cached --others --exclude-standard '*.go' |
-		xargs -0 sh -c 'for f; do [ -f "$f" ] && printf "%s\0" "$f"; done' _
+	list=$(mktemp) || return 1
+	if git ls-files -z --cached --others --exclude-standard '*.go' > "$list"; then
+		xargs -0 sh -c 'for f; do [ -f "$f" ] && printf "%s\0" "$f"; done' _ < "$list"
+		rc=$?
+	else
+		rc=1
+	fi
+	rm -f "$list"
+	return $rc
 }
 
 step gofmt
 # xargs exits non-zero when gofmt does (a file that does not parse), so the
 # capture's status is tested, not only its output.
-unformatted=$(gofiles | xargs -0 gofmt -l) || bad "gofmt failed (a file does not parse?)"
+files=$(mktemp) && gofiles > "$files" || bad "could not list Go files"
+unformatted=$(xargs -0 gofmt -l < "$files") || bad "gofmt failed (a file does not parse?)"
+rm -f "$files"
 [ -z "$unformatted" ] || bad "not gofmt-clean: $unformatted"
 
 for m in $modules; do

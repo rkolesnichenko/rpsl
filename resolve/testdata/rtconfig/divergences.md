@@ -60,9 +60,9 @@ Each test fails when its divergence goes away, on either side.
 | D15 | `TestRtconfigDivergences/D15` |
 | D16 | `TestRtconfigDivergences/D16` |
 | D17 | `TestPevalDivergences/D17`, on the Linux build (told by its echo, not by its answer) on the architectures seen (`d17Arches`: arm64, amd64), failing only when it answers `NOT ANY`, since its wrong answers vary; skipped on the bottle, which answers correctly; `pevalSafe` keeps it out of `TestPevalMatchesIRRToolSet` |
+| D18 | not pinned: it does not happen on every run. `TestRtconfigGoldens` compares IOS-XR's live output with its golden apart from community-set blocks and numbers, stray `end-set` lines and blank lines (`withoutCommSets`), and logs a D18 difference instead of failing on it |
 | D19 | `TestRtconfigDivergences/D19` (rtconfig's cisco list and its decisions; rpslconf refuses for all four vendors, writes the literal as any AS); `TestPevalDivergences/D19`; `TestTranslateAnySet` (resolve/rtconfig); `TestTemplateModeAnySet` (resolve/internal/rpslconf) |
 | D20 | `TestRtconfigDivergences/D20` (no policy toward AS2, AS9's; rpslconf's policy toward both) |
-| D18 | not pinned: it does not happen on every run. `TestRtconfigGoldens` compares IOS-XR's live output with its golden apart from community-set blocks and numbers, stray `end-set` lines and blank lines (`withoutCommSets`), and logs a D18 difference instead of failing on it |
 
 ## rtconfig (`TestRtconfigMatches`, `TestRtconfigGoldens`)
 

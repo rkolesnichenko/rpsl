@@ -137,7 +137,7 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
 - **Filters are only partly enumerable**: `EvalFilter` handles ANY, prefix lists, set and AS
   references, OR and AND (range intersection) and returns `*NotEnumerableError` for NOT,
   PeerAS, community tests and AS-path regexps. Never answer one of those with an empty set.
-- **A set reaching AS-ANY is every AS in an AS-path regexp, and nowhere else.** `NormalizeFilter`
+- **A set reaching AS-ANY is every AS in an AS-path regexp and in a peering (`peval.inASSet`, `consist`'s denoter, D20), and nowhere else.** `NormalizeFilter`
   gives it a `PathMatch.Sets` entry whose `Any()` is true (`Has` holds for every AS, `List`/`Len`
   give nothing: read `Any()` first); in filter position and in `ExpandAS`/`ExpandPrefixes`/
   `EvalFilter` it stays an `*AnySetError` (RFC 2622 §5.3's registered routes cannot be enumerated).

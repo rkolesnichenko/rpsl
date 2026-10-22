@@ -143,7 +143,10 @@ code):
   against the term's attribute and names the set as the regexp does, once
   per term and set. Fix: the set's maintainer listed `AS-ANY`; name the ASes,
   or accept that any AS matches. (In filter position, `accept AS-X`, such a
-  set is still not decidable: `lint/undecided`.)
+  set is still not decidable: `lint/undecided`.) Reported for terms a
+  session decides; a term Lint cannot decide (one naming routers, for
+  example) is `lint/undecided` instead, and the any-set in it is not
+  reported.
 - **`lint/missing-router`** (Warning) — a peering names an inet-rtr the source
   does not have.
 - **`lint/no-aut-num`** (Warning) — a peering names an AS whose aut-num the
