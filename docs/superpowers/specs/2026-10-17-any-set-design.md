@@ -40,6 +40,8 @@ in filter position. RADB, APNIC, AFRINIC, LACNIC, ALTDB and NTTCOM have none.
    everything. Discovery runs to the end under every limit (MaxDepth, MaxVisited), so a graph over a
    limit still refuses with `*SetTooLargeError`, and the any-set is charged like any other expansion. An
    any-set reports no missing sets (nothing missing can change "every AS"), as `peval.inASSet` does.
+   Amended 2026-10-22: discovery stops after the level reaching AS-ANY, as a peering's does;
+   see 2026-10-22-review-fixes-design.md F4.
 4. **rtconfig refuses it**: a new `CauseAnySet`, all-or-nothing as every cause, in both polarities. No
    option to write "any AS".
 5. **Analysis decides it and names it**: peval and consist evaluate the regexp; consist's Lint gives a

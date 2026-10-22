@@ -193,7 +193,7 @@ type filterEval struct {
 	e       *Expander
 	ctx     context.Context
 	missing []types.SetRef
-	visits  int          // filter terms evaluated and sets reached, against MaxVisited
+	visits  *int         // filter terms evaluated and sets reached, against MaxVisited; shared by both evaluators of a normalization
 	cur     types.SetRef // the filter-set being evaluated, to name it in errors
 
 	sets     map[string]object.FilterGroup // filter-sets fetched, by SetRef.String(); nil for one not found
@@ -211,7 +211,7 @@ type filterEval struct {
 
 func newFilterEval(e *Expander, ctx context.Context) *filterEval {
 	return &filterEval{
-		e: e, ctx: ctx,
+		e: e, ctx: ctx, visits: new(int),
 		sets:     map[string]object.FilterGroup{},
 		active:   map[string]bool{},
 		ranges:   map[string]RangeSet{},
@@ -322,8 +322,8 @@ func (ev *filterEval) cap(got rangeSetOf, r types.SetRef) error {
 
 // visit charges n visits against MaxVisited.
 func (ev *filterEval) visit(n int) error {
-	if ev.visits += n; ev.visits > ev.e.maxVisited() {
-		return &SetTooLargeError{Name: ev.cur, Limit: LimitVisited, Max: ev.e.maxVisited(), Count: ev.visits}
+	if *ev.visits += n; *ev.visits > ev.e.maxVisited() {
+		return &SetTooLargeError{Name: ev.cur, Limit: LimitVisited, Max: ev.e.maxVisited(), Count: *ev.visits}
 	}
 	return nil
 }

@@ -143,7 +143,10 @@ code):
   against the term's attribute and names the set as the regexp does, once
   per term and set. Fix: the set's maintainer listed `AS-ANY`; name the ASes,
   or accept that any AS matches. (In filter position, `accept AS-X`, such a
-  set is still not decidable: `lint/undecided`.)
+  set is still not decidable: `lint/undecided`.) Reported for terms a
+  session decides; a term Lint cannot decide (one naming routers, for
+  example) is `lint/undecided` instead, and the any-set in it is not
+  reported.
 - **`lint/missing-router`** (Warning) — a peering names an inet-rtr the source
   does not have.
 - **`lint/no-aut-num`** (Warning) — a peering names an AS whose aut-num the
@@ -174,7 +177,9 @@ code):
   `mp-import:` clause whose own peering names the peer, and whose filter has
   a conjunct that accepts the family's whole space less any negated
   prefixes, has no positive AS-path or community test and no negated AS-path
-  test naming a set that reaches `AS-ANY`, and accepts at least one prefix —
+  test that rejects every route with a path (`NOT <.>`, `NOT <AS-ANY>`, `NOT <AS1*>`, `NOT <AS-R>`
+  with `AS-R` reaching `AS-ANY`; judged on the regexp's syntax, and an anchored
+  regexp never counts), and accepts at least one prefix —
   but its ASPA does not list that peer, or is an AS0 ASPA. A
   peering that reaches `AS-ANY` anywhere on its positive side (in an `OR` or
   `AND`, or left of an `EXCEPT`) — written, through an as-set's expansion, or

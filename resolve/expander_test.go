@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/netip"
+	"slices"
 	"testing"
 	"time"
 
@@ -333,5 +335,103 @@ func TestPropertyCyclicGraphTerminates(t *testing.T) {
 	}
 	if got.Len() != n {
 		t.Errorf("got %d ASNs, want %d (fully connected)", got.Len(), n)
+	}
+}
+
+// fetchedRefs lists, sorted, the references c's GetSet was called with.
+func fetchedRefs(c *getSetByRef) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Sorted(maps.Keys(c.calls))
+}
+
+// An expansion that reaches AS-ANY stops after the level that reaches it, in
+// a regexp (anyLeaf) as in a peering: the next level's references pass the
+// checks, and nothing past that level is fetched.
+func TestDiscoverStopsAtAnySet(t *testing.T) {
+	ctx := context.Background()
+	graph := func(source string) []string {
+		set := func(name, members string) string {
+			return "as-set: " + name + "\nmembers: " + members + "\nsource: " + source + "\n"
+		}
+		return []string{
+			set("AS-X", "AS-ANY, AS-C1"),
+			set("AS-C1", "AS-C2"),
+			set("AS-C2", "AS-C3"),
+			set("AS-C3", "AS-C4"),
+			set("AS-C4", "AS-C5"),
+			set("AS-C5", "AS5"),
+		}
+	}
+	counted := func(texts ...string) *getSetByRef {
+		return &getSetByRef{Source: corpus(t, texts...), calls: map[string]int{}}
+	}
+
+	// A regexp at MaxDepth 3: the any-set, AS-X alone fetched. AS-C1 is never
+	// fetched, so the chain below it cannot refuse.
+	src := counted(graph("TEST")...)
+	nf, err := (&Expander{Src: src, MaxDepth: 3}).NormalizeFilter(ctx, mustFilter(t, "<AS-X>"))
+	if err != nil {
+		t.Fatalf("<AS-X> at MaxDepth 3: %v", err)
+	}
+	if s, ok := pathSetOf(t, nf, "AS-X"); !ok || !s.Any() {
+		t.Errorf("<AS-X>: Sets[AS-X] = %v (present %v), want Any", s, ok)
+	}
+	if got := fetchedRefs(src); !slices.Equal(got, []string{"AS-X"}) {
+		t.Errorf("<AS-X> fetched %v, want [AS-X]", got)
+	}
+
+	// A peering's expansion stops at the same point.
+	src = counted(graph("TEST")...)
+	var ae *AnySetError
+	if _, err := (&Expander{Src: src}).ExpandAS(ctx, types.Ref(mustSet(t, "AS-X"))); !errors.As(err, &ae) {
+		t.Errorf("ExpandAS(AS-X): err %v, want *AnySetError", err)
+	}
+	if got := fetchedRefs(src); !slices.Equal(got, []string{"AS-X"}) {
+		t.Errorf("ExpandAS(AS-X) fetched %v, want [AS-X]", got)
+	}
+
+	// AS-ANY at the top: an *AnySetError, or in a regexp no Sets entry, with
+	// nothing fetched either way.
+	src = counted(graph("TEST")...)
+	if _, err := (&Expander{Src: src}).ExpandAS(ctx, types.Ref(mustSet(t, "AS-ANY"))); !errors.As(err, &ae) {
+		t.Errorf("ExpandAS(AS-ANY): err %v, want *AnySetError", err)
+	}
+	nf, err = (&Expander{Src: src}).NormalizeFilter(ctx, mustFilter(t, "<AS-ANY>"))
+	if err != nil {
+		t.Fatalf("<AS-ANY>: %v", err)
+	}
+	if _, ok := pathSetOf(t, nf, "AS-ANY"); ok {
+		t.Error("<AS-ANY>: the literal AS-ANY has a Sets entry")
+	}
+	if got := fetchedRefs(src); len(got) != 0 {
+		t.Errorf("AS-ANY at the top fetched %v, want nothing", got)
+	}
+
+	// A scoped reference stops at the same level. A regexp cannot name
+	// RIPE::AS-X itself, so it reaches it through AS-TOP's src-members:.
+	ripe := append(graph("RIPE"),
+		"as-set: AS-TOP\nmembers: AS-X\nsrc-members: RIPE::AS-X\nsource: RIPE\n")
+	scoped, err := types.ParseSetRef("RIPE::AS-X")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src = counted(ripe...)
+	if _, err := (&Expander{Src: src}).ExpandAS(ctx, scoped); !errors.As(err, &ae) {
+		t.Errorf("ExpandAS(RIPE::AS-X): err %v, want *AnySetError", err)
+	}
+	if got := fetchedRefs(src); !slices.Equal(got, []string{"RIPE::AS-X"}) {
+		t.Errorf("ExpandAS(RIPE::AS-X) fetched %v, want [RIPE::AS-X]", got)
+	}
+	src = counted(ripe...)
+	nf, err = (&Expander{Src: src, MaxDepth: 3}).NormalizeFilter(ctx, mustFilter(t, "<AS-TOP>"))
+	if err != nil {
+		t.Fatalf("<AS-TOP> at MaxDepth 3: %v", err)
+	}
+	if s, ok := pathSetOf(t, nf, "AS-TOP"); !ok || !s.Any() {
+		t.Errorf("<AS-TOP>: Sets[AS-TOP] = %v (present %v), want Any", s, ok)
+	}
+	if got := fetchedRefs(src); !slices.Equal(got, []string{"AS-TOP", "RIPE::AS-X"}) {
+		t.Errorf("<AS-TOP> fetched %v, want [AS-TOP RIPE::AS-X]", got)
 	}
 }

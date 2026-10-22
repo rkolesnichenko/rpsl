@@ -137,13 +137,14 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
 - **Filters are only partly enumerable**: `EvalFilter` handles ANY, prefix lists, set and AS
   references, OR and AND (range intersection) and returns `*NotEnumerableError` for NOT,
   PeerAS, community tests and AS-path regexps. Never answer one of those with an empty set.
-- **A set reaching AS-ANY is every AS in an AS-path regexp, and nowhere else.** `NormalizeFilter`
+- **A set reaching AS-ANY is every AS in an AS-path regexp and in a peering (`peval.inASSet`, `consist`'s denoter, D20), and nowhere else.** `NormalizeFilter`
   gives it a `PathMatch.Sets` entry whose `Any()` is true (`Has` holds for every AS, `List`/`Len`
   give nothing: read `Any()` first); in filter position and in `ExpandAS`/`ExpandPrefixes`/
   `EvalFilter` it stays an `*AnySetError` (RFC 2622 §5.3's registered routes cannot be enumerated).
   It is built path-only (`filterEval.pathSet`, discovery's anyLeaf mode) and cached apart, in
   `pathASNs`, never in `asns` or the `FilterMemo` ExpandAS pool: a negated literal reading a shared
-  any-set would accept every route. Discovery still runs to the end under MaxDepth and MaxVisited
+  any-set would accept every route. An expansion that reaches AS-ANY stops after the level that
+  reaches it, in either position; references on that next level still pass MaxDepth and MaxVisited
   (over a limit is `*SetTooLargeError`); AS-ANY itself is never fetched and nothing is reported
   missing. `rtconfig` refuses it (`CauseAnySet`, either polarity); `consist`'s Lint warns
   (`lint/any-set`). IRRToolSet drops the member, so it differs (D19).
@@ -230,7 +231,7 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   - A direction where neither side has any term is `Direction.NoPolicy` ("no policy either way"), never "consistent".
   - "Announces" means "permits announcing" (policy text, not a RIB).
   - `Corpus.IndexPeers` keeps AS numbers only, never decoded policies.
-  - The ASPA rules (`Checker.ASPAs`) read conjunct structure, peerings, set members and ASPA provider lists only; "full table" is AnyPrefix, non-empty, with only negated tests, none naming a set that reaches AS-ANY; never a path. A clause counts only if its own peering names the peer: a peering reaching AS-ANY on its positive side (OR, AND, left of EXCEPT) — written, through an as-set, or in a peering-set — names none; a set template is instantiated for the peer. Stale-provider is silent when a peering reaches a missing set (`peerInfo.missing`, never `PeerList.Skipped`).
+  - The ASPA rules (`Checker.ASPAs`) read conjunct structure, peerings, set members and ASPA provider lists only; "full table" is AnyPrefix, non-empty, with only negated tests, none rejecting every route with a path (an unanchored regexp that is nullable or matches every one-AS path, judged on the syntax tree: `resolve/consist/pathall.go`); never a path. A clause counts only if its own peering names the peer: a peering reaching AS-ANY on its positive side (OR, AND, left of EXCEPT) — written, through an as-set, or in a peering-set — names none; a set template is instantiated for the peer. Stale-provider is silent when a peering reaches a missing set (`peerInfo.missing`, never `PeerList.Skipped`).
   - **`Checker.Memo` is result-neutral.** `resolve.FilterMemo` never stores an answer whose normalization read `Expander.Peer` (every read goes through `filterEval.peer`; `TestPeerReadsGoThroughAccessor`), nor a context or Source error; a `Memo` serves one snapshot. Each call reads it through its own `resolve.NewFilterMemoOver` layer (`Checker.eval`), so another call's eviction does not make it compute an answer again while the answer fits the layer's bound. `rpslcheck` always sets it.
 
 - **The server (`resolve/irrdq`) answers as IRRd 4.5.3 does.**

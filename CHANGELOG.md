@@ -9,6 +9,36 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Changed
+
+- `resolve`: `MaxVisited` is one budget per `NormalizeFilter` call, shared by
+  both evaluators (it was charged to each separately), so a filter near the
+  limit can now return `*SetTooLargeError` where it did not.
+- `resolve`: an expansion that reaches `AS-ANY` stops after the level that
+  reaches it, in an AS-path regexp as in a peering. A set graph that runs
+  over a limit deeper than `AS-ANY` now gives the any-set in a regexp: `consist`
+  reports `lint/any-set` (it gave `lint/limit`) and `rtconfig` `CauseAnySet`
+  (it gave the limit error).
+- `resolve/consist`: `lint/aspa-missing-provider` leaves a conjunct out of
+  "full table" only when a negated AS-path test rejects every route that has a
+  path (`NOT <.>`, `NOT <AS-ANY>`, a set reaching `AS-ANY`, `NOT <AS1*>`).
+  `NOT <AS1 AS-R>` and anchored forms such as `NOT <^AS-R>` now count as a
+  full table.
+- `resolve/rtconfig`: an AS-path class holding `AS-ANY` is any AS whatever its
+  item order; `[AS1-AS5000 AS-ANY]` is no longer refused, and
+  `[AS1-AS5000 AS-R]` with `AS-R` reaching `AS-ANY` is refused with
+  `CauseAnySet` instead of `CausePathShape`.
+
+### Fixed
+
+- `resolve`: indirect members (`MembersByRef`) are fetched only after a
+  discovery that ends without `AS-ANY` or a limit, so a failing `MembersByRef`
+  no longer fails an answer that needs no claims. A `Source` that returns
+  `ErrNotFound` from `MembersByRef` now fails the expansion with an error
+  naming the set (it no longer matches `ErrNotFound`, so no caller reads the
+  top set as missing): report "nothing there" as an empty result.
+- `scripts/check.sh`: the gofmt step fails when the Go files cannot be listed.
+
 ## [0.30.0] - 2026-10-18
 
 ### Added

@@ -81,6 +81,11 @@ func TestASPAMissingProvider(t *testing.T) {
 		{"positive regexp", []string{"import: from AS2 accept <^PeerAS+$>"}, []rpki.ASPA{aspa(1, 3)}, false, nil},
 		{"positive community", []string{"import: from AS2 accept ANY AND community(65000:1)"}, []rpki.ASPA{aspa(1, 3)}, false, nil},
 		{"prefix list", []string{"import: from AS2 accept {10.0.0.0/8^+}"}, []rpki.ASPA{aspa(1, 3)}, false, nil},
+		{"NOT <.>", []string{"import: from AS2 accept ANY AND NOT <.>"}, []rpki.ASPA{aspa(1, 3)}, false, nil},
+		{"NOT <AS-ANY>", []string{"import: from AS2 accept ANY AND NOT <AS-ANY>"}, []rpki.ASPA{aspa(1, 3)}, false, nil},
+		{"NOT <AS1*>", []string{"import: from AS2 accept ANY AND NOT <AS1*>"}, []rpki.ASPA{aspa(1, 3)}, false, nil},
+		{"NOT <.* AS64512 .*>", []string{"import: from AS2 accept ANY AND NOT <.* AS64512 .*>"}, []rpki.ASPA{aspa(1, 3)},
+			false, []string{"lint/aspa-missing-provider import 0 [AS2] " + v4 + ": " + missingAS2}},
 		{"imports nothing", []string{"import: from AS2 accept NOT {0.0.0.0/0^0-32}"}, []rpki.ASPA{aspa(1, 3)}, false, nil},
 		{"undecided: router not given", []string{"import: from AS2 192.0.2.1 accept ANY"}, []rpki.ASPA{aspa(1, 3)}, false, nil},
 		{"both families", []string{"mp-import: from AS2 accept ANY"}, []rpki.ASPA{aspa(1, 3)},
@@ -166,16 +171,23 @@ func TestASPAMissingProvider(t *testing.T) {
 // form "accept <AS-R$>" (RIPE AS8308's) gives none either: the rule reads
 // structure only and a positive test never counts, so this is a known false
 // negative. The export form names no positive as-set, so it gives no
-// lint/aspa-* issue.
+// lint/aspa-* issue. A literal AS-ANY or "." rejects every path as well; a
+// negated test that rejects only some paths ("NOT <AS1 AS-R>") still leaves a
+// full table.
 func TestASPAAnySetPath(t *testing.T) {
 	anyR := asSetText("AS-R", "AS-ANY")
-	for _, imp := range []string{"import: from AS9 accept ANY AND NOT <AS-R>", "import: from AS9 accept <AS-R$>"} {
+	for _, imp := range []string{"import: from AS9 accept ANY AND NOT <AS-R>", "import: from AS9 accept <AS-R$>",
+		"import: from AS9 accept ANY AND NOT <AS-ANY>", "import: from AS9 accept ANY AND NOT <.>"} {
 		ch := checker(t, autNum(1, imp, "export: to AS9 announce AS1"), autNum(9), anyR)
 		if got := lintASPA(t, ch, 1, newASPAs(t, aspa(1, 3)), RuleASPAMissingProvider); len(got) != 0 {
 			t.Errorf("%s: got\n%s\nwant none", imp, strings.Join(got, "\n"))
 		}
 	}
-	ch := checker(t, autNum(1, "import: from AS9 accept AS9", "export: to AS9 announce ANY AND NOT <AS-R>"), autNum(9), anyR)
+	ch := checker(t, autNum(1, "import: from AS9 accept ANY AND NOT <AS1 AS-R>", "export: to AS9 announce AS1"), autNum(9), anyR)
+	if got := lintASPA(t, ch, 1, newASPAs(t, aspa(1, 3)), RuleASPAMissingProvider); len(got) != 1 || !strings.Contains(got[0], "aspa-missing-provider") {
+		t.Errorf("NOT <AS1 AS-R>: got\n%s\nwant one aspa-missing-provider issue", strings.Join(got, "\n"))
+	}
+	ch = checker(t, autNum(1, "import: from AS9 accept AS9", "export: to AS9 announce ANY AND NOT <AS-R>"), autNum(9), anyR)
 	if got := lintASPA(t, ch, 1, newASPAs(t, aspa(1, 9))); len(got) != 0 {
 		t.Errorf("export: got\n%s\nwant none", strings.Join(got, "\n"))
 	}

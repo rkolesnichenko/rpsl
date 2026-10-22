@@ -70,36 +70,24 @@ func (t translator) members(e policy.ASPathExpr) (asns []types.ASN, all bool, er
 		if x.Negated {
 			return nil, false, t.refuse(CauseNegatedClass)
 		}
-		// Every item is read, even after one that is any AS, so a set
-		// reaching AS-ANY anywhere in the class is refused.
+		// Ranges are collected and judged after the loop, so the result
+		// does not depend on where AS-ANY sits among the items.
 		seen, anyAS := map[types.ASN]bool{}, false
+		var ranges []policy.ASPathASNRange
 		for _, it := range x.Items {
-			var got []types.ASN
 			if r, ok := it.(policy.ASPathASNRange); ok {
-				if anyAS {
-					continue // as before: a range after AS-ANY is not checked
-				}
-				if r.Hi < r.Lo || r.Hi-r.Lo >= maxClassRange {
-					return nil, false, t.refuse(CausePathShape)
-				}
-				for a := r.Lo; ; a++ {
-					got = append(got, a)
-					if a == r.Hi {
-						break
-					}
-				}
-			} else {
-				as, any, err := t.members(it)
-				if err != nil {
-					return nil, false, err
-				}
-				if any {
-					anyAS = true
-					continue
-				}
-				got = as
+				ranges = append(ranges, r)
+				continue
 			}
-			for _, a := range got {
+			as, any, err := t.members(it)
+			if err != nil {
+				return nil, false, err
+			}
+			if any {
+				anyAS = true
+				continue
+			}
+			for _, a := range as {
 				if !seen[a] {
 					seen[a] = true
 					asns = append(asns, a)
@@ -108,6 +96,20 @@ func (t translator) members(e policy.ASPathExpr) (asns []types.ASN, all bool, er
 		}
 		if anyAS {
 			return nil, true, nil
+		}
+		for _, r := range ranges {
+			if r.Hi < r.Lo || r.Hi-r.Lo >= maxClassRange {
+				return nil, false, t.refuse(CausePathShape)
+			}
+			for a := r.Lo; ; a++ {
+				if !seen[a] {
+					seen[a] = true
+					asns = append(asns, a)
+				}
+				if a == r.Hi {
+					break
+				}
+			}
 		}
 		slices.Sort(asns)
 		return asns, false, nil

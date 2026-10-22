@@ -508,7 +508,9 @@ func (l *linter) policy(kind string, p peval.Policy, peer types.ASN, af types.Ad
 // (lint/any-set), once per set for kind's attribute index: the regexp is
 // decided, the set matching any AS, which its maintainer may not mean. The
 // set is named as the regexp names it (a template bound to the peer), not by
-// the chain inside it that reaches AS-ANY.
+// the chain inside it that reaches AS-ANY. It reports for terms a session
+// decides; a term Lint cannot decide (one naming routers, for example) is
+// lint/undecided instead, and the any-set in it is not reported.
 func (l *linter) anySets(kind string, index int, f resolve.NormalFilter, peer types.ASN, af types.AddrFamily) {
 	var names []string
 	for _, cj := range f.Conjuncts {

@@ -173,6 +173,7 @@ func (e *Expander) normalize(ctx context.Context, f policy.Filter) (NormalFilter
 	noExclude.Exclude = Exclusion{}
 	n.noEx = newFilterEval(&noExclude, ctx)
 	n.noEx.anyAll = true
+	n.noEx.visits = n.ev.visits
 	cs, err := n.norm(f, false, 0)
 	used := func() bool { return n.ev.usedPeer || n.noEx.usedPeer }
 	if err != nil {
@@ -195,8 +196,9 @@ type nconj struct {
 // and the normal form of each filter-set it inlines, by polarity — so a
 // filter-set named any number of times is inlined once per polarity. What it
 // evaluates afresh: each enumerable literal, filter-sets inside it included
-// (filterEval.run starts a new fixpoint per literal). Every step is charged
-// against MaxVisited.
+// (filterEval.run starts a new fixpoint per literal). Every step, in either
+// evaluator, is charged against one MaxVisited budget; a set both evaluators
+// expand is discovered, and charged, twice.
 //
 // noEx is a second filterEval, over the same Expander with Exclude cleared,
 // used for negated literals and for every AS-path regexp's sets (see
