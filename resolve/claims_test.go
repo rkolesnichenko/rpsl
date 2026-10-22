@@ -19,6 +19,7 @@ import (
 type claimCounter struct {
 	*MemSource
 	failOn   string
+	failWith error // returned instead of errClaims, when set
 	onClaims func()
 	mu       sync.Mutex
 	calls    int
@@ -34,6 +35,9 @@ func (c *claimCounter) MembersByRef(ctx context.Context, set object.NamedSet) ([
 		c.onClaims()
 	}
 	if c.failOn != "" && set.SetName().String() == c.failOn {
+		if c.failWith != nil {
+			return nil, c.failWith
+		}
 		return nil, errClaims
 	}
 	return c.MemSource.MembersByRef(ctx, set)
@@ -237,5 +241,23 @@ func TestConcurrencyWithClaims(t *testing.T) {
 				t.Fatalf("seed %d: concurrency %d gave\n%s\nserial gave\n%s", seed, n, got, serial)
 			}
 		}
+	}
+}
+
+// A Source that answers ErrNotFound from MembersByRef breaks its contract (no
+// claimants is an empty result). The error names the set and no longer
+// matches ErrNotFound, so a caller never reads the top set as missing.
+func TestClaimsNotFoundIsNotAnAnswer(t *testing.T) {
+	src := claimsGraph(t, "AS-Y")
+	src.failWith = ErrNotFound
+	_, err := (&Expander{Src: src}).ExpandAS(context.Background(), types.Ref(mustSet(t, "AS-W")))
+	if err == nil {
+		t.Fatal("ExpandAS(AS-W) with AS-Y's claims not found: no error")
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Errorf("err %v matches ErrNotFound", err)
+	}
+	if !strings.Contains(err.Error(), "AS-Y") {
+		t.Errorf("err %q does not name AS-Y", err)
 	}
 }

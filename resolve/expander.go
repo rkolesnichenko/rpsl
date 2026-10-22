@@ -325,12 +325,15 @@ type setNode struct {
 // reference to one passes the same checks as any other (seen, exclusion,
 // MaxDepth, MaxVisited) and is never fetched — an object in the Source under
 // that name is never read. Discovery stops after the level whose processing
-// reaches one: every reference on that level is checked, nothing past it is
+// reaches one: every reference found while processing it is checked, nothing past it is
 // fetched, since whatever lies deeper cannot change "every AS". Without
 // anyLeaf that is an *AnySetError; with it, the references are recorded in the
 // graph's any list and the graph is returned. Only an as-set's expansion for
 // an AS-path regexp sets anyLeaf (expandAS); both modes stop at the same
 // point, so a peering and a regexp naming one set agree on MaxDepth.
+// Claims are fetched in a second pass after discovery, one level at a time:
+// over a Source whose MembersByRef is a network query (whois) that adds about
+// one round trip per level.
 //
 // Sets are fetched without their indirect members. Only a discovery that ends
 // without refusing and without reaching AS-ANY fetches them (fetchClaims), so
@@ -498,7 +501,12 @@ func (e *Expander) claimsOf(ctx context.Context, set object.NamedSet) ([]object.
 	}
 	objs, err := e.Src.MembersByRef(ctx, set)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, ErrNotFound) {
+			// No claimants is an empty result. Passed on as ErrNotFound it
+			// would make a caller read the top set as missing.
+			return nil, fmt.Errorf("resolve: MembersByRef %s: not found is not an answer here (no claimants is an empty result): %v", set.SetName(), err)
+		}
+		return nil, fmt.Errorf("resolve: MembersByRef %s: %w", set.SetName(), err)
 	}
 	var claims []object.Object
 	for _, o := range objs {
