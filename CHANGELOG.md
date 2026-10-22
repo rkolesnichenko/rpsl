@@ -9,6 +9,8 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+## [0.30.1] - 2026-10-22
+
 ### Changed
 
 - `resolve`: `MaxVisited` is one budget per `NormalizeFilter` call, shared by
@@ -1389,7 +1391,8 @@ The first release. There is no earlier version to migrate from.
   values do; a few common RP-attributes have typed helpers.
 - **`rdap` is not a `Source`.** RDAP serves registration data, not IRR sets.
 
-[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.30.0...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.30.1...HEAD
+[0.30.1]: https://github.com/rkolesnichenko/rpsl/compare/v0.30.0...v0.30.1
 [0.30.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.27.2...v0.28.0
