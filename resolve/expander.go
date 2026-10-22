@@ -181,10 +181,11 @@ func (e *Expander) ExpandAS(ctx context.Context, ref types.SetRef) (ASNSet, erro
 	return out, err
 }
 
-// expandAS is ExpandAS, also returning how many sets discovery reached. With
-// anyLeaf (an as-set named in an AS-path regexp), a set that reaches AS-ANY is
-// the set of every AS (ASNSet.Any), with nothing missing, rather than an
-// *AnySetError; see discover.
+// expandAS is ExpandAS, also returning how many references discovery checked
+// (setGraph.size), which the caller charges against MaxVisited. With anyLeaf
+// (an as-set named in an AS-path regexp), a set that reaches AS-ANY is the set
+// of every AS (ASNSet.Any), with nothing missing, rather than an *AnySetError.
+// Either way discovery stops after the level that reaches AS-ANY; see discover.
 func (e *Expander) expandAS(ctx context.Context, ref types.SetRef, anyLeaf bool) (ASNSet, int, error) {
 	if ref.Name().Class() != types.ClassAsSet {
 		return ASNSet{}, 0, fmt.Errorf("resolve: ExpandAS %s: %w", ref, ErrSetClass)
@@ -298,11 +299,14 @@ type setGraph struct {
 	any     []types.SetRef               // references to AS-ANY reached, never fetched (discover's anyLeaf only)
 	routes  map[types.ASN][]netip.Prefix // originated routes (prefix expansions only)
 	ex      excluded                     // what the expansion leaves out
+	reached int                          // references that passed discovery's checks (see size)
 }
 
-// size is how many sets discovery reached: those fetched, those missing and
-// the references to AS-ANY.
-func (g *setGraph) size() int { return len(g.nodes) + len(g.missing) + len(g.any) }
+// size is how many references passed discovery's checks: every set fetched
+// or missing, and for a graph reaching AS-ANY also the references to AS-ANY
+// and the unfetched ones on the level after the one that reached it. Without
+// AS-ANY it is len(nodes)+len(missing).
+func (g *setGraph) size() int { return g.reached }
 
 type setNode struct {
 	set    object.NamedSet
@@ -316,30 +320,32 @@ type setNode struct {
 // fetched separately (the scope selects where, draft §2.3, and never
 // cascades: a node's nested references come from its own object).
 //
-// A level holding a name that denotes the whole IRR (isAnySet) is an
-// *AnySetError, unless anyLeaf is set: then a nested reference to one passes
-// the same checks as any other (seen, MaxDepth, MaxVisited), is recorded in
-// the graph's any list and counted by size, and is never fetched — an object
-// in the Source under that name is never read — and discovery goes on to the
-// end, so a graph over a limit deeper down is still refused. Only an as-set's
-// expansion for an AS-path regexp sets it (expandAS).
+// A top that names the whole IRR (isAnySet) is an *AnySetError. A nested
+// reference to one passes the same checks as any other (seen, exclusion,
+// MaxDepth, MaxVisited) and is never fetched — an object in the Source under
+// that name is never read. Discovery stops after the level whose processing
+// reaches one: every reference on that level is checked, nothing past it is
+// fetched, since whatever lies deeper cannot change "every AS". Without
+// anyLeaf that is an *AnySetError; with it, the references are recorded in the
+// graph's any list and the graph is returned. Only an as-set's expansion for
+// an AS-path regexp sets anyLeaf (expandAS); both modes stop at the same
+// point, so a peering and a regexp naming one set agree on MaxDepth.
 func (e *Expander) discover(ctx context.Context, top types.SetRef, anyLeaf bool) (*setGraph, error) {
+	if isAnySet(top.Name()) {
+		return nil, &AnySetError{Name: top.Name()}
+	}
 	g := &setGraph{top: top, nodes: map[types.SetRef]*setNode{}, ex: e.excluded()}
 	seen := map[types.SetRef]bool{top: true}
 	for level, depth := []types.SetRef{top}, 0; len(level) > 0; depth++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		for _, n := range level {
-			if isAnySet(n.Name()) {
-				return nil, &AnySetError{Name: n.Name()}
-			}
-		}
 		got, err := e.fetchLevel(ctx, level)
 		if err != nil {
 			return nil, err
 		}
 		var next []types.SetRef
+		var anyRef types.SetRef // the first reference to AS-ANY this level reaches
 		for i, n := range level {
 			res := got[i]
 			if res.err != nil {
@@ -364,16 +370,28 @@ func (e *Expander) discover(ctx context.Context, top types.SetRef, anyLeaf bool)
 					return nil, &SetTooLargeError{Name: top, Limit: LimitVisited, Max: e.maxVisited(), Count: len(seen) + 1}
 				}
 				seen[ref] = true
-				if anyLeaf && isAnySet(ref.Name()) {
-					g.any = append(g.any, ref)
+				if isAnySet(ref.Name()) {
+					if anyRef.IsZero() {
+						anyRef = ref
+					}
+					if anyLeaf {
+						g.any = append(g.any, ref)
+					}
 					continue
 				}
 				next = append(next, ref)
 			}
 		}
+		if !anyRef.IsZero() {
+			if !anyLeaf {
+				return nil, &AnySetError{Name: anyRef.Name()}
+			}
+			break
+		}
 		level = next
 	}
 	sort.Slice(g.missing, func(i, j int) bool { return g.missing[i].String() < g.missing[j].String() })
+	g.reached = len(seen)
 	return g, nil
 }
 

@@ -550,8 +550,9 @@ func TestNormalizeAnySetCacheIsolation(t *testing.T) {
 	}
 }
 
-// A graph that reaches AS-ANY shallow and goes on deeper is held to MaxDepth
-// and MaxVisited all the way down.
+// A graph that reaches AS-ANY shallow and goes on deeper stops after the level
+// that reaches AS-ANY: the references on the next level pass MaxDepth and
+// MaxVisited, and nothing deeper is fetched or checked.
 func TestAnySetLimits(t *testing.T) {
 	src := corpus(t,
 		asSet("AS-R", "AS-MID, AS-C1"),
@@ -563,32 +564,39 @@ func TestAnySetLimits(t *testing.T) {
 	)
 	ctx := context.Background()
 	f := mustFilter(t, "<AS-R>")
+	anySet := func(label string, e *Expander) {
+		t.Helper()
+		nf, err := e.NormalizeFilter(ctx, f)
+		if err != nil {
+			t.Errorf("%s: %v, want the any-set", label, err)
+			return
+		}
+		if s, ok := pathSetOf(t, nf, "AS-R"); !ok || !s.Any() {
+			t.Errorf("%s: Sets[AS-R] = %v, want Any", label, s)
+		}
+	}
 	var tl *SetTooLargeError
-	_, err := (&Expander{Src: src, MaxDepth: 3}).NormalizeFilter(ctx, f)
+	// AS-ANY's reference sits at depth 2, past MaxDepth 1.
+	_, err := (&Expander{Src: src, MaxDepth: 1}).NormalizeFilter(ctx, f)
 	if !errors.As(err, &tl) || tl.Limit != LimitDepth {
-		t.Errorf("MaxDepth 3: err %v, want *SetTooLargeError{LimitDepth}", err)
+		t.Errorf("MaxDepth 1: err %v, want *SetTooLargeError{LimitDepth}", err)
 	}
-	nf, err := (&Expander{Src: src, MaxDepth: 4}).NormalizeFilter(ctx, f)
-	if err != nil {
-		t.Fatalf("MaxDepth 4: %v", err)
+	anySet("MaxDepth 2", &Expander{Src: src, MaxDepth: 2})
+	anySet("MaxDepth 3", &Expander{Src: src, MaxDepth: 3}) // AS-C3, at depth 3, is never reached
+	// Level 1 (AS-MID, AS-C1) reaches AS-ANY, so discovery stops after it:
+	// seen is AS-R, AS-MID, AS-C1, AS-ANY, AS-GONE, AS-C2, 6 references. With
+	// 5, discovery refuses the sixth; with 6 it fits, and the evaluator,
+	// charged 1 normalization step plus 6 on one budget, refuses at 7 (its
+	// error has no name).
+	_, err = (&Expander{Src: src, MaxVisited: 5}).NormalizeFilter(ctx, f)
+	if !errors.As(err, &tl) || tl.Limit != LimitVisited || tl.Name.String() != "AS-R" || tl.Count != 6 {
+		t.Errorf("MaxVisited 5: err %v, want *SetTooLargeError{LimitVisited} for AS-R reaching 6", err)
 	}
-	if s, ok := pathSetOf(t, nf, "AS-R"); !ok || !s.Any() {
-		t.Errorf("MaxDepth 4: Sets[AS-R] = %v, want Any", s)
+	_, err = (&Expander{Src: src, MaxVisited: 6}).NormalizeFilter(ctx, f)
+	if !errors.As(err, &tl) || tl.Limit != LimitVisited || !tl.Name.IsZero() || tl.Count != 7 {
+		t.Errorf("MaxVisited 6: err %v, want unnamed *SetTooLargeError{LimitVisited} reaching 7", err)
 	}
-	// AS-R, AS-MID, AS-C1, AS-ANY, AS-GONE, AS-C2, AS-C3, AS-C4: 8 distinct
-	// sets, charged 1 normalization step plus 8: 9 in all, against one budget.
-	// With 8, discovery fits and the evaluator refuses (its error has no name).
-	_, err = (&Expander{Src: src, MaxVisited: 8}).NormalizeFilter(ctx, f)
-	if !errors.As(err, &tl) || tl.Limit != LimitVisited || !tl.Name.IsZero() || tl.Count != 9 {
-		t.Errorf("MaxVisited 8: err %v, want unnamed *SetTooLargeError{LimitVisited} reaching 9", err)
-	}
-	nf, err = (&Expander{Src: src, MaxVisited: 9}).NormalizeFilter(ctx, f)
-	if err != nil {
-		t.Fatalf("MaxVisited 9: %v", err)
-	}
-	if s, ok := pathSetOf(t, nf, "AS-R"); !ok || !s.Any() {
-		t.Errorf("MaxVisited 9: Sets[AS-R] = %v, want Any", s)
-	}
+	anySet("MaxVisited 7", &Expander{Src: src, MaxVisited: 7})
 }
 
 // TestNormalizeVisitsShared: the two evaluators of one normalization draw on

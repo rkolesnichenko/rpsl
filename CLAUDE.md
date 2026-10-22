@@ -143,7 +143,8 @@ Do not start a milestone before the previous one's tests are green. Stop-and-shi
   `EvalFilter` it stays an `*AnySetError` (RFC 2622 §5.3's registered routes cannot be enumerated).
   It is built path-only (`filterEval.pathSet`, discovery's anyLeaf mode) and cached apart, in
   `pathASNs`, never in `asns` or the `FilterMemo` ExpandAS pool: a negated literal reading a shared
-  any-set would accept every route. Discovery still runs to the end under MaxDepth and MaxVisited
+  any-set would accept every route. An expansion that reaches AS-ANY stops after the level that
+  reaches it, in either position; references on that next level still pass MaxDepth and MaxVisited
   (over a limit is `*SetTooLargeError`); AS-ANY itself is never fetched and nothing is reported
   missing. `rtconfig` refuses it (`CauseAnySet`, either polarity); `consist`'s Lint warns
   (`lint/any-set`). IRRToolSet drops the member, so it differs (D19).
