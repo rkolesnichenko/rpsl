@@ -576,17 +576,71 @@ func TestAnySetLimits(t *testing.T) {
 		t.Errorf("MaxDepth 4: Sets[AS-R] = %v, want Any", s)
 	}
 	// AS-R, AS-MID, AS-C1, AS-ANY, AS-GONE, AS-C2, AS-C3, AS-C4: 8 distinct
-	// sets. Discovery refuses the eighth (its error names the top set, the
-	// evaluator's would not); with 8 the expansion is charged 8 and fits.
-	_, err = (&Expander{Src: src, MaxVisited: 7}).NormalizeFilter(ctx, f)
-	if !errors.As(err, &tl) || tl.Limit != LimitVisited || tl.Name.String() != "AS-R" || tl.Count != 8 {
-		t.Errorf("MaxVisited 7: err %v, want *SetTooLargeError{LimitVisited} for AS-R reaching 8", err)
+	// sets, charged 1 normalization step plus 8: 9 in all, against one budget.
+	// With 8, discovery fits and the evaluator refuses (its error has no name).
+	_, err = (&Expander{Src: src, MaxVisited: 8}).NormalizeFilter(ctx, f)
+	if !errors.As(err, &tl) || tl.Limit != LimitVisited || !tl.Name.IsZero() || tl.Count != 9 {
+		t.Errorf("MaxVisited 8: err %v, want unnamed *SetTooLargeError{LimitVisited} reaching 9", err)
 	}
-	nf, err = (&Expander{Src: src, MaxVisited: 8}).NormalizeFilter(ctx, f)
+	nf, err = (&Expander{Src: src, MaxVisited: 9}).NormalizeFilter(ctx, f)
 	if err != nil {
-		t.Fatalf("MaxVisited 8: %v", err)
+		t.Fatalf("MaxVisited 9: %v", err)
 	}
 	if s, ok := pathSetOf(t, nf, "AS-R"); !ok || !s.Any() {
-		t.Errorf("MaxVisited 8: Sets[AS-R] = %v, want Any", s)
+		t.Errorf("MaxVisited 9: Sets[AS-R] = %v, want Any", s)
+	}
+}
+
+// TestNormalizeVisitsShared: the two evaluators of one normalization draw on
+// one MaxVisited budget, so a filter that needs both is charged for both.
+func TestNormalizeVisitsShared(t *testing.T) {
+	chain := func(p string, last string) []string {
+		var out []string
+		for i := 0; i < 10; i++ {
+			next := fmt.Sprintf("AS-%s%d", p, i+1)
+			if i == 9 {
+				next = last
+			}
+			name := "AS-" + p
+			if i > 0 {
+				name = fmt.Sprintf("AS-%s%d", p, i)
+			}
+			out = append(out, asSet(name, next))
+		}
+		return out
+	}
+	texts := append(chain("A", "AS1"), chain("B", "AS2")...)
+	texts = append(texts,
+		"route: 10.1.0.0/16\norigin: AS1\nsource: TEST\n",
+		"route: 10.2.0.0/16\norigin: AS2\nsource: TEST\n")
+	src := corpus(t, texts...)
+	ctx := context.Background()
+	for _, c := range []struct {
+		filter        string
+		refused, fits int
+	}{
+		{"AS-A AND <AS-B>", 23, 24},
+		{"AS-A AND NOT AS-B", 25, 26},
+		{"AS-A OR AS-B", 23, 24},
+	} {
+		f := mustFilter(t, c.filter)
+		var tl *SetTooLargeError
+		_, err := (&Expander{Src: src, MaxVisited: c.refused}).NormalizeFilter(ctx, f)
+		if !errors.As(err, &tl) || tl.Limit != LimitVisited {
+			t.Errorf("%s at %d: err %v, want LimitVisited", c.filter, c.refused, err)
+		}
+		if _, err := (&Expander{Src: src, MaxVisited: c.fits}).NormalizeFilter(ctx, f); err != nil {
+			t.Errorf("%s at %d: %v", c.filter, c.fits, err)
+		}
+	}
+
+	// Exclude does not change what a negated literal's deny side holds.
+	nf, err := (&Expander{Src: src, Exclude: Exclusion{Sets: []types.SetName{mustSet(t, "AS-A5")}}}).
+		NormalizeFilter(ctx, mustFilter(t, "AS-A AND NOT AS-B"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := nf.String(), "NOT ANY"; got != want {
+		t.Errorf("Exclude AS-A5: %q, want %q", got, want)
 	}
 }
