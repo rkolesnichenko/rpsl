@@ -158,10 +158,11 @@ func TestFetchRoutesReturnsCancel(t *testing.T) {
 		failWith error
 		pre      bool // cancelled before the batch
 		maxCalls int
+		reps     int // how many times fetchRoutes runs
 	}{
-		{"cancelled by the first call", nil, false, 40},
-		{"first call also fails", errRoutes, false, 40},
-		{"cancelled before", nil, true, 0},
+		{"cancelled by the first call", nil, false, 40, 1},
+		{"first call also fails", errRoutes, false, 40, 1},
+		{"cancelled before", nil, true, 0, 20},
 	} {
 		src, top := batchGraph(t, "routes")
 		e := &Expander{Src: src, Concurrency: 4}
@@ -176,11 +177,15 @@ func TestFetchRoutesReturnsCancel(t *testing.T) {
 			cancelAt(src, 1, cancel)
 			src.failAt, src.failWith = 1, tc.failWith
 		}
-		err = e.fetchRoutes(ctx, g)
-		cancel()
-		if !errors.Is(err, context.Canceled) {
-			t.Errorf("%s: fetchRoutes = %v, want context.Canceled", tc.name, err)
+		// Cancelled before, each's select finds both a free slot and Done
+		// ready and picks at random, so repeat it: only checking the context
+		// again after taking a slot makes every run start nothing.
+		for range tc.reps {
+			if err := e.fetchRoutes(ctx, g); !errors.Is(err, context.Canceled) {
+				t.Errorf("%s: fetchRoutes = %v, want context.Canceled", tc.name, err)
+			}
 		}
+		cancel()
 		if got := src.count(); got > tc.maxCalls {
 			t.Errorf("%s: %d calls, want at most %d", tc.name, got, tc.maxCalls)
 		}
