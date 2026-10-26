@@ -9,6 +9,12 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Fixed
+
+- `resolve`: once the context is cancelled, an expansion starts no further
+  Source call (a batch of a level's sets, claims or routes made every
+  remaining call before; the answer was the context's error either way).
+
 ## [0.30.1] - 2026-10-22
 
 ### Changed
