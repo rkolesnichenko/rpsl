@@ -50,7 +50,8 @@ type Expander struct {
 	// one both fetch one at a time. Discovery is breadth-first, and a whole
 	// level is fetched together, so raising this hides a live registry's
 	// latency without changing the result: the graph is built from a level's
-	// answers in the order of its references either way.
+	// answers in the order of its references either way. A cancelled context
+	// stops new fetches; those already started finish.
 	Concurrency int
 	// Exclude is what every expansion leaves out; see Exclusion.
 	Exclude Exclusion
@@ -424,27 +425,41 @@ type fetchResult struct {
 // graph is built identically however many fetches ran in parallel.
 func (e *Expander) fetchLevel(ctx context.Context, refs []types.SetRef) ([]fetchResult, error) {
 	out := make([]fetchResult, len(refs))
-	e.each(len(refs), func(i int) { out[i] = e.fetchOne(ctx, refs[i]) })
-	return out, ctx.Err()
+	return out, e.each(ctx, len(refs), func(i int) { out[i] = e.fetchOne(ctx, refs[i]) })
 }
 
 // each calls do(i) for every i in [0, n), up to Concurrency at a time, and
-// returns once every call has. Each call writes only its own index, so what
-// the caller reads afterwards does not depend on the order they finished in.
-// Checking ctx.Err() afterwards is the caller's job.
-func (e *Expander) each(n int, do func(i int)) {
+// returns once every call it started has. Each call writes only its own
+// index, so what the caller reads afterwards does not depend on the order they
+// finished in. Once each sees ctx cancelled it starts no further call, and it
+// returns ctx.Err(): a call it skipped left its index unwritten, so a caller
+// reads nothing when the error is non-nil.
+func (e *Expander) each(ctx context.Context, n int, do func(i int)) error {
 	c := e.concurrency()
 	if c <= 1 || n <= 1 {
 		for i := range n {
+			if ctx.Err() != nil {
+				break
+			}
 			do(i)
 		}
-		return
+		return ctx.Err()
 	}
 	sem := make(chan struct{}, c)
 	var wg sync.WaitGroup
+launch:
 	for i := range n {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			break launch
+		}
+		// select picks at random when both are ready: a slot taken once the
+		// context is cancelled starts nothing (and is never needed again).
+		if ctx.Err() != nil {
+			break
+		}
 		wg.Add(1)
-		sem <- struct{}{}
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
@@ -452,6 +467,7 @@ func (e *Expander) each(n int, do func(i int)) {
 		}()
 	}
 	wg.Wait()
+	return ctx.Err()
 }
 
 // fetchOne fetches one set, without its indirect members (see fetchClaims).
@@ -481,8 +497,7 @@ func (e *Expander) fetchClaims(ctx context.Context, g *setGraph) error {
 		}
 	}
 	errs := make([]error, len(need))
-	e.each(len(need), func(i int) { need[i].claims, errs[i] = e.claimsOf(ctx, need[i].set) })
-	if err := ctx.Err(); err != nil {
+	if err := e.each(ctx, len(need), func(i int) { need[i].claims, errs[i] = e.claimsOf(ctx, need[i].set) }); err != nil {
 		return err
 	}
 	for _, err := range errs {
@@ -691,7 +706,9 @@ func (e *Expander) fetchRoutes(ctx context.Context, g *setGraph) error {
 	}
 	routes := make([][]netip.Prefix, len(need))
 	errs := make([]error, len(need))
-	e.each(len(need), func(i int) { routes[i], errs[i] = e.Src.OriginatedRoutes(ctx, need[i], e.AFI) })
+	if err := e.each(ctx, len(need), func(i int) { routes[i], errs[i] = e.Src.OriginatedRoutes(ctx, need[i], e.AFI) }); err != nil {
+		return err // a skipped AS's empty slot is not "no routes"
+	}
 	for i, as := range need {
 		if errs[i] != nil {
 			return errs[i]

@@ -9,6 +9,14 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Fixed
+
+- `resolve`: once the context is cancelled, an expansion starts no further
+  Source call (a batch of a level's sets, claims or routes made every
+  remaining call before). A cancelled expansion of prefixes whose route
+  lookups also failed now returns the context's error, as one whose claims
+  lookups failed already did, not the failed lookup's.
+
 ## [0.30.1] - 2026-10-22
 
 ### Changed
