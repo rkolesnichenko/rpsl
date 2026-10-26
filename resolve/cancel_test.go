@@ -160,8 +160,8 @@ func TestFetchRoutesReturnsCancel(t *testing.T) {
 		maxCalls int
 		reps     int // how many times fetchRoutes runs
 	}{
-		{"cancelled by the first call", nil, false, 40, 1},
-		{"first call also fails", errRoutes, false, 40, 1},
+		{"cancelled by the first call", nil, false, 4, 1},
+		{"first call also fails", errRoutes, false, 4, 1},
 		{"cancelled before", nil, true, 0, 20},
 	} {
 		src, top := batchGraph(t, "routes")
