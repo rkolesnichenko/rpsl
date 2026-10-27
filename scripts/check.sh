@@ -89,6 +89,23 @@ else
 	bad "go list resolve"
 fi
 
+step "any names: only types spells AS-ANY and its kin (types.SetName.IsAny)"
+# A quoted AS-ANY, RS-ANY, RTRS-ANY, PRNG-ANY or FLTR-ANY outside types is a
+# copy of SetName.IsAny. grep exits 1 when nothing matches, the good case, so
+# only a status above 1 fails the step.
+any_files=$(mktemp) || bad "could not list Go files"
+if gofiles > "$any_files"; then
+	any_hits=$(xargs -0 sh -c 'grep -H -n -i -E "\"(AS|RS|RTRS|PRNG|FLTR)-ANY\"" "$@"; [ $? -le 1 ]' _ < "$any_files") ||
+		bad "any names: grep failed"
+	any_hits=$(printf '%s\n' "$any_hits" |
+		grep -v -E '^([^:]*_test\.go|types/setname\.go|resolve/internal/irrdoracle/cases\.go):')
+else
+	bad "could not list Go files"
+	any_hits=
+fi
+rm -f "$any_files"
+[ -z "$any_hits" ] || bad "a copy of types.SetName.IsAny: $any_hits"
+
 step "api surface: api/ matches the public API, and the API conventions hold"
 go run ./internal/apisurface -check ||
 	bad "api surface (RPSL_API_UPDATE=1 go run ./internal/apisurface -check rewrites api/; review the diff)"
