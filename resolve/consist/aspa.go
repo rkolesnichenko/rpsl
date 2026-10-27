@@ -35,10 +35,11 @@ const (
 // selects a peer's or a customer's routes, not a provider's table — none of
 // the AS-path tests rejecting every route with a path, and accepts something.
 // A negated test that rejects every path (ANY AND NOT <.>, NOT <AS-ANY>,
-// NOT <AS1*>, or NOT <AS-R> with AS-R reaching AS-ANY) leaves only the empty
-// path, so the conjunct is no table; one that rejects only some paths
-// (NOT <AS1 AS-R>, NOT <.* AS64512 .*>) still leaves a full table. The test is
-// on the regexp's syntax tree alone (pathall.go; ruling F1).
+// NOT <AS1*>, NOT <^.>, or NOT <AS-R> or NOT <^AS-R> with AS-R reaching
+// AS-ANY) leaves only the empty path, so the conjunct is no table; one that
+// rejects only some paths (NOT <AS1 AS-R>, NOT <.* AS64512 .*>, NOT <^AS1>)
+// still leaves a full table. The test is on the regexp's syntax tree alone
+// (pathall.go; ruling F1).
 func fullTable(f resolve.NormalFilter) bool {
 	for _, cj := range f.Conjuncts {
 		if cj.AnyPrefix() && onlyNegated(cj) && !cj.Space().IsEmpty() {

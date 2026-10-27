@@ -17,6 +17,12 @@ same version (see [RELEASING.md](RELEASING.md)).
 ### Changed
 
 - `policy` and `resolve` test for those names through it. No answer changes.
+- `resolve/consist`: a negated AS-path test anchored at one end
+  (`NOT <^AS-R>`, `NOT <^.>`, `NOT <AS-R$>`), or a top-level alternation with
+  a branch that rejects every path, now rejects every route with a path, as
+  its unanchored form does, and its conjunct is no full table for
+  `lint/aspa-missing-provider`. A test anchored at both ends still never
+  counts.
 
 ## [0.30.2] - 2026-10-26
 

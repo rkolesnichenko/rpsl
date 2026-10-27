@@ -1,6 +1,8 @@
 package consist
 
 import (
+	"slices"
+
 	"github.com/rkolesnichenko/rpsl/policy"
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/types"
@@ -12,13 +14,54 @@ import (
 //
 // An unanchored regexp matches every non-empty path exactly when it is
 // nullable (it matches the empty string anywhere) or matches every path of one
-// AS (every longer path contains a one-AS window). Anchors make the match
-// depend on position, so any regexp holding one is not counted.
+// AS (every longer path contains a one-AS window). The same holds with one
+// anchor: ^R matches a path when some prefix of it is in R, every non-empty
+// path has the empty prefix and its first AS alone, and a one-AS path has no
+// other prefix; R$ is the mirror case. A regexp anchored at both ends asks
+// whether the whole path is in R, which this does not decide, so it is not
+// counted, nor is one with an anchor anywhere else. A top-level alternation
+// rejects every path when one of its branches, read as a regexp, does.
 func rejectsEveryPath(p resolve.PathMatch) bool {
-	if p.RE == nil || p.RE.Body == nil || hasAnchor(p.RE.Body) {
+	if p.RE == nil || p.RE.Body == nil {
 		return false
 	}
-	return nullable(p.RE.Body) || onesAll(p.RE.Body, p.Sets)
+	if alt, ok := p.RE.Body.(policy.ASPathAlt); ok {
+		return slices.ContainsFunc(alt.Alts, func(b policy.ASPathExpr) bool { return everyPath(b, p.Sets) })
+	}
+	return everyPath(p.RE.Body, p.Sets)
+}
+
+// everyPath reports whether e, read as a whole regexp, matches every non-empty
+// path: one leading '^' and one trailing '$' are taken off its terms, and what
+// is left must hold no anchor and be nullable or match every one-AS path.
+func everyPath(e policy.ASPathExpr, sets map[types.SetName]resolve.ASNSet) bool {
+	ts := []policy.ASPathExpr{e}
+	if seq, ok := e.(policy.ASPathSeq); ok {
+		ts = seq.Terms
+	}
+	left := len(ts) > 0 && ts[0] == policy.ASPathExpr(policy.ASPathStart{})
+	if left {
+		ts = ts[1:]
+	}
+	right := len(ts) > 0 && ts[len(ts)-1] == policy.ASPathExpr(policy.ASPathEnd{})
+	if right {
+		ts = ts[:len(ts)-1]
+	}
+	if left && right {
+		return false
+	}
+	var rest policy.ASPathExpr = policy.ASPathSeq{Terms: ts}
+	if len(ts) == 1 {
+		rest = ts[0]
+	}
+	// An anchor left anywhere else is not counted. nullable and onesAll read an
+	// anchor as an atom that matches nothing, which is already safe, but they
+	// can still find such a regexp all through another branch ((AS-R | ^AS1)
+	// AS2?); this keeps the rule to the one-sided reduction proved above.
+	if hasAnchor(rest) {
+		return false
+	}
+	return nullable(rest) || onesAll(rest, sets)
 }
 
 // hasAnchor reports whether e holds a '^' or '$' anywhere.

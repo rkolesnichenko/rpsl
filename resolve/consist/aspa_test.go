@@ -84,6 +84,10 @@ func TestASPAMissingProvider(t *testing.T) {
 		{"NOT <.>", []string{"import: from AS2 accept ANY AND NOT <.>"}, []rpki.ASPA{aspa(1, 3)}, false, nil},
 		{"NOT <AS-ANY>", []string{"import: from AS2 accept ANY AND NOT <AS-ANY>"}, []rpki.ASPA{aspa(1, 3)}, false, nil},
 		{"NOT <AS1*>", []string{"import: from AS2 accept ANY AND NOT <AS1*>"}, []rpki.ASPA{aspa(1, 3)}, false, nil},
+		{"NOT <^.>", []string{"import: from AS2 accept ANY AND NOT <^.>"}, []rpki.ASPA{aspa(1, 3)}, false, nil},
+		{"NOT <.$>", []string{"import: from AS2 accept ANY AND NOT <.$>"}, []rpki.ASPA{aspa(1, 3)}, false, nil},
+		{"NOT <^[AS1 AS2]>", []string{"import: from AS2 accept ANY AND NOT <^[AS1 AS2]>"}, []rpki.ASPA{aspa(1, 3)},
+			false, []string{"lint/aspa-missing-provider import 0 [AS2] " + v4 + ": " + missingAS2}},
 		{"NOT <.* AS64512 .*>", []string{"import: from AS2 accept ANY AND NOT <.* AS64512 .*>"}, []rpki.ASPA{aspa(1, 3)},
 			false, []string{"lint/aspa-missing-provider import 0 [AS2] " + v4 + ": " + missingAS2}},
 		{"imports nothing", []string{"import: from AS2 accept NOT {0.0.0.0/0^0-32}"}, []rpki.ASPA{aspa(1, 3)}, false, nil},
@@ -177,7 +181,9 @@ func TestASPAMissingProvider(t *testing.T) {
 func TestASPAAnySetPath(t *testing.T) {
 	anyR := asSetText("AS-R", "AS-ANY")
 	for _, imp := range []string{"import: from AS9 accept ANY AND NOT <AS-R>", "import: from AS9 accept <AS-R$>",
-		"import: from AS9 accept ANY AND NOT <AS-ANY>", "import: from AS9 accept ANY AND NOT <.>"} {
+		"import: from AS9 accept ANY AND NOT <AS-ANY>", "import: from AS9 accept ANY AND NOT <.>",
+		"import: from AS9 accept ANY AND NOT <^AS-R>", "import: from AS9 accept ANY AND NOT <AS-R$>",
+		"mp-import: from AS9 accept ANY AND NOT <^AS-R>"} {
 		ch := checker(t, autNum(1, imp, "export: to AS9 announce AS1"), autNum(9), anyR)
 		if got := lintASPA(t, ch, 1, newASPAs(t, aspa(1, 3)), RuleASPAMissingProvider); len(got) != 0 {
 			t.Errorf("%s: got\n%s\nwant none", imp, strings.Join(got, "\n"))
