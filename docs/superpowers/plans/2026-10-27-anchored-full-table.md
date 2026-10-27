@@ -156,7 +156,8 @@ This runs on the code committed in Step 5.
 Run each with `go test -count=1 -run 'TestRejectsEveryPath' ./consist > <ws>/t1-mut<N>.txt
 2>&1; echo $?`, and record which tests fail.
 
-There is no mutation for `hasAnchor(rest)`. The spec says why.
+There is no mutation for `hasAnchor(rest)`. That rested on a wrong premise, corrected in the
+spec after the final review: a `TestRejectsEveryPath` row now pins the check.
 
 ### Task 2: The ASPA rule's tests, the model's menu and the docs
 

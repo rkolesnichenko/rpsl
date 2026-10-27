@@ -178,11 +178,12 @@ Test-first, in resolve/consist.
    - drop the branch-by-branch step: the alternation rows fail;
    - treat `left and right` like one side: `^.$` and `^$` fail, and so does the soundness test.
 
-   No mutation is planned for `hasAnchor(rest)`. `nullable` and `onesAll` already treat an
-   anchor as an atom that never matches, which can only make an answer "not all". So removing
-   the check changes no answer, and no test could catch it. It stays as a guard, with a comment
-   saying so, because it keeps the safety argument visible in one place. (This was raised by
-   the builder check.)
+   No mutation was planned for `hasAnchor(rest)`, on the belief that removing it changes no
+   answer. **Corrected after the final review:** it does change answers.
+   `(AS-R | ^AS1) AS2?` is "all" without the check, through the `AS-R` branch, and "not all"
+   with it. Every answer the check changes is still sound, so it is not needed for safety. It
+   enforces the non-goal that an anchor anywhere else is not counted. A
+   `TestRejectsEveryPath` row now pins it: the row passes with the check and fails without it.
 3. `scripts/check.sh` under memguard (`GOMAXPROCS=4`, `GOMEMLIMIT`, 8 GB cap): `check: ok`.
 4. Real data, with ASPA on: `RPSL_CONSIST_ASPA=1` `TestRealDataConsist` on the seeded
    2,000-aut-num sample, main against the branch, one run at a time under memguard. The rule is

@@ -54,8 +54,10 @@ func everyPath(e policy.ASPathExpr, sets map[types.SetName]resolve.ASNSet) bool 
 	if len(ts) == 1 {
 		rest = ts[0]
 	}
-	// This check never changes an answer, since nullable and onesAll treat an
-	// anchor as an atom that matches nothing; it keeps the safety argument local.
+	// An anchor left anywhere else is not counted. nullable and onesAll read an
+	// anchor as an atom that matches nothing, which is already safe, but they
+	// can still find such a regexp all through another branch ((AS-R | ^AS1)
+	// AS2?); this keeps the rule to the one-sided reduction proved above.
 	if hasAnchor(rest) {
 		return false
 	}

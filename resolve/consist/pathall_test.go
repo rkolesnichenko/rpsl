@@ -39,7 +39,7 @@ func TestRejectsEveryPath(t *testing.T) {
 		{"AS-R$ | AS1$", true}, {"^AS1 | AS-R", true}, {"(AS1|AS2)", false},
 		// Anchored at both ends, or anywhere but the top-level edges: not counted.
 		{"^$", false}, {"^AS-R+$", false}, {"AS1 ^ AS-R", false}, {"^(^AS-R)", false},
-		{"(^AS-R) AS1", false}, {"^(AS-R$)", false},
+		{"(^AS-R) AS1", false}, {"^(AS-R$)", false}, {"(AS-R | ^AS1) AS2?", false}, // the last: only hasAnchor(rest) says false
 	} {
 		re, err := policy.ParseASPathRegexp(c.re)
 		if err != nil {
