@@ -321,7 +321,7 @@ func isAnyPeering(p Peering) bool {
 		return false
 	}
 	ref, ok := as.AS.(ASSetRef)
-	return ok && strings.EqualFold(ref.Name.String(), "AS-ANY")
+	return ok && ref.Name.IsAny()
 }
 
 // concatActions joins two action lists, left first, without sharing backing

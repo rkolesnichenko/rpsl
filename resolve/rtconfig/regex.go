@@ -58,7 +58,7 @@ func (t translator) members(e policy.ASPathExpr) (asns []types.ASN, all bool, er
 	case policy.ASPathAny:
 		return nil, true, nil
 	case policy.ASPathSet:
-		if strings.EqualFold(x.Name.String(), "AS-ANY") {
+		if x.Name.IsAny() {
 			return nil, true, nil
 		}
 		s := t.sets[x.Name]

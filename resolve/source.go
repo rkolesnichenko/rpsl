@@ -68,9 +68,11 @@ func (e *SetTooLargeError) Error() string {
 	return fmt.Sprintf("resolve: expansion of %s exceeds %s (%d): reached %d", e.Name, e.Limit, e.Max, e.Count)
 }
 
-// AnySetError reports a reference to AS-ANY or RS-ANY, which denote every AS or
-// every route in the IRR (RFC 2622 §5) and cannot be expanded. It is returned
-// as an *AnySetError.
+// AnySetError reports a reference to a set whose name denotes the whole IRR
+// (types.SetName.IsAny: AS-ANY and RS-ANY, RFC 2622 §5.3, and RTRS-ANY,
+// PRNG-ANY and FLTR-ANY, which are refused alike), which cannot be expanded.
+// Only the name is read, so a registry scope on the reference (RIPE::AS-ANY)
+// is ignored. It is returned as an *AnySetError.
 type AnySetError struct{ Name types.SetName }
 
 // Error implements error.

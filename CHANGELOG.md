@@ -9,6 +9,15 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Added
+
+- `types`: `SetName.IsAny` reports whether a name is AS-ANY, RS-ANY,
+  RTRS-ANY, PRNG-ANY or FLTR-ANY, the names that denote the whole IRR.
+
+### Changed
+
+- `policy` and `resolve` test for those names through it. No answer changes.
+
 ## [0.30.2] - 2026-10-26
 
 ### Fixed

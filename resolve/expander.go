@@ -322,7 +322,7 @@ type setNode struct {
 // fetched separately (the scope selects where, draft §2.3, and never
 // cascades: a node's nested references come from its own object).
 //
-// A top that names the whole IRR (isAnySet) is an *AnySetError. A nested
+// A top that names the whole IRR (SetName.IsAny) is an *AnySetError. A nested
 // reference to one passes the same checks as any other (seen, exclusion,
 // MaxDepth, MaxVisited) and is never fetched — an object in the Source under
 // that name is never read. Discovery stops after the level whose processing
@@ -342,7 +342,7 @@ type setNode struct {
 // on them. Claims add no nested references, so the graph, the limits and the
 // answer are the same as fetching them with each set.
 func (e *Expander) discover(ctx context.Context, top types.SetRef, anyLeaf bool) (*setGraph, error) {
-	if isAnySet(top.Name()) {
+	if top.Name().IsAny() {
 		return nil, &AnySetError{Name: top.Name()}
 	}
 	g := &setGraph{top: top, nodes: map[types.SetRef]*setNode{}, ex: e.excluded()}
@@ -382,7 +382,7 @@ func (e *Expander) discover(ctx context.Context, top types.SetRef, anyLeaf bool)
 					return nil, &SetTooLargeError{Name: top, Limit: LimitVisited, Max: e.maxVisited(), Count: len(seen) + 1}
 				}
 				seen[ref] = true
-				if isAnySet(ref.Name()) {
+				if ref.Name().IsAny() {
 					if anyRef.IsZero() {
 						anyRef = ref
 					}
@@ -637,20 +637,6 @@ func nestable(parent, child types.SetClass) bool {
 		return child == types.ClassRtrSet
 	case types.ClassPeeringSet:
 		return child == types.ClassPeeringSet
-	}
-	return false
-}
-
-// isAnySet reports whether n is one of the names that denote the whole IRR.
-// AS-ANY and RS-ANY are RFC 2622 §5.3's; RTRS-ANY, PRNG-ANY and FLTR-ANY have
-// no basis in the RFC and are refused alike. It reads the name only, so a
-// registry scope on a reference to one (RIPE::AS-ANY) is ignored, and a
-// hierarchical name with an AS-ANY component (AS208301:AS-ANY) is an ordinary
-// set.
-func isAnySet(n types.SetName) bool {
-	switch n.String() {
-	case "AS-ANY", "RS-ANY", "RTRS-ANY", "PRNG-ANY", "FLTR-ANY":
-		return true
 	}
 	return false
 }

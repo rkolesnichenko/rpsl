@@ -387,7 +387,7 @@ func (ev *filterEval) eval(f policy.Filter, depth int) (rangeSetOf, error) {
 	case policy.FilterSetRef:
 		return ev.setRef(x.Name, x.Op, depth)
 	case policy.FilterASExpr:
-		if ref, ok := x.AS.(policy.ASSetRef); ok && ev.anyAll && isAnySet(ref.Name) {
+		if ref, ok := x.AS.(policy.ASSetRef); ok && ev.anyAll && ref.Name.IsAny() {
 			return ev.setRef(ref.Name, x.Op, depth)
 		}
 		as, err := ev.asExpr(x.AS, depth)
@@ -426,7 +426,7 @@ func (ev *filterEval) setRef(n types.SetName, op types.RangeOperator, depth int)
 	if ev.skipSet(n) {
 		return rangeSetOf{}, nil
 	}
-	if isAnySet(n) {
+	if n.IsAny() {
 		if !ev.anyAll {
 			return nil, &AnySetError{Name: n}
 		}
@@ -483,7 +483,7 @@ func (ev *filterEval) topValue(ref types.SetRef) (rangeSetOf, error) {
 	if err := ev.visit(1); err != nil {
 		return nil, err
 	}
-	if isAnySet(ref.Name()) {
+	if ref.Name().IsAny() {
 		return nil, &AnySetError{Name: ref.Name()}
 	}
 	return ev.filterSetValue(ref, 0)
@@ -631,7 +631,7 @@ func (ev *filterEval) asExpr(e policy.ASExpr, depth int) (map[types.ASN]bool, er
 		if ev.skipSet(x.Name) {
 			return map[types.ASN]bool{}, nil
 		}
-		if isAnySet(x.Name) {
+		if x.Name.IsAny() {
 			return nil, &AnySetError{Name: x.Name}
 		}
 		set, err := ev.asSet(x.Name)

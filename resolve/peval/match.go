@@ -160,7 +160,7 @@ func (c *call) asExpr(e policy.ASExpr) (bool, error) {
 // once per call, with Exclude cleared (see Evaluator). AS-ANY, and a set
 // reaching it, hold every AS.
 func (c *call) inASSet(n types.SetName) (bool, error) {
-	if strings.EqualFold(n.String(), "AS-ANY") {
+	if n.IsAny() {
 		return true, nil
 	}
 	m, ok := c.asns[n]

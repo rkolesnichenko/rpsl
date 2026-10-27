@@ -825,9 +825,6 @@ func pathPeerDependent(e policy.ASPathExpr) bool {
 	return false
 }
 
-// anySets are the names that denote the whole IRR: no lookup finds them.
-var anySets = map[string]bool{"AS-ANY": true, "RS-ANY": true, "RTRS-ANY": true, "PRNG-ANY": true, "FLTR-ANY": true}
-
 // sets looks up, once each, every set an import, export or default attribute
 // names directly — as-sets and peering-sets in its peerings, sets and as-sets
 // in its filters — and reports the missing ones against the attribute, with
@@ -928,7 +925,7 @@ func filterSets(out []types.SetName, f policy.Filter) []types.SetName {
 }
 
 func addSet(out []types.SetName, n types.SetName) []types.SetName {
-	if anySets[n.String()] || slices.Contains(out, n) {
+	if n.IsAny() || slices.Contains(out, n) {
 		return out
 	}
 	return append(out, n)
