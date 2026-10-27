@@ -29,6 +29,7 @@ synthetic shape (`no-trailing-newline.txt`).
 | `mntner-ripe.txt` | `mntner` with multi-line `auth:` (kept raw). |
 | `inetnum.txt`, `organisation.txt`, `peering-set.txt` | Class-coverage fixtures. |
 | `inetnum-lacnic.txt` | Synthetic LACNIC-shaped inetnums: the key a prefix, abbreviated or not, and LACNIC's `city:`. |
+| `aut-num-lacnic.txt` | A synthetic LACNIC-shaped aut-num: the key a bare number (`aut-num: 64500`). |
 | `remarks-gnarly.txt` | `remarks:` block with `+`-continuation including blank lines — the classic round-trip breaker. |
 | `no-trailing-newline.txt` | Object that ends without a trailing newline. |
 | `dump-multi.txt` | Multiple blank-line-separated objects (streaming-parser fixture). |

@@ -42,7 +42,7 @@ func decodeAutNum(d *decoder) AutNum {
 	an := AutNum{
 		Common:   d.common("aut-num"),
 		Registry: d.registry("aut-num"),
-		AS:       d.asn("aut-num", "object/aut-num-as"),
+		AS:       d.autNumAS(),
 		AsName:   d.str("as-name"),
 		MemberOf: d.memberOf("aut-num", types.ClassAsSet),
 		Status:   d.str("status"),

@@ -172,6 +172,35 @@ func (d *decoder) asn(name, rule string) types.ASN {
 	return v
 }
 
+// autNumAS decodes an aut-num's key. LACNIC's whois dump writes every one as a
+// bare number ("aut-num: 278"), which reads as that AS, with a Warning; any
+// other value, an empty one included, is an AS number as RPSL writes it
+// ("AS278", "AS1.10"), read by asn.
+func (d *decoder) autNumAS() types.ASN {
+	const rule = "object/aut-num-as"
+	a, ok := d.o.GetFirst("aut-num")
+	if !ok || !isDecimal(scalar(a)) {
+		return d.asn("aut-num", rule)
+	}
+	as, err := types.ParseASN("AS" + scalar(a))
+	if err != nil {
+		d.errf(a, rule, fmt.Sprintf("%q is no AS number (0 to 4294967295)", scalar(a)))
+		return 0
+	}
+	d.warnf(a, "object/aut-num-bare-number", fmt.Sprintf("%q has no AS prefix; it is read as %s", scalar(a), as))
+	return as
+}
+
+// isDecimal reports whether s is one or more ASCII digits.
+func isDecimal(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
+
 // prefix parses the first value of name as a netip.Prefix.
 func (d *decoder) prefix(name, rule string) netip.Prefix {
 	a, ok := d.o.GetFirst(name)

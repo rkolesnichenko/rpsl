@@ -32,6 +32,7 @@ attribute of it.
 | `object/empty-key` | Error | The class attribute (the key) has no value. |
 | `object/<class>-<attr>` | Error | A value of `<attr>` could not be parsed and is missing from the struct, e.g. `object/route-origin`, `object/aut-num-member-of`, `object/as-set-members`, `object/route-ping-hdl`. |
 | `object/<class>-name`, `object/route-prefix`, `object/route6-prefix`, `object/aut-num-as` | Error | The class key — a set name, a route prefix, an AS number — could not be parsed; the key field is left empty. |
+| `object/aut-num-bare-number` | Warning | An aut-num key written as a bare number (`aut-num: 278`), as LACNIC's whois dump writes every one, instead of `AS278`; it is read as that AS. Only the key: a bare number in `origin:` or elsewhere is still an Error. |
 | `object/inetnum-range`, `object/as-block-range` | Error | A range that is reversed or not `lo - hi`, or (inetnum) a key that is neither two IPv4 addresses nor an IPv4 prefix (`object/inetnum-prefix-key`); the range is left empty. |
 | `object/inet6num-prefix` | Error | An inet6num key that is not an IPv6 prefix. |
 | `object/inetnum-prefix-key` | Warning | An inetnum key written as an IPv4 prefix (`200.16.0.0/16`, abbreviated `2.152.0/22`), as LACNIC's whois dump writes every one, instead of `lo - hi`; it is read as the prefix's range. |

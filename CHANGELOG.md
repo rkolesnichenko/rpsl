@@ -32,6 +32,15 @@ same version (see [RELEASING.md](RELEASING.md)).
   none: a creation needs its parent's consent, and a deletion keyed
   `192.0.2.77/24` finds a stored `192.0.2.0 - 192.0.2.255` and needs its
   maintainers.
+- `object`: an aut-num key written as a bare number, as LACNIC's whois dump
+  writes every one (`aut-num: 278`), now decodes to that AS with a Warning
+  (`object/aut-num-bare-number`), where it was an `object/aut-num-as` Error
+  with AS0. Only the key: a bare number in `origin:` or `local-as:` is still
+  an Error.
+- `auth`: such an aut-num is authorised as that AS's (its as-block's consent
+  for a creation, which looked for an as-block holding AS0), and
+  `MemDatabase` keys `aut-num: 64500` as `AS64500`, so a deletion or
+  modification keyed either way finds the stored object.
 
 ## [0.31.0] - 2026-10-27
 

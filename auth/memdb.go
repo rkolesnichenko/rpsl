@@ -199,12 +199,17 @@ func primaryKey(o object.Object) (class, key string, ok bool) {
 	return class, key, key != ""
 }
 
-// normalKey puts a key of class in canonical form: AS numbers as asplain,
-// set names as types.SetName writes them, anything else upper-cased.
+// normalKey puts a key of class in canonical form: AS numbers as asplain
+// (a bare number too, as LACNIC writes an aut-num's key and object.Decode
+// reads it), set names as types.SetName writes them, anything else
+// upper-cased.
 func normalKey(class, key string) string {
 	key = strings.TrimSpace(key)
 	switch class {
 	case "aut-num":
+		if strings.Trim(key, "0123456789") == "" && key != "" {
+			key = "AS" + key
+		}
 		if as, err := types.ParseASN(key); err == nil {
 			return as.String()
 		}
