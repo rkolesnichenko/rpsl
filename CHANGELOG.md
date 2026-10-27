@@ -19,6 +19,15 @@ same version (see [RELEASING.md](RELEASING.md)).
   `Attribute.ValueWithComments` returns it with no allocation. For a raw whose
   first line starts no attribute, `lexer.ValueWithComments` gives `""`.
 
+### Changed
+
+- `object`: an inetnum key written as an IPv4 prefix, as LACNIC's whois dump
+  writes every one (`inetnum: 200.16.0.0/16`, abbreviated `2.152.0/22`), now
+  decodes to the prefix's range in `Inetnum.Lo`/`Hi` with a Warning
+  (`object/inetnum-prefix`), where it was an `object/inetnum-range` Error with
+  an empty range. A prefix with host bits set reads as its network's range,
+  with `object/inetnum-host-bits`.
+
 ## [0.31.0] - 2026-10-27
 
 ### Added

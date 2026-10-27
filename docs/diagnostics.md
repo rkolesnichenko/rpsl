@@ -32,8 +32,9 @@ attribute of it.
 | `object/empty-key` | Error | The class attribute (the key) has no value. |
 | `object/<class>-<attr>` | Error | A value of `<attr>` could not be parsed and is missing from the struct, e.g. `object/route-origin`, `object/aut-num-member-of`, `object/as-set-members`, `object/route-ping-hdl`. |
 | `object/<class>-name`, `object/route-prefix`, `object/route6-prefix`, `object/aut-num-as` | Error | The class key — a set name, a route prefix, an AS number — could not be parsed; the key field is left empty. |
-| `object/inetnum-range`, `object/as-block-range` | Error | A range that is not `lo - hi`, is reversed, or (inetnum) is not two IPv4 addresses. |
+| `object/inetnum-range`, `object/as-block-range` | Error | A range that is not `lo - hi`, is reversed, or (inetnum) is not two IPv4 addresses nor an IPv4 prefix. |
 | `object/inet6num-prefix` | Error | An inet6num key that is not an IPv6 prefix. |
+| `object/inetnum-prefix` | Warning | An inetnum key written as an IPv4 prefix (`200.16.0.0/16`, abbreviated `2.152.0/22`), as LACNIC's whois dump writes every one, instead of `lo - hi`; it is read as the prefix's range. |
 | `object/<class>-members`, `-mp-members` | Warning | A nested set of a class the container may not list (an `RS-` set in an as-set). |
 | `object/<class>-members-host-bits`, `-mp-members-host-bits` | Warning | A prefix member with host bits set; it is read with them cleared. |
 | `object/<class>-members-no-length`, `-mp-members-no-length` | Warning | A prefix member written as an address without a length (`206.197.238.0`); it is read as the host prefix, /32 or /128, as IRRd reads it. |
@@ -43,7 +44,7 @@ attribute of it.
 | `object/list-line-break` | Warning | Items of a list separated by a line break without a comma (`members: AS1`, continued by a line `AS2`); they are read as separate items, as IRRd does. Once per attribute, at the first such item. |
 | `object/<class>-name-class` | Warning | A set named like another class (`route-set: AS-FOO`). |
 | `object/route-afi`, `object/route6-afi` | Warning | An IPv6 `route` or IPv4 `route6`. |
-| `object/<class>-host-bits` | Warning | A route, route6 or inet6num prefix with host bits set. |
+| `object/<class>-host-bits` | Warning | A route, route6 or inet6num prefix with host bits set, or an inetnum key written as such a prefix (read as the network's range). |
 | `object/<class>-holes-host-bits` | Warning | A `holes:` prefix with host bits set; it is read with them cleared. |
 | `object/<class>-leading-zeros` | Warning | An IPv4 address or prefix with zero-padded octets (`064.006.160.000/19`), in any attribute; the octets are read as decimal, as RPSL writes addresses and IRRd reads them. |
 | `object/<class>-abbreviated-prefix` | Warning | An IPv4 prefix written with fewer than four octets (`143.208.148/22`), in any attribute; the missing octets are read as zero, as IRRd reads them. |

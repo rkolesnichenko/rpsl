@@ -28,6 +28,7 @@ synthetic shape (`no-trailing-newline.txt`).
 | `route-radb.txt` | RADB-style `route` with mixed casing. |
 | `mntner-ripe.txt` | `mntner` with multi-line `auth:` (kept raw). |
 | `inetnum.txt`, `organisation.txt`, `peering-set.txt` | Class-coverage fixtures. |
+| `inetnum-lacnic.txt` | Synthetic LACNIC-shaped inetnums: the key a prefix, abbreviated or not, and LACNIC's `city:`. |
 | `remarks-gnarly.txt` | `remarks:` block with `+`-continuation including blank lines — the classic round-trip breaker. |
 | `no-trailing-newline.txt` | Object that ends without a trailing newline. |
 | `dump-multi.txt` | Multiple blank-line-separated objects (streaming-parser fixture). |

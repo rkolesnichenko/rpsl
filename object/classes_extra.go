@@ -10,7 +10,8 @@ import (
 )
 
 // Inetnum is an inetnum object: an IPv4 address range with registration data
-// (RIPE). Lo/Hi bound the range "lo - hi"; Country may repeat.
+// (RIPE). Lo/Hi bound the range "lo - hi", or the prefix LACNIC writes in its
+// place ("200.16.0.0/16", with a Warning); Country may repeat.
 type Inetnum struct {
 	Common
 	Registry

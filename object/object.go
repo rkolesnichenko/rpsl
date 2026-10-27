@@ -211,14 +211,18 @@ func abbreviatedMessage(text, canonical string) string {
 }
 
 // addrRange parses the first value of name as an inetnum address range
-// "lo - hi" (e.g. "192.0.2.0 - 192.0.2.255") of IPv4 addresses with lo <= hi.
-// Returns the zero Addrs on failure.
+// "lo - hi" (e.g. "192.0.2.0 - 192.0.2.255") of IPv4 addresses with lo <= hi,
+// or an IPv4 prefix as LACNIC writes it (prefixRange). Returns the zero Addrs
+// on failure.
 func (d *decoder) addrRange(name, rule string) (lo, hi netip.Addr) {
 	a, ok := d.o.GetFirst(name)
 	if !ok || d.emptyKey(a) {
 		return netip.Addr{}, netip.Addr{}
 	}
 	l, h, found := strings.Cut(scalar(a), "-")
+	if !found && strings.Contains(scalar(a), "/") {
+		return d.prefixRange(a, name, rule)
+	}
 	if !found {
 		d.errf(a, rule, "expected 'lo - hi' address range")
 		return netip.Addr{}, netip.Addr{}
@@ -239,6 +243,38 @@ func (d *decoder) addrRange(name, rule string) (lo, hi netip.Addr) {
 		return lo, hi
 	}
 	return netip.Addr{}, netip.Addr{}
+}
+
+// prefixRange reads an inetnum key written as an IPv4 prefix, as LACNIC's
+// whois dump writes every one ("200.16.0.0/16", abbreviated "2.152.0/22"),
+// as the prefix's address range, with a Warning. A prefix with host bits set
+// reads as its network's range, with another; padding and abbreviation are
+// reported as for any prefix.
+func (d *decoder) prefixRange(a ast.Attribute, name, rule string) (lo, hi netip.Addr) {
+	p := d.prefix(name, rule)
+	switch {
+	case !p.IsValid():
+		return netip.Addr{}, netip.Addr{}
+	case !p.Addr().Is4():
+		d.errf(a, rule, "address range "+scalar(a)+" is not IPv4")
+		return netip.Addr{}, netip.Addr{}
+	case p != p.Masked():
+		d.warnf(a, "object/"+d.o.Class()+"-host-bits",
+			fmt.Sprintf("prefix %s has host bits set; the network is %s", p, p.Masked()))
+	}
+	p = p.Masked()
+	lo, hi = p.Addr(), lastAddr4(p)
+	d.warnf(a, "object/"+d.o.Class()+"-prefix",
+		fmt.Sprintf("%q is a prefix, not a 'lo - hi' range; it is read as %s - %s", scalar(a), lo, hi))
+	return lo, hi
+}
+
+// lastAddr4 returns the last address of an IPv4 prefix with its host bits clear.
+func lastAddr4(p netip.Prefix) netip.Addr {
+	a := p.Addr().As4()
+	v := uint32(a[0])<<24 | uint32(a[1])<<16 | uint32(a[2])<<8 | uint32(a[3])
+	v |= uint32(uint64(1)<<(32-p.Bits()) - 1)
+	return netip.AddrFrom4([4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)})
 }
 
 // asnRange parses the first value of name as an as-block range "ASlo - AShi"
