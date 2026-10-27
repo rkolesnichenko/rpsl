@@ -30,6 +30,17 @@ type Attribute struct {
 	lead string
 }
 
+// ValueWithComments returns Value with its comments kept: a '#' and what
+// follows it stay on each line (lexer.ValueWithComments). Registries write
+// '#' as text in free-form attributes such as descr:, address: and netname:;
+// Value cuts there. Without a '#' in Raw it is Value, and costs nothing.
+func (a Attribute) ValueWithComments() string {
+	if !strings.Contains(a.Raw, "#") {
+		return a.Value
+	}
+	return lexer.ValueWithComments(a.Raw)
+}
+
 // SpanAt returns a precise source span for the half-open value range
 // [valStart, valEnd), translated through the segment map. It falls back to the
 // whole-attribute Span when no segment map is present.

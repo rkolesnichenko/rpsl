@@ -132,7 +132,7 @@ func TokenizeAt(src string, line, byteOffset int) []Token {
 			cur.Span.EndLine = lineBase + pl.line
 			cur.Span.EndCol = len(pl.text) + 1
 			cur.Span.EndByte = byteOffset + endByte
-			val, off := contValue(pl.text)
+			val, off := contValue(pl.text, false)
 			segs = append(segs, val)
 			cur.Segments = append(cur.Segments, Segment{
 				ValStart: valOff, ValEnd: valOff + len(val),
@@ -284,9 +284,10 @@ func splitAttr(text string) (name, value string, valOff int) {
 // contValue computes the logical value contributed by a continuation line (the
 // leading space/tab/'+' marker is dropped, comments are stripped, surrounding
 // whitespace trimmed) and the byte offset of its first character within the line.
-func contValue(text string) (value string, valOff int) {
+// With keepComment the comment stays (ValueWithComments).
+func contValue(text string, keepComment bool) (value string, valOff int) {
 	content := text
-	if h := strings.IndexByte(content, '#'); h >= 0 {
+	if h := strings.IndexByte(content, '#'); h >= 0 && !keepComment {
 		content = content[:h]
 	}
 	if content == "" {
@@ -296,6 +297,32 @@ func contValue(text string) (value string, valOff int) {
 		return trimPos(content, 1)
 	}
 	return trimPos(content, 0)
+}
+
+// ValueWithComments returns an attribute's logical value with its comments
+// kept: like Token.Value, the name line's text after the ':' and each
+// continuation line's after its marker, each trimmed of spaces and tabs and
+// joined with "\n", except that a '#' and what follows it stay on the line.
+// raw is the attribute token's Raw. Registries write '#' as text in free-form
+// attributes ("descr: Shaw Tower # 16-02/03", "netname: DATA#LIMITED"), which
+// Value, following RFC 2622, cuts at the '#'. When raw holds no '#' the two
+// are equal.
+func ValueWithComments(raw string) string {
+	var segs []string
+	first := true
+	for pl := range scanLines(raw) {
+		if first {
+			first = false
+			if idx := strings.IndexByte(pl.text, ':'); idx >= 0 {
+				v, _ := trimPos(pl.text, idx+1)
+				segs = append(segs, v)
+			}
+			continue
+		}
+		v, _ := contValue(pl.text, true)
+		segs = append(segs, v)
+	}
+	return strings.Join(segs, "\n")
 }
 
 // trimPos returns the whitespace-trimmed value of content[from:] together with

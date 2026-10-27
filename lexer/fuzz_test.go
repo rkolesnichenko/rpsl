@@ -89,6 +89,11 @@ func checkToken(t *testing.T, src string, i int, tk Token) {
 	if name := CanonicalName(first[:strings.IndexByte(first, ':')]); name != tk.Name {
 		t.Fatalf("token %d: name %q, but its line names %q", i, tk.Name, name)
 	}
+	// ValueWithComments is Value with each line's comment kept.
+	with := ValueWithComments(tk.Raw)
+	if stripComments(with) != tk.Value || (!strings.Contains(tk.Raw, "#") && with != tk.Value) {
+		t.Fatalf("token %d: ValueWithComments %q is not value %q with its comments", i, with, tk.Value)
+	}
 	if len(tk.Segments) == 0 || tk.Segments[0].ValStart != 0 || tk.Segments[len(tk.Segments)-1].ValEnd != len(tk.Value) {
 		t.Fatalf("token %d: segments %+v do not cover value %q", i, tk.Segments, tk.Value)
 	}

@@ -83,7 +83,7 @@ Rules it must get right:
 
 - **Attribute lines** are `name:` followed by a value. `name` is case-insensitive in practice (RIPE lowercases; RADB is mixed).
 - **Continuation** of a value onto the next line happens when the next line begins with a space, a tab, or a `+`. A lone `+` continuation line means "a blank line is part of the value" (used in `remarks:` / `descr:`). This single rule breaks naive `strings.Split(s, "\n")` parsers.
-- **Comments** start with `#` and run to end of line — *anywhere*, including mid-value. They must be stripped for semantic parsing but preserved for lossless round-trip, so the token carries both the raw and the comment-stripped span.
+- **Comments** start with `#` and run to end of line — *anywhere*, including mid-value. They must be stripped for semantic parsing but preserved for lossless round-trip, so the token carries both the raw and the comment-stripped span. Registries also write `#` as text in free-form attributes, which the RFC rule cuts: in the RIPE, APNIC, AFRINIC and LACNIC whois dumps (2026), about 28,000 `descr:` values (`Shaw Tower # 16-02/03`, `House # 1`), 338 `netname:`s (`DATA#LIMITED`) and LACNIC `city:`s (`Ia&#351;i`). So `lexer.ValueWithComments` (and `ast.Attribute.ValueWithComments`) gives the continuation-joined value with each line's `#` and what follows it kept, derived from `Raw` and equal to `Value` when there is no `#`; a consumer chooses per attribute.
 - **Object boundaries** are one or more blank lines. But inside a `remarks:` block a "blank" line is really a `+` continuation, so boundary detection happens *after* folding, not before.
 - **EOF without trailing newline**, `\r\n` vs `\n`, trailing whitespace, and tabs-vs-spaces all appear in the wild.
 
