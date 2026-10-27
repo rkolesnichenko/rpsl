@@ -211,6 +211,37 @@ func TestClaimAllowedASCIIFold(t *testing.T) {
 	}
 }
 
+// An aut-num whose key is a bare number ("aut-num: 64500", as LACNIC's whois
+// dump writes every one) decodes to that AS, with a Warning, but the engine
+// keeps it out as it did before Decode read such keys: IRR data writes
+// "AS64500", and the whois dump's policy-less copy of an AS, under the same
+// source as the IRR's, must not claim membership nor stand in for it.
+func TestBareAutNumKeysStayOut(t *testing.T) {
+	ctx := context.Background()
+	bare := "aut-num: 64500\nas-name: STUB\nmember-of: AS-TOP\nmnt-by: M\nsource: TEST\n"
+	irr := "aut-num: AS64500\nas-name: IRR\nimport: from AS1 accept ANY\nmnt-by: M\nsource: TEST\n"
+	if an := decode(t, bare).(*object.AutNum); an.AS != 64500 {
+		t.Fatalf("Decode reads %v, want AS64500", an.AS)
+	}
+
+	src := corpus(t, "as-set: AS-TOP\nmembers: AS1\nmbrs-by-ref: ANY\nsource: TEST\n", bare, irr)
+	got, err := (&Expander{Src: src}).ExpandAS(ctx, types.Ref(mustSet(t, "AS-TOP")))
+	if err != nil || fmt.Sprint(asnList(got)) != "[1]" {
+		t.Errorf("ExpandAS(AS-TOP) = %v, %v; want [1]: the bare aut-num's member-of: does not count", asnList(got), err)
+	}
+	if an, err := src.AutNum(ctx, 64500, "TEST"); err != nil || an.AsName != "IRR" {
+		t.Errorf("AutNum(AS64500) = %+v, %v; want the IRR's", an, err)
+	}
+
+	c := &Corpus{KeepPolicy: true}
+	if c.Put(decode(t, bare)) {
+		t.Error("Corpus.Put took the bare aut-num")
+	}
+	if !c.Put(decode(t, irr)) || !c.Delete("aut-num", "AS64500", "TEST") {
+		t.Error("Corpus: the IRR's aut-num is not put and deleted by its AS")
+	}
+}
+
 // An aut-num whose key does not decode is no AS at all: it must not claim
 // membership as AS0, nor a route whose origin does not decode be AS0's. A real
 // AS0 is still AS0.

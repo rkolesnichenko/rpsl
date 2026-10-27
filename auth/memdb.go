@@ -207,10 +207,11 @@ func normalKey(class, key string) string {
 	key = strings.TrimSpace(key)
 	switch class {
 	case "aut-num":
-		if strings.Trim(key, "0123456789") == "" && key != "" {
-			key = "AS" + key
+		text := key // "" stays "": "AS" is no AS number
+		if strings.Trim(key, "0123456789") == "" {
+			text = "AS" + key
 		}
-		if as, err := types.ParseASN(key); err == nil {
+		if as, err := types.ParseASN(text); err == nil {
 			return as.String()
 		}
 	case "as-set", "route-set", "rtr-set", "peering-set", "filter-set":

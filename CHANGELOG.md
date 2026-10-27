@@ -41,6 +41,10 @@ same version (see [RELEASING.md](RELEASING.md)).
   for a creation, which looked for an as-block holding AS0), and
   `MemDatabase` keys `aut-num: 64500` as `AS64500`, so a deletion or
   modification keyed either way finds the stored object.
+- `resolve`: the engine still keeps such an aut-num out — no membership
+  claim, no policy, nothing for `Corpus.Put` — as before `Decode` read its key:
+  IRR data writes `AS64500`, and LACNIC's whois dump holds a policy-less copy
+  of nearly every AS its IRR dump holds, under the same `source:`.
 
 ## [0.31.0] - 2026-10-27
 

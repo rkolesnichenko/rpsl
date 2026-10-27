@@ -22,14 +22,19 @@ type warnedCase struct {
 }
 
 // runWarned authorises each case's object as decoded, Warnings and all, after
-// check confirms the decode is the one the case is about.
-func runWarned(t *testing.T, check func(object.Object) bool, cases []warnedCase) {
+// confirming the decode is the one the case is about: it carries a Warning
+// under rule, and check holds.
+func runWarned(t *testing.T, rule string, check func(object.Object) bool, cases []warnedCase) {
 	t.Helper()
 	for _, c := range cases {
 		raw, _ := rpsl.ParseObject(c.obj)
 		obj, ds := rpsl.Decode(raw)
-		if len(ds) == 0 || !check(obj) {
-			t.Fatalf("%s: %q decoded with %v, not the Warning and value the case is about", c.name, c.obj, ds)
+		warned := false
+		for _, d := range ds {
+			warned = warned || (d.Rule == rule && d.Severity == rpsl.Warning)
+		}
+		if !warned || !check(obj) {
+			t.Fatalf("%s: %q decoded with %v, not the %s Warning and value the case is about", c.name, c.obj, ds, rule)
 		}
 		srcs := []string{c.stored}
 		for _, m := range testMntners {
@@ -59,7 +64,7 @@ func runWarned(t *testing.T, check func(object.Object) bool, cases []warnedCase)
 func TestRIPEInetnumPrefixKey(t *testing.T) {
 	created := "inetnum: 192.0.2.0/24\nnetname: NEW\nmnt-by: MNT-OWN\nsource: RIPE\n"
 	hostBits := "inetnum: 192.0.2.77/24\nnetname: NEW\nmnt-by: MNT-OWN\nsource: RIPE\n"
-	runWarned(t, func(o object.Object) bool { return o.(*object.Inetnum).Lo.String() == "192.0.2.0" }, []warnedCase{
+	runWarned(t, "object/inetnum-prefix-key", func(o object.Object) bool { return o.(*object.Inetnum).Lo.String() == "192.0.2.0" }, []warnedCase{
 		{"create: the parent's mnt-lower", bigInetnum, Create, created, []string{"MNT-OWN", "MNT-LOWER"}, true, "parent inetnum 192.0.0.0 - 192.0.255.255"},
 		{"create: without the parent", bigInetnum, Create, created, []string{"MNT-OWN"}, false, "parent inetnum 192.0.0.0 - 192.0.255.255"},
 		{"create, host bits: the parent's mnt-lower", bigInetnum, Create, hostBits, []string{"MNT-OWN", "MNT-LOWER"}, true, "parent inetnum 192.0.0.0 - 192.0.255.255"},
@@ -75,9 +80,28 @@ func TestRIPEInetnumPrefixKey(t *testing.T) {
 func TestRIPEAutNumBareNumber(t *testing.T) {
 	block := "as-block: AS64000 - AS64999\nmnt-by: MNT-PARENT\nsource: RIPE\n"
 	created := "aut-num: 64500\nas-name: X\nmnt-by: MNT-OWN\nsource: RIPE\n"
-	runWarned(t, func(o object.Object) bool { return o.(*object.AutNum).AS == 64500 }, []warnedCase{
+	runWarned(t, "object/aut-num-bare-number", func(o object.Object) bool { return o.(*object.AutNum).AS == 64500 }, []warnedCase{
 		{"create: the as-block's maintainer", block, Create, created, []string{"MNT-OWN", "MNT-PARENT"}, true, "as-block AS64000 - AS64999"},
 		{"create: without the as-block", block, Create, created, []string{"MNT-OWN"}, false, "as-block AS64000 - AS64999"},
 		{"delete: the stored AS64500", "aut-num: AS64500\nas-name: X\nmnt-by: MNT-OWN\nsource: RIPE\n", Delete, created, []string{"MNT-OWN"}, true, "stored object's maintainers"},
 	})
+}
+
+// MemDatabase keys an aut-num by its AS, written either way; a key that is no
+// AS stays as written (upper-cased), and an empty one stays empty, never "AS".
+func TestNormalAutNumKey(t *testing.T) {
+	for key, want := range map[string]string{
+		"AS64500":    "AS64500",
+		"as64500":    "AS64500",
+		"64500":      "AS64500",
+		" 64500 ":    "AS64500",
+		"AS1.10":     "AS65546",
+		"4294967296": "4294967296",
+		"AS-X":       "AS-X",
+		"":           "",
+	} {
+		if got := normalKey("aut-num", key); got != want {
+			t.Errorf("normalKey(aut-num, %q) = %q, want %q", key, got, want)
+		}
+	}
 }

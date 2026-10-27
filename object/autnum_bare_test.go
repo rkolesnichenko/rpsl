@@ -27,7 +27,6 @@ func TestAutNumBareNumber(t *testing.T) {
 		{"-278", 0, "object/aut-num-as"},
 		{"27 8", 0, "object/aut-num-as"},
 		{"", 0, "object/empty-key"}, // reported once
-
 	}
 	for _, c := range cases {
 		obj, diags := Decode(parse("aut-num: " + c.key + "\nas-name: X\n"))
@@ -42,6 +41,8 @@ func TestAutNumBareNumber(t *testing.T) {
 			t.Errorf("%q: %v, want one %s", c.key, diags, c.rule)
 		case c.rule == "object/aut-num-bare-number" && (diags[0].Severity.String() != "warning" || !strings.Contains(diags[0].Message, "AS"+strings.TrimLeft(c.key, "0"))):
 			t.Errorf("%q: %v, want a Warning naming the AS it reads", c.key, diags[0])
+		case c.rule != "" && c.rule != "object/aut-num-bare-number" && diags[0].Severity.String() != "error":
+			t.Errorf("%q: %v, want an Error: the AS is dropped", c.key, diags[0])
 		}
 	}
 
