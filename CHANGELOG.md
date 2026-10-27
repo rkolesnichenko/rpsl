@@ -9,6 +9,8 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-10-27
+
 ### Added
 
 - `types`: `SetName.IsAny` reports whether a name is AS-ANY, RS-ANY,
@@ -1416,7 +1418,8 @@ The first release. There is no earlier version to migrate from.
   values do; a few common RP-attributes have typed helpers.
 - **`rdap` is not a `Source`.** RDAP serves registration data, not IRR sets.
 
-[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.30.2...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/rpsl/compare/v0.31.0...HEAD
+[0.31.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.30.2...v0.31.0
 [0.30.2]: https://github.com/rkolesnichenko/rpsl/compare/v0.30.1...v0.30.2
 [0.30.1]: https://github.com/rkolesnichenko/rpsl/compare/v0.30.0...v0.30.1
 [0.30.0]: https://github.com/rkolesnichenko/rpsl/compare/v0.29.0...v0.30.0
