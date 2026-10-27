@@ -251,7 +251,11 @@ func (d *decoder) addrRange(name, rule string) (lo, hi netip.Addr) {
 // reads as its network's range, with another; padding and abbreviation are
 // reported as for any prefix.
 func (d *decoder) prefixRange(a ast.Attribute, name, rule string) (lo, hi netip.Addr) {
-	p := d.prefix(name, rule)
+	if _, err := types.ParsePrefix(scalar(a)); err != nil {
+		d.errf(a, rule, "expected 'lo - hi' or an IPv4 prefix: "+err.Error())
+		return netip.Addr{}, netip.Addr{}
+	}
+	p := d.prefix(name, rule) // parses again, to report padding and abbreviation
 	switch {
 	case !p.IsValid():
 		return netip.Addr{}, netip.Addr{}
@@ -264,7 +268,7 @@ func (d *decoder) prefixRange(a ast.Attribute, name, rule string) (lo, hi netip.
 	}
 	p = p.Masked()
 	lo, hi = p.Addr(), lastAddr4(p)
-	d.warnf(a, "object/"+d.o.Class()+"-prefix",
+	d.warnf(a, "object/"+d.o.Class()+"-prefix-key",
 		fmt.Sprintf("%q is a prefix, not a 'lo - hi' range; it is read as %s - %s", scalar(a), lo, hi))
 	return lo, hi
 }

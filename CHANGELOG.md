@@ -24,9 +24,14 @@ same version (see [RELEASING.md](RELEASING.md)).
 - `object`: an inetnum key written as an IPv4 prefix, as LACNIC's whois dump
   writes every one (`inetnum: 200.16.0.0/16`, abbreviated `2.152.0/22`), now
   decodes to the prefix's range in `Inetnum.Lo`/`Hi` with a Warning
-  (`object/inetnum-prefix`), where it was an `object/inetnum-range` Error with
-  an empty range. A prefix with host bits set reads as its network's range,
-  with `object/inetnum-host-bits`.
+  (`object/inetnum-prefix-key`), where it was an `object/inetnum-range` Error
+  with an empty range. A prefix with host bits set reads as its network's
+  range, with `object/inetnum-host-bits`.
+- `auth`: since `auth` acts on the decoded range, such an inetnum is now
+  authorised as the inetnum of that range, where it was refused for having
+  none: a creation needs its parent's consent, and a deletion keyed
+  `192.0.2.77/24` finds a stored `192.0.2.0 - 192.0.2.255` and needs its
+  maintainers.
 
 ## [0.31.0] - 2026-10-27
 

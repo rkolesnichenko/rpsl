@@ -135,7 +135,7 @@ func TestDiagnosticRulesAreDocumented(t *testing.T) {
 		{"object/aut-num-as", obj("aut-num: 65000\n")},
 		{"object/as-set-name", obj("as-set: AS-X!\n")},
 		{"object/inetnum-range", obj("inetnum: 192.0.2.9 - 192.0.2.1\n")},
-		{"object/inetnum-prefix", obj("inetnum: 200.16.0.0/16\n")},
+		{"object/inetnum-prefix-key", obj("inetnum: 200.16.0.0/16\n")},
 		{"object/inetnum-host-bits", obj("inetnum: 200.16.248.5/24\n")},
 		{"object/as-block-range", obj("as-block: AS9 - AS1\n")},
 		{"object/inet6num-prefix", obj("inet6num: 192.0.2.0/24\n")},
