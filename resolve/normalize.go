@@ -317,7 +317,7 @@ func (n *normalizer) symbolic(f policy.Filter, inSet, neg bool, seen map[string]
 	case policy.FilterAnd:
 		return n.anySymbolic(x.Terms, inSet, neg, seen)
 	case policy.FilterSetRef:
-		if x.Name.Class() != types.ClassFilterSet || isAnySet(x.Name) ||
+		if x.Name.Class() != types.ClassFilterSet || x.Name.IsAny() ||
 			!neg && (inSet || !n.ev.cur.IsZero()) && n.ev.ex.set(x.Name) {
 			return false, nil
 		}
@@ -525,7 +525,7 @@ func (n *normalizer) path(x policy.FilterPathRE) (PathMatch, error) {
 	pm := PathMatch{RE: re, Sets: map[types.SetName]ASNSet{}}
 	ev := n.noEx
 	for _, name := range re.SetNames() {
-		if isAnySet(name) {
+		if name.IsAny() {
 			continue
 		}
 		s, err := ev.pathSet(name)

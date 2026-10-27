@@ -1,8 +1,6 @@
 package consist
 
 import (
-	"strings"
-
 	"github.com/rkolesnichenko/rpsl/policy"
 	"github.com/rkolesnichenko/rpsl/resolve"
 	"github.com/rkolesnichenko/rpsl/types"
@@ -87,7 +85,7 @@ func onesAll(e policy.ASPathExpr, sets map[types.SetName]resolve.ASNSet) bool {
 	case policy.ASPathAny:
 		return true
 	case policy.ASPathSet:
-		if strings.EqualFold(e.Name.String(), "AS-ANY") {
+		if e.Name.IsAny() {
 			return true
 		}
 		s, ok := sets[e.Name]

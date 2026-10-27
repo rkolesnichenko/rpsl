@@ -151,6 +151,20 @@ func (n SetName) String() string { return n.canon }
 // IsZero reports whether n is the zero SetName (never produced by ParseSetName).
 func (n SetName) IsZero() bool { return n.canon == "" }
 
+// IsAny reports whether n is one of the names that denote the whole IRR rather
+// than a set: AS-ANY and RS-ANY, which RFC 2622 §5.3 reserves, and RTRS-ANY,
+// PRNG-ANY and FLTR-ANY, which have no basis in the RFC and are treated alike.
+// No registry holds a set by these names. A hierarchical name with an AS-ANY
+// component (AS208301:AS-ANY) is an ordinary set, and the zero SetName is not
+// any.
+func (n SetName) IsAny() bool {
+	switch n.canon {
+	case "AS-ANY", "RS-ANY", "RTRS-ANY", "PRNG-ANY", "FLTR-ANY":
+		return true
+	}
+	return false
+}
+
 // Components returns the ':'-separated components, in canonical form, as a
 // fresh slice.
 func (n SetName) Components() []string {

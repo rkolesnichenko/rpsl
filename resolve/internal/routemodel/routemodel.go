@@ -206,7 +206,7 @@ func (b builder) single(e policy.ASPathExpr, a types.ASN) (bool, error) {
 	case policy.ASPathASNRange:
 		return x.Lo <= a && a <= x.Hi, nil
 	case policy.ASPathSet:
-		if strings.EqualFold(x.Name.String(), "AS-ANY") {
+		if x.Name.IsAny() {
 			return true, nil
 		}
 		s, ok := b.sets[x.Name]
