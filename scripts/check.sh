@@ -92,13 +92,20 @@ fi
 step "any names: only types spells AS-ANY and its kin (types.SetName.IsAny)"
 # A quoted AS-ANY, RS-ANY, RTRS-ANY, PRNG-ANY or FLTR-ANY outside types is a
 # copy of SetName.IsAny. grep exits 1 when nothing matches, the good case, so
-# only a status above 1 fails the step.
+# only a status above 1 fails the step. IsAny's own names must be among the
+# hits, or the listing or the pattern is broken and the step would pass on
+# any tree.
 any_files=$(mktemp) || bad "could not list Go files"
 if gofiles > "$any_files"; then
 	any_hits=$(xargs -0 sh -c 'grep -H -n -i -E "\"(AS|RS|RTRS|PRNG|FLTR)-ANY\"" "$@"; [ $? -le 1 ]' _ < "$any_files") ||
 		bad "any names: grep failed"
+	case "$any_hits" in
+	*types/setname.go:*) ;;
+	*) bad "any names: types/setname.go's names were not found (is the step broken?)" ;;
+	esac
 	any_hits=$(printf '%s\n' "$any_hits" |
-		grep -v -E '^([^:]*_test\.go|types/setname\.go|resolve/internal/irrdoracle/cases\.go):')
+		grep -v -E '^([^:]*_test\.go|types/setname\.go|resolve/internal/irrdoracle/cases\.go):') ||
+		[ $? -eq 1 ] || bad "any names: filtering the hits failed"
 else
 	bad "could not list Go files"
 	any_hits=
