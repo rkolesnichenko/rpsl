@@ -108,6 +108,7 @@ func (SetClass) String() string
 type SetName struct
 func (SetName) Class() SetClass
 func (SetName) Components() []string
+func (SetName) IsAny() bool
 func (SetName) IsZero() bool
 func (SetName) MarshalText() ([]byte, error)
 func (SetName) String() string

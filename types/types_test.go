@@ -77,6 +77,47 @@ func TestParseSetName(t *testing.T) {
 	}
 }
 
+func TestSetNameIsAny(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"AS-ANY", true},
+		{"RS-ANY", true},
+		{"RTRS-ANY", true},
+		{"PRNG-ANY", true},
+		{"FLTR-ANY", true},
+		{"as-any", true}, // any spelling of one name is that name
+		{"Rs-Any", true},
+		{"AS-ANYTHING", false},
+		{"AS-AN", false},
+		{"FLTR-ANY1", false},
+		{"AS1:AS-ANY", false}, // hierarchical names are ordinary sets
+		{"AS-ANY:AS1", false},
+		{"RS-ANY:RS-X", false},
+	}
+	for _, c := range cases {
+		n, err := ParseSetName(c.in)
+		if err != nil {
+			t.Errorf("ParseSetName(%q) unexpected err: %v", c.in, err)
+			continue
+		}
+		if got := n.IsAny(); got != c.want {
+			t.Errorf("ParseSetName(%q).IsAny() = %v, want %v", c.in, got, c.want)
+		}
+	}
+	if (SetName{}).IsAny() {
+		t.Error("SetName{}.IsAny() = true")
+	}
+	var n SetName
+	if err := n.UnmarshalText([]byte("as-any")); err != nil {
+		t.Fatalf("UnmarshalText(as-any): %v", err)
+	}
+	if !n.IsAny() {
+		t.Error("UnmarshalText(as-any).IsAny() = false")
+	}
+}
+
 // Everything here was accepted by the old prefix-only check. Each is either
 // RFC 2622 §2/§5-invalid or a query-injection vector for the IRRd/whois
 // backends, which interpolate SetName.String() into the wire command.
