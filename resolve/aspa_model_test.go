@@ -78,7 +78,7 @@ type aspaModel struct {
 func aspaFilters(form string) (full, partial, empty []string) {
 	pfx := map[string]string{"import": "{10.0.0.0/8^+}", "v6": "{2001:db8::/32^+}", "mp": "{10.0.0.0/8^+, 2001:db8::/32^+}"}[form]
 	full = []string{"ANY", "ANY AND NOT " + pfx, "NOT <^AS64999>"}
-	partial = []string{"<^PeerAS+$>", "ANY AND community(65000:1)", pfx, "AS-C1", "PeerAS"}
+	partial = []string{"<^PeerAS+$>", "ANY AND community(65000:1)", pfx, "AS-C1", "PeerAS", "ANY AND NOT <^.>"}
 	whole := map[string]string{"import": "{0.0.0.0/0^0-32}", "v6": "{::/0^0-128}", "mp": "{0.0.0.0/0^0-32, ::/0^0-128}"}[form]
 	v4, v6 := "0.0.0.0/0, 0.0.0.0/1^+, 128.0.0.0/1^+", "::/0, ::/1^+, 8000::/1^+"
 	split := map[string]string{"import": "{" + v4 + "}", "v6": "{" + v6 + "}", "mp": "{" + v4 + ", " + v6 + "}"}[form]
