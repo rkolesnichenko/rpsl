@@ -3,10 +3,13 @@ package ast
 import "testing"
 
 func TestAttributeValueWithComments(t *testing.T) {
-	o := parse("inetnum: 10.0.0.0 - 10.0.0.255\nnetname: DATA#LIMITED\ndescr: Shaw Tower # 16-02/03\n more\nmnt-by: MNT-A\n")
+	o := parse("inetnum: 10.0.0.0 - 10.0.0.255\nnetname: DATA#LIMITED\ndescr: Shaw Tower # 16-02/03\n more\n" +
+		"address: Unit\n #167\nmnt-by: MNT-A\n")
 	for _, c := range []struct{ name, value, with string }{
 		{"netname", "DATA", "DATA#LIMITED"},
 		{"descr", "Shaw Tower\nmore", "Shaw Tower # 16-02/03\nmore"},
+		{"address", "Unit\n", "Unit\n#167"}, // the '#' on a continuation line only
+
 		{"mnt-by", "MNT-A", "MNT-A"},
 	} {
 		a, _ := o.GetFirst(c.name)

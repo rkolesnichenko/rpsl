@@ -23,6 +23,11 @@ func TestValueWithComments(t *testing.T) {
 		{"key:#only-comment\n", "", "#only-comment"},
 		{"remarks: see http://example.net/#top\n", "see http://example.net/", "see http://example.net/#top"},
 	}
+	for _, raw := range []string{"# x: y\n", "foo # a: b\n", "  a: b\n", "foo\n bar\n", "+ a: b\n", ""} {
+		if got := ValueWithComments(raw); got != "" {
+			t.Errorf("%q is not an attribute's Raw: ValueWithComments = %q, want \"\"", raw, got)
+		}
+	}
 	for _, c := range cases {
 		toks := Tokenize(c.src)
 		if len(toks) != 1 || toks[0].Kind != KindAttribute {

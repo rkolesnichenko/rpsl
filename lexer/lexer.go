@@ -306,17 +306,20 @@ func contValue(text string, keepComment bool) (value string, valOff int) {
 // raw is the attribute token's Raw. Registries write '#' as text in free-form
 // attributes ("descr: Shaw Tower # 16-02/03", "netname: DATA#LIMITED"), which
 // Value, following RFC 2622, cuts at the '#'. When raw holds no '#' the two
-// are equal.
+// are equal. A raw whose first line does not start an attribute
+// (StartsAttribute) is no attribute's, and gives "".
 func ValueWithComments(raw string) string {
 	var segs []string
 	first := true
 	for pl := range scanLines(raw) {
 		if first {
 			first = false
-			if idx := strings.IndexByte(pl.text, ':'); idx >= 0 {
-				v, _ := trimPos(pl.text, idx+1)
-				segs = append(segs, v)
+			if !StartsAttribute(pl.text) {
+				return ""
 			}
+			// StartsAttribute puts a ':' before any '#'.
+			v, _ := trimPos(pl.text, strings.IndexByte(pl.text, ':')+1)
+			segs = append(segs, v)
 			continue
 		}
 		v, _ := contValue(pl.text, true)

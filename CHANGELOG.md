@@ -15,8 +15,9 @@ same version (see [RELEASING.md](RELEASING.md)).
   give an attribute's continuation-joined value with its comments kept: a `#`
   and what follows it stay on each line. Registries write `#` as text in
   free-form attributes (`descr: Shaw Tower # 16-02/03`, `netname:
-  DATA#LIMITED`), which `Value` cuts. Without a `#` it is `Value`, with no
-  allocation.
+  DATA#LIMITED`), which `Value` cuts. Without a `#` both equal `Value`, and
+  `Attribute.ValueWithComments` returns it with no allocation. For a raw whose
+  first line starts no attribute, `lexer.ValueWithComments` gives `""`.
 
 ## [0.31.0] - 2026-10-27
 

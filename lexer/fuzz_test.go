@@ -89,10 +89,25 @@ func checkToken(t *testing.T, src string, i int, tk Token) {
 	if name := CanonicalName(first[:strings.IndexByte(first, ':')]); name != tk.Name {
 		t.Fatalf("token %d: name %q, but its line names %q", i, tk.Name, name)
 	}
-	// ValueWithComments is Value with each line's comment kept.
+	// ValueWithComments is Value with each line's comment kept: removing the
+	// comments gives Value, and each line's comment, from its first '#', is the
+	// source line's, less trailing spaces and tabs.
 	with := ValueWithComments(tk.Raw)
 	if stripComments(with) != tk.Value || (!strings.Contains(tk.Raw, "#") && with != tk.Value) {
 		t.Fatalf("token %d: ValueWithComments %q is not value %q with its comments", i, with, tk.Value)
+	}
+	rawLines, withLines := strings.Split(strings.TrimSuffix(tk.Raw, "\n"), "\n"), strings.Split(with, "\n")
+	if len(rawLines) != len(withLines) {
+		t.Fatalf("token %d: ValueWithComments %q has %d lines, Raw %q %d", i, with, len(withLines), tk.Raw, len(rawLines))
+	}
+	for j, rl := range rawLines {
+		rl = strings.TrimSuffix(rl, "\r")
+		if h := strings.IndexByte(rl, '#'); h >= 0 {
+			wl := withLines[j]
+			if c := strings.IndexByte(wl, '#'); c < 0 || wl[c:] != strings.TrimRight(rl[h:], " \t") {
+				t.Fatalf("token %d: line %d of ValueWithComments %q does not keep the comment of %q", i, j, wl, rl)
+			}
+		}
 	}
 	if len(tk.Segments) == 0 || tk.Segments[0].ValStart != 0 || tk.Segments[len(tk.Segments)-1].ValEnd != len(tk.Value) {
 		t.Fatalf("token %d: segments %+v do not cover value %q", i, tk.Segments, tk.Value)
