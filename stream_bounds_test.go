@@ -115,6 +115,21 @@ func TestWindows1252LineOverCapIsNotBuilt(t *testing.T) {
 	}
 }
 
+// A plain object costs a few allocations, however many attributes it has:
+// its text, its chunk, tokens and segments, the object and its attributes.
+func TestStreamAllocationsPerObject(t *testing.T) {
+	obj := "inetnum: 192.0.2.0 - 192.0.2.255\nnetname: EXAMPLE\ndescr: one\ncountry: NL\n" +
+		"admin-c: A1-RIPE\ntech-c: A1-RIPE\nstatus: ASSIGNED PA\nmnt-by: MNT\nsource: RIPE\n"
+	in := strings.Repeat(obj+"\n", 100)
+	n := testing.AllocsPerRun(20, func() {
+		for range Parse(strings.NewReader(in)) {
+		}
+	})
+	if per := n / 100; per > 8 {
+		t.Errorf("%.2f allocations per object, want at most 8", per)
+	}
+}
+
 func TestStreamDefaults(t *testing.T) {
 	if DefaultMaxObjectBytes != 16<<20 || DefaultMaxObjectLines != 1<<18 {
 		t.Errorf("defaults = %d bytes, %d lines; want 16 MiB, 262144", DefaultMaxObjectBytes, DefaultMaxObjectLines)
@@ -364,6 +379,29 @@ func TestLongLineCRAtChunkBoundary(t *testing.T) {
 	src := "a: 1\n" + strings.Repeat(" ", chunk-1) + "\r\nb: 2\n"
 	if got, want := streamSummary(src, opts), "a b rpsl/trivia-too-large"; got != want {
 		t.Errorf("a blank line ending CR|LF across the boundary: %q, want the objects apart: %q", got, want)
+	}
+}
+
+// An over-long line is described by all of it from its first byte, however
+// the 64 KiB reads split it: the part kept before the cap was passed counts,
+// and a later read is not the line's start.
+func TestLongLineDescribedWhole(t *testing.T) {
+	const chunk = 64 << 10
+	for _, c := range []struct {
+		name, src string
+		opts      ParseOptions
+		want      string
+	}{
+		// Past a cap of one and a half reads: the '#' was in the part kept.
+		{"a comment holding a ':'", "a: 1\n\n# " + strings.Repeat("x", 2*chunk) + ": y\nb: 2\n",
+			ParseOptions{MaxObjectBytes: chunk + chunk/2}, "a b rpsl/trivia-too-large"},
+		// The second read starts with a space, inside the line.
+		{"an attribute", "a: 1\n\n" + strings.Repeat("x", chunk) + " : y\n\nb: 2\n",
+			ParseOptions{MaxObjectBytes: 1000}, "a rpsl/object-too-large b"},
+	} {
+		if got := streamSummary(c.src, c.opts); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
 	}
 }
 

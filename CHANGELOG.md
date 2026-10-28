@@ -34,6 +34,13 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ### Changed
 
+- Parsing is faster and allocates less, with the same results: on the
+  stream benchmark 5.4 ms where it took 9.3, with 42,000 allocations where it
+  made 143,000, and on RIPE's, APNIC's and AFRINIC's dumps 1.7 to 1.8 times
+  as fast, at 8 allocations per object where it made 36 to 101. `lexer.TokenizeAt` puts
+  every token's `Segments` in one array, each capped so that an append to it
+  copies; the stream tokenizes the blank line before an object with the
+  object, at once.
 - `object`: an inetnum key written as an IPv4 prefix, as LACNIC's whois dump
   writes every one (`inetnum: 200.16.0.0/16`, abbreviated `2.152.0/22`), now
   decodes to the prefix's range in `Inetnum.Lo`/`Hi` with a Warning

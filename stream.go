@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/rkolesnichenko/rpsl/ast"
@@ -208,17 +209,26 @@ func (s *streamer) run() {
 
 // drain yields queued chunks until the queue is empty or the consumer stops.
 func (s *streamer) drain() {
-	for len(s.out) > 0 && !s.stopped {
-		c := s.out[0]
-		s.out[0], s.out = nil, s.out[1:]
-		obj, diags := &ast.Object{}, c.diags
+	n := 0
+	for n < len(s.out) && !s.stopped {
+		c := s.out[n]
+		s.out[n] = nil
+		n++
+		var obj *ast.Object
+		diags := c.diags
 		if c.recoded != nil {
 			diags = append(diags, c.recodedWarning()...)
 		}
-		if !c.empty {
+		if c.empty {
+			obj = &ast.Object{}
+		} else {
 			var toks []lexer.Token
-			for _, p := range c.parts {
-				toks = append(toks, lexer.TokenizeAt(p.text, p.at.line, p.at.byte)...)
+			if len(c.parts) == 1 { // the usual case: tokens used as they come
+				toks = lexer.TokenizeAt(c.parts[0].text, c.parts[0].at.line, c.parts[0].at.byte)
+			} else {
+				for _, p := range c.parts {
+					toks = append(toks, lexer.TokenizeAt(p.text, p.at.line, p.at.byte)...)
+				}
 			}
 			obj = ast.New(toks)
 			diags = append(diags, diagnose(toks)...)
@@ -227,6 +237,11 @@ func (s *streamer) drain() {
 			s.stopped = true
 		}
 	}
+	// What was not yielded stays queued, at the front, for a later range; the
+	// array is kept for the chunks to come.
+	m := copy(s.out, s.out[n:])
+	clear(s.out[m:])
+	s.out = s.out[:m]
 }
 
 func (s *streamer) line(li lineInfo) {
@@ -394,8 +409,21 @@ func (s *streamer) takeLead() []part {
 }
 
 // takeCurrent packages the buffered trivia and object as a chunk and resets.
+// Trivia that runs straight into the object, as the blank line before one
+// does, goes with it as one part, tokenized at once.
 func (s *streamer) takeCurrent() *chunk {
-	c := &chunk{parts: append(s.takeLead(), part{string(s.obj), s.objStart}), diags: s.takeCarry()}
+	var parts []part
+	if len(s.leadParts) == 0 && len(s.lead) > 0 && s.leadStart.byte+len(s.lead) == s.objStart.byte {
+		var b strings.Builder
+		b.Grow(len(s.lead) + len(s.obj))
+		b.Write(s.lead)
+		b.Write(s.obj)
+		parts = []part{{b.String(), s.leadStart}}
+		s.takeLead()
+	} else {
+		parts = append(s.takeLead(), part{string(s.obj), s.objStart})
+	}
+	c := &chunk{parts: parts, diags: s.takeCarry()}
 	s.takeRecoded(c)
 	s.obj, s.objLines = s.obj[:0], 0
 	s.leadOver, s.inObj = false, false
@@ -504,45 +532,37 @@ func newLineReader(r io.Reader, limit int64) *lineReader {
 func (r *lineReader) next() (lineInfo, error) {
 	li := lineInfo{at: r.pos}
 	r.buf = r.buf[:0]
-	n, blank := 0, true
-	heldCR := false // a '\r' ended the previous chunk: a terminator only if "\n" or EOF follows
-	var attr attrScan
+	n := 0
+	d := lineDesc{blank: true} // fed only once the line is over the cap
 	for {
 		frag, e := r.br.ReadSlice('\n')
-		attr.scan(frag, n == 0)
 		n += len(frag)
 		final := e != bufio.ErrBufferFull
-		if heldCR && !(final && (len(frag) == 0 || len(frag) == 1 && frag[0] == '\n')) {
-			blank = false // the held '\r' was inside the line, where it is not blank
+		if !li.tooLong && r.limit >= 0 && int64(len(r.buf)+len(frag)) > r.limit {
+			li.tooLong = true
+			d.add(r.buf, false) // what was kept so far, then the rest as it comes
+			r.buf = r.buf[:0]
 		}
-		body := frag
-		if final {
-			body = text(frag)
-		} else if heldCR = len(frag) > 0 && frag[len(frag)-1] == '\r'; heldCR {
-			body = frag[:len(frag)-1]
+		if li.tooLong {
+			d.add(frag, final)
+		} else {
+			r.buf = appendDoubling(r.buf, frag)
 		}
-		blank = blank && lexer.IsBlankLine(body)
-		if !li.tooLong {
-			if r.limit >= 0 && int64(len(r.buf)+len(frag)) > r.limit {
-				li.tooLong = true
-				r.buf = r.buf[:0]
-			} else {
-				r.buf = appendDoubling(r.buf, frag)
-			}
-		}
-		if e == bufio.ErrBufferFull {
+		if !final {
 			continue
 		}
 		// Judged whole, so a character split between two reads is UTF-8.
 		if r.cp1252 && !li.tooLong && !utf8.Valid(r.buf) {
-			n = r.recode(&li)
+			if n = r.recode(&li); li.tooLong {
+				d.add(r.buf, true) // over the cap transcoded: described as read
+			}
 		}
 		r.pos.byte += n
 		if e == nil {
 			r.pos.line++
 		}
 		if li.tooLong {
-			li.blank, li.attr = blank, attr.attr
+			li.blank, li.attr = d.blank, d.attr.attr
 		} else if li.recoded {
 			li.text = r.out
 		} else {
@@ -568,6 +588,32 @@ func (r *lineReader) recode(li *lineInfo) int {
 	r.out = appendWindows1252(r.out[:0], r.buf)
 	li.recoded = true
 	return n
+}
+
+// lineDesc describes a line over the cap, which is not kept, from its
+// fragments as they are read: whether it is blank and whether it starts an
+// attribute. Lines within the cap are kept and need no description.
+type lineDesc struct {
+	attr   attrScan
+	blank  bool // only spaces, tabs and line terminators so far
+	heldCR bool // a '\r' ended the previous fragment: a terminator only if "\n" or EOF follows
+	seen   int  // bytes described
+}
+
+// add describes the next fragment of the line; final marks its last.
+func (d *lineDesc) add(frag []byte, final bool) {
+	d.attr.scan(frag, d.seen == 0)
+	d.seen += len(frag)
+	if d.heldCR && !(final && (len(frag) == 0 || len(frag) == 1 && frag[0] == '\n')) {
+		d.blank = false // the held '\r' was inside the line, where it is not blank
+	}
+	body := frag
+	if final {
+		body = text(frag)
+	} else if d.heldCR = len(frag) > 0 && frag[len(frag)-1] == '\r'; d.heldCR {
+		body = frag[:len(frag)-1]
+	}
+	d.blank = d.blank && lexer.IsBlankLine(body)
 }
 
 // attrScan decides lexer.StartsAttribute for a line read in fragments, so an

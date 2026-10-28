@@ -106,27 +106,34 @@ func Tokenize(src string) []Token { return TokenizeAt(src, 1, 0) }
 // Segment position is reported in stream coordinates. Raw and Value are
 // unaffected.
 func TokenizeAt(src string, line, byteOffset int) []Token {
-	// One token per line at most: size the slice once instead of growing it,
-	// which on large input would allocate several times its final size.
-	toks := make([]Token, 0, strings.Count(src, "\n")+1)
-	var cur *Token    // attribute being folded, or nil
-	var curStart int  // src offset where cur begins
-	var segs []string // logical value segments for cur (reused)
-	var valOff int    // running offset within the joined value for the next segment
+	// One token and one segment per line at most: size both once instead of
+	// growing them, which on large input would allocate several times their
+	// final size. The tokens' Segments share the one array.
+	lines := strings.Count(src, "\n") + 1
+	toks := make([]Token, 0, lines)
+	all := make([]Segment, 0, lines)
+	var cur Token // attribute being folded, if haveCur
+	haveCur := false
+	var curStart int // src offset where cur begins
+	var curSeg int   // index in all of cur's first segment
+	var segBuf [8]string
+	segs := segBuf[:0] // logical value segments for cur (reused)
+	var valOff int     // running offset within the joined value for the next segment
 	lineBase := line - 1
 
 	flush := func() {
-		if cur != nil {
+		if haveCur {
 			cur.Raw = src[curStart : cur.Span.EndByte-byteOffset] // a slice: no copying per line
 			cur.Value = strings.Join(segs, "\n")
-			toks = append(toks, *cur)
-			cur, segs, valOff = nil, segs[:0], 0
+			cur.Segments = all[curSeg:len(all):len(all)] // capped: an append to it copies
+			toks = append(toks, cur)
+			haveCur, segs, valOff = false, segs[:0], 0
 		}
 	}
 
 	for pl := range scanLines(src) {
 		endByte := pl.start + len(pl.text) + len(pl.term)
-		kind, isCont := classify(pl.text, cur != nil)
+		kind, isCont := classify(pl.text, haveCur)
 
 		if isCont {
 			cur.Span.EndLine = lineBase + pl.line
@@ -134,7 +141,7 @@ func TokenizeAt(src string, line, byteOffset int) []Token {
 			cur.Span.EndByte = byteOffset + endByte
 			val, off := contValue(pl.text, false)
 			segs = append(segs, val)
-			cur.Segments = append(cur.Segments, Segment{
+			all = append(all, Segment{
 				ValStart: valOff, ValEnd: valOff + len(val),
 				SrcLine: lineBase + pl.line, SrcCol: off + 1, SrcByte: byteOffset + pl.start + off,
 			})
@@ -151,13 +158,13 @@ func TokenizeAt(src string, line, byteOffset int) []Token {
 		switch kind {
 		case KindAttribute:
 			name, val, off := splitAttr(pl.text)
-			cur = &Token{Kind: KindAttribute, Name: name, Span: span}
-			curStart = pl.start
+			cur, haveCur = Token{Kind: KindAttribute, Name: name, Span: span}, true
+			curStart, curSeg = pl.start, len(all)
 			segs = append(segs[:0], val)
-			cur.Segments = []Segment{{
+			all = append(all, Segment{
 				ValStart: 0, ValEnd: len(val),
 				SrcLine: lineBase + pl.line, SrcCol: off + 1, SrcByte: byteOffset + pl.start + off,
-			}}
+			})
 			valOff = len(val) + 1
 		default:
 			toks = append(toks, Token{Kind: kind, Raw: src[pl.start:endByte], Span: span})
@@ -181,9 +188,9 @@ func scanLinesTo(src string, yield func(physLine) bool) {
 	i, lineNo := 0, 1
 	for i < len(src) {
 		start := i
-		j := i
-		for j < len(src) && src[j] != '\n' {
-			j++
+		j := len(src)
+		if k := strings.IndexByte(src[i:], '\n'); k >= 0 {
+			j = i + k
 		}
 		var text, term string
 		switch {
@@ -332,10 +339,14 @@ func ValueWithComments(raw string) string {
 // the byte offset (within content, hence within the line) of its first
 // non-whitespace character. The trimmed value maps 1:1 to source bytes.
 func trimPos(content string, from int) (value string, off int) {
-	rest := content[from:]
-	trimmedLeft := strings.TrimLeft(rest, " \t")
-	off = from + (len(rest) - len(trimmedLeft))
-	return strings.TrimRight(trimmedLeft, " \t"), off
+	i, j := from, len(content)
+	for i < j && (content[i] == ' ' || content[i] == '\t') {
+		i++
+	}
+	for j > i && (content[j-1] == ' ' || content[j-1] == '\t') {
+		j--
+	}
+	return content[i:j], i
 }
 
 // CanonicalName returns an attribute name as RPSL compares it: ASCII letters
@@ -344,7 +355,7 @@ func trimPos(content string, from int) (value string, off int) {
 // lower-cases to 'k', a control byte) keeps them and fails validation rather
 // than turning into a valid-looking name.
 func CanonicalName(name string) string {
-	name = strings.Trim(name, " \t")
+	name, _ = trimPos(name, 0)
 	for i := 0; i < len(name); i++ {
 		if c := name[i]; 'A' <= c && c <= 'Z' {
 			b := []byte(name)

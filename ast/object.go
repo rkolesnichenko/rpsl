@@ -74,10 +74,9 @@ func New(toks []lexer.Token) *Object {
 		}
 	}
 	o := &Object{attrs: make([]Attribute, 0, n)}
-	var lead strings.Builder
-	for _, t := range toks {
+	run := 0 // the first of the trivia tokens before the next attribute
+	for i, t := range toks {
 		if t.Kind != lexer.KindAttribute {
-			lead.WriteString(t.Raw)
 			continue
 		}
 		o.attrs = append(o.attrs, Attribute{
@@ -87,12 +86,27 @@ func New(toks []lexer.Token) *Object {
 			Comment:  inlineComment(t.Raw),
 			Span:     t.Span,
 			Segments: t.Segments,
-			lead:     lead.String(),
+			lead:     joinRaw(toks[run:i]),
 		})
-		lead.Reset()
+		run = i + 1
 	}
-	o.trail = lead.String()
+	o.trail = joinRaw(toks[run:])
 	return o
+}
+
+// joinRaw joins the tokens' Raw text; a single token's is used as it is.
+func joinRaw(toks []lexer.Token) string {
+	switch len(toks) {
+	case 0:
+		return ""
+	case 1:
+		return toks[0].Raw
+	}
+	var b strings.Builder
+	for _, t := range toks {
+		b.WriteString(t.Raw)
+	}
+	return b.String()
 }
 
 // Class reports the object's class: the name of its first attribute.

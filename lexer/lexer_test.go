@@ -125,6 +125,28 @@ func TestSegmentSourceMap(t *testing.T) {
 	}
 }
 
+// Each attribute's Segments is its own: appending to one leaves the next
+// attribute's alone, even though they may share an array.
+func TestSegmentsAreSeparate(t *testing.T) {
+	toks := Tokenize("a: 1\n+ 2\nb: 3\n+ 4\nc: 5\n")
+	want := append([]Segment(nil), toks[1].Segments...)
+	toks[0].Segments = append(toks[0].Segments, Segment{ValStart: -1})
+	if got := toks[1].Segments; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("appending to the first attribute's segments changed the second's: %+v, was %+v", got, want)
+	}
+}
+
+// Tokenizing an object costs a fixed number of allocations, not some per
+// attribute: the token slice, one array for every segment, and the joined
+// value of each folded attribute.
+func TestTokenizeAllocations(t *testing.T) {
+	src := "inetnum: 192.0.2.0 - 192.0.2.255\nnetname: EXAMPLE\ndescr: one\n two\ncountry: NL\n" +
+		"admin-c: A1-RIPE\ntech-c: A1-RIPE\nstatus: ASSIGNED PA\nmnt-by: MNT\nsource: RIPE\n"
+	if n := testing.AllocsPerRun(100, func() { Tokenize(src) }); n != 3 {
+		t.Errorf("Tokenize allocated %v times, want 3", n)
+	}
+}
+
 func safeIdx(s string, i int) string {
 	if i < 0 || i >= len(s) {
 		return "<oob>"
