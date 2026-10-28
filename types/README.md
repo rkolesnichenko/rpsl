@@ -24,7 +24,6 @@ prefix-ranges pays nothing for the rest of the library.
 | `NICHandle` | `ParseNICHandle("EX1-RIPE")`, `"1NO-ARIN"`, `"VAGNER_BRASILEIRO"` | RFC 2622 object-name characters (letters, digits, `_`, `-`), a leading digit allowed, at most 64; a name with spaces is rejected, so a handle is always one safe word; case-insensitive, held upper-case |
 | `RouterID` | `ParseRouterID("rtr.example.net")`, `"192.0.2.1"` | an rtr-set member or inet-rtr: an address or a DNS name; canonical, so spellings are `==` |
 | `netip.Addr` / `netip.Prefix` | `ParseAddr("064.006.160.001")`, `ParsePrefix(…)` | `netip`'s grammar, except that zero-padded IPv4 octets are read as decimal, as RPSL writes addresses and IRRd reads them; `PaddedIPv4` reports the spelling |
-| address ranges | `AddrRangePrefixes(lo, hi)`, `LastAddr(p)` | an inetnum's `lo - hi` as the fewest prefixes that hold exactly it, in order; a prefix's last address, masked or not |
 
 ## ASNs
 
@@ -36,6 +35,14 @@ fmt.Println(a)         // AS65001
 fmt.Println(b)         // AS65546 — normalized to plain form
 fmt.Println(uint32(b)) // 65546
 ```
+
+## Address ranges
+
+An inetnum is written `lo - hi`; `AddrRangePrefixes(lo, hi)` gives the fewest
+prefixes that hold exactly those addresses, in order (`192.0.0.0 -
+192.0.4.255` is `192.0.0.0/22` and `192.0.4.0/24`), for either family, an
+IPv4-mapped address staying IPv6. `LastAddr(p)` is a prefix's last address,
+masked or not.
 
 ## Prefix ranges
 

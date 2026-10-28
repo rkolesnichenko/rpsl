@@ -61,6 +61,9 @@ func TestAddrRangePrefixes(t *testing.T) {
 		{"192.0.2.1", "2001:db8::1", "error"},
 		{"10.0.0.1", "::ffff:10.0.0.2", "error"}, // IPv4-mapped is IPv6
 		{"fe80::1%eth0", "fe80::2%eth0", "error"},
+		{"fe80::1%eth0", "fe80::2", "error"},
+		{"fe80::1", "fe80::2%eth0", "error"},
+		{"::ffff:10.0.0.0", "::ffff:10.0.0.255", "[::ffff:10.0.0.0/120]"}, // IPv6 out: never unmapped
 	} {
 		got, err := AddrRangePrefixes(netip.MustParseAddr(c.lo), netip.MustParseAddr(c.hi))
 		s := fmt.Sprint(got)
