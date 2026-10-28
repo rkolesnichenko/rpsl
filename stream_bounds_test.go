@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/rkolesnichenko/rpsl/ast"
 )
 
 // peakHeap runs f while sampling the heap, returning the highest HeapAlloc seen
@@ -116,17 +118,99 @@ func TestWindows1252LineOverCapIsNotBuilt(t *testing.T) {
 }
 
 // A plain object costs a few allocations, however many attributes it has:
-// its text, its chunk, tokens and segments, the object and its attributes.
+// its text, its chunk, tokens and segments, the object and its attributes;
+// and one more for a lead of two trivia lines, joined.
 func TestStreamAllocationsPerObject(t *testing.T) {
 	obj := "inetnum: 192.0.2.0 - 192.0.2.255\nnetname: EXAMPLE\ndescr: one\ncountry: NL\n" +
 		"admin-c: A1-RIPE\ntech-c: A1-RIPE\nstatus: ASSIGNED PA\nmnt-by: MNT\nsource: RIPE\n"
-	in := strings.Repeat(obj+"\n", 100)
-	n := testing.AllocsPerRun(20, func() {
-		for range Parse(strings.NewReader(in)) {
+	for _, c := range []struct {
+		sep  string
+		most float64
+	}{{"\n", 8}, {"\r\n", 8}, {"\n# next\n", 9}} {
+		in := strings.Repeat(obj+c.sep, 100)
+		n := testing.AllocsPerRun(20, func() {
+			for range Parse(strings.NewReader(in)) {
+			}
+		})
+		if per := n / 100; per > c.most {
+			t.Errorf("objects apart by %q: %.2f allocations per object, want at most %v", c.sep, per, c.most)
 		}
-	})
-	if per := n / 100; per > 8 {
-		t.Errorf("%.2f allocations per object, want at most 8", per)
+	}
+}
+
+// The parser holds the same memory at the end of a long stream as early on:
+// nothing it keeps grows with the objects it has yielded.
+func TestStreamStateDoesNotGrow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("parses 500,000 objects")
+	}
+	const n = 500000
+	in := strings.Repeat("a:\n\n", n)
+	heap := func() int64 {
+		var m runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&m)
+		return int64(m.HeapAlloc)
+	}
+	var early, late int64
+	i := 0
+	for range Parse(strings.NewReader(in)) {
+		switch i++; i {
+		case 1000:
+			early = heap()
+		case n:
+			late = heap()
+		}
+	}
+	if late-early > 1<<20 {
+		t.Errorf("the heap grew %d bytes between the 1,000th object and the %dth", late-early, n)
+	}
+}
+
+// retained reports the heap that what keep returns holds after a collection.
+func retained(keep func() any) int64 {
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	kept := keep()
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	runtime.KeepAlive(kept)
+	return int64(after.HeapAlloc) - int64(before.HeapAlloc)
+}
+
+// What an object keeps once parsed is about its text: a long run of trivia
+// before or in it costs no more than its bytes when the object is kept, and
+// nothing much when only an attribute's Segments or Value is.
+func TestStreamRetention(t *testing.T) {
+	for name, c := range map[string]struct{ in, trivia string }{
+		"blank lines before it":      {"x: 0\n" + strings.Repeat("\n", 200000) + "a: 1\n", strings.Repeat("\n", 200000)},
+		"comment lines in it":        {"a: 1\n" + strings.Repeat("#\n", 100000) + "b: 2\n", strings.Repeat("#\n", 100000)},
+		"one long comment before it": {"x: 0\n\n# " + strings.Repeat("x", 4<<20) + "\na: 1\n", "\n# " + strings.Repeat("x", 4<<20) + "\n"},
+	} {
+		for what, keep := range map[string]func(*ast.Object) any{
+			"the object": func(o *ast.Object) any { return o },
+			"Segments":   func(o *ast.Object) any { a, _ := o.GetFirst("a"); return a.Segments },
+			"Value":      func(o *ast.Object) any { a, _ := o.GetFirst("a"); return a.Value },
+		} {
+			in := c.in
+			most := int64(len(c.trivia)) + 1<<20 // the trivia itself, kept by the object, and slack
+			if what != "the object" {
+				most = 1 << 20
+			}
+			n := retained(func() any {
+				var kept []any
+				for o := range Parse(strings.NewReader(in)) {
+					if o.Class() == "a" {
+						kept = append(kept, keep(o))
+					}
+				}
+				return kept
+			})
+			if n > most {
+				t.Errorf("%s, %s kept: %d bytes held, want at most %d", name, what, n, most)
+			}
+		}
 	}
 }
 
@@ -398,6 +482,10 @@ func TestLongLineDescribedWhole(t *testing.T) {
 		// The second read starts with a space, inside the line.
 		{"an attribute", "a: 1\n\n" + strings.Repeat("x", chunk) + " : y\n\nb: 2\n",
 			ParseOptions{MaxObjectBytes: 1000}, "a rpsl/object-too-large b"},
+		// The part kept ends in a '\r' the next read shows is inside the line,
+		// which is so not blank and does not end the object.
+		{"a carriage return ending the part kept", "a: 1\n" + strings.Repeat(" ", chunk-1) + "\r\r\nb: 2\n",
+			ParseOptions{MaxObjectBytes: chunk}, "rpsl/object-too-large"},
 	} {
 		if got := streamSummary(c.src, c.opts); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)

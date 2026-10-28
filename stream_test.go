@@ -240,6 +240,32 @@ func TestParseResumesWithQueuedObjects(t *testing.T) {
 	}
 }
 
+// A range whose body panics, recovered by the consumer, leaves the stream as
+// a break does: the next range yields the objects after the one it had.
+func TestParseResumesAfterPanic(t *testing.T) {
+	seq := Parse(strings.NewReader("a: 1\n\nb: 2\n\nc: 3\n"))
+	func() {
+		defer func() { _ = recover() }()
+		for range seq {
+			panic("consumer")
+		}
+	}()
+	var classes []string
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("the next range panicked: %v", r)
+			}
+		}()
+		for o := range seq {
+			classes = append(classes, o.Class())
+		}
+	}()
+	if !reflect.DeepEqual(classes, []string{"b", "c"}) {
+		t.Errorf("after a recovered panic on the first object, the next range gave %q, want b and c", classes)
+	}
+}
+
 func TestParseObjectDiagnostics(t *testing.T) {
 	rules := func(text string) []string {
 		_, ds := ParseObject(text)

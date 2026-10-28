@@ -165,7 +165,8 @@ type streamer struct {
 	stopped  bool // the consumer broke out of the current range
 	done     bool // the input is exhausted and finished
 
-	out     []*chunk // finished chunks not yet yielded, in order
+	out     []*chunk // finished chunks, those from head on not yet yielded, in order
+	head    int
 	pending *chunk
 
 	lead      []byte // trivia before the next object's first attribute, since the last gap
@@ -209,11 +210,10 @@ func (s *streamer) run() {
 
 // drain yields queued chunks until the queue is empty or the consumer stops.
 func (s *streamer) drain() {
-	n := 0
-	for n < len(s.out) && !s.stopped {
-		c := s.out[n]
-		s.out[n] = nil
-		n++
+	for s.head < len(s.out) && !s.stopped {
+		c := s.out[s.head]
+		s.out[s.head] = nil
+		s.head++ // before yielding: a consumer that panics leaves the queue sound
 		var obj *ast.Object
 		diags := c.diags
 		if c.recoded != nil {
@@ -237,11 +237,11 @@ func (s *streamer) drain() {
 			s.stopped = true
 		}
 	}
-	// What was not yielded stays queued, at the front, for a later range; the
-	// array is kept for the chunks to come.
-	m := copy(s.out, s.out[n:])
-	clear(s.out[m:])
-	s.out = s.out[:m]
+	// What was not yielded stays queued, from head, for a later range; once all
+	// is, the array is kept for the chunks to come.
+	if s.head == len(s.out) {
+		s.out, s.head = s.out[:0], 0
+	}
 }
 
 func (s *streamer) line(li lineInfo) {
@@ -404,22 +404,28 @@ func (s *streamer) takeLead() []part {
 	if len(s.lead) > 0 {
 		parts = append(parts, part{string(s.lead), s.leadStart})
 	}
-	s.lead, s.leadParts, s.leadBytes, s.leadLines = s.lead[:0], nil, 0, 0
+	s.dropLead()
 	return parts
+}
+
+// dropLead resets the buffered trivia, taken or discarded.
+func (s *streamer) dropLead() {
+	s.lead, s.leadParts, s.leadBytes, s.leadLines = s.lead[:0], nil, 0, 0
 }
 
 // takeCurrent packages the buffered trivia and object as a chunk and resets.
 // Trivia that runs straight into the object, as the blank line before one
-// does, goes with it as one part, tokenized at once.
+// does, goes with it as one part, tokenized at once, when it is no longer
+// than the object: the object's values are slices of that part, and keep it.
 func (s *streamer) takeCurrent() *chunk {
 	var parts []part
-	if len(s.leadParts) == 0 && len(s.lead) > 0 && s.leadStart.byte+len(s.lead) == s.objStart.byte {
+	if len(s.leadParts) == 0 && len(s.lead) > 0 && len(s.lead) <= len(s.obj) && s.leadStart.byte+len(s.lead) == s.objStart.byte {
 		var b strings.Builder
 		b.Grow(len(s.lead) + len(s.obj))
 		b.Write(s.lead)
 		b.Write(s.obj)
 		parts = []part{{b.String(), s.leadStart}}
-		s.takeLead()
+		s.dropLead()
 	} else {
 		parts = append(s.takeLead(), part{string(s.obj), s.objStart})
 	}
@@ -457,7 +463,7 @@ func (s *streamer) oversize(at pos) {
 		Span: at.span(),
 		Rule: "rpsl/object-too-large",
 	})
-	s.takeLead()
+	s.dropLead()
 	s.recoded = 0 // the object and its trivia are dropped
 	s.obj, s.objLines = s.obj[:0], 0
 	s.leadOver, s.inObj = false, false

@@ -171,6 +171,20 @@ func TokenizeAt(src string, line, byteOffset int) []Token {
 		}
 	}
 	flush()
+	// The array outlives the call in the tokens' Segments. Sized by every
+	// line, it is mostly unused when comment and blank lines are many; the
+	// segments then move to an array of their own size, in the same order.
+	if len(all) > 0 && cap(all) > 2*len(all) {
+		exact := make([]Segment, len(all))
+		copy(exact, all)
+		k := 0
+		for i := range toks {
+			if n := len(toks[i].Segments); n > 0 {
+				toks[i].Segments = exact[k : k+n : k+n]
+				k += n
+			}
+		}
+	}
 	return toks
 }
 

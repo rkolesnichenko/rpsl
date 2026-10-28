@@ -125,14 +125,31 @@ func TestSegmentSourceMap(t *testing.T) {
 	}
 }
 
-// Each attribute's Segments is its own: appending to one leaves the next
-// attribute's alone, even though they may share an array.
+// Each attribute's Segments is its own, one per line of it: appending to one
+// leaves the next attribute's alone, even though they may share an array —
+// the one sized by every line, or, among many comment lines, one of their own
+// size.
 func TestSegmentsAreSeparate(t *testing.T) {
-	toks := Tokenize("a: 1\n+ 2\nb: 3\n+ 4\nc: 5\n")
-	want := append([]Segment(nil), toks[1].Segments...)
-	toks[0].Segments = append(toks[0].Segments, Segment{ValStart: -1})
-	if got := toks[1].Segments; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Errorf("appending to the first attribute's segments changed the second's: %+v, was %+v", got, want)
+	for _, src := range []string{
+		"a: 1\n+ 2\nb: 3\n+ 4\nc: 5\n",
+		"a: 1\n+ 2\n" + strings.Repeat("# c\n", 20) + "b: 3\n+ 4\nc: 5\n",
+	} {
+		var attrs []Token
+		for _, tok := range Tokenize(src) {
+			if tok.Kind == KindAttribute {
+				attrs = append(attrs, tok)
+			}
+		}
+		for _, a := range attrs {
+			if len(a.Segments) != a.Span.EndLine-a.Span.StartLine+1 || a.Segments[0].SrcLine != a.Span.StartLine {
+				t.Errorf("%q: %s's segments %+v do not cover its lines %+v", src, a.Name, a.Segments, a.Span)
+			}
+		}
+		want := append([]Segment(nil), attrs[1].Segments...)
+		attrs[0].Segments = append(attrs[0].Segments, Segment{ValStart: -1})
+		if got := attrs[1].Segments; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+			t.Errorf("%q: appending to the first attribute's segments changed the second's: %+v, was %+v", src, got, want)
+		}
 	}
 }
 
