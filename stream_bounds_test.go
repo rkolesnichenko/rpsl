@@ -45,7 +45,8 @@ func peakHeap(f func()) (peak, total uint64) {
 
 // With default options, no input can make the parser hold much memory: the
 // worst case, an object at both caps, peaks around 140 MB. Lines used to be
-// uncapped and cost ~1 KB each: 4 MiB of blank lines allocated 4 GB.
+// uncapped and cost ~1 KB each: 4 MiB of blank lines allocated 4 GB. Reading
+// lines as Windows-1252, which can triple them, keeps the bound.
 func TestStreamMemoryIsBoundedByDefault(t *testing.T) {
 	if testing.Short() {
 		t.Skip("allocates hostile 16 MiB inputs")
@@ -67,20 +68,50 @@ func TestStreamMemoryIsBoundedByDefault(t *testing.T) {
 		"continuations at cap":    "remarks: x\n" + strings.Repeat("+\n", lines),
 		"long line at cap":        "remarks: " + strings.Repeat("x", size-100) + "\n",
 		"long folded line at cap": "remarks: x\n" + strings.Repeat(" "+strings.Repeat("x", 62)+"\n", size/64-2),
+		// Read as Windows-1252, 0x80 is three bytes and 0xE9 two.
+		"tripled line under cap":     "remarks: " + strings.Repeat("\x80", size-100) + "\n\nas-set: AS-X\n",
+		"doubled line at cap":        "remarks: " + strings.Repeat("\xe9", (size-100)/2) + "\n",
+		"doubled folded line at cap": "remarks: x\n" + strings.Repeat(" "+strings.Repeat("\xe9", 31)+"\n", size/64-2),
 	}
 	for name, in := range cases {
-		start := time.Now()
-		peak, total := peakHeap(func() {
-			for range Parse(strings.NewReader(in)) {
+		for _, opts := range []ParseOptions{{}, {NonUTF8AsWindows1252: true}} {
+			name := name
+			if opts.NonUTF8AsWindows1252 {
+				name += " (1252)"
+			}
+			start := time.Now()
+			peak, total := peakHeap(func() {
+				for range ParseWith(strings.NewReader(in), opts) {
+				}
+			})
+			t.Logf("%-38s peak heap %4d MB, allocated %5d MB, %v", name, peak>>20, total>>20, time.Since(start).Round(time.Millisecond))
+			if peak > 192<<20 {
+				t.Errorf("%s: peak heap %d MB, want under 192 MB", name, peak>>20)
+			}
+			if total > 384<<20 {
+				t.Errorf("%s: allocated %d MB, want under 384 MB", name, total>>20)
+			}
+		}
+	}
+}
+
+// A line within MaxObjectBytes as read but over it as Windows-1252 is
+// discarded without being transcoded: reading it so costs no more than
+// reading its bytes, which keeps it.
+func TestWindows1252LineOverCapIsNotBuilt(t *testing.T) {
+	if testing.Short() {
+		t.Skip("allocates a hostile 16 MiB input")
+	}
+	in := "remarks: " + strings.Repeat("\x80", DefaultMaxObjectBytes-100) + "\n" // 48 MiB as UTF-8
+	cost := func(opts ParseOptions) uint64 {
+		_, total := peakHeap(func() {
+			for range ParseWith(strings.NewReader(in), opts) {
 			}
 		})
-		t.Logf("%-24s peak heap %4d MB, allocated %5d MB, %v", name, peak>>20, total>>20, time.Since(start).Round(time.Millisecond))
-		if peak > 192<<20 {
-			t.Errorf("%s: peak heap %d MB, want under 192 MB", name, peak>>20)
-		}
-		if total > 384<<20 {
-			t.Errorf("%s: allocated %d MB, want under 384 MB", name, total>>20)
-		}
+		return total
+	}
+	if on, off := cost(ParseOptions{NonUTF8AsWindows1252: true}), cost(ParseOptions{}); on > off {
+		t.Errorf("read as Windows-1252, the line allocated %d MB; as bytes, kept, %d MB", on>>20, off>>20)
 	}
 }
 

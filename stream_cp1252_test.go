@@ -1,6 +1,8 @@
 package rpsl
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -89,17 +91,44 @@ func TestWindows1252Warning(t *testing.T) {
 }
 
 // Positions index the text as read: line numbers are the input's, and byte
-// offsets count each line as transcoded, as the objects hold it.
+// offsets count each line as transcoded, as the objects hold it, the Warning's
+// too.
 func TestWindows1252Positions(t *testing.T) {
-	in := "descr: Caf\xe9 \x96\n\nroute: 192.0.2.0/24\norigin: AS1\n"
-	held := "descr: Café –\n\nroute: 192.0.2.0/24\norigin: AS1\n"
-	for obj := range ParseWith(strings.NewReader(in), cp1252) {
+	in := "descr: Caf\xe9 \x96\n\nroute: 192.0.2.0/24\norigin: AS1\ndescr: \xe9\n"
+	held := "descr: Café –\n\nroute: 192.0.2.0/24\norigin: AS1\ndescr: é\n"
+	for obj, diags := range ParseWith(strings.NewReader(in), cp1252) {
 		if obj.Class() != "route" {
 			continue
 		}
 		if a, _ := obj.GetFirst("origin"); a.Span.StartLine != 4 || a.Span.StartByte != strings.Index(held, "origin") {
 			t.Errorf("origin span = %+v, want line 4, byte %d", a.Span, strings.Index(held, "origin"))
 		}
+		if len(diags) != 1 || diags[0].Span.StartLine != 5 || diags[0].Span.StartByte != strings.LastIndex(held, "descr") {
+			t.Errorf("route diagnostics = %v, want one at line 5, byte %d", diags, strings.LastIndex(held, "descr"))
+		}
+	}
+}
+
+// The corpus's Latin-1 fixture reads as the text it means, with one Warning
+// for its four Latin-1 lines, at the first; its UTF-8 line is kept.
+func TestWindows1252Corpus(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join(corpusDir, "latin1-lacnic.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.NewReplacer("\xe9", "é", "\xed", "í", "\xe1", "á", "\x96", "–").Replace(string(src))
+	objs, _, diags := streamAll(strings.NewReader(string(src)), cp1252)
+	if len(objs) != 1 || objs[0] != want || !strings.Contains(want, "Pequeña") {
+		t.Fatalf("read as %q, want %q", objs, want)
+	}
+	var warned []Diagnostic
+	for _, d := range diags[0] {
+		if d.Rule == "rpsl/not-utf8" {
+			warned = append(warned, d)
+		}
+	}
+	if len(warned) != 1 || warned[0].Span.StartLine != 6 || !strings.HasPrefix(warned[0].Message, "4 lines are not UTF-8") {
+		t.Errorf("not-utf8 diagnostics = %v, want one at line 6 counting 4", warned)
 	}
 }
 

@@ -45,10 +45,12 @@ type ParseOptions struct {
 	MaxObjectLines int
 
 	// NonUTF8AsWindows1252 reads each line that is not valid UTF-8 as
-	// Windows-1252, a superset of the Latin-1 (ISO-8859-1) that registries
-	// wrote before UTF-8, and keeps it transcoded to UTF-8; a UTF-8 line is
-	// kept as it is. Every line is judged on its own, as some dumps mix both
-	// (LACNIC's). The five bytes Windows-1252 leaves undefined read as the C1
+	// Windows-1252, which has every printable character of the Latin-1
+	// (ISO-8859-1) that registries wrote before UTF-8, and keeps it transcoded
+	// to UTF-8; a UTF-8 line is kept as it is. Every line is judged on its own,
+	// as some dumps mix both (LACNIC's). Bytes 0x80-0x9F, Latin-1's C1
+	// controls, are Windows-1252's quotes, dashes and the like (LACNIC writes
+	// 0x96 for an en dash); the five it leaves undefined read as the C1
 	// controls of the same number. Each object holding such a line — in its
 	// trivia too — carries one Warning ("rpsl/not-utf8") counting them, at the
 	// first. Objects hold, and String() returns, the text as transcoded: the
@@ -476,9 +478,9 @@ type lineReader struct {
 	br     *bufio.Reader
 	limit  int64
 	buf    []byte
-	pos    pos  // position of the next line
-	cp1252 bool // read a line that is not UTF-8 as Windows-1252
-	out    []byte
+	pos    pos    // position of the next line
+	cp1252 bool   // read a line that is not UTF-8 as Windows-1252
+	out    []byte // the line in buf as Windows-1252, never over limit bytes
 }
 
 // lineInfo is one physical line. A line longer than the limit is consumed but
@@ -552,14 +554,20 @@ func (r *lineReader) next() (lineInfo, error) {
 
 // recode reads the line in r.buf as Windows-1252 into r.out, marking li
 // recoded, or too long if it is over the cap as held, and returns its length.
+// The length is measured first: a line over the cap, which may be three times
+// its bytes, is not built, and r.out never grows past the cap.
 func (r *lineReader) recode(li *lineInfo) int {
-	r.out = appendWindows1252(r.out[:0], r.buf)
-	if r.limit >= 0 && int64(len(r.out)) > r.limit {
+	n := windows1252Len(r.buf)
+	if r.limit >= 0 && int64(n) > r.limit {
 		li.tooLong = true // over the cap as held: discarded, not recoded
-	} else {
-		li.recoded = true
+		return n
 	}
-	return len(r.out)
+	if n > cap(r.out) {
+		r.out = make([]byte, 0, n)
+	}
+	r.out = appendWindows1252(r.out[:0], r.buf)
+	li.recoded = true
+	return n
 }
 
 // attrScan decides lexer.StartsAttribute for a line read in fragments, so an
@@ -610,6 +618,22 @@ var windows1252 = [32]rune{
 	'\u02C6', '\u2030', '\u0160', '\u2039', '\u0152', '\u008D', '\u017D', '\u008F',
 	'\u0090', '\u2018', '\u2019', '\u201C', '\u201D', '\u2022', '\u2013', '\u2014',
 	'\u02DC', '\u2122', '\u0161', '\u203A', '\u0153', '\u009D', '\u017E', '\u0178',
+}
+
+// windows1252Len is the length of b read as Windows-1252, in UTF-8.
+func windows1252Len(b []byte) int {
+	n := 0
+	for _, c := range b {
+		switch {
+		case c < 0x80:
+			n++
+		case c < 0xA0:
+			n += utf8.RuneLen(windows1252[c-0x80])
+		default:
+			n += 2
+		}
+	}
+	return n
 }
 
 // appendWindows1252 appends b, read as Windows-1252, to dst as UTF-8.
