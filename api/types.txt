@@ -23,7 +23,9 @@ const SAFIUnicast SAFI
 const SAFIUnspecified SAFI = iota
 var ErrTooManyPrefixes = errors.New(…)
 func AbbreviatedIPv4(s string) bool
+func AddrRangePrefixes(lo, hi netip.Addr) ([]netip.Prefix, error)
 func FullSpace(afi AFI) PrefixSpace
+func LastAddr(p netip.Prefix) netip.Addr
 func NewPrefixRange(p netip.Prefix, lo, hi int) (_ PrefixRange, ok bool)
 func NewSetRef(source string, name SetName) (SetRef, error)
 func PaddedIPv4(s string) bool

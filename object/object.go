@@ -296,18 +296,10 @@ func (d *decoder) prefixRange(a ast.Attribute, name, rule string) (lo, hi netip.
 			fmt.Sprintf("prefix %s has host bits set; the network is %s", p, p.Masked()))
 	}
 	p = p.Masked()
-	lo, hi = p.Addr(), lastAddr4(p)
+	lo, hi = p.Addr(), types.LastAddr(p)
 	d.warnf(a, "object/"+d.o.Class()+"-prefix-key",
 		fmt.Sprintf("%q is a prefix, not a 'lo - hi' range; it is read as %s - %s", scalar(a), lo, hi))
 	return lo, hi
-}
-
-// lastAddr4 returns the last address of an IPv4 prefix with its host bits clear.
-func lastAddr4(p netip.Prefix) netip.Addr {
-	a := p.Addr().As4()
-	v := uint32(a[0])<<24 | uint32(a[1])<<16 | uint32(a[2])<<8 | uint32(a[3])
-	v |= uint32(uint64(1)<<(32-p.Bits()) - 1)
-	return netip.AddrFrom4([4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)})
 }
 
 // asnRange parses the first value of name as an as-block range "ASlo - AShi"

@@ -245,5 +245,5 @@ func prefixRange(p netip.Prefix) (lo, hi netip.Addr, ok bool) {
 		return netip.Addr{}, netip.Addr{}, false
 	}
 	p = p.Masked()
-	return p.Addr(), lastAddr(p), true
+	return p.Addr(), types.LastAddr(p), true
 }

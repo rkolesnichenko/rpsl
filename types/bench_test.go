@@ -1,6 +1,25 @@
 package types
 
-import "testing"
+import (
+	"net/netip"
+	"testing"
+)
+
+// An inetnum's range as prefixes: aligned (one), unaligned v4, and v6.
+func BenchmarkAddrRangePrefixes(b *testing.B) {
+	in := [][2]netip.Addr{
+		{netip.MustParseAddr("193.0.0.0"), netip.MustParseAddr("193.0.7.255")},
+		{netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("192.0.9.254")},
+		{netip.MustParseAddr("2001:db8::"), netip.MustParseAddr("2001:db8:0:2:ffff:ffff:ffff:fffe")},
+	}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		r := in[i%len(in)]
+		if _, err := AddrRangePrefixes(r[0], r[1]); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
 
 func BenchmarkParsePrefixRange(b *testing.B) {
 	in := []string{"192.0.2.0/24^+", "10.0.0.0/8^16-24", "2001:db8::/32^48", "192.0.2.0/24", "2001:db8::/32^-"}
