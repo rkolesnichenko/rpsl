@@ -128,6 +128,7 @@ func TestDiagnosticRulesAreDocumented(t *testing.T) {
 		{"rpsl/multiple-objects", obj("a: 1\n\nb: 2\n")},
 		{"rpsl/object-too-large", stream(strings.NewReader("a: 1\nb: 22222222222\n"), ParseOptions{MaxObjectBytes: 8})},
 		{"rpsl/trivia-too-large", stream(strings.NewReader(long+"a: 1\n"), ParseOptions{MaxObjectBytes: 32})},
+		{"rpsl/not-utf8", stream(strings.NewReader("descr: Caf\xe9\n"), ParseOptions{NonUTF8AsWindows1252: true})},
 		{"rpsl/read-error", stream(io.MultiReader(strings.NewReader("a: 1\n"), iotest.ErrReader(errors.New("boom"))), ParseOptions{})},
 		{"object/empty-key", obj("route:\norigin: AS1\n")},
 		{"object/route-origin", obj("route: 192.0.2.0/24\norigin: ASX\n")},

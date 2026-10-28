@@ -24,6 +24,7 @@ attribute of it.
 | `rpsl/object-too-large` | Error | An object over `MaxObjectBytes` or `MaxObjectLines`, skipped to the next blank line (yielded as an empty object). |
 | `rpsl/trivia-too-large` | Warning | Blank/comment lines before an object over a cap, or an over-long line outside any object, discarded. A run of over-long lines gets two: one for the first line, and one counting the rest. |
 | `rpsl/read-error` | Error | The reader failed; the stream ends here. |
+| `rpsl/not-utf8` | Warning | With `ParseOptions.NonUTF8AsWindows1252`: lines of the object, or of its trivia, that are not UTF-8 and were read as Windows-1252. One per object, counting them, at the first. |
 
 ## `object/` — typed decoding (`rpsl.Decode`)
 

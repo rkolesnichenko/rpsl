@@ -23,6 +23,13 @@ same version (see [RELEASING.md](RELEASING.md)).
   prefixes (`192.0.0.0 - 192.0.4.255` is `192.0.0.0/22` and `192.0.4.0/24`) —
   and `LastAddr(p)` a prefix's last address. `object`, `auth` and `resolve`
   use `LastAddr` where each had its own copy; no answer changes.
+- `ParseOptions.NonUTF8AsWindows1252` reads each line of a stream that is not
+  valid UTF-8 as Windows-1252 (a superset of Latin-1) and keeps it as UTF-8;
+  UTF-8 lines are kept as they are, each line judged on its own, as LACNIC's
+  whois dump mixes both. Each object holding such a line carries one Warning,
+  `rpsl/not-utf8`, counting them. Objects hold the text as transcoded, and
+  byte offsets and the caps count it so. Off by default: the stream stays
+  byte-for-byte lossless.
 
 ### Changed
 

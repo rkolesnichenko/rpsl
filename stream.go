@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"unicode/utf8"
 
 	"github.com/rkolesnichenko/rpsl/ast"
 	"github.com/rkolesnichenko/rpsl/lexer"
@@ -42,6 +43,21 @@ type ParseOptions struct {
 	// before it, like MaxObjectBytes. Zero means DefaultMaxObjectLines; a
 	// negative value means unlimited.
 	MaxObjectLines int
+
+	// NonUTF8AsWindows1252 reads each line that is not valid UTF-8 as
+	// Windows-1252, a superset of the Latin-1 (ISO-8859-1) that registries
+	// wrote before UTF-8, and keeps it transcoded to UTF-8; a UTF-8 line is
+	// kept as it is. Every line is judged on its own, as some dumps mix both
+	// (LACNIC's). The five bytes Windows-1252 leaves undefined read as the C1
+	// controls of the same number. Each object holding such a line — in its
+	// trivia too — carries one Warning ("rpsl/not-utf8") counting them, at the
+	// first. Objects hold, and String() returns, the text as transcoded: the
+	// stream is lossless with respect to it, not to the input's bytes. Line
+	// numbers are the input's; byte offsets, and the caps, count the text as
+	// transcoded, except that a line over MaxObjectBytes as read, discarded
+	// unread, counts as read. ParseObject takes no options: parse one object's
+	// text with ParseWith(strings.NewReader(text), …) to read it so.
+	NonUTF8AsWindows1252 bool
 }
 
 func (o ParseOptions) maxObjectLines() int {
@@ -90,7 +106,9 @@ func Parse(r io.Reader) iter.Seq2[*ast.Object, []Diagnostic] {
 // reader and each end the other.
 func ParseWith(r io.Reader, opts ParseOptions) iter.Seq2[*ast.Object, []Diagnostic] {
 	limit := opts.maxObjectBytes()
-	s := &streamer{lr: newLineReader(r, limit), limit: limit, maxLines: opts.maxObjectLines()}
+	lr := newLineReader(r, limit)
+	lr.cp1252 = opts.NonUTF8AsWindows1252
+	s := &streamer{lr: lr, limit: limit, maxLines: opts.maxObjectLines()}
 	return func(yield func(*ast.Object, []Diagnostic) bool) {
 		if s.ranging {
 			panic("rpsl: ParseWith iterator ranged over while it is already running")
@@ -114,9 +132,17 @@ func (p pos) span() lexer.Span {
 // The source comes in parts, each at its own stream position: a discarded line
 // leaves a gap between the trivia before and after it.
 type chunk struct {
-	parts []part
-	diags []Diagnostic
-	empty bool
+	parts   []part
+	diags   []Diagnostic
+	empty   bool
+	recoded *recoded // lines read as Windows-1252, for one Warning when yielded; nil for none
+}
+
+// recoded counts the lines of a chunk read as Windows-1252. It is held apart,
+// and only when there are some, to keep a chunk small.
+type recoded struct {
+	n  int
+	at pos // where the first began
 }
 
 // part is a run of consecutive source lines starting at at.
@@ -154,6 +180,8 @@ type streamer struct {
 	ranging   bool         // a range over the iterator is in progress
 	discards  int          // over-long lines discarded since carry was last taken
 	lastDrop  pos          // where the last of them began
+	recoded   int          // lines read as Windows-1252 kept since the last take
+	recodedAt pos          // where the first of them began
 }
 
 // run yields queued chunks, then reads and yields until the input is exhausted
@@ -182,6 +210,9 @@ func (s *streamer) drain() {
 		c := s.out[0]
 		s.out[0], s.out = nil, s.out[1:]
 		obj, diags := &ast.Object{}, c.diags
+		if c.recoded != nil {
+			diags = append(diags, c.recodedWarning()...)
+		}
 		if !c.empty {
 			var toks []lexer.Token
 			for _, p := range c.parts {
@@ -220,6 +251,7 @@ func (s *streamer) line(li lineInfo) {
 		}
 		s.obj = appendDoubling(s.obj, li.text)
 		s.objLines++
+		s.noteRecoded(li)
 	case li.tooLong && li.attr:
 		s.oversize(li.at) // an object whose first line alone is too long
 	case li.tooLong:
@@ -230,9 +262,51 @@ func (s *streamer) line(li lineInfo) {
 		s.emitPending()
 		s.inObj, s.objStart, s.objLines = true, li.at, 1
 		s.obj = append(s.obj[:0], li.text...)
+		s.noteRecoded(li)
 	default:
-		s.addLead(li.text, li.at)
+		if s.addLead(li.text, li.at) {
+			s.noteRecoded(li)
+		}
 	}
+}
+
+// noteRecoded counts a kept line that was read as Windows-1252 toward the
+// Warning of the object it goes with.
+func (s *streamer) noteRecoded(li lineInfo) {
+	if !li.recoded {
+		return
+	}
+	if s.recoded == 0 {
+		s.recodedAt = li.at
+	}
+	s.recoded++
+}
+
+// takeRecoded adds the lines read as Windows-1252 since the last take to c,
+// which may hold some already (an object, then its trailing trivia), and
+// resets the count.
+func (s *streamer) takeRecoded(c *chunk) {
+	if s.recoded == 0 {
+		return
+	}
+	if c.recoded == nil {
+		c.recoded = &recoded{at: s.recodedAt}
+	}
+	c.recoded.n += s.recoded
+	s.recoded = 0
+}
+
+// recodedWarning is c's one Warning for the lines it holds that were read as
+// Windows-1252, if any.
+func (c *chunk) recodedWarning() []Diagnostic {
+	if c.recoded == nil {
+		return nil
+	}
+	msg := "1 line is not UTF-8 and was read as Windows-1252"
+	if c.recoded.n > 1 {
+		msg = fmt.Sprintf("%d lines are not UTF-8 and were read as Windows-1252, the first here", c.recoded.n)
+	}
+	return []Diagnostic{{Severity: Warning, Message: msg, Span: c.recoded.at.span(), Rule: "rpsl/not-utf8"}}
 }
 
 func (s *streamer) over(have, add int) bool { return s.limit >= 0 && int64(have+add) > s.limit }
@@ -280,10 +354,10 @@ func (s *streamer) takeCarry() []Diagnostic {
 }
 
 // addLead buffers a trivia line for the next object, discarding the whole run
-// (with one Warning) once it exceeds the cap.
-func (s *streamer) addLead(b []byte, at pos) {
+// (with one Warning) once it exceeds the cap. It reports whether it kept b.
+func (s *streamer) addLead(b []byte, at pos) bool {
 	if s.leadOver {
-		return
+		return false
 	}
 	if len(s.lead) == 0 {
 		s.leadStart = at
@@ -291,6 +365,7 @@ func (s *streamer) addLead(b []byte, at pos) {
 	if s.over(s.leadBytes, len(b)) || s.overLines(s.leadLines+1) {
 		s.leadOver = true
 		s.lead, s.leadParts, s.leadBytes, s.leadLines = s.lead[:0], nil, 0, 0
+		s.recoded = 0 // the trivia counted is gone with the run
 		s.carry = append(s.carry, Diagnostic{
 			Severity: Warning,
 			Message: fmt.Sprintf("blank and comment lines before this object exceed MaxObjectBytes (%d) or MaxObjectLines (%d) and were discarded",
@@ -298,11 +373,12 @@ func (s *streamer) addLead(b []byte, at pos) {
 			Span: s.leadStart.span(),
 			Rule: "rpsl/trivia-too-large",
 		})
-		return
+		return false
 	}
 	s.lead = appendDoubling(s.lead, b)
 	s.leadBytes += len(b)
 	s.leadLines++
+	return true
 }
 
 // takeLead returns the buffered trivia as parts, and resets it.
@@ -318,6 +394,7 @@ func (s *streamer) takeLead() []part {
 // takeCurrent packages the buffered trivia and object as a chunk and resets.
 func (s *streamer) takeCurrent() *chunk {
 	c := &chunk{parts: append(s.takeLead(), part{string(s.obj), s.objStart}), diags: s.takeCarry()}
+	s.takeRecoded(c)
 	s.obj, s.objLines = s.obj[:0], 0
 	s.leadOver, s.inObj = false, false
 	return c
@@ -351,6 +428,7 @@ func (s *streamer) oversize(at pos) {
 		Rule: "rpsl/object-too-large",
 	})
 	s.takeLead()
+	s.recoded = 0 // the object and its trivia are dropped
 	s.obj, s.objLines = s.obj[:0], 0
 	s.leadOver, s.inObj = false, false
 	s.dropping = true
@@ -380,9 +458,12 @@ func (s *streamer) finish(err error) {
 	case s.pending != nil: // trailing trivia belongs to the last object
 		s.pending.parts = append(s.pending.parts, s.takeLead()...)
 		s.pending.diags = append(s.pending.diags, s.takeCarry()...)
+		s.takeRecoded(s.pending)
 		s.emitPending()
 	case len(s.lead) > 0 || len(s.leadParts) > 0 || len(s.carry) > 0: // no attributes anywhere
-		s.emit(&chunk{parts: s.takeLead(), diags: s.takeCarry()})
+		c := &chunk{parts: s.takeLead(), diags: s.takeCarry()}
+		s.takeRecoded(c)
+		s.emit(c)
 	}
 	if readErr != nil {
 		s.emitEmpty(readErr)
@@ -392,10 +473,12 @@ func (s *streamer) finish(err error) {
 // lineReader reads physical lines, keeping each at most limit bytes long: a
 // longer line is consumed but not retained, so it cannot exhaust memory.
 type lineReader struct {
-	br    *bufio.Reader
-	limit int64
-	buf   []byte
-	pos   pos // position of the next line
+	br     *bufio.Reader
+	limit  int64
+	buf    []byte
+	pos    pos  // position of the next line
+	cp1252 bool // read a line that is not UTF-8 as Windows-1252
+	out    []byte
 }
 
 // lineInfo is one physical line. A line longer than the limit is consumed but
@@ -407,6 +490,7 @@ type lineInfo struct {
 	tooLong bool
 	blank   bool // tooLong: only spaces, tabs and line terminators
 	attr    bool // tooLong: the whole line starts an attribute (lexer.StartsAttribute)
+	recoded bool // the line was not UTF-8 and was read as Windows-1252
 }
 
 func newLineReader(r io.Reader, limit int64) *lineReader {
@@ -447,17 +531,35 @@ func (r *lineReader) next() (lineInfo, error) {
 		if e == bufio.ErrBufferFull {
 			continue
 		}
+		// Judged whole, so a character split between two reads is UTF-8.
+		if r.cp1252 && !li.tooLong && !utf8.Valid(r.buf) {
+			n = r.recode(&li)
+		}
 		r.pos.byte += n
 		if e == nil {
 			r.pos.line++
 		}
 		if li.tooLong {
 			li.blank, li.attr = blank, attr.attr
+		} else if li.recoded {
+			li.text = r.out
 		} else {
 			li.text = r.buf
 		}
 		return li, e
 	}
+}
+
+// recode reads the line in r.buf as Windows-1252 into r.out, marking li
+// recoded, or too long if it is over the cap as held, and returns its length.
+func (r *lineReader) recode(li *lineInfo) int {
+	r.out = appendWindows1252(r.out[:0], r.buf)
+	if r.limit >= 0 && int64(len(r.out)) > r.limit {
+		li.tooLong = true // over the cap as held: discarded, not recoded
+	} else {
+		li.recoded = true
+	}
+	return len(r.out)
 }
 
 // attrScan decides lexer.StartsAttribute for a line read in fragments, so an
@@ -498,4 +600,29 @@ func appendDoubling(buf, b []byte) []byte {
 func text(line []byte) []byte {
 	line = bytes.TrimSuffix(line, []byte("\n"))
 	return bytes.TrimSuffix(line, []byte("\r"))
+}
+
+// windows1252 holds the characters Windows-1252 gives the bytes 0x80-0x9F; the
+// five it leaves undefined are the C1 controls of the same number. From 0xA0
+// it is Latin-1: each byte is the code point of its value.
+var windows1252 = [32]rune{
+	'\u20AC', '\u0081', '\u201A', '\u0192', '\u201E', '\u2026', '\u2020', '\u2021',
+	'\u02C6', '\u2030', '\u0160', '\u2039', '\u0152', '\u008D', '\u017D', '\u008F',
+	'\u0090', '\u2018', '\u2019', '\u201C', '\u201D', '\u2022', '\u2013', '\u2014',
+	'\u02DC', '\u2122', '\u0161', '\u203A', '\u0153', '\u009D', '\u017E', '\u0178',
+}
+
+// appendWindows1252 appends b, read as Windows-1252, to dst as UTF-8.
+func appendWindows1252(dst, b []byte) []byte {
+	for _, c := range b {
+		switch {
+		case c < 0x80:
+			dst = append(dst, c)
+		case c < 0xA0:
+			dst = utf8.AppendRune(dst, windows1252[c-0x80])
+		default:
+			dst = utf8.AppendRune(dst, rune(c))
+		}
+	}
+	return dst
 }

@@ -21,5 +21,6 @@ type Object = object.Object
 type ParseOptions struct
 	MaxObjectBytes int64
 	MaxObjectLines int
+	NonUTF8AsWindows1252 bool
 type Profile = object.Profile
 type Severity = ast.Severity
