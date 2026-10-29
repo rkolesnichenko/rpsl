@@ -1,0 +1,10 @@
+# Synthetic, in the shape of LACNIC's whois dump (lacnic/dbase/lacnic.db.gz):
+# the aut-num key is a bare number, never "AS..."; city: is LACNIC's own
+# attribute. A private-use AS stands in for a real one.
+
+aut-num: 64500
+city:    Montevideo
+country: UY
+created: 2019-03-31
+changed: 2024-05-23
+source:  LACNIC

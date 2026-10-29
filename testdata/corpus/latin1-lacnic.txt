@@ -1,0 +1,13 @@
+# Synthetic, in the shape of LACNIC's whois dump (lacnic/dbase/lacnic.db.gz),
+# which is not UTF-8: mostly Latin-1, a few lines UTF-8, and Windows-1252's
+# en dash (0x96). Kept byte for byte; ParseOptions.NonUTF8AsWindows1252
+# reads each line that is not UTF-8 as Windows-1252.
+
+owner:   Cooperativa Eléctrica de Ejemplo
+ownerid: UY-EXEM-LACNIC
+responsible: José Ejemplo
+address: Calle Martín 123, 
+city:    Luján – Jauregui
+descr:   PequeÃ±a red
+country: UY
+source:  LACNIC

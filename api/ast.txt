@@ -14,6 +14,7 @@ type Attribute struct
 	Segments []lexer.Segment
 func (Attribute) List() []ListItem
 func (Attribute) SpanAt(valStart, valEnd int) lexer.Span
+func (Attribute) ValueWithComments() string
 type Builder struct
 func (*Builder) Add(name, value string) *Builder
 func (*Builder) AddAll(name string, values ...string) *Builder

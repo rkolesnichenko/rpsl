@@ -795,7 +795,7 @@ func (ev *filterEval) pairs(a, b rangeSetOf, fn func(x, y types.PrefixRange) err
 				return err
 			}
 		}
-		last := lastAddr(p)
+		last := types.LastAddr(p)
 		i := sort.Search(len(prefixes), func(i int) bool { return !prefixLess(prefixes[i], p) })
 		for ; i < len(prefixes) && prefixes[i].Addr().Compare(last) <= 0; i++ {
 			if q := prefixes[i]; q.Bits() > p.Bits() { // a strict descendant
@@ -835,22 +835,6 @@ func prefixLess(a, b netip.Prefix) bool {
 		return c < 0
 	}
 	return a.Bits() < b.Bits()
-}
-
-// lastAddr is the highest address in p.
-func lastAddr(p netip.Prefix) netip.Addr {
-	a := p.Masked().Addr().As16()
-	off := 0
-	if p.Addr().Is4() {
-		off = 12
-	}
-	for i := off*8 + p.Bits(); i < 128; i++ {
-		a[i/8] |= 0x80 >> (i % 8)
-	}
-	if p.Addr().Is4() {
-		return netip.AddrFrom4([4]byte(a[12:]))
-	}
-	return netip.AddrFrom16(a)
 }
 
 // filterText renders a filter term for a diagnostic.

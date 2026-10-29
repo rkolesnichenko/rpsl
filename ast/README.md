@@ -36,6 +36,10 @@ type Attribute struct {
 	Span    lexer.Span
 	// ...
 }
+
+// Value with its comments kept, for attributes where registries write '#'
+// as text (descr: Shaw Tower # 16-02/03); Value without a '#'.
+func (a Attribute) ValueWithComments() string
 ```
 
 ## Read, edit, re-serialize

@@ -34,6 +34,7 @@ func TokenizeAt(src string, line, byteOffset int) []Token // positions in stream
 func IsBlankLine[T ~string | ~[]byte](line T) bool       // the line rules, shared with rpsl.Parse
 func StartsAttribute[T ~string | ~[]byte](line T) bool
 func CanonicalName(name string) string                     // ASCII lower-case, spaces/tabs trimmed
+func ValueWithComments(raw string) string                  // an attribute's Value with its '#' comments kept
 ```
 
 ```go

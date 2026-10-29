@@ -36,6 +36,14 @@ fmt.Println(b)         // AS65546 — normalized to plain form
 fmt.Println(uint32(b)) // 65546
 ```
 
+## Address ranges
+
+An inetnum is written `lo - hi`; `AddrRangePrefixes(lo, hi)` gives the fewest
+prefixes that hold exactly those addresses, in order (`192.0.0.0 -
+192.0.4.255` is `192.0.0.0/22` and `192.0.4.0/24`), for either family, an
+IPv4-mapped address staying IPv6. `LastAddr(p)` is a prefix's last address,
+masked or not.
+
 ## Prefix ranges
 
 The `^operator` is a first-class type with an explicit, capped `Materialize` — so

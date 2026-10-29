@@ -1,0 +1,19 @@
+# Synthetic, in the shape of LACNIC's whois dump (lacnic/dbase/lacnic.db.gz):
+# the inetnum key is a prefix, often abbreviated, never "lo - hi"; city: is
+# LACNIC's own attribute. Documentation prefixes stand in for real ones.
+
+inetnum:    198.51.100/24
+status:     allocated
+city:       Sao Paulo
+country:    BR
+created:    2026-07-14
+changed:    2026-07-14
+source:     LACNIC
+
+inetnum:    203.0.113.0/25
+status:     reallocated
+city:       Montevideo
+country:    UY
+created:    2019-03-31
+changed:    2024-05-23
+source:     LACNIC

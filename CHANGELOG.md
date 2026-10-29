@@ -9,6 +9,65 @@ same version (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+### Added
+
+- `lexer`: `ValueWithComments(raw)`, and `ast`: `Attribute.ValueWithComments`,
+  give an attribute's continuation-joined value with its comments kept: a `#`
+  and what follows it stay on each line. Registries write `#` as text in
+  free-form attributes (`descr: Shaw Tower # 16-02/03`, `netname:
+  DATA#LIMITED`), which `Value` cuts. Without a `#` both equal `Value`, and
+  `Attribute.ValueWithComments` returns it with no allocation. For a raw whose
+  first line starts no attribute, `lexer.ValueWithComments` gives `""`.
+- `types`: `AddrRangePrefixes(lo, hi)` gives the fewest prefixes that hold
+  exactly the addresses `lo` to `hi`, in order — an inetnum's `lo - hi` as
+  prefixes (`192.0.0.0 - 192.0.4.255` is `192.0.0.0/22` and `192.0.4.0/24`) —
+  and `LastAddr(p)` a prefix's last address. `object`, `auth` and `resolve`
+  use `LastAddr` where each had its own copy; no answer changes.
+- `ParseOptions.NonUTF8AsWindows1252` reads each line of a stream that is not
+  valid UTF-8 as Windows-1252 (Latin-1's printable characters and more) and
+  keeps it as UTF-8; UTF-8 lines are kept as they are, each line judged on its
+  own, as LACNIC's whois dump mixes both. Each object holding such a line
+  carries one Warning, `rpsl/not-utf8`, counting them. Objects hold the text
+  as transcoded, and byte offsets and the caps count it so; a line over the
+  cap transcoded is dropped without being built. Off by default: the stream
+  stays byte-for-byte lossless.
+
+### Changed
+
+- Parsing is faster and allocates less; every value, position and
+  diagnostic is as before. On the stream benchmark it takes 5.6 ms where it
+  took 9.5, with 41,000 allocations where it made 143,000; on RIPE's, APNIC's
+  and AFRINIC's dumps it is 1.7 to 1.8 times as fast, at 8 allocations per
+  object where it made 36 to 101. `lexer.TokenizeAt` puts a call's segments
+  in one array, and each token's `Segments` is a slice of it whose capacity
+  is its length, so an append to it copies. Trivia that runs straight into an
+  object, as the blank line before one does, is tokenized with it when it is
+  no longer than the object.
+- `object`: an inetnum key written as an IPv4 prefix, as LACNIC's whois dump
+  writes every one (`inetnum: 200.16.0.0/16`, abbreviated `2.152.0/22`), now
+  decodes to the prefix's range in `Inetnum.Lo`/`Hi` with a Warning
+  (`object/inetnum-prefix-key`), where it was an `object/inetnum-range` Error
+  with an empty range. A prefix with host bits set reads as its network's
+  range, with `object/inetnum-host-bits`.
+- `auth`: since `auth` acts on the decoded range, such an inetnum is now
+  authorised as the inetnum of that range, where it was refused for having
+  none: a creation needs its parent's consent, and a deletion keyed
+  `192.0.2.77/24` finds a stored `192.0.2.0 - 192.0.2.255` and needs its
+  maintainers.
+- `object`: an aut-num key written as a bare number, as LACNIC's whois dump
+  writes every one (`aut-num: 278`), now decodes to that AS with a Warning
+  (`object/aut-num-bare-number`), where it was an `object/aut-num-as` Error
+  with AS0. Only the key: a bare number in `origin:` or `local-as:` is still
+  an Error.
+- `auth`: such an aut-num is authorised as that AS's (its as-block's consent
+  for a creation, which looked for an as-block holding AS0), and
+  `MemDatabase` keys `aut-num: 64500` as `AS64500`, so a deletion or
+  modification keyed either way finds the stored object.
+- `resolve`: the engine still keeps such an aut-num out — no membership
+  claim, no policy, nothing for `Corpus.Put` — as before `Decode` read its key:
+  IRR data writes `AS64500`, and LACNIC's whois dump holds a policy-less copy
+  of nearly every AS its IRR dump holds, under the same `source:`.
+
 ## [0.31.0] - 2026-10-27
 
 ### Added

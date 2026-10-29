@@ -172,6 +172,35 @@ func (d *decoder) asn(name, rule string) types.ASN {
 	return v
 }
 
+// autNumAS decodes an aut-num's key. LACNIC's whois dump writes every one as a
+// bare number ("aut-num: 278"), which reads as that AS, with a Warning; any
+// other value, an empty one included, is an AS number as RPSL writes it
+// ("AS278", "AS1.10"), read by asn.
+func (d *decoder) autNumAS() types.ASN {
+	const rule = "object/aut-num-as"
+	a, ok := d.o.GetFirst("aut-num")
+	if !ok || !isDecimal(scalar(a)) {
+		return d.asn("aut-num", rule)
+	}
+	as, err := types.ParseASN("AS" + scalar(a))
+	if err != nil {
+		d.errf(a, rule, fmt.Sprintf("%q is no AS number (0 to 4294967295)", scalar(a)))
+		return 0
+	}
+	d.warnf(a, "object/aut-num-bare-number", fmt.Sprintf("%q has no AS prefix; it is read as %s", scalar(a), as))
+	return as
+}
+
+// isDecimal reports whether s is one or more ASCII digits.
+func isDecimal(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
+
 // prefix parses the first value of name as a netip.Prefix.
 func (d *decoder) prefix(name, rule string) netip.Prefix {
 	a, ok := d.o.GetFirst(name)
@@ -211,14 +240,18 @@ func abbreviatedMessage(text, canonical string) string {
 }
 
 // addrRange parses the first value of name as an inetnum address range
-// "lo - hi" (e.g. "192.0.2.0 - 192.0.2.255") of IPv4 addresses with lo <= hi.
-// Returns the zero Addrs on failure.
+// "lo - hi" (e.g. "192.0.2.0 - 192.0.2.255") of IPv4 addresses with lo <= hi,
+// or an IPv4 prefix as LACNIC writes it (prefixRange). Returns the zero Addrs
+// on failure.
 func (d *decoder) addrRange(name, rule string) (lo, hi netip.Addr) {
 	a, ok := d.o.GetFirst(name)
 	if !ok || d.emptyKey(a) {
 		return netip.Addr{}, netip.Addr{}
 	}
 	l, h, found := strings.Cut(scalar(a), "-")
+	if !found && strings.Contains(scalar(a), "/") {
+		return d.prefixRange(a, name, rule)
+	}
 	if !found {
 		d.errf(a, rule, "expected 'lo - hi' address range")
 		return netip.Addr{}, netip.Addr{}
@@ -239,6 +272,34 @@ func (d *decoder) addrRange(name, rule string) (lo, hi netip.Addr) {
 		return lo, hi
 	}
 	return netip.Addr{}, netip.Addr{}
+}
+
+// prefixRange reads an inetnum key written as an IPv4 prefix, as LACNIC's
+// whois dump writes every one ("200.16.0.0/16", abbreviated "2.152.0/22"),
+// as the prefix's address range, with a Warning. A prefix with host bits set
+// reads as its network's range, with another; padding and abbreviation are
+// reported as for any prefix.
+func (d *decoder) prefixRange(a ast.Attribute, name, rule string) (lo, hi netip.Addr) {
+	if _, err := types.ParsePrefix(scalar(a)); err != nil {
+		d.errf(a, rule, "expected 'lo - hi' or an IPv4 prefix: "+err.Error())
+		return netip.Addr{}, netip.Addr{}
+	}
+	p := d.prefix(name, rule) // parses again, to report padding and abbreviation
+	switch {
+	case !p.IsValid():
+		return netip.Addr{}, netip.Addr{}
+	case !p.Addr().Is4():
+		d.errf(a, rule, "address range "+scalar(a)+" is not IPv4")
+		return netip.Addr{}, netip.Addr{}
+	case p != p.Masked():
+		d.warnf(a, "object/"+d.o.Class()+"-host-bits",
+			fmt.Sprintf("prefix %s has host bits set; the network is %s", p, p.Masked()))
+	}
+	p = p.Masked()
+	lo, hi = p.Addr(), types.LastAddr(p)
+	d.warnf(a, "object/"+d.o.Class()+"-prefix-key",
+		fmt.Sprintf("%q is a prefix, not a 'lo - hi' range; it is read as %s - %s", scalar(a), lo, hi))
+	return lo, hi
 }
 
 // asnRange parses the first value of name as an as-block range "ASlo - AShi"

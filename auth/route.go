@@ -168,7 +168,7 @@ func covers(o object.Object, p netip.Prefix) (exact, ok bool) {
 
 // rangeCovers is covers for an address range lo-hi, as an inetnum holds.
 func rangeCovers(lo, hi netip.Addr, p netip.Prefix) (exact, ok bool) {
-	first, last := p.Addr(), lastAddr(p)
+	first, last := p.Addr(), types.LastAddr(p)
 	if !lo.IsValid() || !hi.IsValid() || lo.BitLen() != first.BitLen() || hi.BitLen() != first.BitLen() {
 		return false, false
 	}
@@ -176,22 +176,6 @@ func rangeCovers(lo, hi netip.Addr, p netip.Prefix) (exact, ok bool) {
 		return false, false
 	}
 	return lo == first && hi == last, true
-}
-
-// lastAddr is the highest address in the masked prefix p.
-func lastAddr(p netip.Prefix) netip.Addr {
-	a := p.Addr().As16()
-	off := 0
-	if p.Addr().Is4() {
-		off = 96
-	}
-	for i := off + p.Bits(); i < 128; i++ {
-		a[i/8] |= 0x80 >> (i % 8)
-	}
-	if p.Addr().Is4() {
-		return netip.AddrFrom4([4]byte(a[12:]))
-	}
-	return netip.AddrFrom16(a)
 }
 
 // RouteAuthority returns the maintainers an object delegates to authorise a

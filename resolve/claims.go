@@ -79,8 +79,13 @@ func claimant(o object.Object) (memberOf []types.SetName, mntBy []string, source
 	}
 	switch t := o.(type) {
 	case *object.AutNum:
-		if t.AS == 0 && !asnDecodes(t, "aut-num") {
-			return nil, nil, "", false // an aut-num whose key did not decode is no AS
+		// An aut-num whose key is no AS number as RPSL writes it is none the
+		// engine knows: one that did not decode (no AS), or a bare number
+		// ("aut-num: 64500", LACNIC's whois dump, which Decode reads with a
+		// Warning) that IRR data does not write and whose policy-less copy
+		// must not stand in for the IRR's.
+		if !asnDecodes(t, "aut-num") {
+			return nil, nil, "", false
 		}
 		return t.MemberOf, t.MntBy, t.Source, true
 	case *object.Route:

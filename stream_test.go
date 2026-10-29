@@ -205,6 +205,67 @@ func TestStreamPositions(t *testing.T) {
 	}
 }
 
+// Trivia on both sides of an over-long line discarded before an object stays
+// with the object, each part at its own position.
+func TestStreamTriviaAroundDiscardedLine(t *testing.T) {
+	in := "# a\n# " + strings.Repeat("x", 20) + "\n# b\nc: 1\n"
+	for obj, ds := range ParseWith(strings.NewReader(in), ParseOptions{MaxObjectBytes: 16}) {
+		if got := obj.String(); got != "# a\n# b\nc: 1\n" {
+			t.Errorf("object = %q, want both comments and the attribute", got)
+		}
+		if a, _ := obj.GetFirst("c"); a.Span.StartLine != 4 || a.Span.StartByte != strings.Index(in, "c: 1") {
+			t.Errorf("c span = %+v, want line 4, byte %d", a.Span, strings.Index(in, "c: 1"))
+		}
+		if len(ds) != 1 || ds[0].Rule != "rpsl/trivia-too-large" {
+			t.Errorf("diagnostics = %v, want one rpsl/trivia-too-large", ds)
+		}
+	}
+}
+
+// Objects queued together, as the last one and the read error after it are,
+// survive a range that stops between them: the next range yields the rest.
+func TestParseResumesWithQueuedObjects(t *testing.T) {
+	seq := Parse(io.MultiReader(strings.NewReader("a: 1\n\n"), failingReader{errors.New("boom")}))
+	for range seq {
+		break
+	}
+	var rules []string
+	for _, ds := range seq {
+		for _, d := range ds {
+			rules = append(rules, d.Rule)
+		}
+	}
+	if !reflect.DeepEqual(rules, []string{"rpsl/read-error"}) {
+		t.Errorf("after the first object, the rest gave %v, want the read error", rules)
+	}
+}
+
+// A range whose body panics, recovered by the consumer, leaves the stream as
+// a break does: the next range yields the objects after the one it had.
+func TestParseResumesAfterPanic(t *testing.T) {
+	seq := Parse(strings.NewReader("a: 1\n\nb: 2\n\nc: 3\n"))
+	func() {
+		defer func() { _ = recover() }()
+		for range seq {
+			panic("consumer")
+		}
+	}()
+	var classes []string
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("the next range panicked: %v", r)
+			}
+		}()
+		for o := range seq {
+			classes = append(classes, o.Class())
+		}
+	}()
+	if !reflect.DeepEqual(classes, []string{"b", "c"}) {
+		t.Errorf("after a recovered panic on the first object, the next range gave %q, want b and c", classes)
+	}
+}
+
 func TestParseObjectDiagnostics(t *testing.T) {
 	rules := func(text string) []string {
 		_, ds := ParseObject(text)

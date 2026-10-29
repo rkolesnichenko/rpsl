@@ -25,6 +25,21 @@ func TestRoundTripExact(t *testing.T) {
 	}
 }
 
+// New copies no text when a single trivia token leads an attribute, as the
+// blank line before an object does: it allocates the object and its
+// attributes only. Two or more are joined, and round-trip as before.
+func TestNewAllocations(t *testing.T) {
+	toks := lexer.Tokenize("\naut-num: AS1\nsource: RIPE\n")
+	if n := testing.AllocsPerRun(100, func() { New(toks) }); n != 2 {
+		t.Errorf("New allocated %v times, want 2", n)
+	}
+	for _, src := range []string{"\n# a\naut-num: AS1\n# b\nsource: RIPE\n\n#c\n", "#x\n", "\n\n", "a: 1\n\n"} {
+		if got := parse(src).String(); got != src {
+			t.Errorf("%q round-tripped to %q", src, got)
+		}
+	}
+}
+
 func TestAccessors(t *testing.T) {
 	o := parse("as-set: AS-FOO\nmembers: AS1\nmembers: AS2\nsource: RIPE\n")
 	if o.Class() != "as-set" {
